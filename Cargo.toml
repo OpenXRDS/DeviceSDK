@@ -1,3 +1,9 @@
 [workspace]
-members = ["xrds-core"]
+members = [
+    "xrds-audio",
+    "xrds-components",
+    "xrds-core",
+    "xrds-graphics",
+    "xrds-runtime",
+]
 resolver = "2"

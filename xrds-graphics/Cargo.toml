@@ -1,5 +1,5 @@
 [package]
-name = "xrds-core"
+name = "xrds-graphics"
 version = "0.1.0"
 edition = "2021"
 
@@ -7,6 +7,3 @@ edition = "2021"
 crate-type = ["rlib", "cdylib"]
 
 [dependencies]
-
-[build-dependencies]
-bindgen = "0.70.*"
