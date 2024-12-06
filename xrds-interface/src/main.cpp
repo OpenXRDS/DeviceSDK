@@ -16,7 +16,8 @@ limitations under the License.
 #include "xrds/core.hpp"
 
 int main() {
-    hello_rust();
-    xrds::hello_rust();
+    auto hello = xrds::new_hello(10, 20);
+    xrds::hello_rust(hello);
+    xrds::destroy_hello(hello);
     return 0;
 }

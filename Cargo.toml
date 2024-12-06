@@ -7,3 +7,6 @@ members = [
     "xrds-runtime",
 ]
 resolver = "2"
+
+[workspace.dependencies]
+safer-ffi = { version = "0.1.13", features = ["headers"] }
