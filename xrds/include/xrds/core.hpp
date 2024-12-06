@@ -16,7 +16,7 @@
 #ifndef __XRDS_CORE_HPP__
 #define __XRDS_CORE_HPP__
 
-#include "core.h"
+#include "xrds/core.h"
 
 namespace xrds {
 

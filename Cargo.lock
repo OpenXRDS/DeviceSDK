@@ -621,6 +621,10 @@ name = "xrds-graphics"
 version = "0.1.0"
 
 [[package]]
+name = "xrds-net"
+version = "0.1.0"
+
+[[package]]
 name = "xrds-runtime"
 version = "0.1.0"
 dependencies = [

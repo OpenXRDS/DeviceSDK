@@ -20,5 +20,5 @@ set(CMAKE_PDB_OUTPUT_DIRECTORY_RELWITHDEBINFO ${CMAKE_BINARY_DIR}/output/relwith
 message(STATUS "CMAKE_BINARY_DIR: ${CMAKE_BINARY_DIR}")
 
 add_subdirectory(xrds-core)
-add_subdirectory(xrds-interface)
 add_subdirectory(xrds-openxr)
+add_subdirectory(xrds)

@@ -4,6 +4,7 @@ members = [
     "xrds-components",
     "xrds-core",
     "xrds-graphics",
+    "xrds-net",
     "xrds-runtime",
 ]
 resolver = "2"

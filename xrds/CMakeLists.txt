@@ -1,4 +1,4 @@
-project(xrds-interface)
+project(xrds)
 
 add_executable(${PROJECT_NAME})
 
