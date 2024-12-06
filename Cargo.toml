@@ -1,0 +1,3 @@
+[workspace]
+members = ["xrds-core"]
+resolver = "2"
