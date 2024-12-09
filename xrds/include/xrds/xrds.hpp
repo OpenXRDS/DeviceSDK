@@ -13,21 +13,9 @@
  See the License for the specific language governing permissions and
  limitations under the License.
  */
-#ifndef __XRDS_CORE_HPP__
-#define __XRDS_CORE_HPP__
+#ifndef __XRDS_XRDS_HPP__
+#define __XRDS_XRDS_HPP__
 
-#include "xrds/xrds.h"
+#include "xrds/core.hpp"
 
-namespace xrds {
-
-struct HelloStruct {
-    xrds_HelloStruct* handle;
-};
-
-void hello_rust(HelloStruct st) { ::xrds_core_hello_rust(st.handle); }
-HelloStruct new_hello(uint64_t x, uint64_t y) { return HelloStruct{::xrds_core_new_hello(x, y)}; }
-void destroy_hello(HelloStruct st) { xrds_core_destroy_hello(st.handle); }
-
-}  // namespace xrds
-
-#endif  // __XRDS_CORE_HPP__
+#endif  // __XRDS_XRDS_HPP__

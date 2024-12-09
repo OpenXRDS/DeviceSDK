@@ -17,8 +17,15 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO ${CMAKE_BINARY_DIR}/output/rel
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY_RELWITHDEBINFO ${CMAKE_BINARY_DIR}/output/relwithdebinfo)
 set(CMAKE_PDB_OUTPUT_DIRECTORY_RELWITHDEBINFO ${CMAKE_BINARY_DIR}/output/relwithdebinfo)
 
-message(STATUS "CMAKE_BINARY_DIR: ${CMAKE_BINARY_DIR}")
+set(CMAKE_INSTALL_PREFIX ${CMAKE_BINARY_DIR}/install)
 
+include(cmake/rust-library.cmake)
+
+add_subdirectory(xrds-audio)
+add_subdirectory(xrds-components)
 add_subdirectory(xrds-core)
+add_subdirectory(xrds-graphics)
+add_subdirectory(xrds-net)
 add_subdirectory(xrds-openxr)
+add_subdirectory(xrds-runtime)
 add_subdirectory(xrds)

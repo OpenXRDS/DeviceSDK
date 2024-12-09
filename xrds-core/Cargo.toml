@@ -4,17 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [lib]
-crate-type = ["rlib", "cdylib"]
-
-[[bin]]
-name = "core-gen-headers"
-required-features = ["headers"]
-
-[dependencies]
-safer-ffi = { version = "0.1.13", features = ["headers"] }
+crate-type = ["lib", "cdylib"]
 
 [build-dependencies]
-bindgen = "0.70.*"
-
-[features]
-headers = ["safer-ffi/headers"]
+cbindgen = "0.27.0"

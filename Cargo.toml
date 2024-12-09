@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "xrds",
     "xrds-audio",
     "xrds-components",
     "xrds-core",

@@ -4,7 +4,10 @@ version = "0.1.0"
 edition = "2021"
 
 [lib]
-crate-type = ["rlib", "cdylib"]
+crate-type = ["lib", "cdylib"]
 
 [dependencies]
 xrds-core = { path = "../xrds-core" }
+
+[build-dependencies]
+cbindgen = "0.27.0"
