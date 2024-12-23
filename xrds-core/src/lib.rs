@@ -22,11 +22,7 @@ pub struct HelloStruct {
 
 impl HelloStruct {
     pub fn new(x: u64, y: u64) -> Self {
-        Self {
-            x: x,
-            y: y,
-            z: x + y,
-        }
+        Self { x, y, z: x + y }
     }
 }
 
@@ -35,12 +31,13 @@ pub extern "C" fn xrds_core_new_hello(x: u64, y: u64) -> *mut HelloStruct {
     Box::leak(Box::new(new_hello(x, y)))
 }
 
+/// # Safety
+///
+/// Thid function should not be called with invalid HelloStruct pointer
 #[no_mangle]
-pub extern "C" fn xrds_core_destroy_hello(ptr: *mut HelloStruct) {
-    if ptr.is_null() {
-        return;
-    } else {
-        drop(unsafe { Box::<HelloStruct>::from_raw(ptr) })
+pub unsafe extern "C" fn xrds_core_destroy_hello(ptr: *mut HelloStruct) {
+    if !ptr.is_null() {
+        drop(Box::<HelloStruct>::from_raw(ptr))
     }
 }
 

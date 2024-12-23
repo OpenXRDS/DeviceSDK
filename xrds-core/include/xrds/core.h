@@ -18,6 +18,9 @@ extern "C" {
 
 xrds_HelloStruct *xrds_core_new_hello(uint64_t x, uint64_t y);
 
+/// # Safety
+///
+/// Thid function should not be called with invalid HelloStruct pointer
 void xrds_core_destroy_hello(xrds_HelloStruct *ptr);
 
 void xrds_core_hello_rust(const xrds_HelloStruct *st);

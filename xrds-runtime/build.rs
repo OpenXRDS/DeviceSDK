@@ -10,6 +10,9 @@ fn main() {
         .with_cpp_compat(true)
         .with_include_guard("__XRDS_RUNTIME_H__")
         .with_include("xrds/core.h")
+        .with_item_prefix("xrds_")
+        .with_language(cbindgen::Language::C)
+        .with_cpp_compat(true)
         .with_header(concat!(
             "// ***********************************\n",
             "// Auto generated header\n",

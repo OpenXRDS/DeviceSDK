@@ -1,40 +1,39 @@
-use xrds_core::{hello_rust, HelloStruct};
+pub mod runtime;
+pub mod runtime_builder;
 
-// #[derive_ReprC]
-// #[repr(opaque)]
-#[derive(Debug, Clone, Copy)]
-pub struct Runtime;
+use std::{
+    ffi::{c_char, CStr},
+    ptr::null_mut,
+};
 
-impl Runtime {
-    pub fn hello_runtime(self) {
-        println!("Hello XRDS runtime!");
-        hello_rust(&HelloStruct::new(10, 20));
-    }
+use runtime::Runtime;
+use runtime_builder::RuntimeBuilder;
+
+/// Create builder for create runtime object
+#[no_mangle]
+pub extern "C" fn xrds_CreateRuntimeBuilder() -> *mut RuntimeBuilder {
+    Box::leak(Box::new(runtime_builder::new()))
 }
 
 #[no_mangle]
-pub extern "C" fn xrds_runtime_create_runtime() -> *mut Runtime {
-    Box::leak(Box::new(create_runtime()))
+pub unsafe extern "C" fn xrds_RuntimeBuilder_SetApplicationName(
+    raw_builder: &mut RuntimeBuilder,
+    raw_application_name: *const c_char,
+) {
+    let an = CStr::from_ptr(raw_application_name);
+    raw_builder.set_application_name(an.to_str().unwrap());
 }
 
 #[no_mangle]
-pub extern "C" fn xrds_hello_runtime(runtime: *mut Runtime) {
-    if runtime.is_null() {
-        return;
+pub unsafe extern "C" fn xrds_RuntimeBuilder_Build(
+    raw_builder: *mut RuntimeBuilder,
+) -> *mut Runtime {
+    if raw_builder.is_null() {
+        null_mut()
     } else {
-        let r = unsafe { Box::<Runtime>::from_raw(runtime) };
-        r.hello_runtime()
+        unsafe {
+            let builder = Box::<RuntimeBuilder>::from_raw(raw_builder);
+            Box::leak(Box::new(builder.build()))
+        }
     }
 }
-
-pub fn create_runtime() -> Runtime {
-    Runtime {}
-}
-
-// #[cfg(feature = "runtime_headers")]
-// pub fn generate_headers() -> std::io::Result<()> {
-//     safer_ffi::headers::builder()
-//         .with_guard("__XRDS_RUNTIME_H__")
-//         .to_file("include/xrds/runtime.h")?
-//         .generate()
-// }

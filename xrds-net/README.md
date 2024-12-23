@@ -2,13 +2,11 @@
 
 XRDS network library
 
-
 ## Supported Platform/Architecture
 
 - Linux x86/x64
 - Android arm/arm64
 - Windows x86/x64
-
 
 ## Supported Protocols
 
@@ -20,7 +18,6 @@ XRDS network library
 - WS(S)
   - Websocket
 - CoAP
-
 
 ## Dependencies
 

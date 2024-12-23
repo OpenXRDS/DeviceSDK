@@ -5,6 +5,7 @@ members = [
     "xrds-components",
     "xrds-core",
     "xrds-graphics",
+    "xrds-openxr",
     "xrds-net",
     "xrds-runtime",
 ]

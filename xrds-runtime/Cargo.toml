@@ -7,7 +7,26 @@ edition = "2021"
 crate-type = ["lib", "cdylib"]
 
 [dependencies]
+mint = "0.5.9"
+winit = { version = "0.30.5", default-features = false, features = [
+    "ahash",
+    "bytemuck",
+    "memmap2",
+    "percent-encoding",
+    "rwh_06",
+    "sctk",
+    "sctk-adwaita",
+    "mint",
+] }
 xrds-core = { path = "../xrds-core" }
 
 [build-dependencies]
 cbindgen = "0.27.0"
+
+[target.'cfg(windows)'.dependencies]
+
+[target.'cfg(unix)'.dependencies]
+winit = { version = "0.30.5" }
+
+[target.'cfg(android)'.dependencies]
+winit = { version = "0.30.5", features = ["android-game-activity"] }
