@@ -15,6 +15,7 @@
 
 extern "C" {
 
+/// Test graphics module
 void test_graphics();
 
 }  // extern "C"

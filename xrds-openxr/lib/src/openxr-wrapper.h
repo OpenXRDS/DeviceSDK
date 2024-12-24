@@ -13,9 +13,23 @@
  See the License for the specific language governing permissions and
  limitations under the License.
  */
-#ifndef __XRDS_XRDS_HPP__
-#define __XRDS_XRDS_HPP__
+#ifndef __XRDS_OPENXR_OPENXR_H__
+#define __XRDS_OPENXR_OPENXR_H__
 
-#include "xrds/core.hpp"
+#ifdef _WIN32
+#define OPENXR_W_API __declspec(dllexport)
+#else
+#define OPENXR_W_API
+#endif
 
-#endif  // __XRDS_XRDS_HPP__
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+void OPENXR_W_API initialize_openxr();
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif  // __XRDS_OPENXR_OPENXR_H__

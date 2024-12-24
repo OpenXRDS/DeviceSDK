@@ -7,4 +7,5 @@ edition = "2021"
 # crate-type = ["lib", "cdylib"]
 
 [build-dependencies]
-cmake = { version = "*" }
+cmake = { version = "0.1.52" }
+bindgen = { version = "0.71.0" }

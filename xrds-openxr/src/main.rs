@@ -1,12 +1,9 @@
-#[link(name = "openxr", kind = "static")]
-extern "C" {
-    fn test_libxrds_openxr();
-}
+pub mod openxr;
 
 fn main() {
     println!("Hello world! from rust");
 
     unsafe {
-        test_libxrds_openxr();
+        openxr::initialize_openxr();
     }
 }
