@@ -1,3 +1,3 @@
 # XRDS OpenXR
 
-C++ library integrating OpenXR
+Manage OpenXR things

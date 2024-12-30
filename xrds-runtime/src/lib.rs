@@ -11,12 +11,12 @@ use runtime_builder::RuntimeBuilder;
 
 /// Create builder for create runtime object
 #[no_mangle]
-pub extern "C" fn xrds_CreateRuntimeBuilder() -> *mut RuntimeBuilder {
+extern "C" fn xrds_CreateRuntimeBuilder() -> *mut RuntimeBuilder {
     Box::leak(Box::new(runtime_builder::new()))
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn xrds_RuntimeBuilder_SetApplicationName(
+unsafe extern "C" fn xrds_RuntimeBuilder_SetApplicationName(
     raw_builder: &mut RuntimeBuilder,
     raw_application_name: *const c_char,
 ) {
@@ -25,9 +25,7 @@ pub unsafe extern "C" fn xrds_RuntimeBuilder_SetApplicationName(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn xrds_RuntimeBuilder_Build(
-    raw_builder: *mut RuntimeBuilder,
-) -> *mut Runtime {
+unsafe extern "C" fn xrds_RuntimeBuilder_Build(raw_builder: *mut RuntimeBuilder) -> *mut Runtime {
     if raw_builder.is_null() {
         null_mut()
     } else {

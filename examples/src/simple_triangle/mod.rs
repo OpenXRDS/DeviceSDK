@@ -1,5 +1,3 @@
-use xrds;
-
-fn main() {
+pub fn run() {
     xrds::test_xrds();
 }

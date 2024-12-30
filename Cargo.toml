@@ -1,6 +1,5 @@
 [workspace]
 members = [
-    "xrds",
     "xrds-audio",
     "xrds-components",
     "xrds-core",
@@ -8,5 +7,53 @@ members = [
     "xrds-openxr",
     "xrds-net",
     "xrds-runtime",
+    "examples",
+    "xrds",
 ]
 resolver = "2"
+
+[workspace.package]
+edition = "2021"
+version = "0.1.0"
+license = "Apache-2.0"
+keywords = ["XR"]
+repository = "https://github.com/OpenXRDS/DeviceSDK"
+homepage = "https://github.com/OpenXRDS"
+authors = ["OpenXRDS developers"]
+
+[workspace.dependencies.xrds-audio]
+package = "xrds-audio"
+path = "./xrds-audio"
+
+[workspace.dependencies.xrds-components]
+package = "xrds-components"
+path = "./xrds-components"
+
+[workspace.dependencies.xrds-core]
+package = "xrds-core"
+path = "./xrds-core"
+
+[workspace.dependencies.xrds-graphics]
+package = "xrds-graphics"
+path = "./xrds-graphics"
+
+[workspace.dependencies.xrds-net]
+package = "xrds-net"
+path = "./xrds-net"
+
+[workspace.dependencies.xrds-openxr]
+package = "xrds-openxr"
+path = "./xrds-openxr"
+
+[workspace.dependencies.xrds-runtime]
+package = "xrds-runtime"
+path = "./xrds-runtime"
+
+[workspace.dependencies]
+xrds = { version = "0.1.0", path = "./xrds" }
+tokio = { version = "1.42.0", features = ["rt-multi-thread", "sync"] }
+anyhow = "1.0.95"
+env_logger = "0.11.6"
+log = "0.4.20"
+wgpu = { version = "23.0.1", default-features = false, features = ["wgsl"] }
+ash = "0.38.0"

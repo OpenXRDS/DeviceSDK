@@ -1,3 +1,6 @@
-[workspace]
-members = ["simple_triangle"]
-resolver = "2"
+[package]
+name = "xrds-examples"
+edition = "2021"
+
+[dependencies]
+xrds = { workspace = true }

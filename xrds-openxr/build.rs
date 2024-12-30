@@ -1,25 +1,21 @@
-extern crate cmake;
-use cmake::Config;
 use std::env;
 
+extern crate cbindgen;
+
 fn main() {
-    let dst = Config::new("lib")
-        .define("CARGO_TARGET_DIR", env::var("OUT_DIR").unwrap())
-        .build();
+    let crate_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
 
-    println!("cargo:rustc-link-search={}", dst.display());
-    println!("cargo:rustc-link-lib=openxr-wrapper");
-    println!("cargo:rerun-if-changed=lib/CMakeLists.txt");
-    println!("cargo:rerun-if-changed=lib/src/openxr-wrapper.cpp");
-    println!("cargo:rerun-if-changed=lib/src/openxr-wrapper.h");
-
-    let bindings = bindgen::Builder::default()
-        .header("lib/src/openxr-wrapper.h")
-        .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
+    cbindgen::Builder::new()
+        .with_crate(crate_dir)
+        .with_cpp_compat(true)
+        .with_include_guard("__XRDS_NET_H__")
+        .with_include("xrds/core.h")
+        .with_header(concat!(
+            "// ***********************************\n",
+            "// Auto generated header\n",
+            "// ***********************************\n",
+        ))
         .generate()
-        .expect("Unable to generate bindings");
-
-    bindings
-        .write_to_file("src/openxr.rs")
-        .expect("Couldn't write bindings!");
+        .unwrap()
+        .write_to_file("include/xrds/openxr.h");
 }
