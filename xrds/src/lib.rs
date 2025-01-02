@@ -1,5 +1,3 @@
-pub mod runtime;
+mod api;
 
-pub fn test_xrds() {
-    println!("Hello XRDS")
-}
+pub use api::*;

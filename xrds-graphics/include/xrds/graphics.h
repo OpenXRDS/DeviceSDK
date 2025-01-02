@@ -13,11 +13,4 @@
 #include <new>
 #include "xrds/core.h"
 
-extern "C" {
-
-/// Test graphics module
-void test_graphics();
-
-}  // extern "C"
-
 #endif  // __XRDS_GRAPHICS_H__

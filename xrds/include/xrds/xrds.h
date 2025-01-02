@@ -1,26 +1,42 @@
-/*
- Copyright 2024 OpenXRDS
+// ***********************************
+// Auto generated header
+// ***********************************
 
- Licensed under the Apache License, Version 2.0 (the "License");
- you may not use this file except in compliance with the License.
- You may obtain a copy of the License at
 
-      https://www.apache.org/licenses/LICENSE-2.0
+#ifndef __XRDS_GRAPHICS_H__
+#define __XRDS_GRAPHICS_H__
 
- Unless required by applicable law or agreed to in writing, software
- distributed under the License is distributed on an "AS IS" BASIS,
- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- See the License for the specific language governing permissions and
- limitations under the License.
- */
-#ifndef __XRDS_XRDS_H__
-#define __XRDS_XRDS_H__
-
-#include "xrds/audio.h"
-#include "xrds/components.h"
+#include <cstdarg>
+#include <cstdint>
+#include <cstdlib>
+#include <ostream>
+#include <new>
 #include "xrds/core.h"
-#include "xrds/graphics.h"
-#include "xrds/net.h"
-#include "xrds/runtime.h"
 
-#endif  // __XRDS_XRDS_H__
+struct Runtime;
+
+struct RuntimeBuilder;
+
+struct CRuntimeHandler {
+  void (*on_construct)(void*);
+  void (*on_begin)(void*);
+  void (*on_resumed)(void*);
+  void (*on_suspended)(void*);
+  void (*on_end)(void*);
+  void (*on_update)(void*);
+  void (*on_deconstruct)(void*);
+};
+
+extern "C" {
+
+Runtime *xrds_Runtime_new();
+
+RuntimeBuilder *xrds_Runtime_builder();
+
+Runtime *xrds_RuntimeBuilder_build(RuntimeBuilder *builder);
+
+void xrds_Runtime_Run(Runtime *runtime, CRuntimeHandler *runtime_handler, uint64_t user_private);
+
+}  // extern "C"
+
+#endif  // __XRDS_GRAPHICS_H__

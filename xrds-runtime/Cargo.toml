@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [lib]
-crate-type = ["lib", "cdylib"]
+crate-type = ["lib"]
 
 [dependencies]
 log.workspace = true
@@ -24,21 +24,17 @@ winit = { version = "0.30.5", default-features = false, features = [
     "mint",
 ] }
 xrds-core = { workspace = true }
+xrds-net = { workspace = true }
+xrds-audio = { workspace = true }
+xrds-graphics = { workspace = true }
+xrds-components = { workspace = true }
 xrds-openxr = { workspace = true }
-ash = { workspace = true }
 
 [build-dependencies]
 cbindgen = "0.27.0"
-
-[target.'cfg(windows)'.dependencies]
-windows-core = { version = "0.58" }
 
 [target.'cfg(unix)'.dependencies]
 winit = { version = "0.30.5" }
 
 [target.'cfg(android)'.dependencies]
 winit = { version = "0.30.5", features = ["android-game-activity"] }
-
-[target.'cfg(target_os = "windows")'.dependencies]
-wgpu.workspace = true
-wgpu.features = ["dx12"]

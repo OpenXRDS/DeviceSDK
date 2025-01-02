@@ -1,5 +1,5 @@
-mod error;
+mod ffi;
 mod runtime;
 
-pub use error::*;
+#[allow(unused_imports)]
 pub use runtime::*;

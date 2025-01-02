@@ -1,3 +1,3 @@
 # XRDS
 
-C/C++ library wrapping XRDS Rust projects
+XRDS api project including Rust and C api

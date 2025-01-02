@@ -13,3 +13,7 @@ xrds-core = { path = "../xrds-core" }
 xrds-graphics = { path = "../xrds-graphics" }
 xrds-net = { path = "../xrds-net" }
 xrds-runtime = { path = "../xrds-runtime" }
+anyhow = { workspace = true }
+
+[build-dependencies]
+cbindgen = "0.27.0"
