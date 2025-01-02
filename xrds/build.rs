@@ -9,7 +9,6 @@ fn main() {
         .with_crate(crate_dir)
         .with_cpp_compat(true)
         .with_include_guard("__XRDS_GRAPHICS_H__")
-        .with_include("xrds/core.h")
         .with_header(concat!(
             "// ***********************************\n",
             "// Auto generated header\n",

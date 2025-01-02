@@ -11,7 +11,6 @@
 #include <cstdlib>
 #include <ostream>
 #include <new>
-#include "xrds/core.h"
 
 struct Runtime;
 

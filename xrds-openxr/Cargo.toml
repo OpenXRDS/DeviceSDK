@@ -6,10 +6,5 @@ edition = "2021"
 [lib]
 crate-type = ["lib"]
 
-[build-dependencies]
-cmake = { version = "0.1.52" }
-cbindgen = "0.27.0"
-
-
 [dependencies]
 openxr = { version = "0.19.0", features = ["linked", "static", "mint"] }

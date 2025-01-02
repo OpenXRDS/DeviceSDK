@@ -2026,23 +2026,14 @@ dependencies = [
 [[package]]
 name = "xrds-audio"
 version = "0.1.0"
-dependencies = [
- "cbindgen",
-]
 
 [[package]]
 name = "xrds-components"
 version = "0.1.0"
-dependencies = [
- "cbindgen",
-]
 
 [[package]]
 name = "xrds-core"
 version = "0.1.0"
-dependencies = [
- "cbindgen",
-]
 
 [[package]]
 name = "xrds-examples"
@@ -2056,22 +2047,16 @@ name = "xrds-graphics"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "cbindgen",
 ]
 
 [[package]]
 name = "xrds-net"
 version = "0.1.0"
-dependencies = [
- "cbindgen",
-]
 
 [[package]]
 name = "xrds-openxr"
 version = "0.1.0"
 dependencies = [
- "cbindgen",
- "cmake",
  "openxr",
 ]
 
