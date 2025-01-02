@@ -1,0 +1,10 @@
+[package]
+name = "xrds-openxr"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["lib"]
+
+[dependencies]
+openxr = { version = "0.19.0", features = ["linked", "static", "mint"] }

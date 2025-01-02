@@ -1,0 +1,19 @@
+[package]
+name = "xrds"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["lib", "cdylib"]
+
+[dependencies]
+xrds-audio = { path = "../xrds-audio" }
+xrds-components = { path = "../xrds-components" }
+xrds-core = { path = "../xrds-core" }
+xrds-graphics = { path = "../xrds-graphics" }
+xrds-net = { path = "../xrds-net" }
+xrds-runtime = { path = "../xrds-runtime" }
+anyhow = { workspace = true }
+
+[build-dependencies]
+cbindgen = "0.27.0"

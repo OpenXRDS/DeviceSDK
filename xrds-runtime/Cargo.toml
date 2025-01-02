@@ -1,0 +1,40 @@
+[package]
+name = "xrds-runtime"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["lib"]
+
+[dependencies]
+log.workspace = true
+env_logger.workspace = true
+anyhow.workspace = true
+tokio.workspace = true
+
+mint = "0.5.9"
+winit = { version = "0.30.5", default-features = false, features = [
+    "ahash",
+    "bytemuck",
+    "memmap2",
+    "percent-encoding",
+    "rwh_06",
+    "sctk",
+    "sctk-adwaita",
+    "mint",
+] }
+xrds-core = { workspace = true }
+xrds-net = { workspace = true }
+xrds-audio = { workspace = true }
+xrds-graphics = { workspace = true }
+xrds-components = { workspace = true }
+xrds-openxr = { workspace = true }
+
+[build-dependencies]
+cbindgen = "0.27.0"
+
+[target.'cfg(unix)'.dependencies]
+winit = { version = "0.30.5" }
+
+[target.'cfg(android)'.dependencies]
+winit = { version = "0.30.5", features = ["android-game-activity"] }
