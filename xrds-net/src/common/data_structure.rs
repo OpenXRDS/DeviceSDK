@@ -21,9 +21,9 @@ use crate::common::enums::PROTOCOLS;
 #[derive(Debug, Clone)]
 pub struct NetResponse {
     pub protocol: PROTOCOLS,
-    pub status_code: u16,
+    pub status_code: u32,
     pub headers: Vec<(String, String)>,
-    pub body: String,
+    pub body: Vec<u8>,
 
     // Optional fields
     pub error: Option<String>,

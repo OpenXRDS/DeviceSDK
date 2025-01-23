@@ -14,19 +14,28 @@
  limitations under the License.
  */
 
- #[derive(Debug, Clone, Copy, PartialEq)]
- pub enum PROTOCOLS {
-    HTTP,
-    HTTPS,
-    FILE,
-    COAP,
-    // COAPS,
-    MQTT,
-    FTP,
-    SFTP,
-    WS,
-    WSS,
-    WEBRTC,
-    HTTP3,
-    QUIC
+
+ #[cfg(test)]
+mod tests {
+    use xrds_net::client::{Client, ClientBuilder};
+    use xrds_net::common::data_structure::NetResponse;
+    use xrds_net::common::enums::PROTOCOLS;
+
+    #[test]
+    fn test_build_client() {
+        let client = ClientBuilder()
+            .set_protocol(PROTOCOLS::HTTP)
+            .set_host("localhost")
+            .set_port(8080)
+            .build();
+
+        assert_eq!(client.protocol, PROTOCOLS::HTTP);
+        assert_eq!(client.host, "localhost");
+        assert_eq!(client.port, 8080);
+
+    }
+
 }
+
+
+

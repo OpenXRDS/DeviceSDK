@@ -17,9 +17,31 @@
 
 use crate::common::enums::PROTOCOLS;
 use crate::common::data_structure::NetResponse;
+use crate::common::validate_url;
 
 use url::Url;
 use url::ParseError;
+
+use curl::easy::{Easy2, Handler, WriteError, List};
+
+/**
+ * ResponseCollector is a struct to collect response from the server
+ * 0: headers
+ * 1: body
+ */
+struct ResponseCollector(Vec<u8>, Vec<u8>);
+
+impl Handler for ResponseCollector {
+    fn header(&mut self, data: &[u8]) -> bool {
+        self.0.extend_from_slice(data);
+        true
+    }
+    
+    fn write(&mut self, data: &[u8]) -> Result<usize, WriteError> {
+        self.1.extend_from_slice(data);
+        Ok(data.len())
+    }
+}
 
 pub struct ClientBuilder {
     protocol: PROTOCOLS,
@@ -28,8 +50,8 @@ pub struct ClientBuilder {
     path: String,
     
     // Optional fields
-    headers: Option<Vec<(String, String)>>,
-    body: Option<String>,
+    req_headers: Option<Vec<(String, String)>>,
+    req_body: Option<String>,
     timeout: Option<u64>,
 
     // authentication
@@ -39,25 +61,15 @@ pub struct ClientBuilder {
 }
 
 impl ClientBuilder {
-    pub fn new(p_proto: PROTOCOLS, url: String) -> Result<Self, ParseError> {
-        // parse the url
-        let parsed_url = Url::parse(&url)?;
-        let host = parsed_url.host_str().unwrap();
-        let port = parsed_url.port().unwrap_or(80);
-        let path = parsed_url.path();
-
-        Ok(ClientBuilder::init(p_proto, host, port, path))
-    }
-
-    fn init(protocol: PROTOCOLS, host: &str, port: u16, path: &str) -> Self {
+    pub fn new() -> Self {
         ClientBuilder {
-            protocol,
-            url: host.to_string(),
-            port,
-            path: path.to_string(),
+            protocol: PROTOCOLS::HTTP,
+            url: "".to_string(),
+            port: 80,
+            path: "".to_string(),
 
-            headers: None,
-            body: None,
+            req_headers: None,
+            req_body: None,
             timeout: None,
 
             user: None,
@@ -65,13 +77,23 @@ impl ClientBuilder {
         }
     }
 
-    pub fn set_headers(mut self, headers: Vec<(String, String)>) -> Self {
-        self.headers = Some(headers);
+    pub fn set_protocol(mut self, protocol: PROTOCOLS) -> Self {
+        self.protocol = protocol;
         self
     }
 
-    pub fn set_body(mut self, body: String) -> Self {
-        self.body = Some(body);
+    pub fn set_url(mut self, url: String) -> Self {
+        self.url = url;
+        self
+    }
+
+    pub fn set_req_headers(mut self, headers: Vec<(String, String)>) -> Self {
+        self.req_headers = Some(headers);
+        self
+    }
+
+    pub fn set_req_body(mut self, body: String) -> Self {
+        self.req_body = Some(body);
         self
     }
 
@@ -90,67 +112,61 @@ impl ClientBuilder {
         self
     }
 
-    pub fn build(self) -> Client {
-        Client {
-            protocol: self.protocol,
-            url: self.url,
-            port: self.port,
-            path: self.path,
+    pub fn build(self) -> Result<Client, String> {
+        let url_validation_result = validate_url(self.url.as_str());
+        if url_validation_result.is_err() {
+            return Err(url_validation_result.err().unwrap());
+        }
 
-            headers: self.headers,
-            body: self.body,
+        let url = url_validation_result.unwrap();
+        let val_port = url.port().unwrap_or(80);
+        let val_host = url.host_str().unwrap_or("").to_string();
+        let val_path = url.path().to_string();
+
+        Ok(Client {
+            protocol: self.protocol,
+            host: val_host,
+            port: val_port,
+            path: val_path,
+
+            req_headers: self.req_headers,
+            req_body: self.req_body,
             timeout: self.timeout,
 
             user: self.user,
             password: self.password,
 
-            response_body: "".to_string(),
-            
-        }
+            res_headers: vec![],
+            res_body: "".to_string(),
+        })
     }
 }
 
  pub struct Client {
     protocol: PROTOCOLS,
-    url: String,
+    host: String,
     port: u16,
     path: String,
 
-    headers: Option<Vec<(String, String)>>,
-    body: Option<String>,
+    req_headers: Option<Vec<(String, String)>>,
+    req_body: Option<String>,
     timeout: Option<u64>,
 
     user: Option<String>,
     password: Option<String>,
 
-    response_body: String,
+    res_headers: Vec<(String, String)>,
+    res_body: String,
  }
 
  impl Client {
-    pub fn new (protocol: PROTOCOLS, url: String, port: u16, path: String) -> ClientBuilder {
-        ClientBuilder {
-            protocol,
-            url,
-            port,
-            path,
-
-            headers: None,
-            body: None,
-            timeout: None,
-
-            user: None,
-            password: None,
-        }
-    }
-
-
 
     pub fn get_protocol(&self) -> PROTOCOLS {
         self.protocol
     }
 
-    pub fn get_url(&self) -> &str {
-        &self.url
+    pub fn get_host(&self) -> &str {
+        &self.host
     }
 
     pub fn get_port(&self) -> u16 {
@@ -161,12 +177,12 @@ impl ClientBuilder {
         &self.path
     }
 
-    pub fn get_headers(&self) -> Option<&Vec<(String, String)>> {
-        self.headers.as_ref()
+    pub fn get_req_headers(&self) -> Option<&Vec<(String, String)>> {
+        self.req_headers.as_ref()
     }
 
-    pub fn get_body(&self) -> Option<&String> {
-        self.body.as_ref()
+    pub fn get_req_body(&self) -> Option<&String> {
+        self.req_body.as_ref()
     }
 
     pub fn get_timeout(&self) -> Option<u64> {
@@ -181,8 +197,12 @@ impl ClientBuilder {
         self.password.as_ref()
     }
 
+    pub fn get_response_headers(&self) -> Vec<(String, String)> {
+        self.res_headers.clone()
+    }
+
     pub fn get_response_body(&self) -> String {
-        self.response_body.clone()
+        self.res_body.clone()
     }
 
     /**
@@ -258,50 +278,83 @@ impl ClientBuilder {
             PROTOCOLS::HTTPS => self.request_https(),
             PROTOCOLS::FILE => self.request_file(),
             PROTOCOLS::COAP => self.request_coap(),
-            // PROTOCOLS::COAPS => self.request_coaps(),
-            _ => Err("The protocol does not support 'Request'. Use 'Connect' instead.".to_string()),
+            _ => NetResponse {
+                protocol: self.protocol,
+                status_code: 0,
+                headers: vec![],
+                body: Vec::new(),
+                error: Some("The protocol does not support 'Request'. Use 'Connect' instead.".to_string()),
+            },
         };
 
         return result;
     }
 
+    /**
+     * Currently GET and POST methods are supported
+     */
     fn request_http(&self) -> NetResponse {
-        // 1. validate url
-        let result = self.validate_url();
-        if result.is_err() {
+        // 1. validation of the url is done in the builder
+
+        // 2. request to the server using HTTP
+        let mut easy = Easy2::new(ResponseCollector(Vec::new(), Vec::new()));
+        easy.get(true).unwrap(); // GET method is default
+        
+        // Check if the request has headers
+        if self.req_headers.is_some() {
+            let mut list = List::new();
+            let headers = self.req_headers.as_ref().unwrap();
+            for (key, value) in headers.iter() {
+                let item = format!("{}: {}", key, value);
+                list.append(item.as_str()).unwrap();
+            }
+
+            // add headers to the request
+            easy.http_headers(list).unwrap();
+        }
+
+        if self.req_body.is_some() {
+            easy.post(true).unwrap();    // POST method
+            easy.post_fields_copy(self.req_body.as_ref().unwrap().as_bytes()).unwrap();
+        }
+
+        let perform_result = easy.perform();
+        if perform_result.is_err() {
             return NetResponse {
                 protocol: self.protocol,
                 status_code: 0,
                 headers: vec![],
-                body: "".to_string(),
-                error: Some(result.err().unwrap()),
+                body: Vec::new(),
+                error: Some(perform_result.err().unwrap().to_string()),
             };
         }
 
-        // 2. request to the server using HTTP
+        let response_code = easy.response_code().unwrap();
+        let response_headers = easy.get_ref().0.clone();
+        let response_body = easy.get_ref().1.clone();
 
+        // tokenized headers from single string to Vec<(String, String)>
+        let tokenized_headers = String::from_utf8(response_headers).unwrap();
+        let tokenized_headers = tokenized_headers.split("\r\n").collect::<Vec<&str>>();
+        let mut response_headers: Vec<(String, String)> = vec![];
+        for header in tokenized_headers {
+            let header = header.split(":").collect::<Vec<&str>>();
+            if header.len() == 2 {
+                response_headers.push((header[0].to_string(), header[1].to_string()));
+            }
+        }
 
         return NetResponse {
             protocol: self.protocol,
-            status_code: 200,
-            headers: vec![],
-            body: "".to_string(),
+            status_code: response_code,
+            headers: response_headers,
+            body: response_body,
             error: None,
-        };  // temporal return
+        };
     }
 
     fn request_https(&self) -> NetResponse {
-        // 1. validate url
-        let result = self.validate_url();
-        if result.is_err() {
-            return NetResponse {
-                protocol: self.protocol,
-                status_code: 0,
-                headers: vec![],
-                body: "".to_string(),
-                error: Some(result.err().unwrap()),
-            };
-        }
+        // 1. validate url is done in the builder
 
         // 2. request to the server using HTTPS
 
@@ -309,35 +362,58 @@ impl ClientBuilder {
             protocol: self.protocol,
             status_code: 200,
             headers: vec![],
-            body: "".to_string(),
+            body: Vec::new(),
             error: None,
         };  // temporal return
     }
 
-    fn request_file(&self) -> Result<(), String> {
+    /**
+     * request to the server using FILE
+     * returns the file byte stream in NetResponse.body
+     */
+    fn request_file(&self) -> NetResponse {
         // request to the server using FILE
 
-        return Ok(());  // temporal return
+        return NetResponse {
+            protocol: self.protocol,
+            status_code: 200,
+            headers: vec![],
+            body: Vec::new(),
+            error: None,
+        };  // temporal return
     }
 
-    fn request_coap(&self) -> Result<(), String> {
+    fn request_coap(&self) -> NetResponse {
         // request to the server using COAP
 
-        return Ok(());  // temporal return
+        return NetResponse {
+            protocol: self.protocol,
+            status_code: 200,
+            headers: vec![],
+            body: Vec::new(),
+            error: None,
+        }
     }
 
-    fn validate_url(&self) -> Result<(), String> {
-        // do scheme test based on url string
-        let tokenized_url = self.url.split("://").collect::<Vec<&str>>();
-        if tokenized_url.len() != 2 {
-            return Err("Missing scheme".to_string());
-        }
-        
-        let parsed_url = Url::parse(&self.url);
-        if parsed_url.is_err() {
-            return Err(parsed_url.err().unwrap().to_string());  // return the error message to force scheme in the url
-        } else {
-            return Ok(());
-        }
+
+ }
+
+ #[cfg(test)]
+ mod tests {
+    use crate::client::{Client, ClientBuilder};
+    use crate::common::data_structure::NetResponse;
+    use crate::common::enums::PROTOCOLS;
+
+    #[test]
+    fn test_build_client() {
+        let client_builder = ClientBuilder::new();
+        let client = client_builder.set_protocol(PROTOCOLS::HTTP)
+            .set_url("https://www.rust-lang.org:80/".to_string())
+            .build().unwrap();
+
+        assert_eq!(client.protocol, PROTOCOLS::HTTP);
+        assert_eq!(client.host, "www.rust-lang.org");
+        assert_eq!(client.port, 80);
+
     }
  }
