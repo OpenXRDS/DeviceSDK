@@ -5,3 +5,7 @@ edition = "2021"
 
 [lib]
 crate-type = ["lib"]
+
+[dependencies]
+curl="0.4.47"
+url="2.5.4"

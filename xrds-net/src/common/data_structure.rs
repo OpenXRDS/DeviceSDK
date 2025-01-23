@@ -16,8 +16,15 @@
 
 
 
+use crate::common::enums::PROTOCOLS;
 
-pub mod client;
-pub mod common;
+#[derive(Debug, Clone)]
+pub struct NetResponse {
+    pub protocol: PROTOCOLS,
+    pub status_code: u16,
+    pub headers: Vec<(String, String)>,
+    pub body: String,
 
-
+    // Optional fields
+    pub error: Option<String>,
+}

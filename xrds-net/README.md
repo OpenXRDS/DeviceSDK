@@ -11,7 +11,6 @@ XRDS network library
 ## Supported Protocols
 
 - Http(s) [1.1/3]
-  - nghttp3
 - (S)FTP
 - FILE
 - MQTT
@@ -21,5 +20,42 @@ XRDS network library
 
 ## Dependencies
 
-- libcurl
-- libcoap
+### Http(s), FILE
+
+- curl-rust: 0.4.47
+- [https://docs.rs/curl/latest/curl/](https://docs.rs/curl/latest/curl/)
+
+#### ws(s)
+
+* websocket: 0.27.1
+* [https://docs.rs/websocket/latest/websocket/](https://docs.rs/websocket/latest/websocket/)
+
+#### mqtt
+
+- rumqttc: 0.24.0
+- [https://crates.io/crates/rumqttc](https://crates.io/crates/rumqttc)
+- [chrome-extension://efaidnbmnnnibpcajpcglclefindmkaj/https://www.witree.co.kr/layouts/witree_2015/data/product/Manual/MQTT_guide.pdf](chrome-extension://efaidnbmnnnibpcajpcglclefindmkaj/https://www.witree.co.kr/layouts/witree_2015/data/product/Manual/MQTT_guide.pdf)
+
+#### coap
+
+- coap: 0.19.1
+- [https://docs.rs/coap/latest/coap/](https://docs.rs/coap/latest/coap/)
+
+#### WebRTC
+
+- webrtc: 0.12.0
+- [https://docs.rs/webrtc/latest/webrtc/](https://docs.rs/webrtc/latest/webrtc/)
+
+#### (S)FTP
+
+- suppaftp: ^6
+- [https://docs.rs/suppaftp/latest/suppaftp/](https://docs.rs/suppaftp/latest/suppaftp/)
+
+#### DASH
+
+- dash-mpd: 0.17.4
+- [https://docs.rs/dash-mpd/latest/dash_mpd/](https://docs.rs/dash-mpd/latest/dash_mpd/)
+
+#### Http3 & QUIC
+
+- quiche: 0.22.0

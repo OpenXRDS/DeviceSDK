@@ -14,10 +14,19 @@
  limitations under the License.
  */
 
-
-
-
-pub mod client;
-pub mod common;
-
-
+ #[derive(Debug, Clone, Copy)]
+ pub enum PROTOCOLS {
+    HTTP,
+    HTTPS,
+    FILE,
+    COAP,
+    // COAPS,
+    MQTT,
+    FTP,
+    SFTP,
+    WS,
+    WSS,
+    WEBRTC,
+    HTTP3,
+    QUIC
+}

@@ -4,7 +4,7 @@
 ![GitHub Issues or Pull Requests](https://img.shields.io/github/issues/OpenXRDS/DeviceSDK)
 ![GitHub Issues or Pull Requests](https://img.shields.io/github/issues-closed/OpenXRDS/DeviceSDK?color=red)
 
-To support most of the XR devices for XR application
+To ensure compatibility with the majority of XR devices for XR applications.
 
 ## Usage
 
