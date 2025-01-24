@@ -29,12 +29,14 @@ XRDS network library
 
 * websocket: 0.27.1
 * [https://docs.rs/websocket/latest/websocket/](https://docs.rs/websocket/latest/websocket/)
+* default port: 80, secured: 443
 
 #### mqtt
 
 - rumqttc: 0.24.0
 - [https://crates.io/crates/rumqttc](https://crates.io/crates/rumqttc)
 - [chrome-extension://efaidnbmnnnibpcajpcglclefindmkaj/https://www.witree.co.kr/layouts/witree_2015/data/product/Manual/MQTT_guide.pdf](chrome-extension://efaidnbmnnnibpcajpcglclefindmkaj/https://www.witree.co.kr/layouts/witree_2015/data/product/Manual/MQTT_guide.pdf)
+- default port: 1883, secured: 8883
 
 #### coap
 

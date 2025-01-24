@@ -17,10 +17,6 @@
 
 use crate::common::enums::PROTOCOLS;
 use crate::common::data_structure::NetResponse;
-use crate::common::validate_url;
-
-use url::Url;
-use url::ParseError;
 
 use curl::easy::{Easy2, Handler, WriteError, List};
 
@@ -45,9 +41,11 @@ impl Handler for ResponseCollector {
 
 pub struct ClientBuilder {
     protocol: PROTOCOLS,
-    url: String,
-    port: u16,
-    path: String,
+    raw_url: String,
+    
+    host: Option<String>,
+    port: Option<u32>,
+    path: Option<String>,
     
     // Optional fields
     req_headers: Option<Vec<(String, String)>>,
@@ -64,9 +62,11 @@ impl ClientBuilder {
     pub fn new() -> Self {
         ClientBuilder {
             protocol: PROTOCOLS::HTTP,
-            url: "".to_string(),
-            port: 80,
-            path: "".to_string(),
+            raw_url: "".to_string(),
+            
+            host: None,
+            port: None,
+            path: None,
 
             req_headers: None,
             req_body: None,
@@ -83,7 +83,18 @@ impl ClientBuilder {
     }
 
     pub fn set_url(mut self, url: String) -> Self {
-        self.url = url;
+        self.raw_url = url;
+
+        // try parse to fill host, port, and path
+        let parsed_url = crate::common::parse_url(&self.raw_url);
+        if parsed_url.is_err() {
+            return self;
+        } else {
+            let parsed_url = parsed_url.unwrap();
+            self.host = Some(parsed_url.host);
+            self.port = Some(parsed_url.port);
+            self.path = Some(parsed_url.path);
+        }
         self
     }
 
@@ -113,21 +124,14 @@ impl ClientBuilder {
     }
 
     pub fn build(self) -> Result<Client, String> {
-        let url_validation_result = validate_url(self.url.as_str());
-        if url_validation_result.is_err() {
-            return Err(url_validation_result.err().unwrap());
-        }
-
-        let url = url_validation_result.unwrap();
-        let val_port = url.port().unwrap_or(80);
-        let val_host = url.host_str().unwrap_or("").to_string();
-        let val_path = url.path().to_string();
 
         Ok(Client {
             protocol: self.protocol,
-            host: val_host,
-            port: val_port,
-            path: val_path,
+            raw_url: self.raw_url,
+
+            host: None,
+            port: None,
+            path: None,
 
             req_headers: self.req_headers,
             req_body: self.req_body,
@@ -144,9 +148,13 @@ impl ClientBuilder {
 
  pub struct Client {
     protocol: PROTOCOLS,
-    host: String,
-    port: u16,
-    path: String,
+    raw_url: String, // url given by the user. This is used for connection and request
+    
+    // parsed url. these fields are extracted from the url string
+    // Not directly used for connection or request. Just for information
+    host: Option<String>,
+    port: Option<u32>,
+    path: Option<String>,
 
     req_headers: Option<Vec<(String, String)>>,
     req_body: Option<String>,
@@ -165,16 +173,20 @@ impl ClientBuilder {
         self.protocol
     }
 
-    pub fn get_host(&self) -> &str {
-        &self.host
+    pub fn get_url(&self) -> &String {
+        &self.raw_url
     }
 
-    pub fn get_port(&self) -> u16 {
+    pub fn get_host(&self) -> Option<&String> {
+        self.host.as_ref()
+    }
+
+    pub fn get_port(&self) -> Option<u32> {
         self.port
     }
 
-    pub fn get_path(&self) -> &str {
-        &self.path
+    pub fn get_path(&self) -> Option<&String> {
+        self.path.as_ref()
     }
 
     pub fn get_req_headers(&self) -> Option<&Vec<(String, String)>> {
@@ -408,12 +420,10 @@ impl ClientBuilder {
     fn test_build_client() {
         let client_builder = ClientBuilder::new();
         let client = client_builder.set_protocol(PROTOCOLS::HTTP)
-            .set_url("https://www.rust-lang.org:80/".to_string())
+            .set_url("http://www.rust-lang.org:80/".to_string())
             .build().unwrap();
 
         assert_eq!(client.protocol, PROTOCOLS::HTTP);
-        assert_eq!(client.host, "www.rust-lang.org");
-        assert_eq!(client.port, 80);
-
+        assert_eq!(client.raw_url, "http://www.rust-lang.org:80/".to_string());
     }
  }

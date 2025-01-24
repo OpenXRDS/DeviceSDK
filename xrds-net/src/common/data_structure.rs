@@ -28,3 +28,15 @@ pub struct NetResponse {
     // Optional fields
     pub error: Option<String>,
 }
+
+pub struct Url {
+    pub shceme: String,
+    pub host: String,
+    pub port: u32,
+    pub path: String,
+
+    // Optional fields
+    pub query: Option<String>,
+    pub username: Option<String>,
+    pub password: Option<String>,
+}
