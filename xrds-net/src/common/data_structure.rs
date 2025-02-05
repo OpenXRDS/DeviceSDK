@@ -29,8 +29,18 @@ pub struct NetResponse {
     pub error: Option<String>,
 }
 
+// implement display for NetResponse
+impl std::fmt::Display for NetResponse {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        let body_str = String::from_utf8(self.body.clone()).unwrap();
+
+        write!(f, "Protocol: {:?}\nStatus Code: {}\nHeaders: {:?}\nBody: {:?}\nError: {:?}",
+            self.protocol, self.status_code, self.headers, body_str, self.error)
+    }
+}
+
 pub struct Url {
-    pub shceme: String,
+    pub scheme: String,
     pub host: String,
     pub port: u32,
     pub path: String,
