@@ -41,37 +41,16 @@ impl Handler for ResponseCollector {
 
 pub struct ClientBuilder {
     protocol: PROTOCOLS,
-    raw_url: String,
-    
-    host: Option<String>,
-    port: Option<u32>,
-    path: Option<String>,
-    
-    // Optional fields
-    req_headers: Option<Vec<(String, String)>>,
-    req_body: Option<String>,
-    timeout: Option<u64>,
 
     // authentication
     user: Option<String>,
     password: Option<String>,
-
 }
 
 impl ClientBuilder {
     pub fn new() -> Self {
         ClientBuilder {
             protocol: PROTOCOLS::HTTP,
-            raw_url: "".to_string(),
-            
-            host: None,
-            port: None,
-            path: None,
-
-            req_headers: None,
-            req_body: None,
-            timeout: None,
-
             user: None,
             password: None,
         }
@@ -79,37 +58,6 @@ impl ClientBuilder {
 
     pub fn set_protocol(mut self, protocol: PROTOCOLS) -> Self {
         self.protocol = protocol;
-        self
-    }
-
-    pub fn set_url(mut self, url: String) -> Self {
-        self.raw_url = url;
-
-        // try parse to fill host, port, and path
-        let parsed_url = crate::common::parse_url(&self.raw_url);
-        if parsed_url.is_err() {
-            return self;
-        } else {
-            let parsed_url = parsed_url.unwrap();
-            self.host = Some(parsed_url.host);
-            self.port = Some(parsed_url.port);
-            self.path = Some(parsed_url.path);
-        }
-        self
-    }
-
-    pub fn set_req_headers(mut self, headers: Vec<(String, String)>) -> Self {
-        self.req_headers = Some(headers);
-        self
-    }
-
-    pub fn set_req_body(mut self, body: String) -> Self {
-        self.req_body = Some(body);
-        self
-    }
-
-    pub fn set_timeout(mut self, timeout: u64) -> Self {
-        self.timeout = Some(timeout);
         self
     }
 
@@ -123,29 +71,37 @@ impl ClientBuilder {
         self
     }
 
-    pub fn build(self) -> Result<Client, String> {
+    /**
+     * build the client with the given parameters
+     * This function will parse the url to fill host, port, and path
+     */
+    pub fn build(self) -> Client {
+        // try parse to fill host, port, and path
 
-        Ok(Client {
+        Client {
             protocol: self.protocol,
-            raw_url: self.raw_url,
+            raw_url: "".to_string(),
 
             host: None,
             port: None,
             path: None,
 
-            req_headers: self.req_headers,
-            req_body: self.req_body,
-            timeout: self.timeout,
+            method: None,
+            req_headers: None,
+            req_body: None,
+            timeout: None,
+            redirection: false,
 
             user: self.user,
             password: self.password,
 
             res_headers: vec![],
             res_body: "".to_string(),
-        })
+        }
     }
 }
 
+#[derive(Debug, Clone)]
  pub struct Client {
     protocol: PROTOCOLS,
     raw_url: String, // url given by the user. This is used for connection and request
@@ -159,6 +115,8 @@ impl ClientBuilder {
     req_headers: Option<Vec<(String, String)>>,
     req_body: Option<String>,
     timeout: Option<u64>,
+    redirection: bool,
+    method: Option<String>,
 
     user: Option<String>,
     password: Option<String>,
@@ -169,8 +127,8 @@ impl ClientBuilder {
 
  impl Client {
 
-    pub fn get_protocol(&self) -> PROTOCOLS {
-        self.protocol
+    pub fn get_protocol(&self) -> &PROTOCOLS {
+        &self.protocol
     }
 
     pub fn get_url(&self) -> &String {
@@ -215,6 +173,45 @@ impl ClientBuilder {
 
     pub fn get_response_body(&self) -> String {
         self.res_body.clone()
+    }
+
+    pub fn get_method(&self) -> Option<&String> {
+        self.method.as_ref()
+    }
+
+    pub fn set_method(mut self, method: &str) -> Self {
+        self.method = Some(method.to_uppercase().to_string());
+        self
+    }
+
+    pub fn set_url(mut self, url: &str) -> Self {
+        self.raw_url = url.to_string();
+        self
+    }
+
+    pub fn set_follow_redirect(mut self, follow: bool) -> Self {
+        self.redirection = follow;
+        self
+    }
+
+    pub fn set_req_headers(mut self, param_headers: Vec<(&str, &str)>) -> Self {
+        // convert (&str, &str) to (String, String)
+        let mut headers: Vec<(String, String)> = vec![];
+        for (key, value) in param_headers.iter() {
+            headers.push((key.to_string(), value.to_string()));
+        }
+        self.req_headers = Some(headers);
+        self
+    }
+
+    pub fn set_req_body(mut self, body: &str) -> Self {
+        self.req_body = Some(body.to_string());
+        self
+    }
+
+    pub fn set_timeout(mut self, timeout: u64) -> Self {
+        self.timeout = Some(timeout);
+        self
     }
 
     /**
@@ -283,7 +280,28 @@ impl ClientBuilder {
     /**
      * request to the server
      */
-    pub fn request(&self) -> NetResponse {
+    pub fn request(mut self) -> NetResponse {
+        let parsed_url = crate::common::parse_url(&self.raw_url);
+        if parsed_url.is_err() {
+            let err_message = parsed_url.err().unwrap();
+            return NetResponse {
+                protocol: self.protocol,
+                status_code: 0,
+                headers: vec![],
+                body: Vec::new(),
+                error: Some(err_message),
+            }
+        } else {
+            let parsed_url = parsed_url.unwrap();
+            self.host = Some(parsed_url.host);
+            self.port = Some(parsed_url.port);
+            self.path = Some(parsed_url.path);
+            if parsed_url.query.is_some() {
+                // add query to the path
+                self.path = Some(self.path.as_ref().unwrap().to_string() + "?" + parsed_url.query.as_ref().unwrap());
+            }
+        }
+
         // check the protocol
         let result = match self.protocol {
             PROTOCOLS::HTTP => self.request_http(),
@@ -311,7 +329,9 @@ impl ClientBuilder {
         // 2. request to the server using HTTP
         let mut easy = Easy2::new(ResponseCollector(Vec::new(), Vec::new()));
         easy.get(true).unwrap(); // GET method is default
-        
+        easy.url(self.raw_url.as_str()).unwrap();
+        easy.follow_location(self.redirection).unwrap();
+
         // Check if the request has headers
         if self.req_headers.is_some() {
             let mut list = List::new();
@@ -325,9 +345,12 @@ impl ClientBuilder {
             easy.http_headers(list).unwrap();
         }
 
-        if self.req_body.is_some() {
+        if self.get_method() == Some(&"POST".to_string()) {
             easy.post(true).unwrap();    // POST method
-            easy.post_fields_copy(self.req_body.as_ref().unwrap().as_bytes()).unwrap();
+            
+            if self.req_body.is_some() {    // fill body field if there is any in request
+                easy.post_fields_copy(self.req_body.as_ref().unwrap().as_bytes()).unwrap();
+            }
         }
 
         let perform_result = easy.perform();
@@ -366,13 +389,12 @@ impl ClientBuilder {
     }
 
     fn request_https(&self) -> NetResponse {
-        // 1. validate url is done in the builder
 
         // 2. request to the server using HTTPS
 
         return NetResponse {
             protocol: self.protocol,
-            status_code: 200,
+            status_code: 0,
             headers: vec![],
             body: Vec::new(),
             error: None,
@@ -410,20 +432,171 @@ impl ClientBuilder {
 
  }
 
+ /**
+  * Unit tests
+
+  * To run the tests, execute the following command: cargo test
+  * In case of printing the output of the tests, execute the following command: cargo test -- --nocapture
+ */
  #[cfg(test)]
  mod tests {
     use crate::client::{Client, ClientBuilder};
     use crate::common::data_structure::NetResponse;
     use crate::common::enums::PROTOCOLS;
 
+    static HTTP_ECHO_SERVER_URL: &str = "https://echo.free.beeceptor.com";
+
     #[test]
     fn test_build_client() {
         let client_builder = ClientBuilder::new();
         let client = client_builder.set_protocol(PROTOCOLS::HTTP)
-            .set_url("http://www.rust-lang.org:80/".to_string())
-            .build().unwrap();
+            .build();
 
-        assert_eq!(client.protocol, PROTOCOLS::HTTP);
-        assert_eq!(client.raw_url, "http://www.rust-lang.org:80/".to_string());
+        /* Assertions */
+        assert_eq!(client.get_protocol(), &PROTOCOLS::HTTP);
     }
+
+    /* start of HTTP 1.1 tests */
+    #[test]
+    fn test_http_request_wrong_host_name1() {
+        let client_builder = ClientBuilder::new();
+        let client = client_builder.set_protocol(PROTOCOLS::HTTP)
+            .build();
+
+        let response = client.set_url("ww.w.clear.com").request();
+        
+        /* Assertions */
+        assert!(response.error.is_some());  // wrong host name
+    }
+
+    #[test]
+    fn test_http_request_wrong_host_name2() {
+        let client_builder = ClientBuilder::new();
+        let client = client_builder.set_protocol(PROTOCOLS::HTTP)
+            .build();
+
+        let response = client.set_url("3.112.22.222.11").request();
+        
+        /* Assertions */
+        assert!(response.error.is_some());  // wrong host name
+    }
+
+    /*
+        Disabled due to hardness of testing the IP address
+     */
+    // #[test]
+    // fn test_http_request_host_ip() {
+    //     let client_builder = ClientBuilder::new();
+    //     let client = client_builder.set_protocol(PROTOCOLS::HTTP)
+    //         .build();
+
+    //     let response = client.set_url("192.168.10.240")
+    //                             .set_follow_redirect(true).request();
+    //     println!("error: {}", response.error.as_ref().unwrap());
+    //     assert!(response.error.is_none());  // successful request
+
+    //     assert!(response.headers.len() > 0);
+    //     assert!(response.body.len() > 0);
+    //     assert_eq!(response.status_code, 200);
+    // }
+
+    #[test]
+    fn test_http_request_get_with_redirection() {
+        let client_builder = ClientBuilder::new();
+        let client = client_builder.set_protocol(PROTOCOLS::HTTP)
+            .build();
+
+        let response = client.set_follow_redirect(true)
+            .set_url("http://www.rust-lang.org:80/")
+            .request();
+        
+        /* Assertions */
+        assert!(response.error.is_none());  // successful request
+        assert!(response.headers.len() > 0);
+        assert!(response.body.len() > 0);
+        assert_eq!(response.status_code, 200);
+    }
+
+    #[test]
+    fn test_http_request_get_without_redirection() {
+        let client_builder = ClientBuilder::new();
+        let client = client_builder.set_protocol(PROTOCOLS::HTTP)
+            .build();
+
+        let response = client.set_url("http://www.rust-lang.org:80/").request();
+        
+        /* Assertions */
+        assert!(response.error.is_none());  // successful request
+        assert!(response.headers.len() > 0);
+        assert!(response.body.len() > 0);
+        assert_ne!(response.status_code, 200);  // redirection status code
+    }
+
+    #[test]
+    fn test_http_request_post_no_post_allowed() {
+        let client_builder = ClientBuilder::new();
+        let client = client_builder.set_protocol(PROTOCOLS::HTTP)
+            .build();
+
+        let response = client.set_url("http://www.rust-lang.org:80/")
+                        .set_method("POST")
+                        .set_follow_redirect(true)
+                        .request();
+        
+        /* Assertions */
+        assert!(response.error.is_none());  // successful request
+        assert!(response.headers.len() > 0);
+        assert!(response.body.len() > 0);
+
+        // println!("return code: {}", response.status_code);
+        assert_ne!(response.status_code, 200);  // no post allowed for the server
+    }
+
+    #[test]
+    fn test_http_request_post_headers_only() {
+        let client_builder = ClientBuilder::new();
+        let client = client_builder.set_protocol(PROTOCOLS::HTTP)
+            .build();
+
+        let response = client.set_url(HTTP_ECHO_SERVER_URL)
+                .set_req_headers(vec![("Content-Type", "application/json")])
+                .set_method("POST")
+                .request();
+        
+        /* Assertions */
+        assert_eq!(response.status_code, 200);
+    }
+
+    #[test]
+    fn test_http_request_post_1() {
+        let client_builder = ClientBuilder::new();
+        let client = client_builder.set_protocol(PROTOCOLS::HTTP)
+            .build();
+
+        let response = client.set_url(HTTP_ECHO_SERVER_URL)
+                .set_req_headers(vec![("Content-Type", "application/json"), ("Authorization", "Bearer 123456")])
+                .set_method("POST")
+                .set_req_body("{}")
+                .request();
+        
+        /* Assertions */
+        assert_eq!(response.status_code, 200);
+    }
+    /* end of HTTP 1.1 tests */
+
+    /* start of HTTPS tests */
+    #[test]
+    fn test_https_request_get() {
+        let client_builder = ClientBuilder::new();
+        let client = client_builder.set_protocol(PROTOCOLS::HTTPS)
+            .build();
+
+        let response = client.set_url("https://www.rust-lang.org:443/")
+            .request();
+
+        /* Assertions */
+        assert!(response.error.is_none());  // successful request
+        assert_ne!(response.status_code, 200);  // returns 403
+    }
+
  }
