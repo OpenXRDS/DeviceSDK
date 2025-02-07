@@ -79,5 +79,14 @@ pub fn parse_url(url: &str) -> Result<Url, String> {
     })
 }
 
+pub fn coap_code_to_decimal(coap_code: &str) -> u32 {
+    let coap_code_token = coap_code.split(".").collect::<Vec<&str>>();
+
+    let class = coap_code_token[0].parse::<u32>().unwrap();
+    let detail = coap_code_token[1].parse::<u32>().unwrap();
+
+    class * 32 + detail
+}
+
 #[cfg(test)]
 mod tests;

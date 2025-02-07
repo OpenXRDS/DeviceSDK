@@ -18,6 +18,11 @@
 
 use crate::common::enums::PROTOCOLS;
 
+/**
+ * In case of Using CoAP protocol, refer to the following link:
+ * https://www.potaroo.net/ietf/all-ids/draft-castellani-core-http-mapping-07.html#rfc.section.4
+ * The return code is different from the HTTP protocol.
+ */
 #[derive(Debug, Clone)]
 pub struct NetResponse {
     pub protocol: PROTOCOLS,
@@ -39,6 +44,7 @@ impl std::fmt::Display for NetResponse {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct Url {
     pub scheme: String,
     pub host: String,
