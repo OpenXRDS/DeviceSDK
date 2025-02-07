@@ -9,3 +9,6 @@ crate-type = ["lib"]
 [dependencies]
 curl="0.4.47"
 url="2.5.4"
+coap="0.19.1"
+coap-lite = "0.11.3"
+tokio = {version = "^1.32", features = ["full"]}

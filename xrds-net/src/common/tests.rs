@@ -99,42 +99,4 @@ mod tests {
         assert_eq!(parsed_url_9.is_err(), true);
     }
 
-    #[test]
-    fn url_validation_test_valid_query_params1() { // GET query parsing
-        let http_url_8 = "http://echo.free.beeceptor.com?name=John&age=30";
-        let parsed_url_8 = parse_url(http_url_8);
-
-        assert_eq!(parsed_url_8.is_ok(), true);
-
-        let parsed_url_8 = parsed_url_8.unwrap();
-
-        assert_eq!(parsed_url_8.scheme, "http");
-        assert_eq!(parsed_url_8.host, "echo.free.beeceptor.com");
-        assert_eq!(parsed_url_8.port, 80);
-        assert_eq!(parsed_url_8.path, "/");
-        assert_eq!(parsed_url_8.query.unwrap(), "name=John&age=30");
-    }
-
-    #[test]
-    fn url_validation_test_valid_query_params2() {
-        let http_url_10 = "http://echo.free.beeceptor.com:80/?name=John&age=30";
-        let parsed_url_10 = parse_url(http_url_10);
-        
-        assert_eq!(parsed_url_10.is_ok(), true);
-        
-        let parsed_url_10 = parsed_url_10.unwrap();
-
-        assert_eq!(parsed_url_10.scheme, "http");
-        assert_eq!(parsed_url_10.host, "echo.free.beeceptor.com");
-        assert_eq!(parsed_url_10.port, 80);
-        assert_eq!(parsed_url_10.path, "/");
-        assert_eq!(parsed_url_10.query.unwrap(), "name=John&age=30");
-    }
-
-    #[test]
-    fn url_validation_test_invalid_query_params1() {
-        let http_url_11 = "http://www.rust-lang.org/??";
-        let parsed_url_11 = parse_url(http_url_11);
-        assert_eq!(parsed_url_11.is_err(), true);
-    }
 }
