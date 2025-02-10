@@ -7,8 +7,13 @@ edition = "2021"
 crate-type = ["lib"]
 
 [dependencies]
-curl="0.4.47"
-url="2.5.4"
-coap="0.19.1"
-coap-lite = "0.11.3"
+curl="0.4.47"                                           # http / https
+url="2.5.4" 
+coap="0.19.1"                                           # coap
+coap-lite = "0.11.3"                                    # coap
 tokio = {version = "^1.32", features = ["full"]}
+websocket="0.27.1"                                      # websocket / wss
+suppaftp={ version = "^6", features=["native-tls"] }    # ftp / sftp
+
+libunftp = "0.20.3"                                     # ftp server
+unftp-sbe-fs = "0.2.0"                                  # ftp server

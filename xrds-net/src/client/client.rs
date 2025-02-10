@@ -14,14 +14,29 @@
  limitations under the License.
  */
 
+use std::fmt;
+use std::clone::Clone;
+use std::io::Cursor;
 
-use crate::common::enums::PROTOCOLS;
-use crate::common::data_structure::NetResponse;
+// Internal dependencies
+use crate::common::enums::{PROTOCOLS, FtpCommands};
+use crate::common::data_structure::{FtpPayload, FtpResponse, NetResponse};
 
-use curl::{easy::{Easy2, Handler, List, WriteError}, Error};
+// HTTP
+use curl::easy::{Easy2, Handler, List, WriteError};
 
-use coap_lite::{RequestType as Method, CoapRequest, CoapResponse};
-use coap::{UdpCoAPClient};
+// CoAP
+use coap_lite::CoapResponse;
+use coap::UdpCoAPClient;
+
+// Websocket
+use websocket::client::sync::Client as WS_Client;
+use websocket::stream::sync::NetworkStream;
+use websocket::message::OwnedMessage;
+
+// FTP & FTPS
+use suppaftp::FtpStream;
+
 
 /**
  * ResponseCollector is a struct to collect response from the server
@@ -64,13 +79,13 @@ impl ClientBuilder {
         self
     }
 
-    pub fn set_user(mut self, user: String) -> Self {
-        self.user = Some(user);
+    pub fn set_user(mut self, user: &str) -> Self {
+        self.user = Some(user.to_string());
         self
     }
 
-    pub fn set_password(mut self, password: String) -> Self {
-        self.password = Some(password);
+    pub fn set_password(mut self, password: &str) -> Self {
+        self.password = Some(password.to_string());
         self
     }
 
@@ -100,11 +115,12 @@ impl ClientBuilder {
 
             res_headers: vec![],
             res_body: "".to_string(),
+
+            ws_client: None,
+            ftp_stream: None,
         }
     }
 }
-
-#[derive(Debug, Clone)]
  pub struct Client {
     protocol: PROTOCOLS,
     raw_url: String, // url given by the user. This is used for connection and request
@@ -126,9 +142,18 @@ impl ClientBuilder {
 
     res_headers: Vec<(String, String)>,
     res_body: String,
+
+    ws_client: Option<WS_Client<Box<dyn NetworkStream + Send>>>,
+    ftp_stream: Option<FtpStream>,
  }
 
- impl Client {
+ impl fmt::Debug for Client {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Client.Deubg: To Be Implemented")
+    }
+}
+
+impl Client {
 
     pub fn get_protocol(&self) -> &PROTOCOLS {
         &self.protocol
@@ -232,22 +257,54 @@ impl ClientBuilder {
 
     /**
      * connect to the server
+     * Since it is not possible to clarify the type of the client in advance,
+     * the function returns Result<Self, String> instead of Result<T, String>
      */
-    pub fn connect(&self) -> Result<(), String> {
+    pub fn connect(self) -> Result<Self, String> {
         // check the protocol
         let result = match self.protocol {
-            PROTOCOLS::MQTT => self.connect_mqtt(),
+            PROTOCOLS::WS | PROTOCOLS::WSS => self.connect_ws(),
             PROTOCOLS::FTP => self.connect_ftp(),
             PROTOCOLS::SFTP => self.connect_sftp(),
-            PROTOCOLS::WS => self.connect_ws(),
-            PROTOCOLS::WSS => self.connect_wss(),
-            PROTOCOLS::WEBRTC => self.connect_webrtc(),
-            PROTOCOLS::HTTP3 => self.connect_http3(),
-            PROTOCOLS::QUIC => self.connect_quic(),
+            // PROTOCOLS::MQTT => self.connect_mqtt(),
+            // PROTOCOLS::WEBRTC => self.connect_webrtc(),
+            // PROTOCOLS::HTTP3 => self.connect_http3(),
+            // PROTOCOLS::QUIC => self.connect_quic(),
             _ => Err("The protocol does not support 'Connect'. Use 'Request' instead.".to_string()),
         };
 
         return result;
+    }
+
+    fn connect_ftp(mut self) -> Result<Self, String> {
+        let ftp_stream = FtpStream::connect(self.raw_url.as_str());
+        if ftp_stream.is_err() {
+            return Err(ftp_stream.err().unwrap().to_string());
+        }
+
+        let mut ftp_stream = ftp_stream.unwrap();
+
+        if self.user.is_some() && self.password.is_some() {
+            let user = self.user.as_ref().unwrap();
+            let password = self.password.as_ref().unwrap();
+            let login_result = ftp_stream.login(user, password);
+            if login_result.is_err() {
+                return Err(login_result.err().unwrap().to_string());
+            } else {
+                // store the ftp_stream in the client
+                self.ftp_stream = Some(ftp_stream);
+                return Ok(self);
+            }
+        } else {
+            return Err("User and password are required for FTP connection.".to_string());
+        }
+    }
+
+    /*
+        Need to test first
+     */
+    fn connect_sftp(self) -> Result<Self, String> {
+        return Ok(self);  // temporal return
     }
 
     fn connect_mqtt(&self) -> Result<(), String> {
@@ -256,28 +313,15 @@ impl ClientBuilder {
         return Ok(());  // temporal return
     }
 
-    fn connect_ftp(&self) -> Result<(), String> {
-        // connect to the server using FTP
-
-        return Ok(());  // temporal return
-    }
-
-    fn connect_sftp(&self) -> Result<(), String> {
-        // connect to the server using SFTP
-
-        return Ok(());  // temporal return
-    }
-
-    fn connect_ws(&self) -> Result<(), String> {
-        // connect to the server using WS
-
-        return Ok(());  // temporal return
-    }
-
-    fn connect_wss(&self) -> Result<(), String> {
-        // connect to the server using WSS
-
-        return Ok(());  // temporal return
+    fn connect_ws(mut self) -> Result<Self, String> {
+        let client_result = websocket::ClientBuilder::new(self.raw_url.as_str()).unwrap().connect(None);
+        
+        if client_result.is_err() {
+            return Err(client_result.err().unwrap().to_string());
+        } else {
+            self.ws_client = Some(client_result.unwrap());
+            return Ok(self);
+        }
     }
 
     fn connect_webrtc(&self) -> Result<(), String> {
@@ -293,6 +337,77 @@ impl ClientBuilder {
         return Err("The protocol is not supported yet.".to_string());
     }
 
+    pub fn send(self, data: Vec<u8>) -> Result<Self, String> {
+        // check the protocol
+        let result = match self.protocol {
+            PROTOCOLS::WS | PROTOCOLS::WSS => self.send_ws(data),
+            PROTOCOLS::FTP | PROTOCOLS::SFTP => self.send_ftp(),
+            // PROTOCOLS::MQTT => self.send_mqtt(message),
+            // PROTOCOLS::WEBRTC => self.send_webrtc(message),
+            // PROTOCOLS::HTTP3 => self.send_http3(message),
+            // PROTOCOLS::QUIC => self.send_quic(message),
+            _ => Err("The protocol does not support 'Send'.".to_string()),
+        };
+
+        return result;
+    }
+
+    pub fn rcv(self) -> Result<Vec<u8>, String> {
+        // check the protocol
+        let result = match self.protocol {
+            PROTOCOLS::WS | PROTOCOLS::WSS => self.rcv_ws(),
+            PROTOCOLS::FTP | PROTOCOLS::SFTP => self.rcv_ftp(),
+            // PROTOCOLS::MQTT => self.rcv_mqtt(),
+            // PROTOCOLS::WEBRTC => self.rcv_webrtc(),
+            // PROTOCOLS::HTTP3 => self.rcv_http3(),
+            // PROTOCOLS::QUIC => self.rcv_quic(),
+            _ => Err("The protocol does not support 'Receive'.".to_string()),
+        };
+
+        return result;
+    }
+
+    fn send_ftp(&self) -> Result<Self, String> {
+        return Err("Use run_ftp_command instead for FTP/SFTP.".to_string());
+    }
+
+    fn rcv_ftp(&self) -> Result<Vec<u8>, String> {
+        return Err("Use run_ftp_command instead for FTP/SFTP".to_string());
+    }
+    fn send_ws(mut self, message: Vec<u8>) -> Result<Self, String> {
+        let send_result = self.ws_client.as_mut().unwrap().send_message(&OwnedMessage::Binary(message));
+
+        if send_result.is_err() {
+            return Err(send_result.err().unwrap().to_string());
+        } else {
+            return Ok(self);
+        }
+    }
+
+    fn rcv_ws(mut self) -> Result<Vec<u8>, String> {
+        let message = self.ws_client.as_mut().unwrap().recv_message();
+
+        if message.is_err() {
+            return Err(message.err().unwrap().to_string());
+        } else {
+            let message = message.unwrap();
+            match message {
+                OwnedMessage::Binary(data) => {
+                    return Ok(data);
+                },
+                OwnedMessage::Text(data) => {
+                    return Ok(data.into_bytes());
+                },
+                _ => {
+                    return Err("The received message is not binary.".to_string());
+                }
+            }
+        }
+    }
+
+    /**************************** */
+    /* REQUEST-RESPONSE PROTOCOLS */
+    /**************************** */
     /**
      * request to the server
      */
@@ -464,7 +579,7 @@ impl ClientBuilder {
         return NetResponse {
             protocol: self.protocol,
             status_code: coap_status_code,
-            headers: headers,
+            headers,
             body: body.as_bytes().to_vec(),
             error: None,
         };
@@ -480,4 +595,233 @@ impl ClientBuilder {
             return Ok(response.unwrap());
         }
     }
+
+    pub fn run_ftp_command(self, ftp_payload: FtpPayload) -> FtpResponse {
+        match ftp_payload.command {
+            FtpCommands::CWD => self.run_ftp_cwd(ftp_payload),
+            FtpCommands::CDUP => self.run_ftp_cdup(),
+            FtpCommands::QUIT => self.run_ftp_quit(),
+            FtpCommands::RETR => self.run_ftp_retr(ftp_payload),
+            FtpCommands::STOR => self.run_ftp_stor(ftp_payload),    // TODO: server implementation needed
+            FtpCommands::APPE => self.run_ftp_appe(ftp_payload),    // TODO: server implementation needed
+            FtpCommands::DELE => self.run_ftp_dele(ftp_payload),    // TODO: server implementation needed
+            FtpCommands::RMD => self.run_ftp_rmd(ftp_payload),      // TODO: server implementation needed
+            FtpCommands::MKD => self.run_ftp_mkd(ftp_payload),      // TODO: server implementation needed
+            FtpCommands::PWD => self.run_ftp_pwd(),                 
+            FtpCommands::LIST => self.run_ftp_list(ftp_payload),
+            FtpCommands::NOOP => self.run_ftp_noop(),
+        }
+    }
+
+    /**
+     * FTP commands
+     */
+    fn run_ftp_cwd(self, ftp_payload: FtpPayload) -> FtpResponse {
+        let response = self.ftp_stream.unwrap().cwd(ftp_payload.payload_name.as_str());
+        if response.is_err() {
+            return FtpResponse {
+                payload: None,
+                error: Some(response.err().unwrap().to_string()),
+            };
+        } else {
+            return FtpResponse {
+                payload: None,
+                error: None,
+            };
+        }
+    }
+
+    fn run_ftp_cdup(self) -> FtpResponse {
+        let response = self.ftp_stream.unwrap().cdup();
+        if response.is_err() {
+            return FtpResponse {
+                payload: None,
+                error: Some(response.err().unwrap().to_string()),
+            };
+        } else {
+            return FtpResponse {
+                payload: None,
+                error: None,
+            };
+        }
+    }
+
+    fn run_ftp_quit(self) -> FtpResponse {
+        let response = self.ftp_stream.unwrap().quit();
+        if response.is_err() {
+            return FtpResponse {
+                payload: None,
+                error: Some(response.err().unwrap().to_string()),
+            };
+        } else {
+            return FtpResponse {
+                payload: None,
+                error: None,
+            };
+        }
+    }
+
+    fn run_ftp_retr(self, ftp_payload: FtpPayload) -> FtpResponse {
+        let data = self.ftp_stream.unwrap().retr_as_buffer(ftp_payload.payload_name.as_str());
+        if data.is_err() {
+            return FtpResponse {
+                payload: None,
+                error: Some(data.err().unwrap().to_string()),
+            };
+        } else {
+            let data = data.unwrap().into_inner();
+            return FtpResponse {
+                payload: Some(data),
+                error: None,
+            };
+        }
+    }
+
+    fn run_ftp_stor(self, ftp_payload: FtpPayload ) -> FtpResponse {
+        if ftp_payload.payload.is_none() {
+            return FtpResponse {
+                payload: None,
+                error: Some("The payload is required for STOR command.".to_string()),
+            };
+        }
+
+        let mut reader = Cursor::new(ftp_payload.payload.unwrap());
+        let response = self.ftp_stream.unwrap().put_file(ftp_payload.payload_name, &mut reader);
+        if response.is_err() {
+            return FtpResponse {
+                payload: None,
+                error: Some(response.err().unwrap().to_string()),
+            };
+        } else {
+            return FtpResponse {
+                payload: None,
+                error: None,
+            };
+        }
+    }
+
+    // TODO: merge this with stor function. after unit testing
+    fn run_ftp_appe(self, ftp_payload: FtpPayload) -> FtpResponse {
+        let mut reader = Cursor::new(ftp_payload.payload.unwrap());
+        let response = self.ftp_stream.unwrap().append_file(ftp_payload.payload_name.as_str(),  &mut reader);
+        if response.is_err() {
+            return FtpResponse {
+                payload: None,
+                error: Some(response.err().unwrap().to_string()),
+            };
+        } else {
+            return FtpResponse {
+                payload: None,
+                error: None,
+            };
+        }
+    }
+
+    fn run_ftp_dele(self, ftp_payload: FtpPayload) -> FtpResponse {
+        let response = self.ftp_stream.unwrap().rm(ftp_payload.payload_name.as_str());
+        if response.is_err() {
+            return FtpResponse {
+                payload: None,
+                error: Some(response.err().unwrap().to_string()),
+            };
+        } else {
+            return FtpResponse {
+                payload: None,
+                error: None,
+            };
+        }
+    }
+
+    fn run_ftp_rmd(self, ftp_payload: FtpPayload) -> FtpResponse {
+        let response = self.ftp_stream.unwrap().rmdir(ftp_payload.payload_name.as_str());
+        if response.is_err() {
+            return FtpResponse {
+                payload: None,
+                error: Some(response.err().unwrap().to_string()),
+            };
+        } else {
+            return FtpResponse {
+                payload: None,
+                error: None,
+            };
+        }
+    }
+
+    fn run_ftp_mkd(self, ftp_payload: FtpPayload) -> FtpResponse {
+        let response = self.ftp_stream.unwrap().mkdir(ftp_payload.payload_name.as_str());
+        if response.is_err() {
+            return FtpResponse {
+                payload: None,
+                error: Some(response.err().unwrap().to_string()),
+            };
+        } else {
+            return FtpResponse {
+                payload: None,
+                error: None,
+            };
+        }
+    }
+
+    fn run_ftp_pwd(self) -> FtpResponse {
+        let response = self.ftp_stream.unwrap().pwd();
+        if response.is_err() {
+            return FtpResponse {
+                payload: None,
+                error: Some(response.err().unwrap().to_string()),
+            };
+        } else {
+            return FtpResponse {
+                payload: None,
+                error: None,
+            };
+        }
+    }
+
+    fn run_ftp_list(self, ftp_payload: FtpPayload) -> FtpResponse {
+        if ftp_payload.payload_name.is_empty() {
+            let list_result = self.ftp_stream.unwrap().list(None);
+            if list_result.is_err() {
+                return FtpResponse {
+                    payload: None,
+                    error: Some(list_result.err().unwrap().to_string()),
+                };
+            } else {
+                return FtpResponse {
+                    // convert Vec<String> to Vec<u8>
+                    payload: Some(list_result.unwrap().join("\n").as_bytes().to_vec()),
+                    error: None,
+                };
+            }
+        } else {
+            let list_result = self.ftp_stream.unwrap().list(Some(ftp_payload.payload_name.as_str()));
+            if list_result.is_err() {
+                return FtpResponse {
+                    payload: None,
+                    error: Some(list_result.err().unwrap().to_string()),
+                };
+            } else {
+                return FtpResponse {
+                    // convert Vec<String> to Vec<u8>
+                    payload: Some(list_result.unwrap().join("\n").as_bytes().to_vec()),
+                    error: None,
+                };
+            }
+        }
+    }
+
+    fn run_ftp_noop(self) -> FtpResponse {
+        let response = self.ftp_stream.unwrap().noop();
+        if response.is_err() {
+            return FtpResponse {
+                payload: None,
+                error: Some(response.err().unwrap().to_string()),
+            };
+        } else {
+            return FtpResponse {
+                payload: None,
+                error: None,
+            };
+        }
+    }
+    // ***************** End of Ftp Command Functons ***************//
  }

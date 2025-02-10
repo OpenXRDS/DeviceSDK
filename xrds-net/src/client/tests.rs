@@ -1,7 +1,9 @@
 mod tests {
-    use crate::client::{Client, ClientBuilder};
-    use crate::common::data_structure::NetResponse;
-    use crate::common::enums::PROTOCOLS;
+    use std::rc::Rc;
+
+    use crate::client::ClientBuilder;
+    use crate::common::enums::{PROTOCOLS, FtpCommands};
+    use crate::common::data_structure::{FtpPayload, FtpResponse};
 
     static HTTP_ECHO_SERVER_URL: &str = "https://echo.free.beeceptor.com";
 
@@ -35,7 +37,7 @@ mod tests {
             .build();
 
         let response = client.set_url("3.112.22.222.11").request();
-        
+                
         /* Assertions */
         assert!(response.error.is_some());  // wrong host name
     }
@@ -209,10 +211,168 @@ mod tests {
         let client = client_builder.set_protocol(PROTOCOLS::COAP)
             .build();
 
-        let response = client.set_url("coap://coap.unknown:5683/test")
-            .request();
+        let response = client.set_url("coap://coap.unknown:5683/test").request();
 
         /* Assertions */
         assert!(response.error.is_some());
     }
+
+    #[test]
+    fn test_ws_connect() {
+        let client_builder = ClientBuilder::new();
+        let client = client_builder.set_protocol(PROTOCOLS::WS)
+            .build();
+
+        let response = client.set_url("https://echo.websocket.org/").connect();
+        
+
+    }
+    
+    #[test]
+    fn test_ws_send() {
+        let msg = "Hello, WS";
+        let data = Vec::from(msg.as_bytes());
+
+        let client_builder = ClientBuilder::new();
+        let client = client_builder.set_protocol(PROTOCOLS::WS)
+            .build();
+
+        let connect_result = client.set_url("wss://echo.websocket.org/").connect();
+        
+        let send_result = connect_result.unwrap().send(data);
+        
+        assert_eq!(send_result.is_ok(), true);
+        
+    }
+
+    #[test]
+    fn test_ws_rcv() {
+        let client_builder = ClientBuilder::new();
+        let client = client_builder.set_protocol(PROTOCOLS::WS)
+            .build();
+
+        let connect_result = client.set_url("wss://echo.websocket.org/").connect();
+        let send_result = connect_result.unwrap().send(Vec::from("Hello, WS".as_bytes()));
+        
+        let response = send_result.unwrap().rcv();
+        
+        println!("respnse: {:?}", response);
+        assert_eq!(response.is_ok(), true);
+    }
+
+    #[test]
+    fn test_ftp_connect() {
+        let client_builder = ClientBuilder::new();
+        let client = client_builder.set_protocol(PROTOCOLS::FTP)
+            .set_user("demo")
+            .set_password("password")
+            .build();
+
+        let response = client.set_url("test.rebex.net:21").connect();
+        assert_eq!(response.is_ok(), true);
+    }
+
+    #[test]
+    fn test_ftp_quit() {
+        let client_builder = ClientBuilder::new();
+        let client = client_builder.set_protocol(PROTOCOLS::FTP)
+            .set_user("demo")
+            .set_password("password")
+            .build();
+
+        let response = client.set_url("test.rebex.net:21").connect();
+        let ftp_payload = FtpPayload {
+            command: FtpCommands::QUIT,
+            payload_name: "".to_string(),
+            payload: None,
+        };
+
+        let response = response.unwrap().run_ftp_command(ftp_payload);
+        assert_eq!(response.error.is_none(), true);
+    }
+
+    #[test]
+    fn test_ftp_cwd() {
+        let client_builder = ClientBuilder::new();
+        let client = client_builder.set_protocol(PROTOCOLS::FTP)
+            .set_user("demo")
+            .set_password("password")
+            .build();
+
+        let response = client.set_url("test.rebex.net:21")
+            .connect().unwrap();
+
+        let ftp_payload = FtpPayload {
+            command: FtpCommands::CWD,
+            payload_name: "pub/example".to_string(),
+            payload: None,
+        };
+        let response = response.run_ftp_command(ftp_payload);
+        
+        assert_eq!(response.error.is_none(), true);
+    }
+
+    #[test]
+    fn test_ftp_list() {
+        let client_builder = ClientBuilder::new();
+        let client = client_builder.set_protocol(PROTOCOLS::FTP)
+            .set_user("demo")
+            .set_password("password")
+            .build();
+
+        let response = client.set_url("test.rebex.net:21")
+            .connect().unwrap();
+
+        let ftp_payload = FtpPayload {
+            command: FtpCommands::LIST,
+            payload_name: "".to_string(),
+            payload: None,
+        };
+        let response = response.run_ftp_command(ftp_payload);
+        
+        assert_eq!(response.error.is_none(), true);
+    }
+
+    #[test]
+    fn test_ftp_download() {
+        let client_builder = ClientBuilder::new();
+        let client = client_builder.set_protocol(PROTOCOLS::FTP)
+            .set_user("demo")
+            .set_password("password")
+            .build();
+
+        let response = client.set_url("test.rebex.net:21")
+            .connect().unwrap();
+
+        let ftp_payload = FtpPayload {
+            command: FtpCommands::RETR,
+            payload_name: "readme.txt".to_string(),
+            payload: None,
+        };
+        let response = response.run_ftp_command(ftp_payload);
+        
+        assert_eq!(response.error.is_none(), true);
+        assert!(response.payload.is_some());
+    }
+
+    // #[test]
+    // fn test_sftp_connect() {
+
+    // }
+
+    // #[test]
+    // fn test_sftp_list() {
+
+    // }
+
+    // #[test]
+    // fn test_sftp_download() {
+
+    // }
+
+    // #[test]
+    // fn test_sftp_wrong_credentials() {
+
+    // }
  }
+
