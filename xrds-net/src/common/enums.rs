@@ -30,3 +30,43 @@
     HTTP3,
     QUIC
 }
+
+/**
+ * https://en.wikipedia.org/wiki/List_of_FTP_commands
+ */
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum FtpCommands {
+    // USER,
+    // PASS,
+    // ACCT,
+    CWD,
+    CDUP,
+    // SMNT,
+    QUIT,
+    // REIN,
+    // PORT,
+    // PASV,
+    // TYPE,
+    // STRU,
+    // MODE,
+    RETR,
+    STOR,
+    // STOU,
+    APPE,
+    // ALLO,
+    // REST,
+    // RNFR,
+    // RNTO,
+    // ABOR,
+    DELE,
+    RMD,
+    MKD,
+    PWD,
+    LIST,
+    // NLST,
+    // SITE,
+    // SYST,
+    // STAT,
+    // HELP,
+    NOOP
+}

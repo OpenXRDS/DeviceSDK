@@ -16,7 +16,7 @@
 
 
 
-use crate::common::enums::PROTOCOLS;
+use crate::common::enums::{PROTOCOLS, FtpCommands};
 
 /**
  * In case of Using CoAP protocol, refer to the following link:
@@ -42,6 +42,21 @@ impl std::fmt::Display for NetResponse {
         write!(f, "Protocol: {:?}\nStatus Code: {}\nHeaders: {:?}\nBody: {:?}\nError: {:?}",
             self.protocol, self.status_code, self.headers, body_str, self.error)
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct FtpPayload {
+    pub command: FtpCommands,
+    pub payload_name: String,    // file / directory name, etc.
+    pub payload: Option<Vec<u8>>,   // file content, etc.
+}
+
+#[derive(Debug, Clone)]
+pub struct FtpResponse {
+    pub payload: Option<Vec<u8>>,
+
+    // Optional fields
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone)]
