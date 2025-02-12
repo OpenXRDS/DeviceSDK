@@ -224,8 +224,7 @@ mod tests {
             .build();
 
         let response = client.set_url("https://echo.websocket.org/").connect();
-        
-
+        assert!(response.is_ok());
     }
     
     #[test]
@@ -256,7 +255,8 @@ mod tests {
         
         let response = send_result.unwrap().rcv();
         
-        println!("respnse: {:?}", response);
+        let response_str = String::from_utf8(response.clone().unwrap()).unwrap();
+        println!("respnse: {}", response_str);
         assert_eq!(response.is_ok(), true);
     }
 
@@ -354,25 +354,5 @@ mod tests {
         assert_eq!(response.error.is_none(), true);
         assert!(response.payload.is_some());
     }
-
-    // #[test]
-    // fn test_sftp_connect() {
-
-    // }
-
-    // #[test]
-    // fn test_sftp_list() {
-
-    // }
-
-    // #[test]
-    // fn test_sftp_download() {
-
-    // }
-
-    // #[test]
-    // fn test_sftp_wrong_credentials() {
-
-    // }
  }
 

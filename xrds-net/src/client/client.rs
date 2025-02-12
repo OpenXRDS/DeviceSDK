@@ -261,6 +261,10 @@ impl Client {
      * the function returns Result<Self, String> instead of Result<T, String>
      */
     pub fn connect(self) -> Result<Self, String> {
+        if self.raw_url.is_empty() {
+            return Err("URL is required for connection.".to_string());
+        }
+        
         // check the protocol
         let result = match self.protocol {
             PROTOCOLS::WS | PROTOCOLS::WSS => self.connect_ws(),
