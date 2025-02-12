@@ -1,6 +1,9 @@
 pub mod enums;
 pub mod data_structure;
 
+use std::path;
+use std::path::PathBuf;
+
 use crate::common::data_structure::Url;
 
 pub fn parse_url(url: &str) -> Result<Url, String> {
@@ -86,6 +89,31 @@ pub fn coap_code_to_decimal(coap_code: &str) -> u32 {
     let detail = coap_code_token[1].parse::<u32>().unwrap();
 
     class * 32 + detail
+}
+
+pub fn validate_path(path: &str) -> Result<(), String> {
+    let path = path::Path::new(path);
+    if path.exists() {
+        Ok(())
+    } else {
+        Err("Invalid path".to_string())
+    }
+}
+
+pub fn validate_path_write_permission(path: &str) -> Result<(), String> {
+    let p_path = path::Path::new(path);
+
+    if p_path.metadata().unwrap().permissions().readonly() {
+        Err("No write permission".to_string())
+    } else {
+        Ok(())
+    }
+}
+
+pub fn append_to_path(p: PathBuf, s: &str) -> PathBuf {
+    let mut p = p.into_os_string();
+    p.push(s);
+    p.into()
 }
 
 #[cfg(test)]

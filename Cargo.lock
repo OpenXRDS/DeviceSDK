@@ -949,6 +949,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "ctor"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f06b1425736ba96096116f063c9d10be2352a7cde0cbea829a717008e114aec9"
+
+[[package]]
 name = "ctr"
 version = "0.9.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5477,6 +5483,7 @@ version = "0.1.0"
 dependencies = [
  "coap",
  "coap-lite",
+ "ctor",
  "curl",
  "libunftp",
  "suppaftp",
