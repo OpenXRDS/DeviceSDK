@@ -17,6 +17,7 @@
 use std::fmt;
 use std::clone::Clone;
 use std::io::Cursor;
+use std::sync::{Arc, Mutex};
 
 // Internal dependencies
 use crate::common::enums::{PROTOCOLS, FtpCommands};
@@ -121,6 +122,8 @@ impl ClientBuilder {
         }
     }
 }
+
+#[derive(Clone)]
  pub struct Client {
     protocol: PROTOCOLS,
     raw_url: String, // url given by the user. This is used for connection and request
@@ -143,8 +146,8 @@ impl ClientBuilder {
     res_headers: Vec<(String, String)>,
     res_body: String,
 
-    ws_client: Option<WS_Client<Box<dyn NetworkStream + Send>>>,
-    ftp_stream: Option<FtpStream>,
+    ws_client: Option<Arc<Mutex<WS_Client<Box<dyn NetworkStream + Send>>>>>,
+    ftp_stream: Option<Arc<Mutex<FtpStream>>>,
  }
 
  impl fmt::Debug for Client {
@@ -154,7 +157,6 @@ impl ClientBuilder {
 }
 
 impl Client {
-
     pub fn get_protocol(&self) -> &PROTOCOLS {
         &self.protocol
     }
@@ -296,7 +298,7 @@ impl Client {
                 return Err(login_result.err().unwrap().to_string());
             } else {
                 // store the ftp_stream in the client
-                self.ftp_stream = Some(ftp_stream);
+                self.ftp_stream = Some(Arc::new(Mutex::new(ftp_stream)));
                 return Ok(self);
             }
         } else {
@@ -323,7 +325,7 @@ impl Client {
         if client_result.is_err() {
             return Err(client_result.err().unwrap().to_string());
         } else {
-            self.ws_client = Some(client_result.unwrap());
+            self.ws_client = Some(Arc::new(Mutex::new(client_result.unwrap())));
             return Ok(self);
         }
     }
@@ -379,7 +381,9 @@ impl Client {
         return Err("Use run_ftp_command instead for FTP/SFTP".to_string());
     }
     fn send_ws(mut self, message: Vec<u8>) -> Result<Self, String> {
-        let send_result = self.ws_client.as_mut().unwrap().send_message(&OwnedMessage::Binary(message));
+        let send_result = self.ws_client.as_mut().unwrap()
+            .lock().unwrap()
+            .send_message(&OwnedMessage::Binary(message));
 
         if send_result.is_err() {
             return Err(send_result.err().unwrap().to_string());
@@ -389,7 +393,9 @@ impl Client {
     }
 
     fn rcv_ws(mut self) -> Result<Vec<u8>, String> {
-        let message = self.ws_client.as_mut().unwrap().recv_message();
+        let message = self.ws_client.as_mut().unwrap()
+            .lock().unwrap()
+            .recv_message();
 
         if message.is_err() {
             return Err(message.err().unwrap().to_string());
@@ -600,43 +606,47 @@ impl Client {
         }
     }
 
-    pub fn run_ftp_command(self, ftp_payload: FtpPayload) -> FtpResponse {
+    pub fn run_ftp_command(&self, ftp_payload: FtpPayload) -> FtpResponse {
         match ftp_payload.command {
-            FtpCommands::CWD => self.run_ftp_cwd(ftp_payload),
-            FtpCommands::CDUP => self.run_ftp_cdup(),
-            FtpCommands::QUIT => self.run_ftp_quit(),
-            FtpCommands::RETR => self.run_ftp_retr(ftp_payload),
-            FtpCommands::STOR => self.run_ftp_stor(ftp_payload),    // TODO: server implementation needed
-            FtpCommands::APPE => self.run_ftp_appe(ftp_payload),    // TODO: server implementation needed
-            FtpCommands::DELE => self.run_ftp_dele(ftp_payload),    // TODO: server implementation needed
-            FtpCommands::RMD => self.run_ftp_rmd(ftp_payload),      // TODO: server implementation needed
-            FtpCommands::MKD => self.run_ftp_mkd(ftp_payload),      // TODO: server implementation needed
-            FtpCommands::PWD => self.run_ftp_pwd(),                 
-            FtpCommands::LIST => self.run_ftp_list(ftp_payload),
-            FtpCommands::NOOP => self.run_ftp_noop(),
+            FtpCommands::CWD => self.clone().run_ftp_cwd(ftp_payload),
+            FtpCommands::CDUP => self.clone().run_ftp_cdup(),
+            FtpCommands::QUIT => self.clone().run_ftp_quit(),
+            FtpCommands::RETR => self.clone().run_ftp_retr(ftp_payload),
+            FtpCommands::STOR => self.clone().run_ftp_stor(ftp_payload),    
+            FtpCommands::APPE => self.clone().run_ftp_appe(ftp_payload),    
+            FtpCommands::DELE => self.clone().run_ftp_dele(ftp_payload),
+            FtpCommands::RMD => self.clone().run_ftp_rmd(ftp_payload),
+            FtpCommands::MKD => self.clone().run_ftp_mkd(ftp_payload),
+            FtpCommands::PWD => self.clone().run_ftp_pwd(),                 
+            FtpCommands::LIST => self.clone().run_ftp_list(ftp_payload),
+            FtpCommands::NOOP => self.clone().run_ftp_noop(),
         }
+        
     }
 
     /**
      * FTP commands
      */
     fn run_ftp_cwd(self, ftp_payload: FtpPayload) -> FtpResponse {
-        let response = self.ftp_stream.unwrap().cwd(ftp_payload.payload_name.as_str());
+        let response = self.ftp_stream.unwrap().lock().unwrap().cwd(ftp_payload.payload_name.as_str());
         if response.is_err() {
-            return FtpResponse {
+            let ftp_res = FtpResponse {
                 payload: None,
                 error: Some(response.err().unwrap().to_string()),
             };
+            
+            return ftp_res;
         } else {
-            return FtpResponse {
+            let ftp_res = FtpResponse {
                 payload: None,
                 error: None,
             };
+            return ftp_res;
         }
     }
 
     fn run_ftp_cdup(self) -> FtpResponse {
-        let response = self.ftp_stream.unwrap().cdup();
+        let response = self.ftp_stream.unwrap().lock().unwrap().cdup();
         if response.is_err() {
             return FtpResponse {
                 payload: None,
@@ -651,7 +661,7 @@ impl Client {
     }
 
     fn run_ftp_quit(self) -> FtpResponse {
-        let response = self.ftp_stream.unwrap().quit();
+        let response = self.ftp_stream.unwrap().lock().unwrap().quit();
         if response.is_err() {
             return FtpResponse {
                 payload: None,
@@ -666,7 +676,7 @@ impl Client {
     }
 
     fn run_ftp_retr(self, ftp_payload: FtpPayload) -> FtpResponse {
-        let data = self.ftp_stream.unwrap().retr_as_buffer(ftp_payload.payload_name.as_str());
+        let data = self.ftp_stream.unwrap().lock().unwrap().retr_as_buffer(ftp_payload.payload_name.as_str());
         if data.is_err() {
             return FtpResponse {
                 payload: None,
@@ -690,7 +700,7 @@ impl Client {
         }
 
         let mut reader = Cursor::new(ftp_payload.payload.unwrap());
-        let response = self.ftp_stream.unwrap().put_file(ftp_payload.payload_name, &mut reader);
+        let response = self.ftp_stream.unwrap().lock().unwrap().put_file(ftp_payload.payload_name, &mut reader);
         if response.is_err() {
             return FtpResponse {
                 payload: None,
@@ -704,10 +714,9 @@ impl Client {
         }
     }
 
-    // TODO: merge this with stor function. after unit testing
     fn run_ftp_appe(self, ftp_payload: FtpPayload) -> FtpResponse {
         let mut reader = Cursor::new(ftp_payload.payload.unwrap());
-        let response = self.ftp_stream.unwrap().append_file(ftp_payload.payload_name.as_str(),  &mut reader);
+        let response = self.ftp_stream.unwrap().lock().unwrap().append_file(ftp_payload.payload_name.as_str(),  &mut reader);
         if response.is_err() {
             return FtpResponse {
                 payload: None,
@@ -722,7 +731,7 @@ impl Client {
     }
 
     fn run_ftp_dele(self, ftp_payload: FtpPayload) -> FtpResponse {
-        let response = self.ftp_stream.unwrap().rm(ftp_payload.payload_name.as_str());
+        let response = self.ftp_stream.unwrap().lock().unwrap().rm(ftp_payload.payload_name.as_str());
         if response.is_err() {
             return FtpResponse {
                 payload: None,
@@ -736,8 +745,12 @@ impl Client {
         }
     }
 
+    /**
+     * Remove the directory
+     * Only empty directory can be removed
+     */
     fn run_ftp_rmd(self, ftp_payload: FtpPayload) -> FtpResponse {
-        let response = self.ftp_stream.unwrap().rmdir(ftp_payload.payload_name.as_str());
+        let response = self.ftp_stream.unwrap().lock().unwrap().rmdir(ftp_payload.payload_name.as_str());
         if response.is_err() {
             return FtpResponse {
                 payload: None,
@@ -752,7 +765,7 @@ impl Client {
     }
 
     fn run_ftp_mkd(self, ftp_payload: FtpPayload) -> FtpResponse {
-        let response = self.ftp_stream.unwrap().mkdir(ftp_payload.payload_name.as_str());
+        let response = self.ftp_stream.unwrap().lock().unwrap().mkdir(ftp_payload.payload_name.as_str());
         if response.is_err() {
             return FtpResponse {
                 payload: None,
@@ -767,15 +780,16 @@ impl Client {
     }
 
     fn run_ftp_pwd(self) -> FtpResponse {
-        let response = self.ftp_stream.unwrap().pwd();
+        let response = self.ftp_stream.unwrap().lock().unwrap().pwd();
         if response.is_err() {
             return FtpResponse {
                 payload: None,
                 error: Some(response.err().unwrap().to_string()),
             };
         } else {
+            let payload = response.unwrap().as_bytes().to_vec();
             return FtpResponse {
-                payload: None,
+                payload: Some(payload),
                 error: None,
             };
         }
@@ -783,7 +797,7 @@ impl Client {
 
     fn run_ftp_list(self, ftp_payload: FtpPayload) -> FtpResponse {
         if ftp_payload.payload_name.is_empty() {
-            let list_result = self.ftp_stream.unwrap().list(None);
+            let list_result = self.ftp_stream.unwrap().lock().unwrap().list(None);
             if list_result.is_err() {
                 return FtpResponse {
                     payload: None,
@@ -797,7 +811,7 @@ impl Client {
                 };
             }
         } else {
-            let list_result = self.ftp_stream.unwrap().list(Some(ftp_payload.payload_name.as_str()));
+            let list_result = self.ftp_stream.unwrap().lock().unwrap().list(Some(ftp_payload.payload_name.as_str()));
             if list_result.is_err() {
                 return FtpResponse {
                     payload: None,
@@ -814,7 +828,7 @@ impl Client {
     }
 
     fn run_ftp_noop(self) -> FtpResponse {
-        let response = self.ftp_stream.unwrap().noop();
+        let response = self.ftp_stream.unwrap().lock().unwrap().noop();
         if response.is_err() {
             return FtpResponse {
                 payload: None,
