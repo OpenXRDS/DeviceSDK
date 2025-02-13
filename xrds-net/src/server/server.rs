@@ -1,8 +1,7 @@
-use std::env;
 use std::path::PathBuf;
 
 use crate::common::enums::PROTOCOLS;
-use crate::common::{validate_path, validate_path_write_permission, append_to_path};
+use crate::common::{validate_path, validate_path_write_permission};
 
 use unftp_sbe_fs::ServerExt;
 
@@ -51,10 +50,13 @@ impl XRNetServer {
             panic!("Protocol and Port size mismatch");
         }
 
-        // check port availability
+        if validate_path(self.root_dir.clone().unwrap().as_str()).is_err() {
+            panic!("Invalid root directory");
+        }
 
-
-        //TODO: root_dir validation in case of ftp/http families
+        if validate_path_write_permission(self.root_dir.clone().unwrap().as_str()).is_err() {
+            panic!("No write permission to the root directory");
+        }   
 
         for i in 0..self.protocol.len() {
             match self.protocol[i] {
@@ -96,14 +98,12 @@ impl XRNetServer {
         let root_dir_val_result = validate_path(self.root_dir.as_ref().unwrap());
         if (self.root_dir.is_none()) || (root_dir_val_result.is_err()) {
             println!("Given root directory is invalid. Setting to default test directory");
-            let crnt_dir = std::env::current_dir().unwrap();
+            ftp_home = std::env::temp_dir();
             
-            let target_dir = append_to_path(crnt_dir, "/test_root_dir");
-            
-            ftp_home = target_dir;
         } else {
-            // create a PathBuf from String
-            ftp_home = PathBuf::from(self.root_dir.as_ref().unwrap());
+            let target_dir = self.root_dir.as_ref().unwrap();
+            
+            ftp_home = PathBuf::from(target_dir.as_str());
         }
         println!("server home: {:?}", ftp_home);
 

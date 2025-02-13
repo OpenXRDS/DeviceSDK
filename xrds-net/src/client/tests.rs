@@ -1,9 +1,7 @@
 mod tests {
-    use std::rc::Rc;
-
     use crate::client::ClientBuilder;
     use crate::common::enums::{PROTOCOLS, FtpCommands};
-    use crate::common::data_structure::{FtpPayload, FtpResponse};
+    use crate::common::data_structure::FtpPayload;
 
     static HTTP_ECHO_SERVER_URL: &str = "https://echo.free.beeceptor.com";
 

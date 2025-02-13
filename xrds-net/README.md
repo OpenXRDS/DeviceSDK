@@ -61,3 +61,15 @@ XRDS network library
 #### Http3 & QUIC
 
 - quiche: 0.22.0
+
+## Test Command
+
+```
+cargo test -p xrds-net -- --nocapture
+```
+
+##### 특정 유닛 테스트 수행 예시
+
+```
+cargo test --package xrds-net tests::test_server_list -- --nocapture
+```
