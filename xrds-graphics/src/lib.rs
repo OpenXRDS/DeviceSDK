@@ -1,8 +1,14 @@
-use scene::Scene;
+mod buffer;
+mod error;
+mod graphics;
+mod material;
+mod object;
 
-pub mod scene;
-
-pub struct Graphics {}
+pub use buffer::*;
+pub use error::*;
+pub use graphics::*;
+pub use material::*;
+pub use object::*;
 
 pub struct Renderer {}
 

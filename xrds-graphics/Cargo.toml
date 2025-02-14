@@ -7,4 +7,12 @@ edition = "2021"
 crate-type = ["lib"]
 
 [dependencies]
+xrds-core = { workspace = true }
 anyhow = { workspace = true }
+wgpu = { workspace = true }
+glam = { workspace = true }
+
+[dev-dependencies]
+log = { workspace = true }
+env_logger = { workspace = true }
+tokio = { workspace = true }

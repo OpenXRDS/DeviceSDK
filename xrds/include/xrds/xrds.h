@@ -3,8 +3,8 @@
 // ***********************************
 
 
-#ifndef __XRDS_GRAPHICS_H__
-#define __XRDS_GRAPHICS_H__
+#ifndef __XRDS_H__
+#define __XRDS_H__
 
 #include <cstdarg>
 #include <cstdint>
@@ -38,4 +38,4 @@ void xrds_Runtime_Run(Runtime *runtime, CRuntimeHandler *runtime_handler, uint64
 
 }  // extern "C"
 
-#endif  // __XRDS_GRAPHICS_H__
+#endif  // __XRDS_H__
