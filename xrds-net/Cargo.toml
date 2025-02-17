@@ -7,15 +7,17 @@ edition = "2021"
 crate-type = ["lib"]
 
 [dependencies]
-curl="0.4.47"                                           # http / https
+tokio = {version = "^1.32", features = ["full"]}
 url="2.5.4" 
+curl="0.4.47"                                           # http / https
 coap="0.19.1"                                           # coap
 coap-lite = "0.11.3"                                    # coap
-tokio = {version = "^1.32", features = ["full"]}
 websocket="0.27.1"                                      # websocket / wss
 suppaftp={ version = "^6", features=["native-tls"] }    # ftp / sftp
+rumqttc="0.24.0"                                        # mqtt
 
 libunftp = "0.20.3"                                     # ftp server
 unftp-sbe-fs = "0.2.0"                                  # ftp server
 
-ctor="0.3.0"                                            # test setup
+uuid="1.13.1"                                           # Generates UUID for client's id
+short-uuid="0.2.0"                                      # Shortens uuid

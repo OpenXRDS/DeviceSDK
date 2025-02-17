@@ -67,8 +67,6 @@ pub fn parse_url(url: &str) -> Result<Url, String> {
     if port < 1 || port > 65535 {
         return Err("Invalid port range".to_string());
     }
-    
-    //TODO: username, password
 
     Ok(Url {   // temporal return value
         scheme: scheme.to_string(),

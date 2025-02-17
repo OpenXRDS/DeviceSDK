@@ -236,7 +236,7 @@ mod tests {
 
         let connect_result = client.set_url("wss://echo.websocket.org/").connect();
         
-        let send_result = connect_result.unwrap().send(data);
+        let send_result = connect_result.unwrap().send(data, None);
         
         assert_eq!(send_result.is_ok(), true);
         
@@ -249,7 +249,7 @@ mod tests {
             .build();
 
         let connect_result = client.set_url("wss://echo.websocket.org/").connect();
-        let send_result = connect_result.unwrap().send(Vec::from("Hello, WS".as_bytes()));
+        let send_result = connect_result.unwrap().send(Vec::from("Hello, WS".as_bytes()), None);
         
         let response = send_result.unwrap().rcv();
         
@@ -351,6 +351,81 @@ mod tests {
         
         assert_eq!(response.error.is_none(), true);
         assert!(response.payload.is_some());
+    }
+
+    #[test]
+    fn test_mqtt_connect() {
+        let client_builder = ClientBuilder::new();
+        let client = client_builder.set_protocol(PROTOCOLS::MQTT)
+            .build();
+
+        let response = client.set_url("test.mosquitto.org:1883")
+            .connect();
+        assert_eq!(response.is_ok(), true);
+    }
+
+    #[test]
+    fn test_mqtt_subscribe() {
+        let client_builder = ClientBuilder::new();
+        let client = client_builder.set_protocol(PROTOCOLS::MQTT)
+            .build();
+
+        let response = client.set_url("test.mosquitto.org:1883")
+            .connect().unwrap();
+
+        let response = response.mqtt_subscribe("hello/rumqtt");
+        assert_eq!(response.is_ok(), true);
+    }
+
+    #[test]
+    fn test_mqtt_publish() {
+        let client_builder = ClientBuilder::new();
+        let client = client_builder.set_protocol(PROTOCOLS::MQTT)
+            .build();
+
+        let response = client.set_url("test.mosquitto.org:1883")
+            .connect().unwrap();
+
+        let data: Vec<u8> = Vec::from("Hello, MQTT".as_bytes());
+        let response = response.send(data, Some("hello/rumqtt"));
+        assert_eq!(response.is_ok(), true);
+    }
+
+    #[test]
+    fn test_mqtt_sub_pub_rcv() {
+        let client_builder = ClientBuilder::new();
+        let client = client_builder.set_protocol(PROTOCOLS::MQTT)
+            .build();
+
+        let client = client.set_url("test.mosquitto.org:1883")
+            .connect().unwrap();
+
+        let response = client.mqtt_subscribe("hello/rumqtt");
+        assert_eq!(response.is_ok(), true);
+
+        let data: Vec<u8> = Vec::from("Hello, MQTT".as_bytes());
+        let response = response.unwrap().send(data, Some("hello/rumqtt"));
+        assert_eq!(response.is_ok(), true);
+
+        let mut count = 0;
+        loop {
+            count += 1;
+            let rcv_result = response.clone().unwrap().rcv();
+            if rcv_result.is_ok() {
+                let rcv_data = rcv_result.unwrap();
+                let rcv_str = String::from_utf8(rcv_data).unwrap();
+                
+                if !rcv_str.is_empty() {
+                    println!("rcv: {}", rcv_str);
+                    assert_eq!(rcv_str.as_str(), "Hello, MQTT");
+                    break;
+                }
+            } else {
+                if count > 10 {
+                    break;
+                }
+            }
+        }
     }
  }
 
