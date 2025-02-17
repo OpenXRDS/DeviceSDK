@@ -76,9 +76,6 @@ mod tests {
         assert!(true);
     }
 
-    /**
-     * TODO: Need more tests on the server side for different root directory setting
-     */
     #[tokio::test]
     async fn test_server_ftp_list() {
         let current_line = line!(); // To avoid duplicate port number for each test

@@ -14,14 +14,16 @@
  limitations under the License.
  */
 
-use std::fmt;
+use std::fmt::{self, Debug};
 use std::clone::Clone;
 use std::io::Cursor;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 // Internal dependencies
 use crate::common::enums::{PROTOCOLS, FtpCommands};
 use crate::common::data_structure::{FtpPayload, FtpResponse, NetResponse};
+use crate::common::parse_url;
 
 // HTTP
 use curl::easy::{Easy2, Handler, List, WriteError};
@@ -38,6 +40,10 @@ use websocket::message::OwnedMessage;
 // FTP & FTPS
 use suppaftp::FtpStream;
 
+// Mqtt
+use rumqttc::Client as MqttClient;
+use rumqttc::Connection as MqttConnection;
+use rumqttc::{MqttOptions, QoS, Event, Incoming};
 
 /**
  * ResponseCollector is a struct to collect response from the server
@@ -95,11 +101,14 @@ impl ClientBuilder {
      * This function will parse the url to fill host, port, and path
      */
     pub fn build(self) -> Client {
-        // try parse to fill host, port, and path
+        use short_uuid::ShortUuid;
+        let uuid = uuid::Uuid::new_v4();
+        let short_str = ShortUuid::from_uuid(&uuid).to_string();
 
         Client {
             protocol: self.protocol,
             raw_url: "".to_string(),
+            id: short_str,
 
             host: None,
             port: None,
@@ -119,6 +128,8 @@ impl ClientBuilder {
 
             ws_client: None,
             ftp_stream: None,
+            mqtt_client: None,
+            mqtt_connection: None,
         }
     }
 }
@@ -127,7 +138,8 @@ impl ClientBuilder {
  pub struct Client {
     protocol: PROTOCOLS,
     raw_url: String, // url given by the user. This is used for connection and request
-    
+    id: String, // unique id for the client
+
     // parsed url. these fields are extracted from the url string
     // Not directly used for connection or request. Just for information
     host: Option<String>,
@@ -148,6 +160,8 @@ impl ClientBuilder {
 
     ws_client: Option<Arc<Mutex<WS_Client<Box<dyn NetworkStream + Send>>>>>,
     ftp_stream: Option<Arc<Mutex<FtpStream>>>,
+    mqtt_client: Option<MqttClient>,
+    mqtt_connection: Option<Arc<Mutex<MqttConnection>>>,
  }
 
  impl fmt::Debug for Client {
@@ -244,6 +258,10 @@ impl Client {
         self
     }
 
+    pub fn get_mqtt_connection(&self) -> Option<Arc<Mutex<MqttConnection>>> {
+        self.mqtt_connection.clone()
+    }
+
     fn parse_headers(&self, headers: &str) -> Vec<(String, String)> {
         let headers = headers.split("\r\n").collect::<Vec<&str>>();
         let mut parsed_headers: Vec<(String, String)> = vec![];
@@ -262,9 +280,21 @@ impl Client {
      * Since it is not possible to clarify the type of the client in advance,
      * the function returns Result<Self, String> instead of Result<T, String>
      */
-    pub fn connect(self) -> Result<Self, String> {
+    pub fn connect(mut self) -> Result<Self, String> {
         if self.raw_url.is_empty() {
             return Err("URL is required for connection.".to_string());
+        }
+
+        let parse_result = parse_url(&self.raw_url);
+        if parse_result.is_err() {
+            return Err(parse_result.err().unwrap());
+        }
+
+        self.host = Some(parse_result.as_ref().unwrap().host.clone());
+        self.port = Some(parse_result.as_ref().unwrap().port);
+        self.path = Some(parse_result.as_ref().unwrap().path.clone());
+        if parse_result.as_ref().unwrap().query.is_some() {
+            self.path = Some(self.path.as_ref().unwrap().to_string() + "?" + parse_result.as_ref().unwrap().query.as_ref().unwrap());
         }
         
         // check the protocol
@@ -272,7 +302,7 @@ impl Client {
             PROTOCOLS::WS | PROTOCOLS::WSS => self.connect_ws(),
             PROTOCOLS::FTP => self.connect_ftp(),
             PROTOCOLS::SFTP => self.connect_sftp(),
-            // PROTOCOLS::MQTT => self.connect_mqtt(),
+            PROTOCOLS::MQTT => self.connect_mqtt(),
             // PROTOCOLS::WEBRTC => self.connect_webrtc(),
             // PROTOCOLS::HTTP3 => self.connect_http3(),
             // PROTOCOLS::QUIC => self.connect_quic(),
@@ -313,12 +343,88 @@ impl Client {
         return Ok(self);  // temporal return
     }
 
-    fn connect_mqtt(&self) -> Result<(), String> {
-        // connect to the server using MQTT
 
-        return Ok(());  // temporal return
+
+    /*************************** */
+    /* MQTT PROTOCOLS */
+    /*************************** */
+    
+    /**
+     * Invokes 'publish' method of the mqtt client
+     */
+    fn send_mqtt(self, topic: Option<&str>, message: Vec<u8>) -> Result<Self, String> {
+        if self.mqtt_client.is_none() {
+            return Err("MQTT client is not initialized.".to_string());
+        }
+
+        if self.mqtt_connection.is_none() {
+            return Err("MQTT connection is not initialized.".to_string());
+        }
+
+        let publish_result = self.mqtt_client.as_ref().unwrap()
+            .publish(topic.unwrap(), QoS::AtLeastOnce, false, message);
+        if publish_result.is_err() {
+            return Err(publish_result.err().unwrap().to_string());
+        } else {
+            return Ok(self);
+        }
     }
 
+    /**
+     * Receives the 'Publish' event only from the connection
+     * if the received event is not 'Publish', it will return the empty Vec<u8>
+     */
+    fn rcv_mqtt(mut self) -> Result<Vec<u8>, String> {
+        let mut mqtt_connection = self.mqtt_connection.as_mut().unwrap().lock().unwrap();
+        let notification = mqtt_connection.recv();
+        match notification {
+            Ok(notification) => {
+                let mut result_vec: Vec<u8> = Vec::new();
+                if let Event::Incoming(Incoming::Publish(message)) = notification.unwrap() {
+                    result_vec = Vec::from(message.payload);
+                }
+                return Ok(result_vec);
+            },
+            Err(err) => {
+                let err_msg = format!("Error occurred while receiving the message: {:?}", err);
+                return Err(err_msg);
+            }
+        }
+    }
+
+    pub fn mqtt_subscribe(self, topic: &str) -> Result<Self, String>{
+        if self.mqtt_client.is_none() {
+            return Err("MQTT client is not initialized.".to_string());
+        }
+
+        if self.mqtt_connection.is_none() {
+            return Err("MQTT connection is not initialized.".to_string());
+        }
+
+        let subscription_result = 
+            self.mqtt_client.as_ref().unwrap().subscribe(topic, QoS::AtMostOnce);
+        if subscription_result.is_err() {
+            return Err(subscription_result.err().unwrap().to_string());
+        } else {
+            return Ok(self);
+        }
+    }
+
+    fn connect_mqtt(mut self) -> Result<Self, String> {
+        let mut mqtt_options = MqttOptions::new(self.id.as_str(), 
+                self.host.as_ref().unwrap(), self.port.unwrap().try_into().unwrap());
+        mqtt_options.set_keep_alive(Duration::from_secs(5));
+
+        let (client, connection) = MqttClient::new(mqtt_options, 10);
+        self.mqtt_client = Some(client);
+        self.mqtt_connection = Some(Arc::new(Mutex::new(connection)));
+
+        return Ok(self);
+    }
+
+    /************************** */
+    /* WEBSOCKET PROTOCOLS */
+    /************************** */
     fn connect_ws(mut self) -> Result<Self, String> {
         let client_result = websocket::ClientBuilder::new(self.raw_url.as_str()).unwrap().connect(None);
         
@@ -330,56 +436,6 @@ impl Client {
         }
     }
 
-    fn connect_webrtc(&self) -> Result<(), String> {
-        return Err("The protocol is not supported yet.".to_string());
-    }
-
-    fn connect_http3(&self) -> Result<(), String> {
-        return Err("The protocol is not supported yet.".to_string());
-    }
-
-    fn connect_quic(&self) -> Result<(), String> {
-        // connect to the server using QUIC
-        return Err("The protocol is not supported yet.".to_string());
-    }
-
-    pub fn send(self, data: Vec<u8>) -> Result<Self, String> {
-        // check the protocol
-        let result = match self.protocol {
-            PROTOCOLS::WS | PROTOCOLS::WSS => self.send_ws(data),
-            PROTOCOLS::FTP | PROTOCOLS::SFTP => self.send_ftp(),
-            // PROTOCOLS::MQTT => self.send_mqtt(message),
-            // PROTOCOLS::WEBRTC => self.send_webrtc(message),
-            // PROTOCOLS::HTTP3 => self.send_http3(message),
-            // PROTOCOLS::QUIC => self.send_quic(message),
-            _ => Err("The protocol does not support 'Send'.".to_string()),
-        };
-
-        return result;
-    }
-
-    pub fn rcv(self) -> Result<Vec<u8>, String> {
-        // check the protocol
-        let result = match self.protocol {
-            PROTOCOLS::WS | PROTOCOLS::WSS => self.rcv_ws(),
-            PROTOCOLS::FTP | PROTOCOLS::SFTP => self.rcv_ftp(),
-            // PROTOCOLS::MQTT => self.rcv_mqtt(),
-            // PROTOCOLS::WEBRTC => self.rcv_webrtc(),
-            // PROTOCOLS::HTTP3 => self.rcv_http3(),
-            // PROTOCOLS::QUIC => self.rcv_quic(),
-            _ => Err("The protocol does not support 'Receive'.".to_string()),
-        };
-
-        return result;
-    }
-
-    fn send_ftp(&self) -> Result<Self, String> {
-        return Err("Use run_ftp_command instead for FTP/SFTP.".to_string());
-    }
-
-    fn rcv_ftp(&self) -> Result<Vec<u8>, String> {
-        return Err("Use run_ftp_command instead for FTP/SFTP".to_string());
-    }
     fn send_ws(mut self, message: Vec<u8>) -> Result<Self, String> {
         let send_result = self.ws_client.as_mut().unwrap()
             .lock().unwrap()
@@ -414,6 +470,49 @@ impl Client {
             }
         }
     }
+
+    fn connect_webrtc(&self) -> Result<(), String> {
+        return Err("The protocol is not supported yet.".to_string());
+    }
+
+    fn connect_http3(&self) -> Result<(), String> {
+        return Err("The protocol is not supported yet.".to_string());
+    }
+
+    fn connect_quic(&self) -> Result<(), String> {
+        // connect to the server using QUIC
+        return Err("The protocol is not supported yet.".to_string());
+    }
+
+    pub fn send(self, data: Vec<u8>, topic: Option<&str>) -> Result<Self, String> {
+        // check the protocol
+        let result = match self.protocol {
+            PROTOCOLS::WS | PROTOCOLS::WSS => self.send_ws(data),
+            PROTOCOLS::MQTT => self.send_mqtt(topic, data),
+            // PROTOCOLS::WEBRTC => self.send_webrtc(message),
+            // PROTOCOLS::HTTP3 => self.send_http3(message),
+            // PROTOCOLS::QUIC => self.send_quic(message),
+            _ => Err("The protocol does not support 'Send'. Use another method instead.".to_string()),
+        };
+
+        return result;
+    }
+
+    pub fn rcv(self) -> Result<Vec<u8>, String> {
+        // check the protocol
+        let result = match self.protocol {
+            PROTOCOLS::WS | PROTOCOLS::WSS => self.rcv_ws(),
+            PROTOCOLS::MQTT => self.rcv_mqtt(),
+            // PROTOCOLS::WEBRTC => self.rcv_webrtc(),
+            // PROTOCOLS::HTTP3 => self.rcv_http3(),
+            // PROTOCOLS::QUIC => self.rcv_quic(),
+            _ => Err("The protocol does not support 'Receive'. Use another method instead".to_string()),
+        };
+
+        return result;
+    }
+
+    
 
     /**************************** */
     /* REQUEST-RESPONSE PROTOCOLS */
