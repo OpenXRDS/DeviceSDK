@@ -18,6 +18,7 @@
 
 use crate::common::enums::{PROTOCOLS, FtpCommands};
 
+use url::Url;
 /**
  * In case of Using CoAP protocol, refer to the following link:
  * https://www.potaroo.net/ietf/all-ids/draft-castellani-core-http-mapping-07.html#rfc.section.4
@@ -60,14 +61,38 @@ pub struct FtpResponse {
 }
 
 #[derive(Debug, Clone)]
-pub struct Url {
+pub struct XrUrl {
     pub scheme: String,
     pub host: String,
     pub port: u32,
     pub path: String,
+    pub raw_url: String,
 
     // Optional fields
     pub query: Option<String>,
     pub username: Option<String>,
     pub password: Option<String>,
+}
+
+impl XrUrl {
+    pub fn socket_addrs(&self) -> Result<std::net::SocketAddr, String> {
+        let url = Url::parse(self.raw_url.as_str());
+        if url.is_err() {
+            return Err("Invalid URL".to_string());
+        }
+
+        let url = url.unwrap();
+        let sock_addr_result = url.socket_addrs(|| None);
+        
+        if sock_addr_result.is_err() {
+            return Err("Invalid URL".to_string());
+        } else {
+            let sock_addr = sock_addr_result.unwrap();
+            if sock_addr.len() == 0 {
+                return Err("Invalid URL".to_string());
+            } else {
+                return Ok(sock_addr[0]);
+            }
+        }        
+    }
 }

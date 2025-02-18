@@ -16,13 +16,19 @@
 
 use std::fmt::{self, Debug};
 use std::clone::Clone;
-use std::io::Cursor;
+use std::io::{Cursor, Read};
+use std::os::windows::io::AsSocket;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use mio::net::UdpSocket;
+use mio::{Events, Poll, Interest, Token};
+
+use random_string::generate;
+
 // Internal dependencies
 use crate::common::enums::{PROTOCOLS, FtpCommands};
-use crate::common::data_structure::{FtpPayload, FtpResponse, NetResponse};
+use crate::common::data_structure::{FtpPayload, FtpResponse, NetResponse, XrUrl};
 use crate::common::parse_url;
 
 // HTTP
@@ -44,6 +50,15 @@ use suppaftp::FtpStream;
 use rumqttc::Client as MqttClient;
 use rumqttc::Connection as MqttConnection;
 use rumqttc::{MqttOptions, QoS, Event, Incoming};
+
+// QUIC / HTTP3
+use quiche::{Connection, RecvInfo, SendInfo};
+
+const MAX_DATAGRAM_SIZE: usize = 1350;
+
+const RANDOM_STRING_CHARSET: &str = "1234567890abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+
+
 
 /**
  * ResponseCollector is a struct to collect response from the server
@@ -101,15 +116,14 @@ impl ClientBuilder {
      * This function will parse the url to fill host, port, and path
      */
     pub fn build(self) -> Client {
-        use short_uuid::ShortUuid;
-        let uuid = uuid::Uuid::new_v4();
-        let short_str = ShortUuid::from_uuid(&uuid).to_string();
+        let short_str = generate(20, RANDOM_STRING_CHARSET);
 
         Client {
             protocol: self.protocol,
             raw_url: "".to_string(),
             id: short_str,
 
+            url: None,
             host: None,
             port: None,
             path: None,
@@ -130,6 +144,9 @@ impl ClientBuilder {
             ftp_stream: None,
             mqtt_client: None,
             mqtt_connection: None,
+            quic_connection: None,
+            udp_socket: None,
+
         }
     }
 }
@@ -142,6 +159,7 @@ impl ClientBuilder {
 
     // parsed url. these fields are extracted from the url string
     // Not directly used for connection or request. Just for information
+    url: Option<XrUrl>,
     host: Option<String>,
     port: Option<u32>,
     path: Option<String>,
@@ -162,6 +180,9 @@ impl ClientBuilder {
     ftp_stream: Option<Arc<Mutex<FtpStream>>>,
     mqtt_client: Option<MqttClient>,
     mqtt_connection: Option<Arc<Mutex<MqttConnection>>>,
+
+    quic_connection: Option<Arc<Mutex<quiche::Connection>>>,
+    udp_socket: Option<Arc<Mutex<mio::net::UdpSocket>>>,
  }
 
  impl fmt::Debug for Client {
@@ -290,6 +311,7 @@ impl Client {
             return Err(parse_result.err().unwrap());
         }
 
+        self.url = Some(parse_result.as_ref().unwrap().clone());
         self.host = Some(parse_result.as_ref().unwrap().host.clone());
         self.port = Some(parse_result.as_ref().unwrap().port);
         self.path = Some(parse_result.as_ref().unwrap().path.clone());
@@ -305,7 +327,7 @@ impl Client {
             PROTOCOLS::MQTT => self.connect_mqtt(),
             // PROTOCOLS::WEBRTC => self.connect_webrtc(),
             // PROTOCOLS::HTTP3 => self.connect_http3(),
-            // PROTOCOLS::QUIC => self.connect_quic(),
+            PROTOCOLS::QUIC => self.connect_quic(),
             _ => Err("The protocol does not support 'Connect'. Use 'Request' instead.".to_string()),
         };
 
@@ -479,9 +501,39 @@ impl Client {
         return Err("The protocol is not supported yet.".to_string());
     }
 
-    fn connect_quic(&self) -> Result<(), String> {
-        // connect to the server using QUIC
-        return Err("The protocol is not supported yet.".to_string());
+    fn connect_quic(mut self) -> Result<Self, String> {
+        let url = self.url.as_ref().ok_or("URL not set")?;
+        let peer_addr = url.socket_addrs().map_err(|e| e.to_string())?;
+        let bind_addr = "0.0.0.0:0".to_string();
+
+        let mut socket: mio::net::UdpSocket = mio::net::UdpSocket::bind(bind_addr.parse().unwrap()).unwrap();
+        let local_addr = socket.local_addr().unwrap();
+
+        let mut quic_config = self.create_quic_config();
+
+        // scid MUST be 20 bytes long
+        let scid = generate(20, RANDOM_STRING_CHARSET);
+        let scid = quiche::ConnectionId::from_ref(&scid.as_bytes());
+
+        let mut poll = mio::Poll::new().unwrap();
+        let poll_result = poll.registry().register(&mut socket, mio::Token(0), mio::Interest::READABLE);
+        if poll_result.is_err() {
+            return Err(poll_result.err().unwrap().to_string());
+        }
+
+        let mut conn = quiche::connect(Some(self.get_host().unwrap()), &scid, 
+            local_addr, peer_addr, &mut quic_config).map_err(|e| e.to_string())?;
+
+        // Start the QUIC connection
+        Self::send_initial_packet(&mut socket, &mut conn)?;
+
+        Self::event_loop(&mut socket, &mut conn, &mut poll)?;
+
+        self.quic_connection = Some(Arc::new(Mutex::new(conn)));
+        self.udp_socket = Some(Arc::new(Mutex::new(socket)));
+
+        Ok(self)
+
     }
 
     pub fn send(self, data: Vec<u8>, topic: Option<&str>) -> Result<Self, String> {
@@ -521,7 +573,7 @@ impl Client {
      * request to the server
      */
     pub fn request(mut self) -> NetResponse {
-        let parsed_url = crate::common::parse_url(&self.raw_url);
+        let parsed_url: Result<XrUrl, String> = crate::common::parse_url(&self.raw_url);
         if parsed_url.is_err() {
             let err_message = parsed_url.err().unwrap();
             return NetResponse {
@@ -941,4 +993,101 @@ impl Client {
         }
     }
     // ***************** End of Ftp Command Functons ***************//
+
+    fn create_quic_config(&self) -> quiche::Config {
+        let mut config = quiche::Config::new(quiche::PROTOCOL_VERSION).unwrap();
+        config.verify_peer(false);
+
+        config.set_application_protos(quiche::h3::APPLICATION_PROTOCOL).unwrap();
+        config.set_max_idle_timeout(5000);
+        config.set_max_recv_udp_payload_size(MAX_DATAGRAM_SIZE);
+        config.set_max_send_udp_payload_size(MAX_DATAGRAM_SIZE);
+        config.set_initial_max_data(10_000_000);
+        config.set_initial_max_stream_data_bidi_local(1_000_000);
+        config.set_initial_max_stream_data_bidi_remote(1_000_000);
+        config.set_initial_max_stream_data_uni(1_000_000);
+        config.set_initial_max_streams_bidi(100);
+        config.set_initial_max_streams_uni(100);
+        config.set_disable_active_migration(true);
+
+        config
+    }
+
+    /********************************** */
+    /********* QUIC PROTOCOL ************/
+    /********************************** */
+    fn send_initial_packet(socket: &mut UdpSocket, conn: &mut Connection) -> Result<(), String> {
+        let mut out = [0; MAX_DATAGRAM_SIZE];
+        let (write, send_info) = conn.send(&mut out).expect("initial send failed");
+        while let Err(e) = socket.send_to(&out[..write], send_info.to) {
+            if e.kind() == std::io::ErrorKind::WouldBlock {
+                continue;
+            }
+            return Err(format!("send() failed: {:?}", e));
+        }
+        Ok(())
+    }
+
+    fn event_loop(socket: &mut UdpSocket, conn: &mut Connection, poll: &mut Poll) -> Result<(), String> {
+        let mut events = Events::with_capacity(1024);
+        let mut buf = [0; 65535];
+        let mut out = [0; MAX_DATAGRAM_SIZE];
+
+        loop {
+            poll.poll(&mut events, conn.timeout()).map_err(|e| e.to_string())?;
+            if conn.is_closed() {
+                println!("Connection closed.");
+                break;
+            }
+
+            if conn.is_established() {
+                println!("Connection established.");
+                break;
+            }
+
+            Self::handle_read(socket, conn, &mut buf)?;
+            Self::handle_write(socket, conn, &mut out)?;
+        }
+
+        Ok(())
+    }
+
+    fn handle_read(socket: &mut UdpSocket, conn: &mut Connection, buf: &mut [u8]) -> Result<(), String> {
+        let (len, from) = match socket.recv_from(buf) {
+            Ok(v) => v,
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => return Ok(()),
+            Err(e) => return Err(format!("recv() failed: {:?}", e)),
+        };
+
+        let recv_info = RecvInfo { to: socket.local_addr().unwrap(), from };
+
+        conn.recv(&mut buf[..len], recv_info).map_err(|e| format!("recv failed: {:?}", e))?;
+        
+        println!("Received {} bytes", len);
+        Ok(())
+    }
+
+    fn handle_write(socket: &mut UdpSocket, conn: &mut Connection, out: &mut [u8]) -> Result<(), String> {
+        loop {
+            let (write, send_info) = match conn.send(out) {
+                Ok(v) => v,
+                Err(quiche::Error::Done) => break,
+                Err(e) => {
+                    conn.close(false, 0x1, b"fail").ok();
+                    return Err(format!("send failed: {:?}", e));
+                }
+            };
+
+            if let Err(e) = socket.send_to(&out[..write], send_info.to) {
+                if e.kind() == std::io::ErrorKind::WouldBlock {
+                    break;
+                }
+                return Err(format!("send() failed: {:?}", e));
+            }
+
+            println!("Sent {} bytes", write);
+        }
+
+        Ok(())
+    }
  }

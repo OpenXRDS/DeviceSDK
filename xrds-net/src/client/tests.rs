@@ -427,5 +427,22 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn test_quic_connect() {
+        let client_builder = ClientBuilder::new();
+        let client = client_builder.set_protocol(PROTOCOLS::QUIC)
+            .build();
+
+        let result = client.set_url("https://quic.nginx.org:443")
+            .connect();
+
+        if result.is_err() {
+            println!("error: {}", result.err().unwrap());
+            assert!(false);
+        } else {
+            assert_eq!(result.is_ok(), true);
+        }
+    }
  }
 
