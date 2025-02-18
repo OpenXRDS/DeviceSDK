@@ -4,9 +4,9 @@ pub mod data_structure;
 use std::path;
 use std::path::PathBuf;
 
-use crate::common::data_structure::Url;
+use crate::common::data_structure::XrUrl;
 
-pub fn parse_url(url: &str) -> Result<Url, String> {
+pub fn parse_url(url: &str) -> Result<XrUrl, String> {
     
     // 1. separate scheme if it exists
     let scheme_tokens = url.split("://").collect::<Vec<&str>>(); // ["https", "www.google.com/search"]
@@ -68,11 +68,12 @@ pub fn parse_url(url: &str) -> Result<Url, String> {
         return Err("Invalid port range".to_string());
     }
 
-    Ok(Url {   // temporal return value
+    Ok(XrUrl {   // temporal return value
         scheme: scheme.to_string(),
         host: host.to_string(),
         port: port,
         path: path.to_string(),
+        raw_url: url.to_string(),
         
         query: query_params,
         username: None,

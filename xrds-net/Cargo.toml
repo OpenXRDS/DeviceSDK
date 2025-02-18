@@ -9,6 +9,8 @@ crate-type = ["lib"]
 [dependencies]
 tokio = {version = "^1.32", features = ["full"]}
 url="2.5.4" 
+mio="1.0.3"
+
 curl="0.4.47"                                           # http / https
 coap="0.19.1"                                           # coap
 coap-lite = "0.11.3"                                    # coap
@@ -19,5 +21,6 @@ rumqttc="0.24.0"                                        # mqtt
 libunftp = "0.20.3"                                     # ftp server
 unftp-sbe-fs = "0.2.0"                                  # ftp server
 
-uuid="1.13.1"                                           # Generates UUID for client's id
-short-uuid="0.2.0"                                      # Shortens uuid
+quiche="0.22.0"                                         # quic / http3
+
+random-string="1.1.0"                                 # for UUID and scid (quic)
