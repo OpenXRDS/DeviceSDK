@@ -1,10 +1,19 @@
 use std::path::PathBuf;
+use std::sync::Arc;
+
+use random_string::generate;
 
 use crate::common::enums::PROTOCOLS;
 use crate::common::{validate_path, validate_path_write_permission};
 
 use unftp_sbe_fs::ServerExt;
 
+// QUIC / HTTP3
+use quiche::{Connection, RecvInfo, SendInfo};
+
+const MAX_DATAGRAM_SIZE: usize = 1350;
+
+const RANDOM_STRING_CHARSET: &str = "1234567890abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
 #[derive(Debug, Clone)]
 pub struct XRNetServer {
@@ -37,6 +46,8 @@ impl XRNetServer {
     }
 
     pub async fn start(&self) {
+        let server = Arc::new(self.clone());
+
         // Protocol Check
         if self.protocol.len() == 0 {
             panic!("No protocol is specified");
@@ -61,8 +72,11 @@ impl XRNetServer {
         for i in 0..self.protocol.len() {
             match self.protocol[i] {
                 PROTOCOLS::FTP | PROTOCOLS::SFTP => {
-                    // create a thread to start a different server for each port
-                    self.run_ftp_server(self.port[i]).await;
+                    let server = Arc::clone(&server);
+                    let port = self.port[i];
+                    tokio::spawn(async move {
+                        server.run_ftp_server(port).await;
+                    });
                 }
                 PROTOCOLS::HTTP | PROTOCOLS::HTTPS => {
                     // self.run_http_server();
@@ -86,13 +100,18 @@ impl XRNetServer {
                     // self.run_http3_server();
                 }
                 PROTOCOLS::QUIC => {
-                    // self.run_quic_server();
+                    let server = Arc::clone(&server);
+                    let port = self.port[i];
+                    tokio::spawn(async move {
+                        server.run_quic_server(port).await;
+                    });
                 }
             }
         }
     }
 
     async fn run_ftp_server(&self, port: u32) {
+        println!("FTP server started");
         let ftp_home: PathBuf;
         // set root directory as designated dir if the given directory is invalid or not provided
         let root_dir_val_result = validate_path(self.root_dir.as_ref().unwrap());
@@ -105,7 +124,7 @@ impl XRNetServer {
             
             ftp_home = PathBuf::from(target_dir.as_str());
         }
-        println!("server home: {:?}", ftp_home);
+        println!("ftp server home: {:?}", ftp_home);
 
         let server = libunftp::Server::with_fs(ftp_home)
         .build()
@@ -119,6 +138,33 @@ impl XRNetServer {
         } else {
             println!("FTP server started");
         }
+    }
+
+    async fn run_quic_server(&self, port: u32) {
+        println!("QUIC server started");
+
+        // quic server starts from udp socket
+        // server requires certificate and private key
+        
+    }
+
+    fn create_quic_config(&self) -> quiche::Config {
+        let mut config = quiche::Config::new(quiche::PROTOCOL_VERSION).unwrap();
+        config.verify_peer(false);
+
+        config.set_application_protos(quiche::h3::APPLICATION_PROTOCOL).unwrap();
+        config.set_max_idle_timeout(5000);
+        config.set_max_recv_udp_payload_size(MAX_DATAGRAM_SIZE);
+        config.set_max_send_udp_payload_size(MAX_DATAGRAM_SIZE);
+        config.set_initial_max_data(10_000_000);
+        config.set_initial_max_stream_data_bidi_local(1_000_000);
+        config.set_initial_max_stream_data_bidi_remote(1_000_000);
+        config.set_initial_max_stream_data_uni(1_000_000);
+        config.set_initial_max_streams_bidi(100);
+        config.set_initial_max_streams_uni(100);
+        config.set_disable_active_migration(true);
+
+        config
     }
 }
 

@@ -251,10 +251,11 @@ mod tests {
         let connect_result = client.set_url("wss://echo.websocket.org/").connect();
         let send_result = connect_result.unwrap().send(Vec::from("Hello, WS".as_bytes()), None);
         
-        let response = send_result.unwrap().rcv();
+        let client = send_result.unwrap();
+        let response = client.rcv();
         
         let response_str = String::from_utf8(response.clone().unwrap()).unwrap();
-        println!("respnse: {}", response_str);
+        println!("response: {}", response_str);
         assert_eq!(response.is_ok(), true);
     }
 
@@ -437,12 +438,109 @@ mod tests {
         let result = client.set_url("https://quic.nginx.org:443")
             .connect();
 
-        if result.is_err() {
-            println!("error: {}", result.err().unwrap());
-            assert!(false);
-        } else {
-            assert_eq!(result.is_ok(), true);
-        }
+        let result = result.map_err(|e| e.to_string());
+        assert_eq!(result.is_ok(), true);
+    }
+
+    #[test]
+    fn test_quic_send() {
+        let client_builder = ClientBuilder::new();
+        let client: crate::client::Client = client_builder.set_protocol(PROTOCOLS::QUIC)
+            .build();
+
+        let result = client.set_url("https://quic.nginx.org:443")
+            .connect().map_err(|e| e.to_string());
+
+        let client = result.unwrap();
+
+        let send_result = client.send(Vec::from("Hello, QUIC".as_bytes()), None);
+        assert_eq!(send_result.is_ok(), true);
+
+        assert!(true);
+    }
+
+    #[test]
+    fn test_quic_rcv() {
+
+    }
+
+    #[test]
+    fn test_http3_request1() {
+        let client_builder = ClientBuilder::new();
+        let client = client_builder.set_protocol(PROTOCOLS::HTTP3)
+            .build();
+
+        let result = client.set_url("https://quic.nginx.org:443").request();
+        let res_body = String::from_utf8(result.body).unwrap();
+        println!("response body length: {}", res_body.len());
+        println!("status code: {}", result.status_code);
+        println!("error: {:?}", result.error);
+        assert_eq!(result.status_code, 200);
+    }
+
+    #[test]
+    fn test_http3_request2() {
+        let client_builder = ClientBuilder::new();
+        let client = client_builder.set_protocol(PROTOCOLS::HTTP3)
+            .build();
+
+        let result = client.set_url("https://www.litespeedtech.com/products/litespeed-web-server").request();
+        let res_body = String::from_utf8(result.body).unwrap();
+        println!("response body length: {}", res_body.len());
+        println!("status code: {}", result.status_code);
+        println!("error: {:?}", result.error);
+        assert_eq!(result.status_code, 200);
+    }
+
+    #[test]
+    fn test_http3_request_custom_header() {
+        let client_builder = ClientBuilder::new();
+        let client = client_builder.set_protocol(PROTOCOLS::HTTP3)
+            .build();
+
+        // These 5 fields MUST appear or it won't work
+        let header = vec![
+            (":method", "GET"),                             // mandatory pseudo field
+            (":scheme", "https"),                           // mandatory pseudo field
+            (":authority", "www.litespeedtech.com"),        // mandatory pseudo field
+            (":path", "/products/litespeed-web-server"),    // mandatory pseudo field
+            ("user-Agent", "PostmanRuntime/7.43.0"),   // Some http3 sites require this field
+            ("accept", "*/*"),                      // custom fields
+            ("accept-language", "en-US,en;q=0.9"),  // custom fields
+        ];
+
+        let result = client.set_url("https://www.litespeedtech.com/products/litespeed-web-server")
+            .set_req_headers(header)
+            .request();
+        let res_body = String::from_utf8(result.body).unwrap();
+        println!("response body length: {}", res_body.len());
+        println!("status code: {}", result.status_code);
+        println!("error: {:?}", result.error);
+        assert_eq!(result.status_code, 200);
+    }
+
+    #[test]
+    fn test_http3_request_without_agent() {
+        let client_builder = ClientBuilder::new();
+        let client = client_builder.set_protocol(PROTOCOLS::HTTP3)
+            .build();
+
+        // These 5 fields MUST appear or it won't work
+        let header = vec![
+            (":method", "GET"),
+            (":scheme", "https"),
+            (":authority", "cloudflare-quic.com"),
+            (":path", "/"),
+        ];
+
+        let result = client.set_url("https://cloudflare-quic.com")
+            .set_req_headers(header)
+            .request();
+        let res_body = String::from_utf8(result.body).unwrap();
+        println!("response body length: {}", res_body.len());
+        println!("status code: {}", result.status_code);
+        println!("error: {:?}", result.error);
+        assert_eq!(result.status_code, 200);
     }
  }
 
