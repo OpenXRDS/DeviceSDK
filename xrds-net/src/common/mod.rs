@@ -4,6 +4,8 @@ pub mod data_structure;
 use std::path;
 use std::path::PathBuf;
 
+use quiche::h3::NameValue;
+
 use crate::common::data_structure::XrUrl;
 
 pub fn parse_url(url: &str) -> Result<XrUrl, String> {
@@ -114,6 +116,93 @@ pub fn append_to_path(p: PathBuf, s: &str) -> PathBuf {
     p.push(s);
     p.into()
 }
+
+fn convert_header_to_h3_header(headers: Vec<(String, String)>) -> Vec<quiche::h3::Header> {
+    let mut h3_headers: Vec<quiche::h3::Header> = Vec::new();
+    for (key, value) in headers {
+        let key = key.as_bytes();
+        let value = value.as_bytes();
+
+        h3_headers.push(quiche::h3::Header::new(key, value));
+    }
+
+    h3_headers
+}
+
+/**
+ * This function is to satisfy RFC 9114 Section 4.3.1
+ * https://datatracker.ietf.org/doc/html/rfc9114#section-4.3.1
+ * Mandatory headers are:
+ * - :method
+ * - :scheme
+ * - :authority
+ * - :path
+ * 
+ * Some sites may block requests without user-agent header.
+ * So, user-agent header is also added.
+ * 
+ * Default Method: GET
+ * If method is not provided by either set_method or header, GET method is used.
+ */
+pub fn fill_mandatory_http_headers(url: XrUrl, headers: Option<Vec<(String, String)>>, method: Option<String>) -> Vec<quiche::h3::Header> {
+    let mut h3_headers = match headers {
+        Some(h) => convert_header_to_h3_header(h),
+        None => Vec::new(),
+    };
+
+    let mut mandatory_headers = Vec::new();
+
+    let mut has_method = false;
+    let mut has_scheme = false;
+    let mut has_authority = false;
+    let mut has_path = false;
+    let mut has_useragent = false;  // optional. some sites may block requests without user-agent
+
+    for header in h3_headers.iter() {
+        if header.name() == b":method" {
+            has_method = true;
+        }
+        if header.name() == b":scheme" {
+            has_scheme = true;
+        }
+        if header.name() == b":authority" {
+            has_authority = true;
+        }
+        if header.name() == b":path" {
+            has_path = true;
+        }
+        if header.name() == b"user-agent" {
+            has_useragent = true;
+        }
+    }
+
+    if !has_method {
+        let mut method_str = "GET";
+        if method.is_some() {
+            let binding = method.as_ref().unwrap();
+            method_str = binding.as_str();
+        }
+        mandatory_headers.push(quiche::h3::Header::new(b":method", method_str.as_bytes()));
+    }
+    if !has_scheme {
+        mandatory_headers.push(quiche::h3::Header::new(b":scheme", url.scheme.as_bytes()));
+    }
+    if !has_authority {
+        let authority = format!("{}:{}", url.host, url.port);
+        mandatory_headers.push(quiche::h3::Header::new(b":authority", authority.as_bytes()));
+    }
+    if !has_path {
+        mandatory_headers.push(quiche::h3::Header::new(b":path", url.path.as_bytes()));
+    }
+    if !has_useragent {
+        mandatory_headers.push(quiche::h3::Header::new(b"user-agent", b"xrds/1.0"));
+    }
+
+    h3_headers.extend(mandatory_headers);
+    h3_headers
+
+}
+
 
 #[cfg(test)]
 mod tests;

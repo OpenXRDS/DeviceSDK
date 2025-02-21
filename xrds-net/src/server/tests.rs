@@ -45,7 +45,7 @@ mod tests {
         }
     }
 
-    fn run_server(port: u32) -> tokio::task::JoinHandle<()> {
+    fn run_ftp_server(port: u32) -> tokio::task::JoinHandle<()> {
         let protocols = vec![PROTOCOLS::FTP];
         let ports = vec![port];
         let crnt_dir = std::env::current_dir().unwrap();
@@ -61,9 +61,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_server_run_multiple() {
+        let current_line = line!();
+        let protocol_vec: Vec<PROTOCOLS> = vec![PROTOCOLS::FTP, PROTOCOLS::QUIC];
+        let ports: Vec<u32> = vec![current_line, current_line + 1];
+        let crnt_dir = std::env::current_dir().unwrap();
+        let target_dir = append_to_path(crnt_dir, "/test_root_dir");
+        
+        let server = XRNetServer::new(protocol_vec, ports);
+        let server_handle = tokio::spawn(async move {
+            server.set_root_dir(target_dir.as_path().to_str().unwrap()).start().await;
+        });
+
+        server_handle.await.unwrap();
+    }
+
+    #[tokio::test]
     async fn test_server_ftp_connection() {
         let current_line = line!();
-        let server_handle = run_server(current_line);
+        let server_handle = run_ftp_server(current_line);
         sleep(Duration::from_secs(2)).await;
 
         let client_handle = tokio::task::spawn_blocking(move || {
@@ -79,7 +95,7 @@ mod tests {
     #[tokio::test]
     async fn test_server_ftp_list() {
         let current_line = line!(); // To avoid duplicate port number for each test
-        let server_handle = run_server(current_line);
+        let server_handle = run_ftp_server(current_line);
         sleep(Duration::from_secs(2)).await;
         
         let client_handle = tokio::task::spawn_blocking(move || {
@@ -111,7 +127,7 @@ mod tests {
     #[tokio::test]
     async fn test_server_ftp_noop() {
         let current_line = line!(); // To avoid duplicate port number for each test
-        let server_handle = run_server(current_line);
+        let server_handle = run_ftp_server(current_line);
         sleep(Duration::from_secs(2)).await;
         
         let client_handle = tokio::task::spawn_blocking(move || {
@@ -148,7 +164,7 @@ mod tests {
     #[tokio::test]
     async fn test_server_ftp_crud() {
         let current_line = line!(); // To avoid duplicate port number for each test
-        let server_handle = run_server(current_line);
+        let server_handle = run_ftp_server(current_line);
         sleep(Duration::from_secs(2)).await;
         
         let ftp_payload_mkd = FtpPayload { command: FtpCommands::MKD, payload_name: "test_dir".to_string(), payload: None,};

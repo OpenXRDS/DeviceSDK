@@ -17,8 +17,8 @@
 use std::fmt::{self, Debug};
 use std::clone::Clone;
 use std::io::{Cursor, Read};
-use std::os::windows::io::AsSocket;
 use std::sync::{Arc, Mutex};
+use std::{thread, vec};
 use std::time::Duration;
 
 use mio::net::UdpSocket;
@@ -29,7 +29,7 @@ use random_string::generate;
 // Internal dependencies
 use crate::common::enums::{PROTOCOLS, FtpCommands};
 use crate::common::data_structure::{FtpPayload, FtpResponse, NetResponse, XrUrl};
-use crate::common::parse_url;
+use crate::common::{parse_url, fill_mandatory_http_headers};
 
 // HTTP
 use curl::easy::{Easy2, Handler, List, WriteError};
@@ -53,6 +53,7 @@ use rumqttc::{MqttOptions, QoS, Event, Incoming};
 
 // QUIC / HTTP3
 use quiche::{Connection, RecvInfo, SendInfo};
+use quiche::h3::NameValue;
 
 const MAX_DATAGRAM_SIZE: usize = 1350;
 
@@ -146,7 +147,7 @@ impl ClientBuilder {
             mqtt_connection: None,
             quic_connection: None,
             udp_socket: None,
-
+            event_poll: None,
         }
     }
 }
@@ -181,8 +182,10 @@ impl ClientBuilder {
     mqtt_client: Option<MqttClient>,
     mqtt_connection: Option<Arc<Mutex<MqttConnection>>>,
 
+    /* QUIC */
     quic_connection: Option<Arc<Mutex<quiche::Connection>>>,
     udp_socket: Option<Arc<Mutex<mio::net::UdpSocket>>>,
+    event_poll: Option<Arc<Mutex<mio::Poll>>>,
  }
 
  impl fmt::Debug for Client {
@@ -296,6 +299,9 @@ impl Client {
         return parsed_headers;
     }
 
+    /******************************************** */
+    /*************     CONNECTION       ********* */
+    /******************************************** */
     /**
      * connect to the server
      * Since it is not possible to clarify the type of the client in advance,
@@ -326,7 +332,6 @@ impl Client {
             PROTOCOLS::SFTP => self.connect_sftp(),
             PROTOCOLS::MQTT => self.connect_mqtt(),
             // PROTOCOLS::WEBRTC => self.connect_webrtc(),
-            // PROTOCOLS::HTTP3 => self.connect_http3(),
             PROTOCOLS::QUIC => self.connect_quic(),
             _ => Err("The protocol does not support 'Connect'. Use 'Request' instead.".to_string()),
         };
@@ -334,43 +339,41 @@ impl Client {
         return result;
     }
 
-    fn connect_ftp(mut self) -> Result<Self, String> {
-        let ftp_stream = FtpStream::connect(self.raw_url.as_str());
-        if ftp_stream.is_err() {
-            return Err(ftp_stream.err().unwrap().to_string());
-        }
+    /******************************************** */
+    /*************         SEND         ********* */
+    /******************************************** */
+    pub fn send(self, data: Vec<u8>, topic: Option<&str>) -> Result<Self, String> {
+        // check the protocol
+        let result = match self.protocol {
+            PROTOCOLS::WS | PROTOCOLS::WSS => self.send_ws(data),
+            PROTOCOLS::MQTT => self.send_mqtt(topic, data),
+            // PROTOCOLS::WEBRTC => self.send_webrtc(message),
+            PROTOCOLS::QUIC => self.send_quic(data),
+            _ => Err("The protocol does not support 'Send'. Use another method instead.".to_string()),
+        };
 
-        let mut ftp_stream = ftp_stream.unwrap();
-
-        if self.user.is_some() && self.password.is_some() {
-            let user = self.user.as_ref().unwrap();
-            let password = self.password.as_ref().unwrap();
-            let login_result = ftp_stream.login(user, password);
-            if login_result.is_err() {
-                return Err(login_result.err().unwrap().to_string());
-            } else {
-                // store the ftp_stream in the client
-                self.ftp_stream = Some(Arc::new(Mutex::new(ftp_stream)));
-                return Ok(self);
-            }
-        } else {
-            return Err("User and password are required for FTP connection.".to_string());
-        }
+        return result;
     }
 
-    /*
-        Need to test first
-     */
-    fn connect_sftp(self) -> Result<Self, String> {
-        return Ok(self);  // temporal return
+    /******************************************** */
+    /*************       RECEIVE        ********* */
+    /******************************************** */
+    pub fn rcv(&self) -> Result<Vec<u8>, String> {
+        // check the protocol
+        let result = match self.protocol {
+            PROTOCOLS::WS | PROTOCOLS::WSS => &self.rcv_ws(),
+            PROTOCOLS::MQTT => &self.rcv_mqtt(),
+            // PROTOCOLS::WEBRTC => self.rcv_webrtc(),
+            PROTOCOLS::QUIC => &self.rcv_quic(),
+            _ => &Err("The protocol does not support 'Receive'. Use another method instead".to_string()),
+        };
+
+        result.clone()
     }
-
-
 
     /*************************** */
     /* MQTT PROTOCOLS */
     /*************************** */
-    
     /**
      * Invokes 'publish' method of the mqtt client
      */
@@ -396,9 +399,9 @@ impl Client {
      * Receives the 'Publish' event only from the connection
      * if the received event is not 'Publish', it will return the empty Vec<u8>
      */
-    fn rcv_mqtt(mut self) -> Result<Vec<u8>, String> {
-        let mut mqtt_connection = self.mqtt_connection.as_mut().unwrap().lock().unwrap();
-        let notification = mqtt_connection.recv();
+    fn rcv_mqtt(&self) -> Result<Vec<u8>, String> {
+        let mqtt_connection = self.mqtt_connection.as_ref().unwrap();
+        let notification = mqtt_connection.lock().unwrap().recv();
         match notification {
             Ok(notification) => {
                 let mut result_vec: Vec<u8> = Vec::new();
@@ -470,8 +473,9 @@ impl Client {
         }
     }
 
-    fn rcv_ws(mut self) -> Result<Vec<u8>, String> {
-        let message = self.ws_client.as_mut().unwrap()
+    fn rcv_ws(&self) -> Result<Vec<u8>, String> {
+        let ws_client = self.ws_client.as_ref().unwrap();
+        let message = ws_client
             .lock().unwrap()
             .recv_message();
 
@@ -497,75 +501,6 @@ impl Client {
         return Err("The protocol is not supported yet.".to_string());
     }
 
-    fn connect_http3(&self) -> Result<(), String> {
-        return Err("The protocol is not supported yet.".to_string());
-    }
-
-    fn connect_quic(mut self) -> Result<Self, String> {
-        let url = self.url.as_ref().ok_or("URL not set")?;
-        let peer_addr = url.socket_addrs().map_err(|e| e.to_string())?;
-        let bind_addr = "0.0.0.0:0".to_string();
-
-        let mut socket: mio::net::UdpSocket = mio::net::UdpSocket::bind(bind_addr.parse().unwrap()).unwrap();
-        let local_addr = socket.local_addr().unwrap();
-
-        let mut quic_config = self.create_quic_config();
-
-        // scid MUST be 20 bytes long
-        let scid = generate(20, RANDOM_STRING_CHARSET);
-        let scid = quiche::ConnectionId::from_ref(&scid.as_bytes());
-
-        let mut poll = mio::Poll::new().unwrap();
-        let poll_result = poll.registry().register(&mut socket, mio::Token(0), mio::Interest::READABLE);
-        if poll_result.is_err() {
-            return Err(poll_result.err().unwrap().to_string());
-        }
-
-        let mut conn = quiche::connect(Some(self.get_host().unwrap()), &scid, 
-            local_addr, peer_addr, &mut quic_config).map_err(|e| e.to_string())?;
-
-        // Start the QUIC connection
-        Self::send_initial_packet(&mut socket, &mut conn)?;
-
-        Self::event_loop(&mut socket, &mut conn, &mut poll)?;
-
-        self.quic_connection = Some(Arc::new(Mutex::new(conn)));
-        self.udp_socket = Some(Arc::new(Mutex::new(socket)));
-
-        Ok(self)
-
-    }
-
-    pub fn send(self, data: Vec<u8>, topic: Option<&str>) -> Result<Self, String> {
-        // check the protocol
-        let result = match self.protocol {
-            PROTOCOLS::WS | PROTOCOLS::WSS => self.send_ws(data),
-            PROTOCOLS::MQTT => self.send_mqtt(topic, data),
-            // PROTOCOLS::WEBRTC => self.send_webrtc(message),
-            // PROTOCOLS::HTTP3 => self.send_http3(message),
-            // PROTOCOLS::QUIC => self.send_quic(message),
-            _ => Err("The protocol does not support 'Send'. Use another method instead.".to_string()),
-        };
-
-        return result;
-    }
-
-    pub fn rcv(self) -> Result<Vec<u8>, String> {
-        // check the protocol
-        let result = match self.protocol {
-            PROTOCOLS::WS | PROTOCOLS::WSS => self.rcv_ws(),
-            PROTOCOLS::MQTT => self.rcv_mqtt(),
-            // PROTOCOLS::WEBRTC => self.rcv_webrtc(),
-            // PROTOCOLS::HTTP3 => self.rcv_http3(),
-            // PROTOCOLS::QUIC => self.rcv_quic(),
-            _ => Err("The protocol does not support 'Receive'. Use another method instead".to_string()),
-        };
-
-        return result;
-    }
-
-    
-
     /**************************** */
     /* REQUEST-RESPONSE PROTOCOLS */
     /**************************** */
@@ -585,6 +520,7 @@ impl Client {
             }
         } else {
             let parsed_url = parsed_url.unwrap();
+            self.url = Some(parsed_url.clone());
             self.host = Some(parsed_url.host);
             self.port = Some(parsed_url.port);
             self.path = Some(parsed_url.path);
@@ -598,6 +534,7 @@ impl Client {
         let result = match self.protocol {
             PROTOCOLS::HTTP => self.request_http(),
             PROTOCOLS::HTTPS => self.request_http(),
+            PROTOCOLS::HTTP3 => self.request_http3(),
             PROTOCOLS::FILE => self.request_file(),
             PROTOCOLS::COAP => self.request_coap(),
             _ => NetResponse {
@@ -709,6 +646,10 @@ impl Client {
         };
     }    
 
+
+    /******************************** ****************/
+    /* *****************    COAP    ******************/
+    /******************************** ****************/
     fn request_coap(&self) -> NetResponse {
         // request to the server using COAP
         let rt = tokio::runtime::Runtime::new().unwrap();
@@ -756,6 +697,41 @@ impl Client {
             return Ok(response.unwrap());
         }
     }
+
+    /******************************** ****************/
+    /* ***************** FTP & FTPS ******************/
+    /******************************** ****************/
+    fn connect_ftp(mut self) -> Result<Self, String> {
+        let ftp_stream = FtpStream::connect(self.raw_url.as_str());
+        if ftp_stream.is_err() {
+            return Err(ftp_stream.err().unwrap().to_string());
+        }
+
+        let mut ftp_stream = ftp_stream.unwrap();
+
+        if self.user.is_some() && self.password.is_some() {
+            let user = self.user.as_ref().unwrap();
+            let password = self.password.as_ref().unwrap();
+            let login_result = ftp_stream.login(user, password);
+            if login_result.is_err() {
+                return Err(login_result.err().unwrap().to_string());
+            } else {
+                // store the ftp_stream in the client
+                self.ftp_stream = Some(Arc::new(Mutex::new(ftp_stream)));
+                return Ok(self);
+            }
+        } else {
+            return Err("User and password are required for FTP connection.".to_string());
+        }
+    }
+
+    /*
+        Need to test first
+     */
+    fn connect_sftp(self) -> Result<Self, String> {
+        return Ok(self);  // temporal return
+    }
+
 
     pub fn run_ftp_command(&self, ftp_payload: FtpPayload) -> FtpResponse {
         match ftp_payload.command {
@@ -994,6 +970,72 @@ impl Client {
     }
     // ***************** End of Ftp Command Functons ***************//
 
+
+    /********************************** */
+    /********* QUIC PROTOCOL ************/
+    /********************************** */
+    fn connect_quic(mut self) -> Result<Self, String> {
+        let url = self.url.as_ref().ok_or("URL not set")?;
+        let peer_addr = url.socket_addrs().map_err(|e| e.to_string())?;
+        let bind_addr = "0.0.0.0:0".to_string();
+
+        let mut socket: mio::net::UdpSocket = mio::net::UdpSocket::bind(bind_addr.parse().unwrap()).unwrap();
+        let local_addr = socket.local_addr().unwrap();
+
+        let mut quic_config = self.create_quic_config();
+
+        // scid MUST be 20 bytes long
+        let scid = generate(20, RANDOM_STRING_CHARSET);
+        let scid = quiche::ConnectionId::from_ref(&scid.as_bytes());
+
+        let mut poll = mio::Poll::new().unwrap();
+        let poll_result = poll.registry().register(&mut socket, mio::Token(0), mio::Interest::READABLE);
+        if poll_result.is_err() {
+            return Err(poll_result.err().unwrap().to_string());
+        }
+
+        let mut conn = quiche::connect(Some(self.get_host().unwrap()), &scid, 
+            local_addr, peer_addr, &mut quic_config).map_err(|e| e.to_string())?;
+
+        // Start the QUIC connection
+        Self::send_initial_packet(&mut socket, &mut conn)?;
+
+        // Condition of breaking the loop: Connection is closed or established
+        Self::event_loop(&mut socket, &mut conn, &mut poll)?;
+
+        if conn.is_closed() {
+            return Err("Connection closed.".to_string());
+        }
+
+        self.quic_connection = Some(Arc::new(Mutex::new(conn)));
+        self.udp_socket = Some(Arc::new(Mutex::new(socket)));
+        self.event_poll = Some(Arc::new(Mutex::new(poll)));
+
+        Ok(self)
+
+    }
+
+    // TODO: unit test
+    fn send_quic(mut self, mut data: Vec<u8>) -> Result<Self, String> {
+        let conn = self.quic_connection.as_mut().ok_or("QUIC connection is not initialized")?;
+
+        Self::handle_write( &mut self.udp_socket.as_mut().unwrap().lock().unwrap(),
+             &mut conn.lock().unwrap(), &mut data)?;
+
+        Ok(self)
+    }
+
+    fn rcv_quic(&self) -> Result<Vec<u8>, String> {
+        let conn = self.quic_connection.as_ref().ok_or("QUIC connection is not initialized")?;
+        let mut buf = [0; 65535];
+        let mut socket = self.udp_socket.as_ref().unwrap().lock().unwrap();
+        let mut conn = conn.lock().unwrap();
+
+        Self::handle_read(&mut socket, &mut conn, &mut buf)?;
+
+        Ok(buf.to_vec())
+    }
+
     fn create_quic_config(&self) -> quiche::Config {
         let mut config = quiche::Config::new(quiche::PROTOCOL_VERSION).unwrap();
         config.verify_peer(false);
@@ -1013,9 +1055,6 @@ impl Client {
         config
     }
 
-    /********************************** */
-    /********* QUIC PROTOCOL ************/
-    /********************************** */
     fn send_initial_packet(socket: &mut UdpSocket, conn: &mut Connection) -> Result<(), String> {
         let mut out = [0; MAX_DATAGRAM_SIZE];
         let (write, send_info) = conn.send(&mut out).expect("initial send failed");
@@ -1028,6 +1067,49 @@ impl Client {
         Ok(())
     }
 
+    /**
+     * For QUIC only
+     */
+    pub fn start_event_loop(&self, socket: Arc<Mutex<UdpSocket>>, 
+            conn: Arc<Mutex<Connection>>, poll: Arc<Mutex<Poll>>) {
+                println!("[start_event_loop] Start the event loop");
+        thread::spawn(move || {
+            let mut events = Events::with_capacity(1024);
+            let mut buf = [0; 65535];
+            let mut out = [0; MAX_DATAGRAM_SIZE];
+
+            loop {
+                println!("Event loop is running...");
+                // sleep for 1 sec
+                thread::sleep(Duration::from_secs(1));
+
+                {
+                    let conn = conn.lock().unwrap();
+                    if conn.is_closed() {
+                        println!("[start_event_loop]Connection closed.");
+                        break;
+                    }
+                }
+                
+                {
+                    let mut poll = poll.lock().unwrap();
+                    poll.poll(&mut events, None).unwrap();
+                }
+
+                {
+                    let mut conn = conn.lock().unwrap();
+                    let mut socket = socket.lock().unwrap();
+                    let _ = Self::handle_read(&mut socket, &mut conn, &mut buf);
+                    let _ = Self::handle_write(&mut socket, &mut conn, &mut out);
+                }
+            }   // end of loop
+            println!("[start_event_loop] Event loop is finished.");
+        });
+
+        
+    }
+
+    /* Used for initial handshake */
     fn event_loop(socket: &mut UdpSocket, conn: &mut Connection, poll: &mut Poll) -> Result<(), String> {
         let mut events = Events::with_capacity(1024);
         let mut buf = [0; 65535];
@@ -1048,7 +1130,7 @@ impl Client {
             Self::handle_read(socket, conn, &mut buf)?;
             Self::handle_write(socket, conn, &mut out)?;
         }
-
+        
         Ok(())
     }
 
@@ -1062,8 +1144,6 @@ impl Client {
         let recv_info = RecvInfo { to: socket.local_addr().unwrap(), from };
 
         conn.recv(&mut buf[..len], recv_info).map_err(|e| format!("recv failed: {:?}", e))?;
-        
-        println!("Received {} bytes", len);
         Ok(())
     }
 
@@ -1089,5 +1169,180 @@ impl Client {
         }
 
         Ok(())
+    }
+
+    /**
+     * 
+     */
+    fn request_http3(&self) -> NetResponse {
+        // base response
+        let mut response = NetResponse {
+            protocol: PROTOCOLS::HTTP3,
+            status_code: 0,
+            headers: vec![],
+            body: Vec::new(),
+            error: None,
+        };
+
+        // prepare a buffer for response body
+        let mut buf = [0; 65535];
+
+        // meta data preparation
+        let url = self.clone().url.unwrap();
+        let peer_addr = url.socket_addrs().unwrap();
+        let bind_addr = match peer_addr {
+            std::net::SocketAddr::V4(_) => "0.0.0.0:0",
+            std::net::SocketAddr::V6(_) => "[::]:0",
+        };
+
+        let mut path = url.path.clone();
+        if path.is_empty() {
+            path = "/".to_string();
+        }
+
+        // Need improvement on header setting. in case of using .set_method() method or not 
+        let req_headers = match self.req_headers.clone() {
+            Some(headers) => fill_mandatory_http_headers(url.clone(), Some(headers), self.method.clone()),
+            None => fill_mandatory_http_headers(url.clone(), None, self.method.clone()),
+        };
+
+        let mut socket = mio::net::UdpSocket::bind(bind_addr.parse().unwrap()).unwrap();
+        let mut poll = mio::Poll::new().unwrap();
+        poll.registry()
+            .register(&mut socket, mio::Token(0), mio::Interest::READABLE)
+            .unwrap();
+
+        let scid = generate(20, RANDOM_STRING_CHARSET);
+        let scid = quiche::ConnectionId::from_ref(&scid.as_bytes());
+
+        let mut quic_config = self.create_quic_config();
+
+        let local_addr = socket.local_addr().unwrap();
+        let mut conn = quiche::connect(Some(url.host.as_str())
+            , &scid, local_addr, peer_addr, &mut quic_config).unwrap();
+
+        // QUIC Initialization
+        let mut out = [0; MAX_DATAGRAM_SIZE];
+        Self::send_packet(&mut socket, &mut conn, &mut out).expect("Initial send failed");
+
+        let h3_config = quiche::h3::Config::new().unwrap();
+        let mut http3_conn: Option<quiche::h3::Connection> = None;
+        let mut req_sent = false;
+        let mut events = mio::Events::with_capacity(1024);
+        let mut is_exit = false;
+
+        loop {  // looping is inevitable
+            if is_exit {
+                break;
+            }
+            poll.poll(&mut events, conn.timeout()).unwrap();
+
+            Self::receive_packets(&mut socket, &mut conn, &mut buf, local_addr, &mut http3_conn, &h3_config);
+
+            if let Some(h3) = http3_conn.as_mut() {
+                if !req_sent {
+                    let _ = Self::send_http3_request(h3, &mut conn, &req_headers);
+                    req_sent = true;
+                }
+                is_exit = match Self::handle_http3_events(h3, &mut conn, &mut buf, &mut response) {
+                    Ok(exit) => exit,
+                    Err(err) => {
+                        response.error = Some(err);
+                        true
+                    }
+                };
+            }
+            let _ = Self::send_packet(&mut socket, &mut conn, &mut out);
+
+            if conn.is_closed() {
+                break;
+            }
+        }
+
+        return response;
+        
+    }
+
+    fn send_packet(
+        socket: &mut mio::net::UdpSocket,
+        conn: &mut quiche::Connection,
+        out: &mut [u8],
+    ) -> Result<(), String> {
+        while let Ok((write, send_info)) = conn.send(out) {
+            socket.send_to(&out[..write], send_info.to).map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    }
+
+    fn receive_packets(
+        socket: &mut mio::net::UdpSocket,
+        conn: &mut quiche::Connection,
+        buf: &mut [u8],
+        local_addr: std::net::SocketAddr,
+        http3_conn: &mut Option<quiche::h3::Connection>,
+        h3_config: &quiche::h3::Config,
+    ) {
+        while let Ok((len, from)) = socket.recv_from(buf) {
+            let recv_info = quiche::RecvInfo { to: local_addr, from };
+            if conn.recv(&mut buf[..len], recv_info).is_ok() && conn.is_established() && http3_conn.is_none() {
+                *http3_conn = Some(quiche::h3::Connection::with_transport(conn, h3_config).unwrap());
+            }
+        }
+    }
+    
+    fn send_http3_request(
+        h3: &mut quiche::h3::Connection,
+        conn: &mut quiche::Connection,
+        req: &[quiche::h3::Header],
+    ) -> Result<(), String> {
+        h3.send_request(conn, req, true).map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    fn handle_http3_events(
+        h3: &mut quiche::h3::Connection,
+        conn: &mut quiche::Connection,
+        buf: &mut [u8],
+        response: &mut NetResponse
+    ) -> Result<(bool), String> {
+        while let Ok(event) = h3.poll(conn) {
+            match event {
+                // print event name
+                (stream_id, quiche::h3::Event::Headers { list, .. }) => {
+                    for header in list {
+                        let header_name = String::from_utf8_lossy(header.name()).to_string();
+                        let header_value = String::from_utf8_lossy(header.value()).to_string();
+                        println!("{}: {}", header_name.clone(), header_value.clone());
+                        response.headers.push((header_name, header_value));
+                    }
+
+                    // put the status code
+                    for (k, v) in response.headers.iter() {
+                        if k == ":status" {
+                            let status_code = v.parse::<u16>().unwrap();
+                            response.status_code = status_code as u32;
+                        }
+                    }
+                }
+                (stream_id, quiche::h3::Event::Data) => {
+                    if let Ok(read) = h3.recv_body(conn, stream_id, buf) {
+                        response.body.extend_from_slice(&buf[..read]);
+                    }
+                }
+                (_, quiche::h3::Event::Finished) => {
+                    println!("Finished");
+                    conn.close(true, 0x100, b"kthxbye").map_err(|e| e.to_string())?;
+                    return Ok(true);
+                }
+                (_, quiche::h3::Event::Reset(e)) => {
+                    conn.close(true, 0x100, b"kthxbye").map_err(|e| e.to_string())?;
+                    return Ok(true);
+                }
+                (goaway_id, quiche::h3::Event::GoAway) => {},
+                _ => {
+                }
+            }
+        }
+        Ok(false)
     }
  }
