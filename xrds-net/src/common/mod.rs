@@ -3,6 +3,8 @@ pub mod data_structure;
 
 use std::path;
 use std::path::PathBuf;
+use std::fs::File;
+use std::io::Read;
 
 use quiche::h3::NameValue;
 
@@ -203,6 +205,24 @@ pub fn fill_mandatory_http_headers(url: XrUrl, headers: Option<Vec<(String, Stri
 
 }
 
+
+pub fn read_file_from_disk(path: &str) -> Result<Vec<u8>, String> {
+    let p = path::Path::new(path);
+    if !p.exists() {
+        return Err("File does not exist".to_string());
+    }
+
+    let mut file = match std::fs::File::open(p) {
+        Ok(f) => f,
+        Err(_) => return Err("File open error".to_string()),
+    };
+
+    let mut buffer = Vec::new();
+    match file.read_to_end(&mut buffer) {
+        Ok(_) => Ok(buffer),
+        Err(_) => Err("File read error".to_string()),
+    }
+}
 
 #[cfg(test)]
 mod tests;

@@ -14,15 +14,15 @@
  limitations under the License.
  */
 
-use std::fmt::{self, Debug};
+use std::fmt;
 use std::clone::Clone;
-use std::io::{Cursor, Read};
+use std::io::Cursor;
 use std::sync::{Arc, Mutex};
 use std::{thread, vec};
 use std::time::Duration;
 
 use mio::net::UdpSocket;
-use mio::{Events, Poll, Interest, Token};
+use mio::{Events, Poll};
 
 use random_string::generate;
 
@@ -30,6 +30,7 @@ use random_string::generate;
 use crate::common::enums::{PROTOCOLS, FtpCommands};
 use crate::common::data_structure::{FtpPayload, FtpResponse, NetResponse, XrUrl};
 use crate::common::{parse_url, fill_mandatory_http_headers};
+use crate::client::xrds_webrtc::{WebRTCPublisher, WebRTCSubscriber};
 
 // HTTP
 use curl::easy::{Easy2, Handler, List, WriteError};
@@ -52,8 +53,9 @@ use rumqttc::Connection as MqttConnection;
 use rumqttc::{MqttOptions, QoS, Event, Incoming};
 
 // QUIC / HTTP3
-use quiche::{Connection, RecvInfo, SendInfo};
+use quiche::{Connection, RecvInfo};
 use quiche::h3::NameValue;
+
 
 const MAX_DATAGRAM_SIZE: usize = 1350;
 
@@ -138,9 +140,6 @@ impl ClientBuilder {
             user: self.user,
             password: self.password,
 
-            res_headers: vec![],
-            res_body: "".to_string(),
-
             ws_client: None,
             ftp_stream: None,
             mqtt_client: None,
@@ -148,22 +147,25 @@ impl ClientBuilder {
             quic_connection: None,
             udp_socket: None,
             event_poll: None,
+
+            webrtc_publishder: None,
+            webrtc_subscriber: None,
         }
     }
 }
 
 #[derive(Clone)]
  pub struct Client {
-    protocol: PROTOCOLS,
-    raw_url: String, // url given by the user. This is used for connection and request
-    id: String, // unique id for the client
+    pub protocol: PROTOCOLS,
+    pub raw_url: String, // url given by the user. This is used for connection and request
+    pub id: String, // unique id for the client
 
     // parsed url. these fields are extracted from the url string
     // Not directly used for connection or request. Just for information
-    url: Option<XrUrl>,
-    host: Option<String>,
-    port: Option<u32>,
-    path: Option<String>,
+    pub url: Option<XrUrl>,
+    pub host: Option<String>,
+    pub port: Option<u32>,
+    pub path: Option<String>,
 
     req_headers: Option<Vec<(String, String)>>,
     req_body: Option<String>,
@@ -171,21 +173,22 @@ impl ClientBuilder {
     redirection: bool,
     method: Option<String>,
 
-    user: Option<String>,
-    password: Option<String>,
+    pub user: Option<String>,
+    pub password: Option<String>,
 
-    res_headers: Vec<(String, String)>,
-    res_body: String,
-
-    ws_client: Option<Arc<Mutex<WS_Client<Box<dyn NetworkStream + Send>>>>>,
-    ftp_stream: Option<Arc<Mutex<FtpStream>>>,
-    mqtt_client: Option<MqttClient>,
-    mqtt_connection: Option<Arc<Mutex<MqttConnection>>>,
+    pub ws_client: Option<Arc<Mutex<WS_Client<Box<dyn NetworkStream + Send>>>>>,
+    pub ftp_stream: Option<Arc<Mutex<FtpStream>>>,
+    pub mqtt_client: Option<MqttClient>,
+    pub mqtt_connection: Option<Arc<Mutex<MqttConnection>>>,
 
     /* QUIC */
-    quic_connection: Option<Arc<Mutex<quiche::Connection>>>,
-    udp_socket: Option<Arc<Mutex<mio::net::UdpSocket>>>,
-    event_poll: Option<Arc<Mutex<mio::Poll>>>,
+    pub quic_connection: Option<Arc<Mutex<quiche::Connection>>>,
+    pub udp_socket: Option<Arc<Mutex<mio::net::UdpSocket>>>,
+    pub event_poll: Option<Arc<Mutex<mio::Poll>>>,
+
+    // WebRTC
+    pub webrtc_publishder: Option<WebRTCPublisher>,
+    pub webrtc_subscriber: Option<WebRTCSubscriber>,
  }
 
  impl fmt::Debug for Client {
@@ -195,58 +198,6 @@ impl ClientBuilder {
 }
 
 impl Client {
-    pub fn get_protocol(&self) -> &PROTOCOLS {
-        &self.protocol
-    }
-
-    pub fn get_url(&self) -> &String {
-        &self.raw_url
-    }
-
-    pub fn get_host(&self) -> Option<&String> {
-        self.host.as_ref()
-    }
-
-    pub fn get_port(&self) -> Option<u32> {
-        self.port
-    }
-
-    pub fn get_path(&self) -> Option<&String> {
-        self.path.as_ref()
-    }
-
-    pub fn get_req_headers(&self) -> Option<&Vec<(String, String)>> {
-        self.req_headers.as_ref()
-    }
-
-    pub fn get_req_body(&self) -> Option<&String> {
-        self.req_body.as_ref()
-    }
-
-    pub fn get_timeout(&self) -> Option<u64> {
-        self.timeout
-    }
-
-    pub fn get_user(&self) -> Option<&String> {
-        self.user.as_ref()
-    }
-
-    pub fn get_password(&self) -> Option<&String> {
-        self.password.as_ref()
-    }
-
-    pub fn get_response_headers(&self) -> Vec<(String, String)> {
-        self.res_headers.clone()
-    }
-
-    pub fn get_response_body(&self) -> String {
-        self.res_body.clone()
-    }
-
-    pub fn get_method(&self) -> Option<&String> {
-        self.method.as_ref()
-    }
-
     pub fn set_method(mut self, method: &str) -> Self {
         self.method = Some(method.to_uppercase().to_string());
         self
@@ -497,10 +448,6 @@ impl Client {
         }
     }
 
-    fn connect_webrtc(&self) -> Result<(), String> {
-        return Err("The protocol is not supported yet.".to_string());
-    }
-
     /**************************** */
     /* REQUEST-RESPONSE PROTOCOLS */
     /**************************** */
@@ -572,7 +519,7 @@ impl Client {
             easy.http_headers(list).unwrap();
         }
 
-        if self.get_method() == Some(&"POST".to_string()) {
+        if self.method == Some("POST".to_string()) {
             easy.post(true).unwrap();    // POST method
             
             if self.req_body.is_some() {    // fill body field if there is any in request
@@ -994,7 +941,7 @@ impl Client {
             return Err(poll_result.err().unwrap().to_string());
         }
 
-        let mut conn = quiche::connect(Some(self.get_host().unwrap()), &scid, 
+        let mut conn = quiche::connect(Some(self.host.clone().unwrap().as_str()), &scid, 
             local_addr, peer_addr, &mut quic_config).map_err(|e| e.to_string())?;
 
         // Start the QUIC connection
@@ -1171,8 +1118,13 @@ impl Client {
         Ok(())
     }
 
+    /********************************** */
+    /*************** HTTP/3 *************/
+    /********************************** */
     /**
-     * 
+     * Mandatory headers for HTTP3 MUJST be included in the request
+     *  - RFC 9114 Section 4.3.1
+     *  - https://datatracker.ietf.org/doc/html/rfc9114#section-4.3.1
      */
     fn request_http3(&self) -> NetResponse {
         // base response
@@ -1194,11 +1146,6 @@ impl Client {
             std::net::SocketAddr::V4(_) => "0.0.0.0:0",
             std::net::SocketAddr::V6(_) => "[::]:0",
         };
-
-        let mut path = url.path.clone();
-        if path.is_empty() {
-            path = "/".to_string();
-        }
 
         // Need improvement on header setting. in case of using .set_method() method or not 
         let req_headers = match self.req_headers.clone() {
@@ -1304,11 +1251,11 @@ impl Client {
         conn: &mut quiche::Connection,
         buf: &mut [u8],
         response: &mut NetResponse
-    ) -> Result<(bool), String> {
+    ) -> Result<bool, String> {
         while let Ok(event) = h3.poll(conn) {
             match event {
                 // print event name
-                (stream_id, quiche::h3::Event::Headers { list, .. }) => {
+                (_stream_id, quiche::h3::Event::Headers { list, .. }) => {
                     for header in list {
                         let header_name = String::from_utf8_lossy(header.name()).to_string();
                         let header_value = String::from_utf8_lossy(header.value()).to_string();
@@ -1334,15 +1281,26 @@ impl Client {
                     conn.close(true, 0x100, b"kthxbye").map_err(|e| e.to_string())?;
                     return Ok(true);
                 }
-                (_, quiche::h3::Event::Reset(e)) => {
+                (_, quiche::h3::Event::Reset(_e)) => {
                     conn.close(true, 0x100, b"kthxbye").map_err(|e| e.to_string())?;
                     return Ok(true);
                 }
-                (goaway_id, quiche::h3::Event::GoAway) => {},
+                (_goaway_id, quiche::h3::Event::GoAway) => {},
                 _ => {
                 }
             }
         }
         Ok(false)
     }
+
+    /********************************** */
+    /*************** WebRTC *************/
+    /********************************** */
+    
+
+
  }
+
+ /********************************** */
+/*************** WebRTC *************/
+/********************************** */

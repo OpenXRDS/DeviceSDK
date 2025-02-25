@@ -2,6 +2,7 @@ mod tests {
     use crate::client::ClientBuilder;
     use crate::common::enums::{PROTOCOLS, FtpCommands};
     use crate::common::data_structure::FtpPayload;
+    use crate::client::xrds_webrtc::{WebRTCPublisher, WebRTCSubscriber};
 
     static HTTP_ECHO_SERVER_URL: &str = "https://echo.free.beeceptor.com";
 
@@ -12,7 +13,7 @@ mod tests {
             .build();
 
         /* Assertions */
-        assert_eq!(client.get_protocol(), &PROTOCOLS::HTTP);
+        assert_eq!(client.protocol, PROTOCOLS::HTTP);
     }
 
     /* start of HTTP 1.1 tests */
@@ -525,7 +526,6 @@ mod tests {
         let client = client_builder.set_protocol(PROTOCOLS::HTTP3)
             .build();
 
-        // These 5 fields MUST appear or it won't work
         let header = vec![
             (":method", "GET"),
             (":scheme", "https"),

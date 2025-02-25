@@ -1,10 +1,11 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use random_string::generate;
-
 use crate::common::enums::PROTOCOLS;
 use crate::common::{validate_path, validate_path_write_permission};
+
+use tokio::sync::Mutex;
+use std::collections::HashMap;
 
 use unftp_sbe_fs::ServerExt;
 
@@ -91,10 +92,18 @@ impl XRNetServer {
                     // self.run_file_server();
                 }
                 PROTOCOLS::WS | PROTOCOLS::WSS => {
-                    // self.run_ws_server();
+                    let server = Arc::clone(&server);
+                    let port = self.port[i];
+                    tokio::spawn(async move {
+                        server.run_ws_server(port).await;
+                    });
                 }
                 PROTOCOLS::WEBRTC => {
-                    // self.run_webrtc_server();
+                    let server = Arc::clone(&server);
+                    let port = self.port[i];
+                    tokio::spawn(async move {
+                        server.run_webrtc_server(port).await;
+                    });
                 }
                 PROTOCOLS::HTTP3 => {
                     // self.run_http3_server();
@@ -147,6 +156,34 @@ impl XRNetServer {
         // server requires certificate and private key
         
     }
+
+    async fn run_ws_server(&self, port: u32) {
+        println!("WebSocket server started");
+
+        // ws server starts from tcp socket
+        let host_addr = "127.0.0.1".to_string() + ":" + &port.to_string();
+        
+
+    }
+
+    /**
+     * This is an websocket-based WebRTC Signaling server
+     */
+    async fn run_webrtc_server(&self, port: u32) {
+        // let listener = TcpListener::bind("0.0.0.0:8080").await?;
+        println!("Signaling server running on ws://0.0.0.0:8080");
+
+        // rooms: hashMap<room_id, vec<client>>
+
+        // while let Ok((stream, _)) = listener.accept().await {
+        //     let rooms = Arc::clone(&rooms);
+        //     tokio::spawn(handle_connection(stream, rooms));
+        // }
+    }
+
+    // async fn handle_connection(stream: tokio::net::TcpStream, rooms: Arc<Mutex<HashMap<String, Vec<_>>>>) -> Result<(), Box<dyn std::error::Error>> {
+    //     Ok(())  // temporal return
+    // }
 
     fn create_quic_config(&self) -> quiche::Config {
         let mut config = quiche::Config::new(quiche::PROTOCOL_VERSION).unwrap();
