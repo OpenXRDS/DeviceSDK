@@ -26,6 +26,13 @@ mod tests {
     use crate::common::enums::{PROTOCOLS, FtpCommands};
     use crate::common::data_structure::FtpPayload;
     use crate::common::append_to_path;
+    use crate::server::ws_server::WebSocketServer;
+
+    async fn echo_handler(msg: Vec<u8>) -> Option<Vec<u8>> {
+        let msg_str = String::from_utf8(msg.clone()).unwrap();
+        println!("Received message: {:?}", msg_str);
+        Some(msg)
+    }
 
     fn connect_ftp_client(port: u32) -> Client {
         let client = ClientBuilder::new()
@@ -233,5 +240,23 @@ mod tests {
 
         client_handle.await.unwrap();
         server_handle.abort();
+    }
+
+    #[tokio::test]
+    async fn test_server_websocket_register_handler() {
+        let mut ws_server = WebSocketServer::new();
+        
+        ws_server.register_handler("test", |msg| Box::pin(echo_handler(msg)));
+        
+        let result = ws_server.test_handler();
+        assert_eq!(result.is_ok(), true);
+    }
+
+    #[tokio::test]
+    async fn test_server_websocket_register_default_handlers() {
+        let mut ws_server = WebSocketServer::new();
+        ws_server.register_default_handlers();
+
+        ws_server.run(8080).await;
     }
 }
