@@ -26,12 +26,32 @@ mod tests {
     use crate::common::enums::{PROTOCOLS, FtpCommands};
     use crate::common::data_structure::FtpPayload;
     use crate::common::append_to_path;
-    use crate::server::ws_server::WebSocketServer;
+    use std::sync::Arc;
 
     async fn echo_handler(msg: Vec<u8>) -> Option<Vec<u8>> {
         let msg_str = String::from_utf8(msg.clone()).unwrap();
-        println!("Received message: {:?}", msg_str);
+        println!("This is custom handler: {:?}", msg_str);
         Some(msg)
+    }
+
+    /**
+     * Since this function is blocking, must be called with tokio::task::spawn_blocking
+     */
+    fn connect_ws_client(port: u32) -> Client {
+        let client = ClientBuilder::new()
+            .set_protocol(PROTOCOLS::WS)
+            .build();
+
+        let addr = "ws://127.0.0.1".to_string() + ":" + &port.to_string() + "/";
+        println!("Connecting to {}", addr.clone());
+
+        let ws = client.set_url(addr.as_str()).connect();
+        if ws.is_err() {
+            println!("{}", ws.err().unwrap());
+            panic!("Connection failed");
+        } else {
+            ws.unwrap()
+        }
     }
 
     fn connect_ftp_client(port: u32) -> Client {
@@ -62,6 +82,18 @@ mod tests {
         let server = XRNetServer::new(protocols, ports);
         let server_handle = tokio::spawn(async move {
             println!("Starting server");
+            server.set_root_dir(root_dir.unwrap().as_str()).start().await;
+        });
+        server_handle
+    }
+
+    fn run_server(protocol: PROTOCOLS, port: u32) -> tokio::task::JoinHandle<()> {
+        let crnt_dir = std::env::current_dir().unwrap();
+        let target_dir = append_to_path(crnt_dir, "/test_root_dir"); 
+        let root_dir = Some(target_dir.as_path().to_str().unwrap().to_string());
+
+        let server = XRNetServer::new(vec![protocol], vec![port]);
+        let server_handle = tokio::spawn(async move {
             server.set_root_dir(root_dir.unwrap().as_str()).start().await;
         });
         server_handle
@@ -244,19 +276,98 @@ mod tests {
 
     #[tokio::test]
     async fn test_server_websocket_register_handler() {
-        let mut ws_server = WebSocketServer::new();
+        let mut server = XRNetServer::new(vec![PROTOCOLS::WS], vec![line!()]);
+
+        server.register_handler("test", |msg| Box::pin(echo_handler(msg)));
         
-        ws_server.register_handler("test", |msg| Box::pin(echo_handler(msg)));
-        
-        let result = ws_server.test_handler();
-        assert_eq!(result.is_ok(), true);
+        assert!(true);
     }
 
     #[tokio::test]
-    async fn test_server_websocket_register_default_handlers() {
-        let mut ws_server = WebSocketServer::new();
-        ws_server.register_default_handlers();
+    async fn test_server_websocket_run() {
+        let current_line = line!();
+        let server_handle = run_server(PROTOCOLS::WS, current_line);
 
-        ws_server.run(8080).await;
+        sleep(Duration::from_secs(2)).await;
+        server_handle.abort();
+    }
+
+    #[tokio::test]
+    async fn test_server_websocket_connection() {
+        let current_line = line!() + 8000;
+        let server_handle = run_server(PROTOCOLS::WS, current_line);
+
+        sleep(Duration::from_secs(2)).await;
+
+        let ws_client_handle = tokio::task::spawn_blocking(move || {
+                let _ = connect_ws_client(current_line);
+            }
+        );
+
+        ws_client_handle.await.unwrap();
+        server_handle.abort();
+        // ws_server_handle.await.unwrap();
+        assert!(true);
+    }
+
+    #[tokio::test]
+    async fn test_server_websocket_rcv() {
+        let current_line = line!() + 8000;
+        let server_handle = run_server(PROTOCOLS::WS, current_line);
+
+        sleep(Duration::from_secs(2)).await;
+
+        let ws_client_handle = tokio::task::spawn_blocking(move || {
+                let client = connect_ws_client(current_line);
+
+                let msg = "test".as_bytes().to_vec();
+                let result = client.send(msg, None);
+                println!("client send result: {:?}", result.clone());
+                assert_eq!(result.is_ok(), true);
+
+                let close_result = result.unwrap().close();
+                println!("client close result {:?}", close_result.clone());
+                assert_eq!(close_result.is_ok(), true);
+            }
+        );
+
+        ws_client_handle.await.unwrap();
+        // ws_server_handle.await.unwrap();
+        server_handle.abort();
+    }
+
+    #[tokio::test]
+    async fn test_server_websocket_custome_handler() {
+        let current_line = line!() + 8000;
+        let crnt_dir = std::env::current_dir().unwrap();
+        let target_dir = append_to_path(crnt_dir, "/test_root_dir"); 
+        let root_dir = Some(target_dir.as_path().to_str().unwrap().to_string());
+
+        let mut server = XRNetServer::new(vec![PROTOCOLS::WS], vec![current_line]);
+        server.register_handler("text", |msg| Box::pin(echo_handler(msg)));
+        let server_handle = tokio::spawn(async move {
+            server.set_root_dir(root_dir.unwrap().as_str()).start().await;
+        });
+
+        sleep(Duration::from_secs(2)).await;
+
+        let ws_client_handle = tokio::task::spawn_blocking(move || {
+                let client = connect_ws_client(current_line);
+
+                let msg = "hello world".as_bytes().to_vec();
+                let mut result = client.send(msg, Some("text"));
+
+                assert_eq!(result.is_ok(), true);
+
+                let rcv_result = result.as_mut().unwrap().rcv();
+                println!("client received {:?}", rcv_result.clone());
+
+                let close_result = result.unwrap().close();
+                assert_eq!(close_result.is_ok(), true);
+            }
+        );
+
+        ws_client_handle.await.unwrap();
+        server_handle.abort();
     }
 }

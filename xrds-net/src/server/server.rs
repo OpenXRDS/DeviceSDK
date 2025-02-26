@@ -4,7 +4,11 @@ use std::sync::Arc;
 use crate::common::enums::PROTOCOLS;
 use crate::common::{validate_path, validate_path_write_permission};
 
+use crate::server::ws_server::WebSocketServer;
+
 use tokio::sync::Mutex;
+use std::pin::Pin;
+use std::future::Future;
 use std::collections::HashMap;
 
 use unftp_sbe_fs::ServerExt;
@@ -16,7 +20,10 @@ const MAX_DATAGRAM_SIZE: usize = 1350;
 
 const RANDOM_STRING_CHARSET: &str = "1234567890abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
-#[derive(Debug, Clone)]
+type WS_Handlers = HashMap<String, Arc<dyn Fn(Vec<u8>) -> Pin<Box<dyn Future<Output = Option<Vec<u8>>> + Send + Sync + 'static>> + Send + Sync + 'static>>;
+type WS_Handler = Arc<dyn Fn(Vec<u8>) -> Pin<Box<dyn Future<Output = Option<Vec<u8>>> + Send + Sync + 'static>> + Send + Sync + 'static>;
+
+#[derive(Clone)]
 pub struct XRNetServer {
     pub protocol: Vec<PROTOCOLS>,
     pub port: Vec<u32>,
@@ -24,6 +31,8 @@ pub struct XRNetServer {
     // Optional fields
     pub greeting: Option<String>,
     pub root_dir: Option<String>,
+
+    ws_handlers: WS_Handlers,   //TODO: will be changed for generic handlers
 }
 
 impl XRNetServer {
@@ -33,6 +42,7 @@ impl XRNetServer {
             port,
             greeting: None,
             root_dir: Some("".to_string()),
+            ws_handlers: HashMap::new(),
         }
     }
 
@@ -44,6 +54,19 @@ impl XRNetServer {
     pub fn set_root_dir(mut self, root_dir: &str) -> Self {
         self.root_dir = Some(root_dir.to_string());
         self
+    }
+
+    pub fn register_handler<F, Fut>(&mut self, msg_type: &str, handler: F)
+    where
+        F: Fn(Vec<u8>) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Option<Vec<u8>>> + Send + Sync + 'static,
+    {
+        let handler_arc: Arc<dyn Fn(Vec<u8>) -> Pin<Box<dyn Future<Output = Option<Vec<u8>>> + Send + Sync + 'static>> + Send + Sync> =
+            Arc::new(move |data| {
+                let fut: Fut = handler(data);
+                Box::pin(fut) as Pin<Box<dyn Future<Output = Option<Vec<u8>>> + Send + Sync + 'static>>
+            });
+        self.ws_handlers.insert(msg_type.to_lowercase(), handler_arc);
     }
 
     pub async fn start(&self) {
@@ -62,6 +85,7 @@ impl XRNetServer {
             panic!("Protocol and Port size mismatch");
         }
 
+        // Root directory check
         if validate_path(self.root_dir.clone().unwrap().as_str()).is_err() {
             panic!("Invalid root directory");
         }
@@ -157,13 +181,28 @@ impl XRNetServer {
         
     }
 
+    /**
+     * Starts WebSocke server with given port
+     * Registered user-defined handlers are passed to the server
+     */
     async fn run_ws_server(&self, port: u32) {
         println!("WebSocket server started");
 
         // ws server starts from tcp socket
-        let host_addr = "127.0.0.1".to_string() + ":" + &port.to_string();
-        
+        // sets default handlers
+        let mut ws_server = WebSocketServer::new();
 
+        // register user-defined handlers to the server
+        // This could override default handlers
+        for (msg_type, handler) in self.ws_handlers.iter() {
+            println!("Registering handler for {}", msg_type);
+            ws_server.register_handler_arc(msg_type, Arc::clone(handler));
+        }
+
+        let run_result = Arc::new(ws_server).run(port).await;
+        if let Err(e) = run_result {
+            println!("Error starting WebSocket server: {}", e);
+        }
     }
 
     /**
