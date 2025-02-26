@@ -27,9 +27,10 @@ impl Runtime {
 
     pub fn run<A>(self, app: A) -> Result<(), RuntimeError>
     where
-        A: RuntimeHandler + Send + Sync,
+        A: RuntimeHandler + Send + Sync + 'static,
     {
-        self.inner.run(app)
+        self.inner.run_block(app).expect("Unexpected error");
+        Ok(())
     }
 }
 

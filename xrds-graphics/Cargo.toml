@@ -10,9 +10,20 @@ crate-type = ["lib"]
 xrds-core = { workspace = true }
 anyhow = { workspace = true }
 wgpu = { workspace = true }
+wgpu-hal = { workspace = true }
+naga_oil = { workspace = true }
 glam = { workspace = true }
+ash = { workspace = true }
+regex = { workspace = true }
+log = { workspace = true }
+tokio = { workspace = true }
+rustc-hash = { workspace = true }
+image = { workspace = true }
+rayon = { workspace = true }
+gltf = { workspace = true }
+uuid = { workspace = true }
+percent-encoding = { workspace = true }
+base64 = { workspace = true }
 
 [dev-dependencies]
-log = { workspace = true }
 env_logger = { workspace = true }
-tokio = { workspace = true }

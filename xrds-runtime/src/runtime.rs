@@ -1,9 +1,15 @@
-use crate::*;
+use crate::application::{RuntimeApplication, RuntimeEvent};
 
-use std::sync::{Arc, Mutex};
+use std::{
+    sync::{Arc, RwLock},
+    thread::sleep,
+    time::{Duration, SystemTime},
+};
 
-use error::RuntimeError;
-use xrds_graphics::Renderer;
+use crate::error::RuntimeError;
+use log::debug;
+use tokio::{runtime::Handle, task::JoinHandle};
+use winit::event_loop;
 
 pub trait RuntimeHandler {
     fn on_construct(&mut self);
@@ -16,9 +22,7 @@ pub trait RuntimeHandler {
 }
 
 pub struct Runtime {
-    main_context: tokio::runtime::Runtime,
-    render_context: tokio::runtime::Runtime,
-    renderer: Arc<Mutex<Renderer>>,
+    main_thread: tokio::runtime::Runtime,
 }
 
 pub struct RuntimeParameters {
@@ -27,73 +31,78 @@ pub struct RuntimeParameters {
 
 impl Runtime {
     pub fn new(params: RuntimeParameters) -> Self {
-        let main_context = tokio::runtime::Builder::new_current_thread()
+        let main_context = tokio::runtime::Builder::new_multi_thread()
             .thread_name(format!("{}-main", params.app_name))
             .build()
             .expect("Could not create main runtime");
-        let render_context = tokio::runtime::Builder::new_multi_thread()
-            .thread_name(format!("{}-render", params.app_name))
-            .build()
-            .expect("Could not create render runtime");
         Self {
-            main_context,
-            render_context,
-            renderer: Arc::new(Mutex::new(Renderer {})),
+            main_thread: main_context,
         }
     }
 
-    pub fn run<A>(self, mut app: A) -> Result<(), RuntimeError>
+    pub fn run_block<A>(self, app: A) -> anyhow::Result<()>
     where
-        A: RuntimeHandler + Send + Sync,
+        A: RuntimeHandler + Send + Sync + 'static,
     {
-        // let main_context = self.main_context;
-        // let render_context = self.render_context;
-        // let renderer = self.renderer.clone();
-        app.on_begin();
-        // let _main_context_future: JoinHandle<anyhow::Result<()>> = main_context.spawn(async move {
-        //     {
-        //         let mut lock = renderer.lock().unwrap();
-        //         let scene = lock.load_scene()?;
-        //         // graphics.load_scene();
-        //     }
-        //     // // Initialize OpenXR
+        let render_runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("Could not create render runtime");
 
-        //     // // Initialize window (Optional)
+        render_runtime.block_on(self.run(app))
+    }
 
-        //     // // Initialize graphics
+    pub async fn run<A>(self, app: A) -> anyhow::Result<()>
+    where
+        A: RuntimeHandler + Send + Sync + 'static,
+    {
+        // We are running in render thread
+        let render_runtime_handle = Handle::current();
+        let main_runtime_handle = self.main_thread.handle().clone();
 
-        //     // // Initialize user application
-        //     app.on_construct()?;
+        let app = Arc::new(RwLock::new(app));
+        let mut runtime_app = RuntimeApplication::default();
 
-        //     // // Begin OpenXR session
+        let event_loop = event_loop::EventLoop::<RuntimeEvent>::with_user_event().build()?;
+        let event_proxy = event_loop.create_proxy();
 
-        //     // // Begin user application
-        //     // app.on_begin()?;
+        let main_app = app.clone();
+        let main_event_proxy = event_proxy.clone();
+        let main_result: JoinHandle<anyhow::Result<()>> = main_runtime_handle.spawn(async move {
+            let event_proxy = main_event_proxy;
+            let app = main_app;
+            let render_handle = render_runtime_handle;
+            {
+                let mut lock = app.write().map_err(|_| RuntimeError::SyncError)?;
 
-        //     // // Call on_resumed() on first iteration
-        //     // app.on_resumed()?;
+                lock.on_construct();
+                lock.on_begin();
+            }
 
-        //     // If system support winit. Use event_loop instead loop{}
-        //     loop {
-        //         app.on_update().unwrap();
-        //         break;
-        //     }
+            let tick_rate = Duration::from_secs_f32(1.0 / 120.0);
+            let mut before = SystemTime::now();
 
-        //     // // Suspend app first
-        //     // self.app.on_suspended()?;
+            loop {
+                let diff = SystemTime::now().duration_since(before)?;
+                if diff >= tick_rate {
+                    match event_proxy.send_event(RuntimeEvent::Tick(diff)) {
+                        Ok(_) => {}
+                        Err(_) => break,
+                    }
+                    before = SystemTime::now();
+                }
+                match event_proxy.send_event(RuntimeEvent::RedrawRequested) {
+                    Ok(_) => {}
+                    Err(_) => break,
+                }
+                sleep(Duration::from_millis(1));
+            }
+            Ok(())
+        });
 
-        //     // self.app.on_end()?;
+        event_loop.run_app(&mut runtime_app)?;
+        debug!("Event loop closed");
 
-        //     // self.app.on_deconstruct()?;
-        //     Ok(())
-        // });
-
-        // let renderer = self.renderer.clone();
-        // let _render_context_future = render_context.spawn(async move {
-        //     let lock = renderer.lock();
-        // });
-
-        // // Start render thread
+        let _res = main_result.await??;
 
         Ok(())
     }

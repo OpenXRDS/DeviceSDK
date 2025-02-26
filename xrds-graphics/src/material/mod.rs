@@ -1,3 +1,5 @@
+pub mod pbr;
+
 use crate::{DiscreteVertex, LinearVertex, XrdsVertexBuffer, XrdsVertexInputType};
 
 #[derive(Debug, Clone)]

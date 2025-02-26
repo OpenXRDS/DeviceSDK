@@ -4,3 +4,5 @@ edition = "2021"
 
 [dependencies]
 xrds = { workspace = true }
+log = { workspace = true }
+env_logger = { workspace = true }
