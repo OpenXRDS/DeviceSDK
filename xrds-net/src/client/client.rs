@@ -293,10 +293,15 @@ impl Client {
     /******************************************** */
     /*************         SEND         ********* */
     /******************************************** */
+    /**
+     * topic is required for MQTT
+     * topic is optional for WS, and indicates the message type (binary, text, etc.)
+     * if no message type is given for WS, it will be considered as binary
+     */
     pub fn send(self, data: Vec<u8>, topic: Option<&str>) -> Result<Self, String> {
         // check the protocol
         let result = match self.protocol {
-            PROTOCOLS::WS | PROTOCOLS::WSS => self.send_ws(data),
+            PROTOCOLS::WS | PROTOCOLS::WSS => self.send_ws(topic, data),
             PROTOCOLS::MQTT => self.send_mqtt(topic, data),
             // PROTOCOLS::WEBRTC => self.send_webrtc(message),
             PROTOCOLS::QUIC => self.send_quic(data),
@@ -320,6 +325,19 @@ impl Client {
         };
 
         result.clone()
+    }
+
+    pub fn close(&self) -> Result<(), String> {
+        // check the protocol
+        let result = match self.protocol {
+            PROTOCOLS::WS | PROTOCOLS::WSS => self.close_ws(),
+            // PROTOCOLS::MQTT => self.close_mqtt(),
+            // PROTOCOLS::WEBRTC => self.close_webrtc(),
+            // PROTOCOLS::QUIC => self.close_quic(),
+            _ => Err("The protocol does not support 'Close'. Use another method instead".to_string()),
+        };
+
+        return result;
     }
 
     /*************************** */
@@ -412,10 +430,25 @@ impl Client {
         }
     }
 
-    fn send_ws(mut self, message: Vec<u8>) -> Result<Self, String> {
-        let send_result = self.ws_client.as_mut().unwrap()
-            .lock().unwrap()
-            .send_message(&OwnedMessage::Binary(message));
+    fn send_ws(self, msg_type: Option<&str>, message: Vec<u8>) -> Result<Self, String> {
+        let mut ws_client = self.ws_client.clone();
+        let mut client = ws_client.as_mut().unwrap().lock().unwrap();
+
+        let message_type = match msg_type {
+            Some(t) => t,
+            None => "binary",
+        };
+
+        let binding = message_type.to_lowercase().clone();
+        let message_type = binding.as_str();
+
+        let message = match message_type {
+            "text" => OwnedMessage::Text(String::from_utf8(message).unwrap()),
+            "binary" => OwnedMessage::Binary(message),
+            _ => return Err("Invalid message type".to_string()),
+        };
+
+        let send_result = client.send_message(&message);
 
         if send_result.is_err() {
             return Err(send_result.err().unwrap().to_string());
@@ -445,6 +478,17 @@ impl Client {
                     return Err("The received message is not binary.".to_string());
                 }
             }
+        }
+    }
+
+    fn close_ws(&self) -> Result<(), String> {
+        let ws_client = self.ws_client.as_ref().unwrap();
+        let close_msg = OwnedMessage::Close(None);
+        let close_result = ws_client.lock().unwrap().send_message(&close_msg);
+        if close_result.is_err() {
+            return Err(close_result.err().unwrap().to_string());
+        } else {
+            return Ok(());
         }
     }
 

@@ -9,6 +9,10 @@ use futures::stream::SplitStream;
 use tokio_tungstenite::WebSocketStream as WsStream;
 use std::pin::Pin;
 use std::future::Future;
+use tokio_tungstenite::tungstenite::error::Error;
+
+type WS_Handlers = HashMap<String, Arc<dyn Fn(Vec<u8>) -> Pin<Box<dyn Future<Output = Option<Vec<u8>>> + Send + Sync + 'static>> + Send + Sync + 'static>>;
+type WS_Handler = Arc<dyn Fn(Vec<u8>) -> Pin<Box<dyn Future<Output = Option<Vec<u8>>> + Send + Sync + 'static>> + Send + Sync + 'static>;
 
 struct WsConnection {
     sender: SplitSink<WsStream<TcpStream>, Message>,
@@ -20,22 +24,29 @@ struct WsConnection {
     This function echoes the received message
  */
 async fn default_handler(msg: Vec<u8>) -> Option<Vec<u8>> {
-    println!("Received message: {:?}", msg.clone());
+    println!("Default Handler echoing: {:?}", msg.clone());
     Some(msg)
 }
 
 pub struct WebSocketServer {
     // handler type: fn handler_name(Vec<u8>) -> Option<vec<u8>>
-    handlers: HashMap<String, Arc<dyn Fn(Vec<u8>) -> Pin<Box<dyn Future<Output = Option<Vec<u8>>> + Send + 'static>> + Send>>,  // <msg_type, handler>
+    handlers: WS_Handlers,  // <msg_type, handler>
 }
 
+#[allow(dead_code)]
 impl WebSocketServer {
+
+    /**
+     * Create a new WebSocketServer instance with default handlers
+     */
     pub fn new() -> Self {
         let handlers = HashMap::new();
-
-        WebSocketServer {
+        let mut wss = WebSocketServer {
             handlers,
-        }
+        };
+
+        wss.register_default_handlers();
+        wss
     }
 
     /**
@@ -48,34 +59,29 @@ impl WebSocketServer {
      */
     pub fn register_handler<F, Fut>(&mut self, msg_type: &str, handler: F)
     where
-        F: Fn(Vec<u8>) -> Fut + Send + 'static,
-        Fut: Future<Output = Option<Vec<u8>>> + Send + 'static,
+        F: Fn(Vec<u8>) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Option<Vec<u8>>> + Send + Sync + 'static,
     {
-        let handler_arc: Arc<dyn Fn(Vec<u8>) -> Pin<Box<dyn Future<Output = Option<Vec<u8>>> + Send + 'static>> + Send> =
+        let handler_arc: Arc<dyn Fn(Vec<u8>) -> Pin<Box<dyn Future<Output = Option<Vec<u8>>> + Send + Sync + 'static>> + Send + Sync> =
             Arc::new(move |data| {
                 let fut: Fut = handler(data);
-                Box::pin(fut) as Pin<Box<dyn Future<Output = Option<Vec<u8>>> + Send + 'static>>
+                Box::pin(fut) as Pin<Box<dyn Future<Output = Option<Vec<u8>>> + Send + Sync + 'static>>
             });
         self.handlers.insert(msg_type.to_lowercase(), handler_arc);
     }
 
-    /**
-     * This method is to test 'register_handler' method
-     * This runs the handler for 'test' message type, so tester must provide a handler for 'test' message type
-     */
-    pub fn test_handler(&self) -> Result<(), Box<dyn std::error::Error>> {
-        let input_str = "hello world";
-        let input = input_str.as_bytes().to_vec();
-
-        let handler = self.handlers.get("test").unwrap();
-        let fut = handler(input);
-        let result = futures::executor::block_on(fut);
-        let result_str = String::from_utf8(result.unwrap()).unwrap();
-        println!("Result: {:?}", result_str);
-        Ok(())
+    pub fn register_handler_arc(&mut self, msg_type: &str, handler: WS_Handler) {
+        self.handlers.insert(msg_type.to_lowercase(), handler);
     }
 
-    pub fn register_default_handlers(&mut self) {
+    pub fn set_handlers(&mut self, handlers: WS_Handlers) {
+        self.handlers = handlers;
+    }
+
+    /**
+     * Register default handlers for each message type which echoes the received message
+     */
+    fn register_default_handlers(&mut self) {
         self.register_handler("text", default_handler);
         self.register_handler("binary", default_handler);
         self.register_handler("close", default_handler);
@@ -83,9 +89,132 @@ impl WebSocketServer {
         self.register_handler("pong", default_handler);
     }
     
-    pub async fn run(&self, port: u32) {
+    async fn handle_connection(&self, ws_connection: WsConnection, handers: WS_Handlers) -> Result<(), Box<dyn std::error::Error>> {
+        let (mut sender, mut receiver) = (ws_connection.sender, ws_connection.receiver);
+        while let Some(msg) = receiver.next().await {
+            println!("Ws Server Received message: {:?}", msg);
+            let msg = match msg {
+                Ok(msg) => msg,
+                Err(e) => {
+                    Self::log_error_connection(e);
 
+                    if let Err(close_err) = sender.send(Message::Close(None)).await {
+                        println!("Failed to send close frame: {}", close_err);
+                    }
+                    break;
+                }
+            };
+
+            let msg_type = match msg.clone() {
+                msg if msg.is_binary() => "binary",
+                msg if msg.is_text() => "text",
+                msg if msg.is_ping() => "ping",
+                msg if msg.is_pong() => "pong",
+                msg if msg.is_close() => {
+                    println!("Close message received");
+                    break;
+                },
+                _ => {
+                    println!("Unknown message type");
+                    continue;
+                }
+            };
+
+            let handler = handers.get(msg_type).unwrap();
+            let input = msg.into_data();
+            let input = input.to_vec();
+            let fut = handler(input);
+            let result = fut.await;
+            let result = match result {
+                Some(r) => r,
+                None => {
+                    println!("Handler returned None");
+                    continue;
+                }
+            };
+
+            println!("preparing message back to client");
+            // prepare message back to client
+            let msg = Message::Binary(result.into());
+            if let Err(e) = sender.send(msg).await {
+                println!("Error sending message: {}", e);
+                continue;
+            }
+        }
+        Ok(())
+        
+    }
+
+    pub async fn run(self: Arc<Self>, port: u32) -> Result<(), Box<dyn std::error::Error>> {
+        let host_addr = "0.0.0.0".to_owned() + ":" + &port.to_string();
+        let try_socket = TcpListener::bind(host_addr.clone()).await;
+        let listener = match try_socket { 
+            Ok(l) => {
+                println!("WebSocket server started on {}", host_addr);  // temporal log
+                l
+            }
+            Err(e) => {
+                println!("Error binding to {}: {}", host_addr, e);
+                return Err(Box::new(e));
+            }
+        };
+
+        
+        while let Ok((stream, addr)) = listener.accept().await {
+            println!("Accepted connection from {}", addr);  // temporal log
+            
+            let handlers = self.handlers.clone();
+            let self_clone = Arc::clone(&self);
+            tokio::spawn({
+                async move {
+                    match accept_async(stream).await {
+                        Ok(ws_stream) => {
+                            let (sender, receiver) = ws_stream.split();
+                            let ws_connection = WsConnection {
+                                sender,
+                                receiver,
+                            };
+                            if let Err(e) = self_clone.handle_connection(ws_connection, handlers).await {
+                                println!("Error handling connection from {}: {}", addr, e);
+                            }
+                        }
+                        Err(e) => println!("Error accepting WebSocket connection from {}: {}", addr, e),
+                    }
+                }
+            });
+        }
+
+        Ok(())
     }
     /* Privates */
 
+    fn log_error_connection(error: Error) {
+        match &error {
+            Error::ConnectionClosed => {
+                println!("Connection closed normally (but no Close frame?).");
+            }
+            Error::Io(io_err) => {
+                match io_err.kind() {
+                    std::io::ErrorKind::ConnectionReset => {
+                        println!("Client rudely dropped connection (ConnectionReset).");
+                    }
+                    std::io::ErrorKind::BrokenPipe => {
+                        println!("Client terminated socket without handshake (BrokenPipe).");
+                    }
+                    std::io::ErrorKind::ConnectionAborted => {
+                        println!("Client terminated socket with handshake (ConnectionAborted).");
+                    }
+                    _ => {
+                        println!("Unexpected I/O error: {}", io_err);
+                    }
+                }
+            }
+            Error::Protocol(proto_err) => {
+                println!("Protocol violation by client: {}", proto_err);
+            }
+            _ => {
+                println!("Other WebSocket error: {}", error);
+            }
+        }
+    }
 }
