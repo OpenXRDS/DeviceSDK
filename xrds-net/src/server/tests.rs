@@ -22,9 +22,10 @@
 mod tests {
     use tokio::time::{sleep, Duration};
     use crate::server::XRNetServer;
-    use crate::client::{ClientBuilder, Client};
+    use crate::client::{ClientBuilder, Client, WebRTCClient};
     use crate::common::enums::{PROTOCOLS, FtpCommands};
     use crate::common::data_structure::FtpPayload;
+
     use crate::common::append_to_path;
     use std::sync::Arc;
 
@@ -368,6 +369,62 @@ mod tests {
         );
 
         ws_client_handle.await.unwrap();
+        server_handle.abort();
+    }
+
+    #[tokio::test]
+    async fn test_server_webrtc_run() {
+        let current_line = line!() + 8000;
+        let server_handle = run_server(PROTOCOLS::WEBRTC, current_line);
+
+        sleep(Duration::from_secs(15)).await;
+
+        assert!(true);
+        server_handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_server_webrtc_connect_signal() {
+        let current_line = line!() + 8000;
+        let server_handle = run_server(PROTOCOLS::WEBRTC, current_line);
+
+        sleep(Duration::from_secs(2)).await;
+
+        let mut webrtc_client = WebRTCClient::new();
+        let addr_str = "ws://127.0.0.1".to_owned() + ":" + &current_line.to_string() + "/";
+        let client_handle = tokio::task::spawn_blocking(move || {
+            let connect_result = webrtc_client.connect(addr_str.as_str());
+            assert_eq!(connect_result.is_ok(), true);
+
+            let close_result = webrtc_client.close_connection();
+            assert_eq!(close_result.is_ok(), true);
+        });
+
+        client_handle.await.unwrap();
+        server_handle.abort();
+    }
+
+    #[tokio::test]
+    async fn test_server_webrtc_create_session() {
+        let current_line = line!() + 8000;
+        let server_handle = run_server(PROTOCOLS::WEBRTC, current_line);
+
+        sleep(Duration::from_secs(2)).await;
+
+        let mut webrtc_client = WebRTCClient::new();
+        let addr_str = "ws://127.0.0.1".to_owned() + ":" + &current_line.to_string() + "/";
+        let client_handle = tokio::task::spawn_blocking(move || {
+            let connect_result = webrtc_client.connect(addr_str.as_str());
+            assert_eq!(connect_result.is_ok(), true);
+
+            let create_session_result = webrtc_client.create_session();
+            assert_eq!(create_session_result.is_ok(), true);
+
+            let close_result = webrtc_client.close_connection();
+            assert_eq!(close_result.is_ok(), true);
+        });
+
+        client_handle.await.unwrap();
         server_handle.abort();
     }
 }

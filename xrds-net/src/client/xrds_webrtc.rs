@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use coap::client;
 use webrtc::{peer_connection::RTCPeerConnection, rtp_transceiver::rtp_codec::RTCRtpCodecCapability};
 use webrtc::peer_connection::configuration::RTCConfiguration;
 use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
@@ -19,13 +20,29 @@ use webrtc::media::io::ogg_reader::OggReader;
 use tokio::sync::mpsc::{Sender, Receiver};
 use std::sync::Mutex;
 
+
+
+use crate::common::data_structure::{NetResponse, WebRTCMessage};
+use crate::common::generate_random_string;
+use crate::client::xrds_websocket::XrdsWebsocket;
+
 use tokio::sync::Notify;
 
 use async_trait::async_trait;
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 
-pub fn create_default_webrtc_config() -> RTCConfiguration {
+
+static CREATE_SESSION: &str = "create_session"; // publisher to server
+static LIST_SESSIONS: &str = "list_sessions";   // subscriber to server
+static JOIN_SESSION: &str = "join_session";     // subscriber to server
+static LEAVE_SESSION: &str = "leave_session";   // subscriber to server
+static CLOSE_SESSION: &str = "close_session";   // publisher to server
+static OFFER: &str = "offer";                   // server to subscriber
+static ANSWER: &str = "answer";                 // subscriber to server
+static WELCOME: &str = "welcome";               // server to client (publisher or subscriber)
+
+fn create_default_webrtc_config() -> RTCConfiguration {
     let config = RTCConfiguration {
         ice_servers: vec![RTCIceServer {
             urls: vec!["stun:stun.l.google.com:19302".to_owned()],
@@ -36,228 +53,133 @@ pub fn create_default_webrtc_config() -> RTCConfiguration {
     config
 }
 
-#[derive(Debug, Clone)]
-struct WebRTCClient {
-    peer: Arc<RTCPeerConnection>,
+#[derive(Clone)]
+pub struct WebRTCClient {
+    client_id: Option<String>,  // This field is used to identify the client in the signaling server
+    ws_client: Option<XrdsWebsocket>,
+    session_id: Option<String>, // session_id participating in
 
-    notify_tx: Arc<Notify>,
-    done_tx: Sender<()>,
-    done_rx: Arc<Mutex<Receiver<()>>>,
 }
 
-
-#[async_trait]
-trait Signaling {
-    async fn create_offer(&self) -> Result<String, Box<dyn std::error::Error>>;
-    async fn set_answer(&self, answer: &str) -> Result<(), Box<dyn std::error::Error>>;
-    async fn create_answer(&self) -> Result<String, Box<dyn std::error::Error>>;
-}
-
+#[allow(dead_code)]
 impl WebRTCClient {
-    pub async fn new(config: RTCConfiguration) -> Result<Self, Box<dyn std::error::Error>> {
-        // let mut registry = Registry::new();
-        
-        let api = APIBuilder::new().build();
-
-        let peer = Arc::new(api.new_peer_connection(config).await?);
-        Ok(WebRTCClient { 
-            peer, 
-            notify_tx: Arc::new(Notify::new()),
-            done_tx: tokio::sync::mpsc::channel(1).0,
-            done_rx: Arc::new(Mutex::new(tokio::sync::mpsc::channel(1).1)),
-        })
-    }
-}
-
-#[async_trait]
-impl Signaling for WebRTCClient {
-    
-
-    async fn create_offer(&self) -> Result<String, Box<dyn std::error::Error>> {
-        let offer = self.peer.create_offer(None).await?;
-        self.peer.set_local_description(offer.clone()).await?;
-        let json = serde_json::to_string(&offer)?;
-        let encoded = STANDARD.encode(json.as_bytes()); // padding included
-        Ok(encoded)
-    }
-
-    async fn set_answer(&self, answer: &str) -> Result<(), Box<dyn std::error::Error>> {
-        let decoded = STANDARD.decode(answer.as_bytes())?;
-        let answer_desc: RTCSessionDescription = serde_json::from_slice(&decoded)?;
-        self.peer.set_remote_description(answer_desc).await?;
-        Ok(())
-    }
-
-    async fn create_answer(&self) -> Result<String, Box<dyn std::error::Error>> {
-        let answer = self.peer.create_answer(None).await?;
-        self.peer.set_local_description(answer.clone()).await?;
-        let json = serde_json::to_string(&answer)?;
-        let encoded = STANDARD.encode(json.as_bytes()); // padding included
-        Ok(encoded)
-    }
-
-}
-
-/**
- * WebRTC Publisher
- * - creates the offer
- * - accept answer from subscriber(s)
- */
-#[derive(Debug, Clone)]
-pub struct WebRTCPublisher {
-    client: WebRTCClient,
-}
-
-impl WebRTCPublisher {
-    pub async fn new(config: Option<RTCConfiguration>) -> Self {
-        let client;
-        if config.is_none() {   // default RTC configuration
-            let config = create_default_webrtc_config();
-            client = WebRTCClient::new(config).await.unwrap();
-        } else {
-            client = WebRTCClient::new(config.unwrap()).await.unwrap();
-        }
-
-        WebRTCPublisher {
-            client,
+    pub fn new() -> Self {
+        WebRTCClient {
+            client_id: None,
+            ws_client: None,
+            session_id: None,
         }
     }
 
-    pub async fn run_publisher(&self) -> Result<(), Box<dyn std::error::Error>> {
-        
+    /**
+     * This procedure contains request for client id from the signaling server
+     * - This handles welcome message containing client id issued by the server
+     */
+    pub fn connect(&mut self, ws_url: &str) -> Result<(), String> {
+        let ws_client = XrdsWebsocket::new().connect(ws_url);
+        if ws_client.is_err() {
+            return Err(ws_client.err().unwrap());
+        }
+
+        self.ws_client = Some(ws_client.unwrap());
+
+        // handle welcome message to obtain client id
+        let ws_client = self.ws_client.as_ref().unwrap();
+        let rcv_result = ws_client.rcv_ws();
+
+        if rcv_result.is_err() {
+            return Err(rcv_result.err().unwrap());
+        }
+
+        let rcv_result = rcv_result.unwrap();
+        let rcv_result = String::from_utf8(rcv_result);
+        if rcv_result.is_err() {
+            return Err(rcv_result.err().unwrap().to_string());
+        }
+
+        let rtc_msg_json = rcv_result.unwrap();
+        let desirialize_result = serde_json::from_str(rtc_msg_json.as_str());
+
+        if desirialize_result.is_err() {
+            return Err(desirialize_result.err().unwrap().to_string());
+        }
+
+        let msg: WebRTCMessage = desirialize_result.unwrap();
+
+        println!("Welcome message: {:?}", msg);
+        self.client_id = Some(msg.client_id.clone());
+
 
         Ok(())
     }
 
-    pub async fn add_track_from_file(&mut self, path: &str, is_video: bool) -> Result<Self, Box<dyn std::error::Error>> {
-        let notify = self.client.notify_tx.clone();
-        let done_tx = self.client.done_tx.clone();
-        
-        let notify_tx = self.client.notify_tx.clone();
-        self.client.peer.on_ice_connection_state_change(Box::new(
-            move |connection_state: RTCIceConnectionState| {
-                println!("Connection State has changed {connection_state}");
-                if connection_state == RTCIceConnectionState::Connected {
-                    notify_tx.notify_waiters();
-                }
-                Box::pin(async {})
-            },
-        ));
-    
-        // Set the handler for Peer connection state
-        // This will notify you when the peer has connected/disconnected
-        self.client.peer.on_peer_connection_state_change(Box::new(move |s: RTCPeerConnectionState| {
-            println!("Peer Connection State has changed: {s}");
-    
-            if s == RTCPeerConnectionState::Failed {
-                // Wait until PeerConnection has had no network activity for 30 seconds or another failure. It may be reconnected using an ICE Restart.
-                // Use webrtc.PeerConnectionStateDisconnected if you are interested in detecting faster timeout.
-                // Note that the PeerConnection may come back from PeerConnectionStateDisconnected.
-                println!("Peer Connection has gone to failed exiting");
-                let _ = done_tx.try_send(());
-            }
-    
-            Box::pin(async {})
-        }));
+    pub fn close_connection(&self) -> Result<(), String> {
+        let ws_client = self.ws_client.as_ref().unwrap();
+        let close_result = ws_client.close_ws();
+        if close_result.is_err() {
+            return Err(close_result.err().unwrap());
+        }
+        Ok(())
+    }
 
-        let track = if is_video {
-            Some(Arc::new(TrackLocalStaticSample::new(
-                RTCRtpCodecCapability {
-                    mime_type: MIME_TYPE_H264.to_owned(), // TODO: deal with other codecs
-                    ..Default::default()
-                },
-                "video".to_owned(),
-                "webrtc-rs".to_owned(),
-            )))
-        } else {    // audio
-            Some(Arc::new(TrackLocalStaticSample::new(
-                RTCRtpCodecCapability {
-                    mime_type: MIME_TYPE_OPUS.to_owned(), // TODO: deal with other codecs
-                    ..Default::default()
-                },
-                "audio".to_owned(),
-                "webrtc-rs".to_owned(),
-            )))
+    /**
+     * Send create_session message to the signaling server
+     * - This message is used to create a new session in the signaling server
+     * 
+     */
+    pub fn create_session(&mut self) -> Result<(), String> {
+        if self.client_id.is_none() {
+            return Err("Client ID is not set".to_string());
+        }        
+
+        let msg = WebRTCMessage {
+            client_id: self.client_id.clone().unwrap(),
+            message_type: CREATE_SESSION.to_string(),
+            payload: Vec::new(),
+            sdp: None,
+            error: None,
         };
-        
-        let rtp_sender = self.client.peer.add_track(track.unwrap()).await?;
 
-        tokio::spawn(async move {
-            let mut rtcp_buf = vec![0u8; 1500];
-            while let Ok((_, _)) = rtp_sender.read(&mut rtcp_buf).await {}
-            
-        });
+        let ws_client = self.ws_client.as_ref().unwrap();
 
-        let file_name = path.split("/").last().unwrap().to_owned();
-        if is_video {
-            tokio::spawn(async move {
-                let file_res = File::open(&file_name);
-                if file_res.is_err() {
-                    return;
-                }
-                let file = file_res.unwrap();
-                let reader = BufReader::new(file);
-                let mut h264 = H264Reader::new(reader, 1_048_576);
-
-                notify.notified().await;
-
-
-            });
-        } else {
-
+        // serialize msg into json
+        let msg = serde_json::to_string(&msg);
+        if msg.is_err() {
+            return Err(msg.err().unwrap().to_string());
         }
 
-        
-        Ok(self.clone())
-    }
-
-    pub async fn create_offer(&self) -> Result<String, Box<dyn std::error::Error>> {
-        self.client.create_offer().await
-    }
-
-    pub async fn set_answer(&self, answer: &str) -> Result<(), Box<dyn std::error::Error>> {
-        self.client.set_answer(answer).await
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct WebRTCSubscriber {
-    client: WebRTCClient,
-}
-
-impl WebRTCSubscriber {
-    pub async fn new(config: Option<RTCConfiguration>) -> Self {
-        let client;
-        if config.is_none() {   // default RTC configuration
-            let config = create_default_webrtc_config();
-            client = WebRTCClient::new(config).await.unwrap();
-        } else {
-            client = WebRTCClient::new(config.unwrap()).await.unwrap();
+        let msg = msg.unwrap();
+        let send_result = ws_client.send_ws(Some("text"), msg.as_bytes().to_vec());
+        if send_result.is_err() {
+            return Err(send_result.err().unwrap());
         }
-        WebRTCSubscriber { client }
-    }
 
-    pub async fn subscribe<F>(&self, on_track: F) -> Result<(), Box<dyn std::error::Error>>
-    where
-        F: Fn(Arc<TrackRemote>) + Send + Sync + 'static,
-    {
-        let peer = Arc::clone(&self.client.peer);
-        peer.on_track(Box::new(move |track, _, _| {
-            on_track(track);
-            Box::pin(async {})
-        }));
+        // wait for response
+        let rcv_result = ws_client.rcv_ws();
+        if rcv_result.is_err() {    // handle receive error
+            return Err(rcv_result.err().unwrap());
+        }
+
+        let rcv_result = rcv_result.unwrap();
+        let rcv_result = String::from_utf8(rcv_result);
+        if rcv_result.is_err() {    // handle string conversion error
+            return Err(rcv_result.err().unwrap().to_string());
+        }
+
+        let rtc_msg_json = rcv_result.unwrap();
+        let desirialize_result = serde_json::from_str(rtc_msg_json.as_str());
+
+        if desirialize_result.is_err() {    // handle desirialization error
+            return Err(desirialize_result.err().unwrap().to_string());
+        }
+
+        let msg: WebRTCMessage = desirialize_result.unwrap();
+
+        println!("Create Session response: {:?}", msg);
+        println!("session_id: {:?}", msg.client_id.clone());
+
+        self.session_id = Some(msg.client_id.clone());
+
         Ok(())
-    }
-
-    pub async fn create_offer(&self) -> Result<String, Box<dyn std::error::Error>> {
-        self.client.create_offer().await
-    }
-
-    pub async fn set_answer(&self, answer: &str) -> Result<(), Box<dyn std::error::Error>> {
-        self.client.set_answer(answer).await
-    }
-
-    pub async fn create_answer(&self) -> Result<String, Box<dyn std::error::Error>> {
-        self.client.create_answer().await
     }
 }
