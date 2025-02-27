@@ -1,22 +1,31 @@
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
 use tokio_tungstenite::accept_async;
-use tokio_tungstenite::tungstenite::{Message, Utf8Bytes};
+use tokio_tungstenite::tungstenite::Message;
 use futures::{SinkExt, StreamExt};
 use futures::stream::SplitSink;
 use futures::stream::SplitStream;
 use tokio_tungstenite::WebSocketStream as WsStream;
 use std::pin::Pin;
 use std::future::Future;
+use std::sync::Mutex;
 use tokio_tungstenite::tungstenite::error::Error;
 
-type WS_Handlers = HashMap<String, Arc<dyn Fn(Vec<u8>) -> Pin<Box<dyn Future<Output = Option<Vec<u8>>> + Send + Sync + 'static>> + Send + Sync + 'static>>;
-type WS_Handler = Arc<dyn Fn(Vec<u8>) -> Pin<Box<dyn Future<Output = Option<Vec<u8>>> + Send + Sync + 'static>> + Send + Sync + 'static>;
+use crate::common::generate_uuid;
 
-struct WsConnection {
+type WsHandlers = HashMap<String, Arc<dyn Fn(Vec<u8>) -> Pin<Box<dyn Future<Output = Option<Vec<u8>>> + Send + Sync + 'static>> + Send + Sync + 'static>>;
+type WsHandler = Arc<dyn Fn(Vec<u8>) -> Pin<Box<dyn Future<Output = Option<Vec<u8>>> + Send + Sync + 'static>> + Send + Sync + 'static>;
+
+struct WsConnection {   // client auth info can be added here, e.g. client_id
     sender: SplitSink<WsStream<TcpStream>, Message>,
     receiver: SplitStream<WsStream<TcpStream>>,
+}
+
+#[derive(Clone)]
+struct Client {
+    client_id: String,
+    peer_addr: String,
 }
 
 /*
@@ -30,7 +39,8 @@ async fn default_handler(msg: Vec<u8>) -> Option<Vec<u8>> {
 
 pub struct WebSocketServer {
     // handler type: fn handler_name(Vec<u8>) -> Option<vec<u8>>
-    handlers: WS_Handlers,  // <msg_type, handler>
+    handlers: WsHandlers,  // <msg_type, handler>
+    clients: Arc<Mutex<HashMap<String, Client>>>,  // <client_id, ws_connection>
 }
 
 #[allow(dead_code)]
@@ -43,10 +53,15 @@ impl WebSocketServer {
         let handlers = HashMap::new();
         let mut wss = WebSocketServer {
             handlers,
+            clients: Arc::new(Mutex::new(HashMap::new())),
         };
 
-        wss.register_default_handlers();
+        wss.register_default_handlers();    // register default handlers for each message type
         wss
+    }
+
+    fn add_client(&self, client_id: &String, client: Client) {
+        self.clients.lock().unwrap().insert(client_id.to_string(), client);
     }
 
     /**
@@ -70,11 +85,11 @@ impl WebSocketServer {
         self.handlers.insert(msg_type.to_lowercase(), handler_arc);
     }
 
-    pub fn register_handler_arc(&mut self, msg_type: &str, handler: WS_Handler) {
+    pub fn register_handler_arc(&mut self, msg_type: &str, handler: WsHandler) {
         self.handlers.insert(msg_type.to_lowercase(), handler);
     }
 
-    pub fn set_handlers(&mut self, handlers: WS_Handlers) {
+    pub fn set_handlers(&mut self, handlers: WsHandlers) {
         self.handlers = handlers;
     }
 
@@ -89,8 +104,10 @@ impl WebSocketServer {
         self.register_handler("pong", default_handler);
     }
     
-    async fn handle_connection(&self, ws_connection: WsConnection, handers: WS_Handlers) -> Result<(), Box<dyn std::error::Error>> {
+    async fn handle_connection(&self, ws_connection: WsConnection) -> Result<(), Box<dyn std::error::Error>> {
         let (mut sender, mut receiver) = (ws_connection.sender, ws_connection.receiver);
+        let handlers = self.handlers.clone();
+
         while let Some(msg) = receiver.next().await {
             println!("Ws Server Received message: {:?}", msg);
             let msg = match msg {
@@ -120,7 +137,7 @@ impl WebSocketServer {
                 }
             };
 
-            let handler = handers.get(msg_type).unwrap();
+            let handler = handlers.get(msg_type).unwrap();
             let input = msg.into_data();
             let input = input.to_vec();
             let fut = handler(input);
@@ -158,23 +175,33 @@ impl WebSocketServer {
                 return Err(Box::new(e));
             }
         };
-
         
         while let Ok((stream, addr)) = listener.accept().await {
             println!("Accepted connection from {}", addr);  // temporal log
             
-            let handlers = self.handlers.clone();
             let self_clone = Arc::clone(&self);
             tokio::spawn({
                 async move {
                     match accept_async(stream).await {
-                        Ok(ws_stream) => {
+                        Ok(ws_stream) => {  // connection established
+                            let client_id = generate_uuid();
+                            let peer_addr = addr.to_string();
+
+                            let client = Client {
+                                client_id: client_id.clone(),
+                                peer_addr,
+                            };
+
+                            self_clone.add_client(&client_id, client);
+
                             let (sender, receiver) = ws_stream.split();
+
                             let ws_connection = WsConnection {
                                 sender,
                                 receiver,
                             };
-                            if let Err(e) = self_clone.handle_connection(ws_connection, handlers).await {
+
+                            if let Err(e) = self_clone.handle_connection(ws_connection).await {
                                 println!("Error handling connection from {}: {}", addr, e);
                             }
                         }

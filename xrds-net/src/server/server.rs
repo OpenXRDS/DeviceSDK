@@ -5,23 +5,18 @@ use crate::common::enums::PROTOCOLS;
 use crate::common::{validate_path, validate_path_write_permission};
 
 use crate::server::ws_server::WebSocketServer;
+use crate::server::webrtc_server::WebRTCServer;
 
-use tokio::sync::Mutex;
 use std::pin::Pin;
 use std::future::Future;
 use std::collections::HashMap;
 
 use unftp_sbe_fs::ServerExt;
 
-// QUIC / HTTP3
-use quiche::{Connection, RecvInfo, SendInfo};
 
-const MAX_DATAGRAM_SIZE: usize = 1350;
+// const MAX_DATAGRAM_SIZE: usize = 1350;
 
-const RANDOM_STRING_CHARSET: &str = "1234567890abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
-
-type WS_Handlers = HashMap<String, Arc<dyn Fn(Vec<u8>) -> Pin<Box<dyn Future<Output = Option<Vec<u8>>> + Send + Sync + 'static>> + Send + Sync + 'static>>;
-type WS_Handler = Arc<dyn Fn(Vec<u8>) -> Pin<Box<dyn Future<Output = Option<Vec<u8>>> + Send + Sync + 'static>> + Send + Sync + 'static>;
+type WsHandlers = HashMap<String, Arc<dyn Fn(Vec<u8>) -> Pin<Box<dyn Future<Output = Option<Vec<u8>>> + Send + Sync + 'static>> + Send + Sync + 'static>>;
 
 #[derive(Clone)]
 pub struct XRNetServer {
@@ -32,7 +27,7 @@ pub struct XRNetServer {
     pub greeting: Option<String>,
     pub root_dir: Option<String>,
 
-    ws_handlers: WS_Handlers,   //TODO: will be changed for generic handlers
+    ws_handlers: WsHandlers,   //TODO: will be changed for generic handlers
 }
 
 impl XRNetServer {
@@ -209,38 +204,33 @@ impl XRNetServer {
      * This is an websocket-based WebRTC Signaling server
      */
     async fn run_webrtc_server(&self, port: u32) {
-        // let listener = TcpListener::bind("0.0.0.0:8080").await?;
-        println!("Signaling server running on ws://0.0.0.0:8080");
+        
+        println!("WebRTC server started");
 
-        // rooms: hashMap<room_id, vec<client>>
+        let webrtc_signaling_server = WebRTCServer::new();
 
-        // while let Ok((stream, _)) = listener.accept().await {
-        //     let rooms = Arc::clone(&rooms);
-        //     tokio::spawn(handle_connection(stream, rooms));
-        // }
+        let run_result = Arc::new(webrtc_signaling_server).run(port).await;
+        if let Err(e) = run_result {
+            println!("Error starting WebRTC server: {}", e);
+        }
     }
 
-    // async fn handle_connection(stream: tokio::net::TcpStream, rooms: Arc<Mutex<HashMap<String, Vec<_>>>>) -> Result<(), Box<dyn std::error::Error>> {
-    //     Ok(())  // temporal return
+    // fn create_quic_config(&self) -> quiche::Config {
+    //     let mut config = quiche::Config::new(quiche::PROTOCOL_VERSION).unwrap();
+    //     config.verify_peer(false);
+
+    //     config.set_application_protos(quiche::h3::APPLICATION_PROTOCOL).unwrap();
+    //     config.set_max_idle_timeout(5000);
+    //     config.set_max_recv_udp_payload_size(MAX_DATAGRAM_SIZE);
+    //     config.set_max_send_udp_payload_size(MAX_DATAGRAM_SIZE);
+    //     config.set_initial_max_data(10_000_000);
+    //     config.set_initial_max_stream_data_bidi_local(1_000_000);
+    //     config.set_initial_max_stream_data_bidi_remote(1_000_000);
+    //     config.set_initial_max_stream_data_uni(1_000_000);
+    //     config.set_initial_max_streams_bidi(100);
+    //     config.set_initial_max_streams_uni(100);
+    //     config.set_disable_active_migration(true);
+
+    //     config
     // }
-
-    fn create_quic_config(&self) -> quiche::Config {
-        let mut config = quiche::Config::new(quiche::PROTOCOL_VERSION).unwrap();
-        config.verify_peer(false);
-
-        config.set_application_protos(quiche::h3::APPLICATION_PROTOCOL).unwrap();
-        config.set_max_idle_timeout(5000);
-        config.set_max_recv_udp_payload_size(MAX_DATAGRAM_SIZE);
-        config.set_max_send_udp_payload_size(MAX_DATAGRAM_SIZE);
-        config.set_initial_max_data(10_000_000);
-        config.set_initial_max_stream_data_bidi_local(1_000_000);
-        config.set_initial_max_stream_data_bidi_remote(1_000_000);
-        config.set_initial_max_stream_data_uni(1_000_000);
-        config.set_initial_max_streams_bidi(100);
-        config.set_initial_max_streams_uni(100);
-        config.set_disable_active_migration(true);
-
-        config
-    }
 }
-

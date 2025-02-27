@@ -14,7 +14,7 @@
  limitations under the License.
  */
 
-
+use serde::{Serialize, Deserialize};
 
 use crate::common::enums::{PROTOCOLS, FtpCommands};
 
@@ -95,4 +95,13 @@ impl XrUrl {
             }
         }        
     }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct WebRTCMessage {
+    pub client_id: String,
+    pub message_type: String,
+    pub payload: Vec<u8>,
+    pub sdp: Option<String>,    // Session Description Protocol. base64 encoded
+    pub error: Option<String>,
 }

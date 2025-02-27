@@ -2,7 +2,6 @@ mod tests {
     use crate::client::ClientBuilder;
     use crate::common::enums::{PROTOCOLS, FtpCommands};
     use crate::common::data_structure::FtpPayload;
-    use crate::client::xrds_webrtc::{WebRTCPublisher, WebRTCSubscriber};
 
     static HTTP_ECHO_SERVER_URL: &str = "https://echo.free.beeceptor.com";
 

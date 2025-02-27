@@ -3,12 +3,15 @@ pub mod data_structure;
 
 use std::path;
 use std::path::PathBuf;
-use std::fs::File;
 use std::io::Read;
 
 use quiche::h3::NameValue;
 
+use random_string::generate;
+
 use crate::common::data_structure::XrUrl;
+
+const RANDOM_STRING_CHARSET: &str = "1234567890abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
 pub fn parse_url(url: &str) -> Result<XrUrl, String> {
     
@@ -222,6 +225,18 @@ pub fn read_file_from_disk(path: &str) -> Result<Vec<u8>, String> {
         Ok(_) => Ok(buffer),
         Err(_) => Err("File read error".to_string()),
     }
+}
+
+pub fn generate_random_string(length: usize) -> String {
+    let charset_str = RANDOM_STRING_CHARSET;
+
+    let random_str = generate(length, charset_str);
+    random_str    
+}
+
+pub fn generate_uuid() -> String {
+    let uuid = uuid::Uuid::new_v4();
+    uuid.to_string()
 }
 
 #[cfg(test)]

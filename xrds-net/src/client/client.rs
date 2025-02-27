@@ -24,13 +24,10 @@ use std::time::Duration;
 use mio::net::UdpSocket;
 use mio::{Events, Poll};
 
-use random_string::generate;
-
 // Internal dependencies
 use crate::common::enums::{PROTOCOLS, FtpCommands};
 use crate::common::data_structure::{FtpPayload, FtpResponse, NetResponse, XrUrl};
-use crate::common::{parse_url, fill_mandatory_http_headers};
-use crate::client::xrds_webrtc::{WebRTCPublisher, WebRTCSubscriber};
+use crate::common::{parse_url, fill_mandatory_http_headers, generate_random_string};
 
 // HTTP
 use curl::easy::{Easy2, Handler, List, WriteError};
@@ -40,9 +37,7 @@ use coap_lite::CoapResponse;
 use coap::UdpCoAPClient;
 
 // Websocket
-use websocket::client::sync::Client as WS_Client;
-use websocket::stream::sync::NetworkStream;
-use websocket::message::OwnedMessage;
+use crate::client::xrds_websocket::XrdsWebsocket;
 
 // FTP & FTPS
 use suppaftp::FtpStream;
@@ -58,8 +53,6 @@ use quiche::h3::NameValue;
 
 
 const MAX_DATAGRAM_SIZE: usize = 1350;
-
-const RANDOM_STRING_CHARSET: &str = "1234567890abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
 
 
@@ -119,7 +112,7 @@ impl ClientBuilder {
      * This function will parse the url to fill host, port, and path
      */
     pub fn build(self) -> Client {
-        let short_str = generate(20, RANDOM_STRING_CHARSET);
+        let short_str = generate_random_string(20);
 
         Client {
             protocol: self.protocol,
@@ -147,9 +140,6 @@ impl ClientBuilder {
             quic_connection: None,
             udp_socket: None,
             event_poll: None,
-
-            webrtc_publishder: None,
-            webrtc_subscriber: None,
         }
     }
 }
@@ -176,7 +166,7 @@ impl ClientBuilder {
     pub user: Option<String>,
     pub password: Option<String>,
 
-    pub ws_client: Option<Arc<Mutex<WS_Client<Box<dyn NetworkStream + Send>>>>>,
+    pub ws_client: Option<XrdsWebsocket>,
     pub ftp_stream: Option<Arc<Mutex<FtpStream>>>,
     pub mqtt_client: Option<MqttClient>,
     pub mqtt_connection: Option<Arc<Mutex<MqttConnection>>>,
@@ -186,9 +176,7 @@ impl ClientBuilder {
     pub udp_socket: Option<Arc<Mutex<mio::net::UdpSocket>>>,
     pub event_poll: Option<Arc<Mutex<mio::Poll>>>,
 
-    // WebRTC
-    pub webrtc_publishder: Option<WebRTCPublisher>,
-    pub webrtc_subscriber: Option<WebRTCSubscriber>,
+
  }
 
  impl fmt::Debug for Client {
@@ -420,36 +408,20 @@ impl Client {
     /* WEBSOCKET PROTOCOLS */
     /************************** */
     fn connect_ws(mut self) -> Result<Self, String> {
-        let client_result = websocket::ClientBuilder::new(self.raw_url.as_str()).unwrap().connect(None);
-        
+        let client_result = XrdsWebsocket::new().connect(self.raw_url.as_str());
+
         if client_result.is_err() {
             return Err(client_result.err().unwrap().to_string());
         } else {
-            self.ws_client = Some(Arc::new(Mutex::new(client_result.unwrap())));
+            self.ws_client = Some(client_result.unwrap());
             return Ok(self);
         }
     }
 
     fn send_ws(self, msg_type: Option<&str>, message: Vec<u8>) -> Result<Self, String> {
-        let mut ws_client = self.ws_client.clone();
-        let mut client = ws_client.as_mut().unwrap().lock().unwrap();
+        let ws_client = self.ws_client.as_ref().unwrap();
 
-        let message_type = match msg_type {
-            Some(t) => t,
-            None => "binary",
-        };
-
-        let binding = message_type.to_lowercase().clone();
-        let message_type = binding.as_str();
-
-        let message = match message_type {
-            "text" => OwnedMessage::Text(String::from_utf8(message).unwrap()),
-            "binary" => OwnedMessage::Binary(message),
-            _ => return Err("Invalid message type".to_string()),
-        };
-
-        let send_result = client.send_message(&message);
-
+        let send_result = ws_client.send_ws(msg_type, message);
         if send_result.is_err() {
             return Err(send_result.err().unwrap().to_string());
         } else {
@@ -459,32 +431,19 @@ impl Client {
 
     fn rcv_ws(&self) -> Result<Vec<u8>, String> {
         let ws_client = self.ws_client.as_ref().unwrap();
-        let message = ws_client
-            .lock().unwrap()
-            .recv_message();
+        let message = ws_client.rcv_ws();
 
         if message.is_err() {
             return Err(message.err().unwrap().to_string());
         } else {
-            let message = message.unwrap();
-            match message {
-                OwnedMessage::Binary(data) => {
-                    return Ok(data);
-                },
-                OwnedMessage::Text(data) => {
-                    return Ok(data.into_bytes());
-                },
-                _ => {
-                    return Err("The received message is not binary.".to_string());
-                }
-            }
+            return Ok(message.unwrap());
         }
     }
 
     fn close_ws(&self) -> Result<(), String> {
         let ws_client = self.ws_client.as_ref().unwrap();
-        let close_msg = OwnedMessage::Close(None);
-        let close_result = ws_client.lock().unwrap().send_message(&close_msg);
+        let close_result = ws_client.close_ws();
+
         if close_result.is_err() {
             return Err(close_result.err().unwrap().to_string());
         } else {
@@ -976,7 +935,7 @@ impl Client {
         let mut quic_config = self.create_quic_config();
 
         // scid MUST be 20 bytes long
-        let scid = generate(20, RANDOM_STRING_CHARSET);
+        let scid = generate_random_string(20);
         let scid = quiche::ConnectionId::from_ref(&scid.as_bytes());
 
         let mut poll = mio::Poll::new().unwrap();
@@ -1203,7 +1162,7 @@ impl Client {
             .register(&mut socket, mio::Token(0), mio::Interest::READABLE)
             .unwrap();
 
-        let scid = generate(20, RANDOM_STRING_CHARSET);
+        let scid = generate_random_string(20);
         let scid = quiche::ConnectionId::from_ref(&scid.as_bytes());
 
         let mut quic_config = self.create_quic_config();
