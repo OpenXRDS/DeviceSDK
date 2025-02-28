@@ -1,7 +1,11 @@
 use ash::vk;
 
 pub fn required_wgpu_features() -> wgpu::Features {
-    wgpu::Features::MULTIVIEW | wgpu::Features::PUSH_CONSTANTS | wgpu::Features::PIPELINE_CACHE
+    wgpu::Features::MULTIVIEW
+        | wgpu::Features::PUSH_CONSTANTS
+        | wgpu::Features::PIPELINE_CACHE
+        | wgpu::Features::BUFFER_BINDING_ARRAY
+        | wgpu::Features::TEXTURE_BINDING_ARRAY
 }
 
 pub fn required_wgpu_memory_hints() -> wgpu::MemoryHints {

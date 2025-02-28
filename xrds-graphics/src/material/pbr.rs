@@ -1,15 +1,16 @@
-use std::{borrow::Cow, collections::HashMap};
+use std::{borrow::Cow, collections::HashMap, sync::RwLock};
 
+use glam::{Vec3, Vec4};
 use naga_oil::compose::{
     ComposableModuleDescriptor, Composer, NagaModuleDescriptor, ShaderDefValue,
 };
-use wgpu::{Device, ShaderModuleDescriptor};
+use wgpu::{naga::valid::Capabilities, Device, ShaderModuleDescriptor};
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct Options {
     pub vertex_input: PbrVertexInputOption,
-    pub fragment_output: PbrFragmentOutputOption,
     pub material_input: PbrMaterialInputOption,
+    pub view_count: u32,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq)]
@@ -17,6 +18,17 @@ pub enum ColorChannel {
     Ch3,
     #[default]
     Ch4,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PbrVertexSemantic {
+    Position,
+    Normal,
+    Tangent,
+    Color(u32),
+    Texcoord(u32),
+    Weights(u32),
+    Joints(u32),
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -33,43 +45,71 @@ pub struct PbrVertexInputOption {
 }
 
 #[derive(Debug, Default, Clone, Copy)]
-pub struct PbrMaterialInputOption {
-    pub base_color: bool,
-    pub normal: bool,
-    pub emissive: bool,
-    pub metallic_roughness: bool,
-    pub occlusion: bool,
-    pub diffuse: bool,
-    pub specular_glossiness: bool,
-    pub ibl: bool,
-    pub brdf: bool,
+pub enum AlphaMode {
+    #[default]
+    Opaque,
+    Mask {
+        alpha_cutoff: f32,
+    },
+    Blend,
 }
 
 #[derive(Debug, Default, Clone, Copy)]
-pub struct PbrFragmentOutputOption {
-    pub motion_vector: bool,
-    pub final_color: bool,
-    pub specular_roughness: bool,
+pub struct PbrMaterialInputOption {
+    pub base_color: bool,
+    pub base_color_factor: Vec4,
+    pub base_color_texcoord: u32,
+    pub normal: bool,
+    pub normal_scale: f32,
+    pub normal_texcoord: u32,
+    pub emissive: bool,
+    pub emissive_factor: Vec3,
+    pub emissive_texcoord: u32,
+    pub metallic_roughness: bool,
+    pub metallic_factor: f32,
+    pub roughness_factor: f32,
+    pub metallic_roughness_texcoord: u32,
+    pub occlusion: bool,
+    pub occlusion_strength: f32,
+    pub occlusion_texcoord: u32,
+    pub double_sided: bool,
+    pub alpha_mode: AlphaMode,
+    #[cfg(feature = "material_spec_gloss")]
     pub diffuse: bool,
-    pub normals: bool,
-    pub upscale_reactive: bool,
-    pub upscale_transparency_and_composition: bool,
+    #[cfg(feature = "material_spec_gloss")]
+    pub specular_glossiness: bool,
+    #[cfg(feature = "material_ibl")]
+    pub ibl: bool,
+    #[cfg(feature = "material_ibl")]
+    pub brdf: bool,
 }
 
 #[derive(Debug, Clone)]
 pub struct PbrMaterial;
 
-pub struct PbrShader {
-    composer: Composer,
+pub struct PbrShaderBuilder {
+    composer: RwLock<Composer>,
 }
 
-impl PbrShader {
+impl PbrShaderBuilder {
     pub fn new() -> anyhow::Result<Self> {
-        let mut composer = Composer::default();
+        let mut composer = Composer::default()
+            .with_capabilities(Capabilities::MULTIVIEW | Capabilities::PUSH_CONSTANT);
 
         composer.add_composable_module(ComposableModuleDescriptor {
             source: include_str!("shader/pbr/vertex_params.wgsl"),
             file_path: "shader/pbr/vertex_params.wgsl",
+            ..Default::default()
+        })?;
+        composer.add_composable_module(ComposableModuleDescriptor {
+            source: include_str!("shader/view_params.wgsl"),
+            file_path: "shader/view_params.wgsl",
+
+            ..Default::default()
+        })?;
+        composer.add_composable_module(ComposableModuleDescriptor {
+            source: include_str!("shader/skinning.wgsl"),
+            file_path: "shader/skinning.wgsl",
             ..Default::default()
         })?;
         composer.add_composable_module(ComposableModuleDescriptor {
@@ -82,33 +122,62 @@ impl PbrShader {
             file_path: "shader/pbr/material_params.wgsl",
             ..Default::default()
         })?;
-        composer.add_composable_module(ComposableModuleDescriptor {
-            source: include_str!("shader/skinning.wgsl"),
-            file_path: "shader/skinning.wgsl",
-            ..Default::default()
-        })?;
 
-        Ok(Self { composer })
+        Ok(Self {
+            composer: RwLock::new(composer),
+        })
     }
 
     pub fn build_shader_module(
-        &mut self,
+        &self,
         device: &Device,
         source: &str,
         file_path: &str,
-        defs: &HashMap<String, ShaderDefValue>,
+        options: &Options,
     ) -> anyhow::Result<wgpu::ShaderModule> {
-        let naga_module = self.composer.make_naga_module(NagaModuleDescriptor {
-            source,
-            file_path,
-            shader_defs: defs.clone(),
-            ..Default::default()
-        })?;
+        let defs = options.shader_defines();
+        log::debug!("{:?}", defs);
+        let naga_module = {
+            let mut lock = self.composer.write().unwrap();
+            lock.make_naga_module(NagaModuleDescriptor {
+                source,
+                file_path,
+                shader_defs: options.shader_defines(),
+                shader_type: naga_oil::compose::ShaderType::Wgsl,
+                ..Default::default()
+            })?
+        };
 
         Ok(device.create_shader_module(ShaderModuleDescriptor {
             label: Some(file_path),
             source: wgpu::ShaderSource::Naga(Cow::Owned(naga_module)),
         }))
+    }
+
+    pub fn build_vertex_module(
+        &self,
+        device: &Device,
+        options: &Options,
+    ) -> anyhow::Result<wgpu::ShaderModule> {
+        self.build_shader_module(
+            device,
+            include_str!("shader/pbr/vertex.wgsl"),
+            "shader/pbr/vertex.wgsl",
+            options,
+        )
+    }
+
+    pub fn build_fragment_module(
+        &self,
+        device: &Device,
+        options: &Options,
+    ) -> anyhow::Result<wgpu::ShaderModule> {
+        self.build_shader_module(
+            device,
+            include_str!("shader/pbr/fragment.wgsl"),
+            "shader/pbr/fragment.wgsl",
+            options,
+        )
     }
 }
 
@@ -122,12 +191,15 @@ impl Options {
     fn shader_defines(&self) -> HashMap<String, ShaderDefValue> {
         let vertex_key_values = self.vertex_input.shader_defines();
         let material_key_values = self.material_input.shader_defines();
-        let fragment_key_values = self.fragment_output.shader_defines();
+        let option_key_values = vec![(
+            "VIEW_COUNT".to_owned(),
+            ShaderDefValue::UInt(self.view_count),
+        )];
 
-        vertex_key_values
+        option_key_values
             .into_iter()
+            .chain(vertex_key_values)
             .chain(material_key_values.into_iter())
-            .chain(fragment_key_values.into_iter())
             .collect()
     }
 }
@@ -146,64 +218,68 @@ impl PbrVertexInputOption {
 
     fn shader_defines(&self) -> Vec<(String, ShaderDefValue)> {
         let mut res = Vec::new();
-        res.push((
-            Self::VERTEX_INPUT_POSITION.to_owned(),
-            ShaderDefValue::Bool(self.position),
-        ));
-        res.push((
-            Self::VERTEX_INPUT_COLOR.to_owned(),
-            ShaderDefValue::Bool(self.color.is_some()),
-        ));
-        if let Some(ch) = self.color {
-            if ch == ColorChannel::Ch3 {
-                res.push((
-                    Self::VERTEX_INPUT_COLOR_3CH.to_owned(),
-                    ShaderDefValue::Bool(true),
-                ));
+        self.position.then(|| {
+            res.push((
+                Self::VERTEX_INPUT_POSITION.to_owned(),
+                ShaderDefValue::Bool(self.position),
+            ))
+        });
+        self.color.is_some().then(|| {
+            res.push((
+                Self::VERTEX_INPUT_COLOR.to_owned(),
+                ShaderDefValue::Bool(self.color.is_some()),
+            ));
+            if let Some(ch) = self.color {
+                if ch == ColorChannel::Ch3 {
+                    res.push((
+                        Self::VERTEX_INPUT_COLOR_3CH.to_owned(),
+                        ShaderDefValue::Bool(true),
+                    ));
+                }
             }
-        }
-        res.push((
-            Self::VERTEX_INPUT_NORMAL.to_owned(),
-            ShaderDefValue::Bool(self.normal),
-        ));
-        res.push((
-            Self::VERTEX_INPUT_TANGENT.to_owned(),
-            ShaderDefValue::Bool(self.tangent),
-        ));
-        res.push((
-            Self::VERTEX_INPUT_TEXCOORD_0.to_owned(),
-            ShaderDefValue::Bool(self.texcoord_0),
-        ));
-        if self.texcoord_0 {
+        });
+        self.normal.then(|| {
             res.push((
-                Self::VERTEX_INPUT_TEXCOORD_1.to_owned(),
-                ShaderDefValue::Bool(self.texcoord_1),
-            ));
-        } else {
+                Self::VERTEX_INPUT_NORMAL.to_owned(),
+                ShaderDefValue::Bool(self.normal),
+            ))
+        });
+        self.tangent.then(|| {
             res.push((
-                Self::VERTEX_INPUT_TEXCOORD_1.to_owned(),
-                ShaderDefValue::Bool(false),
-            ));
-        }
-        res.push((
-            Self::VERTEX_INPUT_WEIGHTS_JOINTS_0.to_owned(),
-            ShaderDefValue::Bool(self.weights_joints_0),
-        ));
-        if self.weights_joints_0 {
+                Self::VERTEX_INPUT_TANGENT.to_owned(),
+                ShaderDefValue::Bool(self.tangent),
+            ))
+        });
+        self.texcoord_0.then(|| {
             res.push((
-                Self::VERTEX_INPUT_WEIGHTS_JOINTS_1.to_owned(),
-                ShaderDefValue::Bool(self.weights_joints_1),
+                Self::VERTEX_INPUT_TEXCOORD_0.to_owned(),
+                ShaderDefValue::Bool(self.texcoord_0),
             ));
-        } else {
+            self.texcoord_1.then(|| {
+                res.push((
+                    Self::VERTEX_INPUT_TEXCOORD_1.to_owned(),
+                    ShaderDefValue::Bool(false),
+                ))
+            });
+        });
+        self.weights_joints_0.then(|| {
             res.push((
-                Self::VERTEX_INPUT_WEIGHTS_JOINTS_1.to_owned(),
-                ShaderDefValue::Bool(false),
+                Self::VERTEX_INPUT_WEIGHTS_JOINTS_0.to_owned(),
+                ShaderDefValue::Bool(self.weights_joints_0),
             ));
-        }
-        res.push((
-            Self::VERTEX_INPUT_INSTANCE.to_owned(),
-            ShaderDefValue::Bool(self.instance),
-        ));
+            self.weights_joints_1.then(|| {
+                res.push((
+                    Self::VERTEX_INPUT_WEIGHTS_JOINTS_1.to_owned(),
+                    ShaderDefValue::Bool(self.weights_joints_1),
+                ))
+            });
+        });
+        self.instance.then(|| {
+            res.push((
+                Self::VERTEX_INPUT_INSTANCE.to_owned(),
+                ShaderDefValue::Bool(self.instance),
+            ))
+        });
 
         res
     }
@@ -211,54 +287,77 @@ impl PbrVertexInputOption {
 
 impl PbrMaterialInputOption {
     const MATERIAL_INPUT_BASE_COLOR_TEXTURE: &str = "MATERIAL_INPUT_BASE_COLOR_TEXTURE";
-    const MATERIAL_INPUT_DIFFUSE_TEXTURE: &str = "MATERIAL_INPUT_DIFFUSE_TEXTURE";
     const MATERIAL_INPUT_EMISSIVE_TEXTURE: &str = "MATERIAL_INPUT_EMISSIVE_TEXTURE";
     const MATERIAL_INPUT_METALLIC_ROUGHNESS_TEXTURE: &str =
         "MATERIAL_INPUT_METALLIC_ROUGHNESS_TEXTURE";
     const MATERIAL_INPUT_NORMAL_TEXTURE: &str = "MATERIAL_INPUT_NORMAL_TEXTURE";
     const MATERIAL_INPUT_OCCLUSION_TEXTURE: &str = "MATERIAL_INPUT_OCCLUSION_TEXTURE";
+    #[cfg(feature = "material_spec_gloss")]
+    const MATERIAL_INPUT_DIFFUSE_TEXTURE: &str = "MATERIAL_INPUT_DIFFUSE_TEXTURE";
+    #[cfg(feature = "material_spec_gloss")]
     const MATERIAL_INPUT_SPECULAR_GLOSSINESS_TEXTURE: &str =
         "MATERIAL_INPUT_SPECULAR_GLOSSINESS_TEXTURE";
+    #[cfg(feature = "material_ibl")]
     const MATERIAL_INPUT_IBL: &str = "MATERIAL_INPUT_IBL";
+    #[cfg(feature = "material_ibl")]
     const MATERIAL_INPUT_IBL_DIFFUSE_TEXTURE: &str = "MATERIAL_INPUT_IBL_DIFFUSE_TEXTURE";
+    #[cfg(feature = "material_ibl")]
     const MATERIAL_INPUT_IBL_SPECULAR_TEXTURE: &str = "MATERIAL_INPUT_IBL_SPECULAR_TEXTURE";
+    #[cfg(feature = "material_ibl")]
     const MATERIAL_INPUT_BRDF_TEXTURE: &str = "MATERIAL_INPUT_BRDF_TEXTURE";
 
     fn shader_defines(&self) -> Vec<(String, ShaderDefValue)> {
         let mut res = Vec::new();
-        res.push((
-            Self::MATERIAL_INPUT_BASE_COLOR_TEXTURE.to_owned(),
-            ShaderDefValue::Bool(self.base_color),
-        ));
-        res.push((
-            Self::MATERIAL_INPUT_DIFFUSE_TEXTURE.to_owned(),
-            ShaderDefValue::Bool(self.diffuse),
-        ));
-        res.push((
-            Self::MATERIAL_INPUT_EMISSIVE_TEXTURE.to_owned(),
-            ShaderDefValue::Bool(self.emissive),
-        ));
-        res.push((
-            Self::MATERIAL_INPUT_METALLIC_ROUGHNESS_TEXTURE.to_owned(),
-            ShaderDefValue::Bool(self.metallic_roughness),
-        ));
-        res.push((
-            Self::MATERIAL_INPUT_NORMAL_TEXTURE.to_owned(),
-            ShaderDefValue::Bool(self.normal),
-        ));
-        res.push((
-            Self::MATERIAL_INPUT_OCCLUSION_TEXTURE.to_owned(),
-            ShaderDefValue::Bool(self.occlusion),
-        ));
-        res.push((
-            Self::MATERIAL_INPUT_SPECULAR_GLOSSINESS_TEXTURE.to_owned(),
-            ShaderDefValue::Bool(self.specular_glossiness),
-        ));
-        res.push((
-            Self::MATERIAL_INPUT_IBL.to_owned(),
-            ShaderDefValue::Bool(self.ibl),
-        ));
-        if self.ibl {
+        self.base_color.then(|| {
+            res.push((
+                Self::MATERIAL_INPUT_BASE_COLOR_TEXTURE.to_owned(),
+                ShaderDefValue::Bool(self.base_color),
+            ))
+        });
+        self.emissive.then(|| {
+            res.push((
+                Self::MATERIAL_INPUT_EMISSIVE_TEXTURE.to_owned(),
+                ShaderDefValue::Bool(self.emissive),
+            ))
+        });
+        self.metallic_roughness.then(|| {
+            res.push((
+                Self::MATERIAL_INPUT_METALLIC_ROUGHNESS_TEXTURE.to_owned(),
+                ShaderDefValue::Bool(self.metallic_roughness),
+            ))
+        });
+        self.normal.then(|| {
+            res.push((
+                Self::MATERIAL_INPUT_NORMAL_TEXTURE.to_owned(),
+                ShaderDefValue::Bool(self.normal),
+            ))
+        });
+        self.occlusion.then(|| {
+            res.push((
+                Self::MATERIAL_INPUT_OCCLUSION_TEXTURE.to_owned(),
+                ShaderDefValue::Bool(self.occlusion),
+            ))
+        });
+        #[cfg(feature = "material_spec_gloss")]
+        self.diffuse.then(|| {
+            res.push((
+                Self::MATERIAL_INPUT_DIFFUSE_TEXTURE.to_owned(),
+                ShaderDefValue::Bool(self.diffuse),
+            ))
+        });
+        #[cfg(feature = "material_spec_gloss")]
+        self.specular_glossiness.then(|| {
+            res.push((
+                Self::MATERIAL_INPUT_SPECULAR_GLOSSINESS_TEXTURE.to_owned(),
+                ShaderDefValue::Bool(self.specular_glossiness),
+            ))
+        });
+        #[cfg(feature = "material_ibl")]
+        self.ibl.then(|| {
+            res.push((
+                Self::MATERIAL_INPUT_IBL.to_owned(),
+                ShaderDefValue::Bool(self.ibl),
+            ));
             res.push((
                 Self::MATERIAL_INPUT_IBL_DIFFUSE_TEXTURE.to_owned(),
                 ShaderDefValue::Bool(true),
@@ -267,57 +366,29 @@ impl PbrMaterialInputOption {
                 Self::MATERIAL_INPUT_IBL_SPECULAR_TEXTURE.to_owned(),
                 ShaderDefValue::Bool(true),
             ));
-        }
-        res.push((
-            Self::MATERIAL_INPUT_BRDF_TEXTURE.to_owned(),
-            ShaderDefValue::Bool(self.brdf),
-        ));
+        });
+        #[cfg(feature = "material_ibl")]
+        self.brdf.then(|| {
+            res.push((
+                Self::MATERIAL_INPUT_BRDF_TEXTURE.to_owned(),
+                ShaderDefValue::Bool(self.brdf),
+            ))
+        });
 
         res
     }
 }
 
-impl PbrFragmentOutputOption {
-    const FRAGMENT_OUTPUT_FINAL_COLOR: &str = "FRAGMENT_OUTPUT_FINAL_COLOR";
-    const FRAGMENT_OUTPUT_DIFFUSE: &str = "FRAGMENT_OUTPUT_DIFFUSE";
-    const FRAGMENT_OUTPUT_NORMALS: &str = "FRAGMENT_OUTPUT_NORMALS";
-    const FRAGMENT_OUTPUT_SPECULAR_ROUGHNESS: &str = "FRAGMENT_OUTPUT_SPECULAR_ROUGHNESS";
-    const FRAGMENT_OUTPUT_UPSCALE_REACTIVE: &str = "FRAGMENT_OUTPUT_UPSCALE_REACTIVE";
-    const FRAGMENT_OUTPUT_UPSCALE_TRANSPARENCY_AND_COMPOSITION: &str =
-        "FRAGMENT_OUTPUT_UPSCALE_TRANSPARENCY_AND_COMPOSITION";
-    const FRAGMENT_OUTPUT_MOTION_VECTOR: &str = "FRAGMENT_OUTPUT_MOTION_VECTOR";
-
-    fn shader_defines(&self) -> Vec<(String, ShaderDefValue)> {
-        let mut res = Vec::new();
-        res.push((
-            Self::FRAGMENT_OUTPUT_FINAL_COLOR.to_owned(),
-            ShaderDefValue::Bool(self.final_color),
-        ));
-        res.push((
-            Self::FRAGMENT_OUTPUT_DIFFUSE.to_owned(),
-            ShaderDefValue::Bool(self.diffuse),
-        ));
-        res.push((
-            Self::FRAGMENT_OUTPUT_NORMALS.to_owned(),
-            ShaderDefValue::Bool(self.normals),
-        ));
-        res.push((
-            Self::FRAGMENT_OUTPUT_SPECULAR_ROUGHNESS.to_owned(),
-            ShaderDefValue::Bool(self.specular_roughness),
-        ));
-        res.push((
-            Self::FRAGMENT_OUTPUT_UPSCALE_REACTIVE.to_owned(),
-            ShaderDefValue::Bool(self.upscale_reactive),
-        ));
-        res.push((
-            Self::FRAGMENT_OUTPUT_UPSCALE_TRANSPARENCY_AND_COMPOSITION.to_owned(),
-            ShaderDefValue::Bool(self.upscale_transparency_and_composition),
-        ));
-        res.push((
-            Self::FRAGMENT_OUTPUT_MOTION_VECTOR.to_owned(),
-            ShaderDefValue::Bool(self.motion_vector),
-        ));
-
-        res
+impl PbrVertexSemantic {
+    pub fn location(&self) -> u32 {
+        match *self {
+            Self::Position => 0,
+            Self::Color(_n) => 1,
+            Self::Texcoord(n) => 2 + n,
+            Self::Normal => 4,
+            Self::Tangent => 5,
+            Self::Weights(n) => 6 + (n * 2),
+            Self::Joints(n) => 7 + (n * 2),
+        }
     }
 }

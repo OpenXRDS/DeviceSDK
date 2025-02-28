@@ -2,11 +2,16 @@
 
 struct PbrParams {
     base_color_factor: vec4<f32>,
+    base_color_texcoord: u32,
     emissive_factor: vec4<f32>,
+    emissive_texcoord: u32,
     metallic_factor: f32,
     roughness_factor: f32,
+    metallic_roughness_texcoord: u32
     normal_scale: f32,
+    normal_texcoord: u32,
     occlusion_strength: f32,
+    occlusion_texcoord: u32,
 }
 
 @group(1) @binding(0)
@@ -17,35 +22,35 @@ var base_color_texcure: texture_2d<f32>;
 @group(1) @binding(2)
 var base_color_sampler: sampler;
 #endif
-#ifdef MATERIAL_INPUT_DIFFUSE_TEXTURE
-@group(1) @binding(3)
-var diffuse_texture: texture_2d<f32>;
-@group(1) @binding(4)
-var diffuse_sampler: sampler;
-#endif
-#ifdef MATERIAL_INPUT_EMISSIVE_TEXTURE
-@group(1) @binding(5)
-var emissive_texture: texture_2d<f32>;
-@group(1) @binding(6)
-var emissive_sampler: sampler;
-#endif
 #ifdef MATERIAL_INPUT_METALLIC_ROUGHNESS_TEXTURE
-@group(1) @binding(7)
+@group(1) @binding(3)
 var metallic_roughness_texture: texture_2d<f32>;
-@group(1) @binding(8)
+@group(1) @binding(4)
 var metallic_roughness_sampler: sampler;
 #endif
 #ifdef MATERIAL_INPUT_NORMAL_TEXTURE
-@group(1) @binding(9)
+@group(1) @binding(5)
 var normal_texture: texture_2d<f32>;
-@group(1) @binding(10)
+@group(1) @binding(6)
 var normal_sampler: sampler;
 #endif
+#ifdef MATERIAL_INPUT_EMISSIVE_TEXTURE
+@group(1) @binding(7)
+var emissive_texture: texture_2d<f32>;
+@group(1) @binding(8)
+var emissive_sampler: sampler;
+#endif
 #ifdef MATERIAL_INPUT_OCCLUSION_TEXTURE
-@group(1) @binding(11)
+@group(1) @binding(9)
 var occlusion_texture: texture_2d<f32>;
-@group(1) @binding(12)
+@group(1) @binding(10)
 var occlusion_sampler: sampler;
+#endif
+#ifdef MATERIAL_INPUT_DIFFUSE_TEXTURE
+@group(1) @binding(11)
+var diffuse_texture: texture_2d<f32>;
+@group(1) @binding(12)
+var diffuse_sampler: sampler;
 #endif
 #ifdef MATERIAL_INPUT_SPECULAR_GLOSSINESS_TEXTURE
 @group(1) @binding(13)

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use glam::Mat4;
 
-use crate::{pbr::PbrMaterial, Transform};
+use crate::Transform;
 
 pub mod loader;
 
@@ -27,21 +27,6 @@ pub struct GltfScene {}
 
 #[derive(Debug, Clone)]
 pub struct GltfMesh {}
-
-#[derive(Debug, Clone)]
-pub struct GltfPrimitive {
-    pub index: usize,
-    pub name: String,
-    pub mesh: GltfMesh,
-    pub material: Option<Material>,
-    pub extras: Option<String>,
-    pub material_extras: Option<String>,
-}
-
-#[derive(Debug, Clone)]
-pub struct Material {
-    material: PbrMaterial,
-}
 
 #[derive(Debug, Clone)]
 pub struct GltfNode {
@@ -80,6 +65,7 @@ async fn test_gltf_loader() {
     use crate::{AssetServer, GraphicsInstance};
     use loader::GltfLoader;
     use std::path::PathBuf;
+    use std::sync::Arc;
 
     env_logger::Builder::from_default_env()
         .filter_level(log::LevelFilter::Debug)
@@ -91,10 +77,12 @@ async fn test_gltf_loader() {
     }
 
     let graphics = GraphicsInstance::new().await;
-    let asset_server = AssetServer::new(graphics.clone());
+    let asset_server = Arc::new(AssetServer::new(graphics.clone()).unwrap());
     let gltf_loader = GltfLoader::new(asset_server.clone(), buf.parent().unwrap());
 
     let gltf = gltf_loader.load_from_file(buf.as_path()).await.unwrap();
+    let gltf2 = gltf_loader.load_from_file(buf.as_path()).await.unwrap();
 
-    println!("{:?}", gltf);
+    log::debug!("{:?}", gltf);
+    log::debug!("{:?}", gltf2);
 }

@@ -1,7 +1,7 @@
 #define_import_path shader::skinning
 
 #ifdef VERTEX_INPUT_SKINNED
-@group(2) @binding(1)
+@group(2) @binding(0)
 var<uniform> u_joint_matrices: array<mat4x4<f32>, 256u>
 #endif
 

@@ -34,19 +34,12 @@ where
         Self { id, asset }
     }
 
-    pub fn id(&self) -> &AssetId {
-        &self.id
-    }
-
     pub fn asset(&self) -> &A {
         &self.asset
     }
 
     pub fn as_weak_handle(&self) -> AssetHandle<A> {
-        AssetHandle {
-            id: self.id.clone(),
-            _p: PhantomData::default(),
-        }
+        AssetHandle::new(&self.id)
     }
 }
 
@@ -54,6 +47,13 @@ impl<A> AssetHandle<A>
 where
     A: Clone,
 {
+    pub fn new(id: &AssetId) -> Self {
+        Self {
+            id: id.clone(),
+            _p: PhantomData::default(),
+        }
+    }
+
     pub fn id(&self) -> &AssetId {
         &self.id
     }

@@ -408,7 +408,7 @@ impl OpenXrContextApi for OpenXrVulkanContext {
                 base_array_layer: 0,
                 ..Default::default()
             });
-            let swapchain_texture = xrds_graphics::XrdsTexture::from_init(
+            let swapchain_texture = xrds_graphics::XrdsTexture::new(
                 wgpu_texture,
                 swapchain_format,
                 swapchain_size,

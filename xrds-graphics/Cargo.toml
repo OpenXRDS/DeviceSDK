@@ -6,6 +6,10 @@ edition = "2021"
 [lib]
 crate-type = ["lib"]
 
+[features]
+material_spec_gloss = []
+material_ibl = []
+
 [dependencies]
 xrds-core = { workspace = true }
 anyhow = { workspace = true }

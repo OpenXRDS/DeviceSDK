@@ -1,10 +1,9 @@
 use std::sync::Arc;
 
 use ash::vk;
-use wgpu::{
-    DeviceDescriptor, InstanceDescriptor, PipelineCompilationOptions, RenderPipelineDescriptor,
-    RequestAdapterOptions, ShaderModuleDescriptor, TextureUsages, VertexState,
-};
+use wgpu::{DeviceDescriptor, InstanceDescriptor, RequestAdapterOptions, TextureUsages};
+
+use crate::required_wgpu_features;
 
 #[derive(Debug, Clone)]
 pub struct GraphicsInstance {
@@ -30,7 +29,13 @@ impl GraphicsInstance {
             .await
             .unwrap();
         let (device, queue) = adapter
-            .request_device(&DeviceDescriptor::default(), None)
+            .request_device(
+                &DeviceDescriptor {
+                    required_features: required_wgpu_features(),
+                    ..Default::default()
+                },
+                None,
+            )
             .await
             .unwrap();
         Arc::new(Self {

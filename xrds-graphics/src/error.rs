@@ -1,11 +1,11 @@
 use std::fmt::Debug;
 
-use crate::XrdsBufferType;
+use crate::XrdsBufferViewType;
 
 pub enum XrdsGraphicsError {
-    BufferTypeMismatched {
-        ty: XrdsBufferType,
-        expected: XrdsBufferType,
+    BufferFormatMismatched {
+        ty: XrdsBufferViewType,
+        expected: XrdsBufferViewType,
     },
     VertexFormatMismatched {
         fmt: wgpu::VertexFormat,
@@ -16,7 +16,7 @@ pub enum XrdsGraphicsError {
 impl Debug for XrdsGraphicsError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            XrdsGraphicsError::BufferTypeMismatched { ty, expected } => {
+            XrdsGraphicsError::BufferFormatMismatched { ty, expected } => {
                 write!(
                     f,
                     "Buffer type '{:?}' does not matched expect type '{:?}'",

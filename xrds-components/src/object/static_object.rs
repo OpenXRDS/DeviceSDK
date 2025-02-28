@@ -1,18 +1,12 @@
 use xrds_core::{XrdsComponent, XrdsObject, XrdsWorldComponent, XrdsWorldComponentInner};
-use xrds_graphics::XrdsStaticMesh;
 
 #[derive(Debug, Clone)]
 pub struct StaticObject {
     name: String,
-    mesh: XrdsStaticMesh,
     world_component: XrdsWorldComponentInner,
 }
 
-impl StaticObject {
-    pub fn mesh(&self) -> &XrdsStaticMesh {
-        &self.mesh
-    }
-}
+impl StaticObject {}
 
 impl XrdsWorldComponent for StaticObject {
     fn world_component(&self) -> &XrdsWorldComponentInner {
@@ -24,9 +18,7 @@ impl XrdsWorldComponent for StaticObject {
 }
 
 impl XrdsComponent for StaticObject {
-    fn update(&mut self, elapsed: std::time::Duration) {
-        self.mesh.update(elapsed);
-    }
+    fn update(&mut self, elapsed: std::time::Duration) {}
     fn query_resources(&self) -> Vec<xrds_core::XrdsResource> {
         todo!()
     }

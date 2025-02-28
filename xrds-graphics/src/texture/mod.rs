@@ -13,7 +13,7 @@ pub struct XrdsTexture {
 }
 
 impl XrdsTexture {
-    pub fn from_init(
+    pub fn new(
         inner: wgpu::Texture,
         format: TextureFormat,
         size: wgpu::Extent3d,

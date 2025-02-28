@@ -50,7 +50,7 @@ impl Renderer {
                         });
                 let wgpu_color_view =
                     wgpu_color_texture.create_view(&TextureViewDescriptor::default());
-                let color_texture = XrdsTexture::from_init(
+                let color_texture = XrdsTexture::new(
                     wgpu_color_texture,
                     color_format,
                     extent,
@@ -71,7 +71,7 @@ impl Renderer {
                         });
                 let wgpu_depth_stencil_view =
                     wgpu_depth_stencil_texture.create_view(&TextureViewDescriptor::default());
-                let depth_stencil_texture = XrdsTexture::from_init(
+                let depth_stencil_texture = XrdsTexture::new(
                     wgpu_depth_stencil_texture,
                     wgpu::TextureFormat::Depth24PlusStencil8.into(),
                     extent,

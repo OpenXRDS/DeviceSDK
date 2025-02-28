@@ -1,4 +1,4 @@
-#define_import_path shader::camera
+#define_import_path shader::view_params
 
 struct ViewParams {
     view_projection: mat4x4<f32>,
@@ -12,7 +12,7 @@ struct ViewParams {
     height: u32,
 }
 
-#if VIEW_COUNT > 0
+#if VIEW_COUNT > 1
 @group(0) @binding(0)
 var<uniform> u_view_params: array<ViewParams, #{VIEW_COUNT}>;
 #else
