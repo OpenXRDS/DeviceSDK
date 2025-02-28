@@ -20,6 +20,7 @@
  */
 
 mod tests {
+    use suppaftp::list;
     use tokio::time::{sleep, Duration};
     use crate::server::XRNetServer;
     use crate::client::{ClientBuilder, Client, WebRTCClient};
@@ -28,6 +29,7 @@ mod tests {
 
     use crate::common::append_to_path;
     use std::sync::Arc;
+    use std::thread::sleep as thread_sleep;
 
     async fn echo_handler(msg: Vec<u8>) -> Option<Vec<u8>> {
         let msg_str = String::from_utf8(msg.clone()).unwrap();
@@ -405,7 +407,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_server_webrtc_create_session() {
+    async fn test_server_webrtc_session_create() {
         let current_line = line!() + 8000;
         let server_handle = run_server(PROTOCOLS::WEBRTC, current_line);
 
@@ -427,4 +429,221 @@ mod tests {
         client_handle.await.unwrap();
         server_handle.abort();
     }
+
+    #[tokio::test]
+    async fn test_server_webrtc_session_list() {
+        let current_line = line!() + 8000;
+        let server_handle = run_server(PROTOCOLS::WEBRTC, current_line);
+
+        sleep(Duration::from_secs(2)).await;
+
+        let mut webrtc_client = WebRTCClient::new();
+        let addr_str = "ws://127.0.0.1".to_owned() + ":" + &current_line.to_string() + "/";
+        let client_handle = tokio::task::spawn_blocking(move || {
+            let connect_result = webrtc_client.connect(addr_str.as_str());
+            assert_eq!(connect_result.is_ok(), true);
+
+            let create_session_result = webrtc_client.create_session();
+            assert_eq!(create_session_result.is_ok(), true);
+
+            let list_session_result = webrtc_client.list_sessions();
+            assert_eq!(list_session_result.is_ok(), true);
+
+            list_session_result.unwrap().iter().for_each(|session| {
+                println!("{:?}", session);
+            });
+
+            let close_result = webrtc_client.close_connection();
+            assert_eq!(close_result.is_ok(), true);
+        });
+
+        client_handle.await.unwrap();
+        server_handle.abort();
+    }
+
+    #[tokio::test]
+    async fn test_server_webrtc_session_multiple() {
+        let current_line = line!() + 8000;
+        let server_handle = run_server(PROTOCOLS::WEBRTC, current_line);
+
+        sleep(Duration::from_secs(2)).await;
+
+        let mut webrtc_client = WebRTCClient::new();
+        let addr_str = "ws://127.0.0.1".to_owned() + ":" + &current_line.to_string() + "/";
+        let client_handle = tokio::task::spawn_blocking(move || {
+            let connect_result = webrtc_client.connect(addr_str.as_str());
+            assert_eq!(connect_result.is_ok(), true);
+
+            let create_session_result = webrtc_client.create_session();
+            assert_eq!(create_session_result.is_ok(), true);
+
+            let create_session_result = webrtc_client.create_session();
+            assert_eq!(create_session_result.is_ok(), true);
+
+            let list_session_result = webrtc_client.list_sessions();
+            assert_eq!(list_session_result.is_ok(), true);
+
+            list_session_result.unwrap().iter().for_each(|session| {
+                println!("{:?}", session);
+            });
+
+            let close_result = webrtc_client.close_connection();
+            assert_eq!(close_result.is_ok(), true);
+        });
+
+        client_handle.await.unwrap();
+        server_handle.abort();
+    }
+
+    #[tokio::test]
+    async fn test_server_webrtc_session_close() {
+        let current_line = line!() + 8000;
+        let server_handle = run_server(PROTOCOLS::WEBRTC, current_line);
+
+        sleep(Duration::from_secs(2)).await;
+
+        let mut webrtc_client = WebRTCClient::new();
+        let addr_str = "ws://127.0.0.1".to_owned() + ":" + &current_line.to_string() + "/";
+        let client_handle = tokio::task::spawn_blocking(move || {
+            let connect_result = webrtc_client.connect(addr_str.as_str());
+            assert_eq!(connect_result.is_ok(), true);
+
+            let create_session_result = webrtc_client.create_session();
+            assert_eq!(create_session_result.is_ok(), true);
+
+            let first_session_id = create_session_result.unwrap();
+            println!("First session id: {}", first_session_id.clone());
+
+            let create_session_result = webrtc_client.create_session();
+            assert_eq!(create_session_result.is_ok(), true);
+
+            let list_session_result = webrtc_client.list_sessions();
+            assert_eq!(list_session_result.is_ok(), true);
+
+            list_session_result.unwrap().iter().for_each(|session| {
+                println!("{}", session);
+            });
+
+            let close_session_result = webrtc_client.close_session(first_session_id.clone().as_str());
+            assert_eq!(close_session_result.is_ok(), true);
+
+            let remaining_sessions = webrtc_client.list_sessions().unwrap();
+            assert_eq!(remaining_sessions.len(), 1);
+
+            let close_result = webrtc_client.close_connection();
+            assert_eq!(close_result.is_ok(), true);
+        });
+
+        client_handle.await.unwrap();
+        server_handle.abort();
+    }
+
+    #[tokio::test]
+    async fn test_server_webrtc_session_join() {
+        let current_line = line!() + 8000;
+        let server_handle = run_server(PROTOCOLS::WEBRTC, current_line);
+
+        sleep(Duration::from_secs(2)).await;
+
+        let mut webrtc_client = WebRTCClient::new();
+        let addr_str = "ws://127.0.0.1".to_owned() + ":" + &current_line.to_string() + "/";
+        let client_handle = tokio::task::spawn_blocking(move || {
+            let connect_result = webrtc_client.connect(addr_str.as_str());
+            assert_eq!(connect_result.is_ok(), true);
+
+            let create_session_result = webrtc_client.create_session();
+            assert_eq!(create_session_result.is_ok(), true);
+
+            println!("Session id: {}", create_session_result.clone().unwrap());
+
+            thread_sleep(Duration::from_secs(15));
+
+            let close_result = webrtc_client.close_connection();
+            assert_eq!(close_result.is_ok(), true);
+        });
+
+        let mut participant_client = WebRTCClient::new();
+        let addr_str2 = "ws://127.0.0.1".to_owned() + ":" + &current_line.to_string() + "/";
+        let participant = tokio::task::spawn_blocking(move || {
+            // lazy start for the second client
+            thread_sleep(Duration::from_secs(5));
+
+            let connect_result = participant_client.connect(addr_str2.as_str());
+            assert_eq!(connect_result.is_ok(), true);
+
+            let list_result = participant_client.list_sessions();
+            let sessions = list_result.unwrap();
+
+            let room_id = sessions[0].clone();
+            println!("Joining Room id: {}", room_id.clone());
+
+            let join_session_result = participant_client.join_session(room_id.as_str());
+            assert_eq!(join_session_result.is_ok(), true);
+
+            let close_result = participant_client.close_connection();
+            assert_eq!(close_result.is_ok(), true);
+        });
+
+        participant.await.unwrap();
+        client_handle.await.unwrap();
+        server_handle.abort();
+    }
+
+    #[tokio::test]
+    async fn test_server_webrtc_session_leave() {
+        let current_line = line!() + 8000;
+        let server_handle = run_server(PROTOCOLS::WEBRTC, current_line);
+
+        sleep(Duration::from_secs(2)).await;
+
+        let mut webrtc_client = WebRTCClient::new();
+        let addr_str = "ws://127.0.0.1".to_owned() + ":" + &current_line.to_string() + "/";
+        let client_handle = tokio::task::spawn_blocking(move || {
+            let connect_result = webrtc_client.connect(addr_str.as_str());
+            assert_eq!(connect_result.is_ok(), true);
+
+            let create_session_result = webrtc_client.create_session();
+            assert_eq!(create_session_result.is_ok(), true);
+
+            let session_id = create_session_result.clone().unwrap();
+            println!("Session id: {}", session_id.clone());
+
+            thread_sleep(Duration::from_secs(10));
+
+            let check_participants_result = webrtc_client.list_participants(session_id.as_str());
+            let participants = check_participants_result.unwrap();
+            println!("Remaining Participants: {:?}", participants);
+            
+            assert_eq!(participants.len(), 1);
+
+            let close_result = webrtc_client.close_connection();
+            assert_eq!(close_result.is_ok(), true);
+        });
+
+        let mut participants_client = WebRTCClient::new();
+        let addr_str2 = "ws://127.0.0.1".to_owned() + ":" + &current_line.to_string() + "/";
+        let client_handle2 = tokio::task::spawn_blocking(move || {
+            thread_sleep(Duration::from_secs(5));
+            
+            let _ = participants_client.connect(addr_str2.as_str());
+
+            let session_list = participants_client.list_sessions().unwrap();
+            let session_id = session_list[0].clone();
+
+            println!("Joining Room id: {}", session_id.clone());
+            let join_result = participants_client.join_session(session_id.as_str());
+            assert_eq!(join_result.is_ok(), true);
+
+            let leave_result = participants_client.leave_session(session_id.as_str());
+            assert_eq!(leave_result.is_ok(), true);
+
+            let close_result = participants_client.close_connection();
+            assert_eq!(close_result.is_ok(), true);
+        });
+
+        client_handle2.await.unwrap();
+        client_handle.await.unwrap();
+        server_handle.abort();
+    }
+
 }

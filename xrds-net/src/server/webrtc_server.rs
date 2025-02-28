@@ -23,18 +23,11 @@ use tokio_tungstenite::tungstenite::error::Error;
 use tokio_tungstenite::accept_async;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::WebSocketStream as WsStream;
+use webrtc::sdp::description::session;
 
 use crate::common::data_structure::WebRTCMessage;
 use crate::common::generate_uuid;
-
-static CREATE_SESSION: &str = "create_session"; // publisher to server
-static LIST_SESSIONS: &str = "list_sessions";   // subscriber to server
-static JOIN_SESSION: &str = "join_session";     // subscriber to server
-static LEAVE_SESSION: &str = "leave_session";   // subscriber to server
-static CLOSE_SESSION: &str = "close_session";   // publisher to server
-static OFFER: &str = "offer";                   // publisher to server, server to subscriber
-static ANSWER: &str = "answer";                 // subscriber to server
-static WELCOME: &str = "welcome";               // server to client (publisher or subscriber)
+use crate::common::data_structure::{CREATE_SESSION, LIST_SESSIONS, JOIN_SESSION, LEAVE_SESSION, CLOSE_SESSION, LIST_PARTICIPANTS, OFFER, ANSWER};
 
 
 /**
@@ -82,12 +75,8 @@ impl WebRTCServer {
         self.clients.lock().unwrap().insert(client_id.to_string(), client);
     }
 
-    fn remove_client(&mut self, client_id: &str) {
+    fn remove_client(&self, client_id: &String) {
         self.clients.lock().unwrap().remove(client_id);
-    }
-
-    fn get_client(&self, client_id: &str) -> Option<WebRTCClient> {
-        self.clients.lock().unwrap().get(client_id).cloned()
     }
 
     pub async fn run(self: Arc<Self>, port: u32) -> Result<(), Box<dyn std::error::Error>> {
@@ -152,11 +141,11 @@ impl WebRTCServer {
 
         // handle incoming messages
         while let Some(msg) = receiver.next().await {
-            println!("WebRTC Server Received message: {:?}", msg);
+            // println!("WebRTC Server Received message: {:?}", msg);
             let msg = match msg {
                 Ok(msg) => msg,
                 Err(e) => {
-                    Self::log_error_connection(e);
+                    log_error_connection(e);
 
                     if let Err(close_err) = sender.send(Message::Close(None)).await {
                         println!("Failed to send close frame: {}", close_err);
@@ -166,6 +155,8 @@ impl WebRTCServer {
             };
 
             if msg.is_close() {
+                self.remove_client(&client_id);
+                // TODO: remove the session if the client is the creator
                 println!("Connection closed by client");
                 break;
             }
@@ -196,60 +187,34 @@ impl WebRTCServer {
         let msg = String::from_utf8_lossy(&input);
         let msg: WebRTCMessage = serde_json::from_str(msg.as_ref()).unwrap();
         let message_type = msg.clone().message_type;
+
         // handle message by matching message_types
-
-        if message_type == CREATE_SESSION {
-            let response = self.handle_create_session(msg);
-            let response = serde_json::to_string(&response).unwrap();
-            return Some(response.into_bytes());
-        } else if message_type == OFFER {
-            return None;
-        } else if message_type == LIST_SESSIONS {
-            let response = self.handle_list_session(msg);
-            let response = serde_json::to_string(&response).unwrap();
-            return Some(response.into_bytes());
-        } else if message_type == JOIN_SESSION {    // Start of WebRTC Connection Creation
-            return None;
-
-        } else if message_type == LEAVE_SESSION {
-           return None; 
-        } else {
-            //lefties: offer, answer, ice candidate
-            // unknown message type
-            return None;
+        match message_type.as_str() {
+            CREATE_SESSION => {
+                let response = self.handle_create_session(msg);
+                Some(serde_json::to_string(&response).unwrap().into_bytes())
+            },
+            LIST_SESSIONS => {
+                let response = self.handle_list_session(msg);
+                Some(serde_json::to_string(&response).unwrap().into_bytes())
+            },
+            CLOSE_SESSION | JOIN_SESSION | LEAVE_SESSION | LIST_PARTICIPANTS => {
+                let session_id = String::from_utf8_lossy(&msg.payload).to_string();
+                
+                let response = match message_type.as_str() {
+                    CLOSE_SESSION => self.close_session(&session_id),
+                    JOIN_SESSION => self.join_session(session_id.clone(), &msg.client_id),
+                    LEAVE_SESSION => self.leave_session(session_id, &msg.client_id),
+                    LIST_PARTICIPANTS => self.list_participants(&session_id),
+                    _ => unreachable!(), // This won't happen due to the outer match
+                };
+                Some(serde_json::to_string(&response).unwrap().into_bytes())
+            },
+            OFFER | ANSWER | _ => None  // Handle OFFER, ANSWER, and any other message type
         }
     }
 
-    fn log_error_connection(error: Error) {
-        match &error {
-            Error::ConnectionClosed => {
-                println!("Connection closed normally (but no Close frame?).");
-            }
-            Error::Io(io_err) => {
-                match io_err.kind() {
-                    std::io::ErrorKind::ConnectionReset => {
-                        println!("Client rudely dropped connection (ConnectionReset).");
-                    }
-                    std::io::ErrorKind::BrokenPipe => {
-                        println!("Client terminated socket without handshake (BrokenPipe).");
-                    }
-                    std::io::ErrorKind::ConnectionAborted => {
-                        println!("Client terminated socket with handshake (ConnectionAborted).");
-                    }
-                    _ => {
-                        println!("Unexpected I/O error: {}", io_err);
-                    }
-                }
-            }
-            Error::Protocol(proto_err) => {
-                println!("Protocol violation by client: {}", proto_err);
-            }
-            _ => {
-                println!("Other WebSocket error: {}", error);
-            }
-        }
-    }
-
+    /****************** Message Handler Functions **************** */
     //helper function
     fn handle_create_session(&self, request: WebRTCMessage) -> WebRTCMessage{
         // create a new session
@@ -286,6 +251,112 @@ impl WebRTCServer {
             error: None,
         };
         response
+    }
+
+    /**
+     * Returns a response message for closing a session with remaining session lists.
+     */
+    fn close_session(&self, session_id: &str) -> WebRTCMessage{
+        self.sessions.lock().unwrap().remove(session_id);
+
+        // get remaining session list
+        let sessions = self.sessions.lock().unwrap();
+        let session_ids: Vec<String> = sessions.keys().cloned().collect();
+
+        let response = WebRTCMessage {
+            client_id: "".to_string(),
+            message_type: CLOSE_SESSION.to_string(),
+            payload: session_ids.join(",").into_bytes(),
+            sdp: None,
+            error: None,
+        };
+        response
+    }
+
+    fn join_session(&self, session_id: String, client_id: &str) -> WebRTCMessage{
+        let mut sessions = self.sessions.lock().unwrap();
+        let session = sessions.get_mut(&session_id).unwrap();
+        if session.participants.contains(&client_id.to_string()) {  // reset the session for the client
+            // remove the client from the session
+            session.participants.retain(|x| x != client_id);
+            // TODO: remove the WebRTC connection too. (not implemented yet)
+            // setup the webrtc connection again
+        }
+
+        session.participants.push(client_id.to_string());
+
+        let response = WebRTCMessage {
+            client_id: client_id.to_string(),
+            message_type: JOIN_SESSION.to_string(),
+            payload: session_id.into_bytes(),
+            sdp: None,
+            error: None,
+        };
+        response
+    }
+
+    fn leave_session(&self, session_id: String, client_id: &str) -> WebRTCMessage{
+        let mut sessions = self.sessions.lock().unwrap();
+        let session = sessions.get_mut(&session_id).unwrap();
+
+        session.participants.retain(|x| x != client_id);
+
+        // TODO: remove the WebRTC connection too. (not implemented yet)
+
+        let response = WebRTCMessage {
+            client_id: client_id.to_string(),
+            message_type: LEAVE_SESSION.to_string(),
+            payload: session_id.into_bytes(),
+            sdp: None,
+            error: None,
+        };
+        response
+    }
+
+    fn list_participants(&self, session_id: &str) -> WebRTCMessage {
+        let sessions = self.sessions.lock().unwrap();
+        let session = sessions.get(session_id).unwrap();
+        let participants = session.participants.clone();
+        let response = WebRTCMessage {
+            client_id: "".to_string(),
+            message_type: LIST_PARTICIPANTS.to_string(),
+            payload: serde_json::to_string(&participants).unwrap().into_bytes(),
+            sdp: None,
+            error: None,
+        };
+        response
+    }
+
+    
+}
+
+fn log_error_connection(error: Error) {
+    match &error {
+        Error::ConnectionClosed => {
+            println!("Connection closed normally (but no Close frame?).");
+        }
+        Error::Io(io_err) => {
+            match io_err.kind() {
+                std::io::ErrorKind::ConnectionReset => {
+                    println!("Client rudely dropped connection (ConnectionReset).");
+                }
+                std::io::ErrorKind::BrokenPipe => {
+                    println!("Client terminated socket without handshake (BrokenPipe).");
+                }
+                std::io::ErrorKind::ConnectionAborted => {
+                    println!("Client terminated socket with handshake (ConnectionAborted).");
+                }
+                _ => {
+                    println!("Unexpected I/O error: {}", io_err);
+                }
+            }
+        }
+        Error::Protocol(proto_err) => {
+            println!("Protocol violation by client: {}", proto_err);
+        }
+        _ => {
+            println!("Other WebSocket error: {}", error);
+        }
     }
 }
 

@@ -19,6 +19,17 @@ use serde::{Serialize, Deserialize};
 use crate::common::enums::{PROTOCOLS, FtpCommands};
 
 use url::Url;
+
+pub const CREATE_SESSION: &str = "create_session"; // publisher to server
+pub const LIST_SESSIONS: &str = "list_sessions";   // subscriber to server
+pub const JOIN_SESSION: &str = "join_session";     // subscriber to server
+pub const LEAVE_SESSION: &str = "leave_session";   // subscriber to server
+pub const CLOSE_SESSION: &str = "close_session";   // publisher to server
+pub const LIST_PARTICIPANTS: &str = "list_participants"; // server to client (publisher or subscriber)
+pub const OFFER: &str = "offer";                   // publisher to server, server to subscriber
+pub const ANSWER: &str = "answer";                 // subscriber to server
+pub const WELCOME: &str = "welcome";               // server to client (publisher or subscriber)
+
 /**
  * In case of Using CoAP protocol, refer to the following link:
  * https://www.potaroo.net/ietf/all-ids/draft-castellani-core-http-mapping-07.html#rfc.section.4
