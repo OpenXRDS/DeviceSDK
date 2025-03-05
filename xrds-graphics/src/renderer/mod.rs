@@ -31,7 +31,6 @@ impl Renderer {
         framebuffer_count: u32,
     ) -> Self {
         let framebuffers: Vec<_> = (0..framebuffer_count)
-            .into_iter()
             .map(|_| {
                 let wgpu_color_texture =
                     graphics_instance
@@ -50,12 +49,8 @@ impl Renderer {
                         });
                 let wgpu_color_view =
                     wgpu_color_texture.create_view(&TextureViewDescriptor::default());
-                let color_texture = XrdsTexture::new(
-                    wgpu_color_texture,
-                    color_format,
-                    extent,
-                    Some(wgpu_color_view),
-                );
+                let color_texture =
+                    XrdsTexture::new(wgpu_color_texture, color_format, extent, wgpu_color_view);
                 let wgpu_depth_stencil_texture =
                     graphics_instance
                         .device()
@@ -75,7 +70,7 @@ impl Renderer {
                     wgpu_depth_stencil_texture,
                     wgpu::TextureFormat::Depth24PlusStencil8.into(),
                     extent,
-                    Some(wgpu_depth_stencil_view),
+                    wgpu_depth_stencil_view,
                 );
                 Framebuffer::new(
                     &[RenderTargetTexture::new(

@@ -50,7 +50,7 @@ where
     pub fn new(id: &AssetId) -> Self {
         Self {
             id: id.clone(),
-            _p: PhantomData::default(),
+            _p: PhantomData,
         }
     }
 

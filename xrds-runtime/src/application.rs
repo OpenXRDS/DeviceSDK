@@ -26,6 +26,7 @@ pub(crate) enum RuntimeEvent {
     Closed,
 }
 
+#[derive(Default)]
 pub(crate) struct RuntimeApplication<'window> {
     preview_window_attr: Option<PreviewWindowAttributes>,
     preview_window: Option<PreviewWindow<'window>>,
@@ -38,18 +39,6 @@ pub(crate) struct RuntimeApplication<'window> {
 pub(crate) struct PreviewWindow<'window> {
     window: Arc<Window>,
     surface: Surface<'window>,
-}
-
-impl<'w> Default for RuntimeApplication<'w> {
-    fn default() -> Self {
-        Self {
-            preview_window_attr: None,
-            preview_window: None,
-            openxr_context: None,
-            renderer: None,
-            world: None,
-        }
-    }
 }
 
 impl<'w> RuntimeApplication<'w> {

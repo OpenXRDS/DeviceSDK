@@ -28,16 +28,19 @@ impl GraphicsInstance {
             .request_adapter(&RequestAdapterOptions::default())
             .await
             .unwrap();
+        log::debug!("Adapter graphics limits: {:?}", adapter.limits());
         let (device, queue) = adapter
             .request_device(
                 &DeviceDescriptor {
                     required_features: required_wgpu_features(),
+                    required_limits: adapter.limits(),
                     ..Default::default()
                 },
                 None,
             )
             .await
             .unwrap();
+        log::debug!("Device graphics limits: {:?}", device.limits());
         Arc::new(Self {
             instance,
             adapter,

@@ -22,19 +22,19 @@ pub fn required_wgpu_limits() -> wgpu::Limits {
 }
 
 pub fn is_wgpu_supported_vk_format(vk_format: &vk::Format) -> bool {
-    match *vk_format {
+    matches!(
+        *vk_format,
         vk::Format::R8G8B8A8_UNORM
-        | vk::Format::R8G8B8A8_SRGB
-        | vk::Format::B8G8R8A8_UNORM
-        | vk::Format::B8G8R8A8_SRGB
-        | vk::Format::R16G16B16A16_SFLOAT
-        | vk::Format::R32G32B32A32_SFLOAT
-        | vk::Format::D32_SFLOAT
-        | vk::Format::D32_SFLOAT_S8_UINT
-        | vk::Format::D24_UNORM_S8_UINT
-        | vk::Format::R8_UNORM => true,
-        _ => false,
-    }
+            | vk::Format::R8G8B8A8_SRGB
+            | vk::Format::B8G8R8A8_UNORM
+            | vk::Format::B8G8R8A8_SRGB
+            | vk::Format::R16G16B16A16_SFLOAT
+            | vk::Format::R32G32B32A32_SFLOAT
+            | vk::Format::D32_SFLOAT
+            | vk::Format::D32_SFLOAT_S8_UINT
+            | vk::Format::D24_UNORM_S8_UINT
+            | vk::Format::R8_UNORM
+    )
 }
 
 pub fn wgpu_format_from_vk_format(format: vk::Format) -> anyhow::Result<wgpu::TextureFormat> {

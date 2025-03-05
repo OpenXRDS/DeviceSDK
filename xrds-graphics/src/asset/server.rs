@@ -7,17 +7,19 @@ use std::{
 use uuid::Uuid;
 use wgpu::{
     util::{BufferInitDescriptor, DeviceExt},
-    BindGroupLayoutDescriptor, BindGroupLayoutEntry, BindingType, BufferBindingType,
-    ColorTargetState, ColorWrites, DepthBiasState, DepthStencilState, FragmentState,
-    MultisampleState, PipelineCompilationOptions, PipelineLayoutDescriptor, PrimitiveState,
-    RenderPipelineDescriptor, SamplerBindingType, ShaderStages, StencilState, TextureDescriptor,
-    TextureSampleType, TextureViewDimension, VertexAttribute, VertexBufferLayout, VertexState,
+    BindGroupEntry, BindGroupLayoutDescriptor, BindGroupLayoutEntry, BindingResource, BindingType,
+    BufferBinding, BufferBindingType, BufferUsages, ColorTargetState, ColorWrites, DepthBiasState,
+    DepthStencilState, FragmentState, MultisampleState, PipelineCompilationOptions,
+    PipelineLayoutDescriptor, PrimitiveState, PushConstantRange, RenderPipelineDescriptor,
+    SamplerBindingType, ShaderStages, StencilState, TextureDescriptor, TextureSampleType,
+    TextureViewDimension, VertexAttribute, VertexBufferLayout, VertexState,
 };
 
 use crate::{
     buffer::XrdsBufferType,
-    pbr::{Options, PbrMaterialInputOption, PbrShaderBuilder},
-    GraphicsInstance, TextureFormat, XrdsBuffer, XrdsMaterial, XrdsTexture, XrdsVertexBuffer,
+    pbr::{Options, PbrMaterialInputOption, PbrMaterialParams, PbrShaderBuilder},
+    GraphicsInstance, TextureFormat, XrdsBuffer, XrdsMaterial, XrdsMaterialInstance, XrdsTexture,
+    XrdsVertexBuffer,
 };
 
 use super::types::{AssetHandle, AssetId, AssetStrongHandle};
@@ -33,6 +35,7 @@ pub struct ResourceBuffer {
     textures: HashMap<AssetId, AssetStrongHandle<XrdsTexture>>,
     buffers: HashMap<AssetId, AssetStrongHandle<XrdsBuffer>>,
     materials: HashMap<AssetId, AssetStrongHandle<XrdsMaterial>>,
+    material_instances: HashMap<AssetId, AssetStrongHandle<XrdsMaterialInstance>>,
 }
 
 #[derive(Debug)]
@@ -58,6 +61,47 @@ pub struct MaterialAssetInfo<'a> {
     pub vertex_buffers: &'a [XrdsVertexBuffer],
 }
 
+#[derive(Debug, Clone)]
+pub struct MaterialTextureInfo {
+    pub texture: XrdsTexture,
+    pub sampler: wgpu::Sampler,
+}
+
+#[derive(Debug, Clone)]
+pub struct PbrMaterialInfo<'a> {
+    pub id: &'a AssetId,
+    pub params: PbrMaterialParams,
+    pub base_color_texture: Option<MaterialTextureInfo>,
+    pub emissive_texture: Option<MaterialTextureInfo>,
+    pub metallic_roughness_texture: Option<MaterialTextureInfo>,
+    pub normal_texture: Option<MaterialTextureInfo>,
+    pub occlusion_texture: Option<MaterialTextureInfo>,
+    #[cfg(feature = "material_spec_gloss")]
+    diffuse_texture: Option<MaterialTextureInfo>,
+    #[cfg(feature = "material_spec_gloss")]
+    specular_glossiness_texture: Option<MaterialTextureInfo>,
+    #[cfg(feature = "material_ibl")]
+    ibl_diffuse_texture: Option<MaterialTextureInfo>,
+    #[cfg(feature = "material_ibl")]
+    ibl_specular_texture: Option<MaterialTextureInfo>,
+    #[cfg(feature = "material_ibl")]
+    brdf_texture: Option<MaterialTextureInfo>,
+}
+
+impl<'a> PbrMaterialInfo<'a> {
+    pub fn new(id: &'a AssetId) -> Self {
+        Self {
+            id,
+            params: PbrMaterialParams::default(),
+            base_color_texture: None,
+            emissive_texture: None,
+            metallic_roughness_texture: None,
+            normal_texture: None,
+            occlusion_texture: None,
+        }
+    }
+}
+
 impl AssetServer {
     pub fn new(graphics_instance: Arc<GraphicsInstance>) -> anyhow::Result<Self> {
         let resource_buffer = Arc::new(RwLock::new(ResourceBuffer::default()));
@@ -68,6 +112,10 @@ impl AssetServer {
             resource_buffer,
             shader_builder,
         })
+    }
+
+    pub fn device(&self) -> &wgpu::Device {
+        self.graphics_instance.device()
     }
 
     /// Register new texture to asset server.
@@ -126,7 +174,7 @@ impl AssetServer {
             texture,
             TextureFormat::from(wgpu::TextureFormat::Rgba8Unorm),
             size,
-            Some(view),
+            view,
         );
         let handle = AssetStrongHandle::new(info.id.clone(), xrds_texture);
         let weak_handle = handle.as_weak_handle();
@@ -196,6 +244,8 @@ impl AssetServer {
         let device = self.graphics_instance.device().clone();
 
         let mut bind_group_layouts = Vec::new();
+
+        // view-proj uniform
         bind_group_layouts.push(device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: None,
             entries: &[BindGroupLayoutEntry {
@@ -210,11 +260,16 @@ impl AssetServer {
             }],
         }));
 
-        bind_group_layouts.push(device.create_bind_group_layout(&BindGroupLayoutDescriptor {
-            label: None,
-            entries: &Self::into_bind_group_layout_entries(&info.options.material_input),
-        }));
+        let material_bind_group_layout =
+            device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+                label: None,
+                entries: &Self::into_bind_group_layout_entries(&info.options.material_input),
+            });
 
+        // material textures
+        bind_group_layouts.push(material_bind_group_layout.clone());
+
+        // skinning materices
         if info.options.vertex_input.weights_joints_0 {
             bind_group_layouts.push(device.create_bind_group_layout(&BindGroupLayoutDescriptor {
                 label: None,
@@ -233,8 +288,12 @@ impl AssetServer {
         let bind_group_layouts_ref: Vec<_> = bind_group_layouts.iter().collect();
 
         let pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+            label: None,
             bind_group_layouts: &bind_group_layouts_ref,
-            ..Default::default()
+            push_constant_ranges: &[PushConstantRange {
+                range: 0..std::mem::size_of::<glam::Mat4>() as _,
+                stages: ShaderStages::VERTEX,
+            }],
         });
 
         let mut vertex_layouts: Vec<_> = info
@@ -346,7 +405,10 @@ impl AssetServer {
                     multiview: NonZeroU32::new(info.options.view_count),
                 });
 
-        let xrds_material = XrdsMaterial { pipeline };
+        let xrds_material = XrdsMaterial {
+            pipeline,
+            bind_group_layout: material_bind_group_layout,
+        };
         let handle = AssetStrongHandle::new(info.id.clone(), xrds_material);
         let weak_handle = handle.as_weak_handle();
         let mut lock = self.resource_buffer.write().unwrap();
@@ -394,21 +456,21 @@ impl AssetServer {
         if material_option.base_color {
             add_texture_and_sampler(&mut res, 1, TextureViewDimension::D2);
         }
-        if material_option.emissive {
-            add_texture_and_sampler(&mut res, 5, TextureViewDimension::D2);
-        }
         if material_option.metallic_roughness {
-            add_texture_and_sampler(&mut res, 7, TextureViewDimension::D2);
+            add_texture_and_sampler(&mut res, 3, TextureViewDimension::D2);
         }
         if material_option.normal {
-            add_texture_and_sampler(&mut res, 9, TextureViewDimension::D2);
+            add_texture_and_sampler(&mut res, 5, TextureViewDimension::D2);
+        }
+        if material_option.emissive {
+            add_texture_and_sampler(&mut res, 7, TextureViewDimension::D2);
         }
         if material_option.occlusion {
-            add_texture_and_sampler(&mut res, 11, TextureViewDimension::D2);
+            add_texture_and_sampler(&mut res, 9, TextureViewDimension::D2);
         }
         #[cfg(feature = "material_spec_gloss")]
         if material_option.diffuse {
-            add_texture_and_sampler(&mut res, 3, TextureViewDimension::D2);
+            add_texture_and_sampler(&mut res, 11, TextureViewDimension::D2);
         }
         #[cfg(feature = "material_spec_gloss")]
         if material_option.specular_glossiness {
@@ -427,6 +489,108 @@ impl AssetServer {
         }
 
         res
+    }
+
+    pub fn register_material_instance(
+        &self,
+        material: &XrdsMaterial,
+        info: &PbrMaterialInfo,
+    ) -> anyhow::Result<AssetHandle<XrdsMaterialInstance>> {
+        let material_params =
+            self.graphics_instance
+                .device()
+                .create_buffer_init(&BufferInitDescriptor {
+                    label: None,
+                    usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+                    contents: bytemuck::bytes_of(&info.params),
+                });
+        let buffer = XrdsBuffer::new(material_params, XrdsBufferType::Uniform, 1);
+        let mut bind_group_entries = Vec::new();
+
+        bind_group_entries.push(BindGroupEntry {
+            binding: 0,
+            resource: BindingResource::Buffer(BufferBinding {
+                buffer: buffer.buffer(),
+                offset: 0,
+                size: None,
+            }),
+        });
+
+        if let Some(base_color) = &info.base_color_texture {
+            bind_group_entries.push(BindGroupEntry {
+                binding: 1,
+                resource: BindingResource::TextureView(base_color.texture.view()),
+            });
+            bind_group_entries.push(BindGroupEntry {
+                binding: 2,
+                resource: BindingResource::Sampler(&base_color.sampler),
+            });
+        }
+
+        if let Some(metallic_roughness) = &info.metallic_roughness_texture {
+            bind_group_entries.push(BindGroupEntry {
+                binding: 3,
+                resource: BindingResource::TextureView(metallic_roughness.texture.view()),
+            });
+            bind_group_entries.push(BindGroupEntry {
+                binding: 4,
+                resource: BindingResource::Sampler(&metallic_roughness.sampler),
+            });
+        }
+
+        if let Some(normal) = &info.normal_texture {
+            bind_group_entries.push(BindGroupEntry {
+                binding: 5,
+                resource: BindingResource::TextureView(normal.texture.view()),
+            });
+            bind_group_entries.push(BindGroupEntry {
+                binding: 6,
+                resource: BindingResource::Sampler(&normal.sampler),
+            });
+        }
+
+        if let Some(emissive) = &info.emissive_texture {
+            bind_group_entries.push(BindGroupEntry {
+                binding: 7,
+                resource: BindingResource::TextureView(emissive.texture.view()),
+            });
+            bind_group_entries.push(BindGroupEntry {
+                binding: 8,
+                resource: BindingResource::Sampler(&emissive.sampler),
+            });
+        }
+
+        if let Some(occlusion) = &info.occlusion_texture {
+            bind_group_entries.push(BindGroupEntry {
+                binding: 9,
+                resource: BindingResource::TextureView(occlusion.texture.view()),
+            });
+            bind_group_entries.push(BindGroupEntry {
+                binding: 10,
+                resource: BindingResource::Sampler(&occlusion.sampler),
+            });
+        }
+
+        let bind_group =
+            self.graphics_instance
+                .device()
+                .create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: None,
+                    layout: &material.bind_group_layout,
+                    entries: &bind_group_entries,
+                });
+        let instance = XrdsMaterialInstance {
+            inner: material.clone(),
+            material_params: buffer,
+            bind_group,
+        };
+        let mut lock = self.resource_buffer.write().unwrap();
+        let instance_handle = AssetStrongHandle::new(info.id.clone(), instance);
+        let weak_handle = instance_handle.as_weak_handle();
+        lock.material_instances
+            .insert(info.id.clone(), instance_handle);
+
+        Ok(weak_handle)
     }
 
     pub fn get_texture(&self, handle: &AssetHandle<XrdsTexture>) -> Option<XrdsTexture> {
@@ -469,6 +633,26 @@ impl AssetServer {
     pub fn get_material_handle(&self, id: &AssetId) -> Option<AssetHandle<XrdsMaterial>> {
         let lock = self.resource_buffer.read().unwrap();
         lock.materials.get(id).map(|h| h.as_weak_handle())
+    }
+
+    pub fn get_material_instance(
+        &self,
+        handle: &AssetHandle<XrdsMaterialInstance>,
+    ) -> Option<XrdsMaterialInstance> {
+        self.get_material_instance_by_id(handle.id())
+    }
+
+    pub fn get_material_instance_by_id(&self, id: &AssetId) -> Option<XrdsMaterialInstance> {
+        let lock = self.resource_buffer.read().unwrap();
+        lock.material_instances.get(id).map(|h| h.asset().clone())
+    }
+
+    pub fn get_material_instance_handle(
+        &self,
+        id: &AssetId,
+    ) -> Option<AssetHandle<XrdsMaterialInstance>> {
+        let lock = self.resource_buffer.read().unwrap();
+        lock.material_instances.get(id).map(|h| h.as_weak_handle())
     }
 
     pub fn generate_id(&self) -> AssetId {

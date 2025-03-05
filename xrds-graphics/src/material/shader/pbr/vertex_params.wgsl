@@ -9,7 +9,7 @@ struct Input {
 #endif
 #ifdef VERTEX_INPUT_COLOR
 #ifdef VERTEX_INPUT_COLOR_3CH
-    @location(1) color: vec3<f32>
+    @location(1) color: vec3<f32>,
 #else
     @location(1) color: vec4<f32>,
 #endif
@@ -34,6 +34,7 @@ struct Input {
     @location(8) weights_1n: vec4<f32>,
     @location(9) joints_1n: vec4<u32>,
 #endif
+    // Instance buffer value. It is changable model matrix
     @location(10) model_0n: vec4<f32>,
     @location(11) model_1n: vec4<f32>,
     @location(12) model_2n: vec4<f32>,

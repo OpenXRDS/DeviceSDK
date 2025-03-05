@@ -1,4 +1,2 @@
 #[derive(Debug, Clone)]
-pub struct XrdsScene {
-    // world: XrdsWorld,
-}
+pub struct XrdsScene {}

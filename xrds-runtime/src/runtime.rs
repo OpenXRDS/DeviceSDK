@@ -102,7 +102,7 @@ impl Runtime {
         event_loop.run_app(&mut runtime_app)?;
         debug!("Event loop closed");
 
-        let _res = main_result.await??;
+        main_result.await??;
 
         Ok(())
     }

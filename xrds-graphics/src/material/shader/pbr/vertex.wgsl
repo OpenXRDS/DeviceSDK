@@ -26,12 +26,12 @@ fn main(in: Vertex::Input) -> Vertex::Output {
         in.model_3n
     );
 
-    var transform_mat = model * skinning_model;
+    var transform_mat = View::get_local_model() * skinning_model * model;
     var pos = transform_mat * vec4<f32>(in.position, 1.0);
 #if VIEW_COUNT > 1
-    var view_params = View::u_view_params[in.view_index];
+    var view_params = View::get_view_params(in.view_index);
 #else
-    var view_params = View::u_view_params;
+    var view_params = View::get_view_params(0);
 #endif
     out.clip_position = view_params.view_projection * pos;
     out.world_position = pos.xyz / pos.w;

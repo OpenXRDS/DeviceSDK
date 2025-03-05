@@ -2,16 +2,19 @@
 
 struct PbrParams {
     base_color_factor: vec4<f32>,
-    base_color_texcoord: u32,
     emissive_factor: vec4<f32>,
-    emissive_texcoord: u32,
     metallic_factor: f32,
     roughness_factor: f32,
-    metallic_roughness_texcoord: u32
     normal_scale: f32,
-    normal_texcoord: u32,
     occlusion_strength: f32,
-    occlusion_texcoord: u32,
+    alpha_cutoff: f32,
+    texcoord_base_color: u32,
+    texcoord_emissive: u32,
+    texcoord_metallic_roughness: u32,
+    texcoord_normal: u32,
+    texcoord_occlusion: u32,
+    texcoord_diffuse: u32,
+    texcoord_specular_glossiness: u32,
 }
 
 @group(1) @binding(0)

@@ -32,9 +32,9 @@ impl Framebuffer {
             .color_attachments
             .iter()
             .map(|target| {
-                if target.texture().view().is_some() && target.is_color_target() {
+                if target.is_color_target() {
                     Some(wgpu::RenderPassColorAttachment {
-                        view: target.texture().view().unwrap(),
+                        view: target.texture().view(),
                         ops: target.as_color_operation().unwrap(),
                         resolve_target: None,
                     })
@@ -51,9 +51,9 @@ impl Framebuffer {
         &self,
     ) -> anyhow::Result<Option<wgpu::RenderPassDepthStencilAttachment>> {
         let res = if let Some(ds) = self.depth_stencil_attachment.as_ref() {
-            if ds.texture().view().is_some() && ds.is_depth_stencil_target() {
+            if ds.is_depth_stencil_target() {
                 Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: ds.texture().view().unwrap(),
+                    view: ds.texture().view(),
                     depth_ops: ds.as_depth_operation().unwrap(),
                     stencil_ops: ds.as_stencil_operation().unwrap(),
                 })

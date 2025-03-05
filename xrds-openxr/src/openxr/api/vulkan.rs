@@ -124,6 +124,7 @@ impl OpenXrVulkanContext {
             .collect())
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn wgpu_device(
         vk_entry: &ash::Entry,
         instance: &openxr::Instance,
@@ -412,7 +413,7 @@ impl OpenXrContextApi for OpenXrVulkanContext {
                 wgpu_texture,
                 swapchain_format,
                 swapchain_size,
-                Some(view),
+                view,
             );
             swapchain_textures.push(swapchain_texture);
         }
@@ -456,7 +457,7 @@ impl OpenXrContextApi for OpenXrVulkanContext {
         space: Arc<openxr::Space>,
         views: &[openxr::View],
     ) -> anyhow::Result<()> {
-        if views.len() > 0 {
+        if !views.is_empty() {
             let projection_views: Vec<_> = {
                 let swapchain = self
                     .swapchain

@@ -1,26 +1,34 @@
-use std::{borrow::Cow, collections::HashMap, sync::RwLock};
+use std::{
+    borrow::Cow,
+    collections::HashMap,
+    hash::{DefaultHasher, Hash, Hasher},
+    sync::RwLock,
+};
 
-use glam::{Vec3, Vec4};
 use naga_oil::compose::{
     ComposableModuleDescriptor, Composer, NagaModuleDescriptor, ShaderDefValue,
 };
 use wgpu::{naga::valid::Capabilities, Device, ShaderModuleDescriptor};
 
-#[derive(Debug, Default, Clone, Copy)]
+pub static BIND_GROUP_INDEX_VIEW_PARAMS: u32 = 0;
+pub static BIND_GROUP_INDEX_MATERIAL_INPUT: u32 = 1;
+pub static BIND_GROUP_INDEX_SKINNING_MATRICES: u32 = 2;
+
+#[derive(Debug, Default, Clone, Copy, Hash)]
 pub struct Options {
     pub vertex_input: PbrVertexInputOption,
     pub material_input: PbrMaterialInputOption,
     pub view_count: u32,
 }
 
-#[derive(Debug, Default, Clone, Copy, PartialEq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Hash)]
 pub enum ColorChannel {
     Ch3,
     #[default]
     Ch4,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Hash)]
 pub enum PbrVertexSemantic {
     Position,
     Normal,
@@ -31,7 +39,7 @@ pub enum PbrVertexSemantic {
     Joints(u32),
 }
 
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Default, Clone, Copy, Hash)]
 pub struct PbrVertexInputOption {
     pub position: bool,
     pub color: Option<ColorChannel>,
@@ -44,36 +52,34 @@ pub struct PbrVertexInputOption {
     pub instance: bool,
 }
 
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Default, Clone, Copy, Hash)]
 pub enum AlphaMode {
     #[default]
     Opaque,
-    Mask {
-        alpha_cutoff: f32,
-    },
+    Mask,
     Blend,
 }
 
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Default, Clone, Copy, Hash)]
+pub enum PrimitiveMode {
+    #[default]
+    TriangleList,
+    TriangleStrip,
+    LineList,
+    LineStrip,
+    PointList,
+}
+
+#[derive(Debug, Default, Clone, Copy, Hash)]
 pub struct PbrMaterialInputOption {
     pub base_color: bool,
-    pub base_color_factor: Vec4,
-    pub base_color_texcoord: u32,
     pub normal: bool,
-    pub normal_scale: f32,
-    pub normal_texcoord: u32,
     pub emissive: bool,
-    pub emissive_factor: Vec3,
-    pub emissive_texcoord: u32,
     pub metallic_roughness: bool,
-    pub metallic_factor: f32,
-    pub roughness_factor: f32,
-    pub metallic_roughness_texcoord: u32,
     pub occlusion: bool,
-    pub occlusion_strength: f32,
-    pub occlusion_texcoord: u32,
     pub double_sided: bool,
     pub alpha_mode: AlphaMode,
+    pub primitive_mode: PrimitiveMode,
     #[cfg(feature = "material_spec_gloss")]
     pub diffuse: bool,
     #[cfg(feature = "material_spec_gloss")]
@@ -84,8 +90,28 @@ pub struct PbrMaterialInputOption {
     pub brdf: bool,
 }
 
-#[derive(Debug, Clone)]
-pub struct PbrMaterial;
+#[repr(C)]
+#[derive(Debug, Default, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct PbrMaterialParams {
+    pub base_color_factor: glam::Vec4,
+    pub emissive_factor: glam::Vec4,
+    pub metallic_factor: f32,
+    pub roughness_factor: f32,
+    pub normal_scale: f32,
+    pub occlusion_strength: f32,
+    pub alpha_cutoff: f32,
+    pub texcoord_base_color: u32,
+    pub texcoord_emissive: u32,
+    pub texcoord_metallic_roughness: u32,
+    pub texcoord_normal: u32,
+    pub texcoord_occlusion: u32,
+    #[cfg(feature = "material_spec_gloss")]
+    pub texcoord_diffuse: u32,
+    #[cfg(feature = "material_spec_gloss")]
+    pub texcoord_specular_glossiness: u32,
+    #[cfg(not(feature = "material_spec_gloss"))]
+    _pad: [u32; 2],
+}
 
 pub struct PbrShaderBuilder {
     composer: RwLock<Composer>,
@@ -135,14 +161,23 @@ impl PbrShaderBuilder {
         file_path: &str,
         options: &Options,
     ) -> anyhow::Result<wgpu::ShaderModule> {
-        let defs = options.shader_defines();
-        log::debug!("{:?}", defs);
+        let mut defs = options.shader_defines();
+
+        // Additional defines for device limits
+        let limits = device.limits();
+        if limits.max_push_constant_size >= 64 {
+            defs.insert(
+                "PUSH_CONSTANT_SUPPORTED".to_owned(),
+                ShaderDefValue::Bool(true),
+            );
+        }
+
         let naga_module = {
             let mut lock = self.composer.write().unwrap();
             lock.make_naga_module(NagaModuleDescriptor {
                 source,
                 file_path,
-                shader_defs: options.shader_defines(),
+                shader_defs: defs,
                 shader_type: naga_oil::compose::ShaderType::Wgsl,
                 ..Default::default()
             })?
@@ -199,8 +234,18 @@ impl Options {
         option_key_values
             .into_iter()
             .chain(vertex_key_values)
-            .chain(material_key_values.into_iter())
+            .chain(material_key_values)
             .collect()
+    }
+
+    pub fn as_hash(&self) -> String {
+        let mut hasher = DefaultHasher::new();
+        self.hash(&mut hasher);
+        let hash_value = hasher.finish();
+        base64::engine::Engine::encode(
+            &base64::engine::general_purpose::STANDARD,
+            hash_value.to_le_bytes(),
+        )
     }
 }
 

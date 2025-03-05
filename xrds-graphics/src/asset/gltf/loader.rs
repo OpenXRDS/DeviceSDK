@@ -7,16 +7,16 @@ use std::{
     time::Instant,
 };
 
-use glam::{Vec3, Vec4};
+use glam::{Mat4, Vec4};
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use wgpu::SamplerDescriptor;
 
 use crate::{
     asset::types::{AssetHandle, AssetId},
     pbr::{self, AlphaMode},
-    AssetServer, BufferAssetInfo, MaterialAssetInfo, TextureAssetInfo, XrdsBuffer, XrdsBufferType,
-    XrdsIndexBuffer, XrdsMaterial, XrdsMesh, XrdsPrimitive, XrdsScene, XrdsTexture,
-    XrdsVertexBuffer,
+    AssetServer, BufferAssetInfo, MaterialAssetInfo, MaterialTextureInfo, PbrMaterialInfo,
+    TextureAssetInfo, Transform, XrdsBuffer, XrdsBufferType, XrdsIndexBuffer, XrdsMaterialInstance,
+    XrdsMesh, XrdsObject, XrdsPrimitive, XrdsTexture, XrdsVertexBuffer,
 };
 
 use super::Gltf;
@@ -30,6 +30,8 @@ struct GltfLoadContext<'a> {
     gltf_name: Cow<'a, str>,
     raw_buffers: Vec<Vec<u8>>,
     textures: Vec<AssetHandle<XrdsTexture>>,
+    samplers: Vec<wgpu::Sampler>,
+    default_sampler: wgpu::Sampler,
 }
 
 impl GltfLoader {
@@ -83,6 +85,23 @@ impl GltfLoader {
             })
             .filter_map(|res| res.ok())
             .collect();
+        let samplers: Vec<_> = gltf
+            .samplers()
+            .map(|sampler| self.load_sampler(&sampler))
+            .collect();
+        let default_sampler = self
+            .asset_server
+            .device()
+            .create_sampler(&SamplerDescriptor {
+                label: None,
+                address_mode_u: wgpu::AddressMode::Repeat,
+                address_mode_v: wgpu::AddressMode::Repeat,
+                address_mode_w: wgpu::AddressMode::Repeat,
+                mag_filter: wgpu::FilterMode::Linear,
+                min_filter: wgpu::FilterMode::Nearest,
+                mipmap_filter: wgpu::FilterMode::Nearest,
+                ..Default::default()
+            });
         log::debug!(
             "Load {} xrds textures in {} secs",
             textures.len(),
@@ -92,93 +111,84 @@ impl GltfLoader {
             gltf_name: Cow::Borrowed(&gltf_key),
             raw_buffers,
             textures,
+            samplers,
+            default_sampler,
         };
         let instant = Instant::now();
         let mut scenes = Vec::new();
         for scene in gltf.scenes() {
-            scenes.push(self.load_scene(&scene, &context)?);
+            scenes.push(Arc::new(self.load_scene_as_object(&scene, &context)?));
         }
         log::debug!(
             "Load {} scenes in {} secs",
             scenes.len(),
             instant.elapsed().as_secs_f32()
         );
+        let mut res = Gltf::default().with_scenes(&scenes);
+        if let Some(default_scene) = gltf.default_scene() {
+            res = res.with_default_scene(default_scene.index());
+        }
 
-        Ok(Gltf::default())
+        Ok(res)
     }
 
-    fn load_scene(
+    fn load_scene_as_object(
         &self,
         scene: &gltf::Scene,
         context: &GltfLoadContext,
-    ) -> anyhow::Result<XrdsScene> {
+    ) -> anyhow::Result<XrdsObject> {
         let instant = Instant::now();
         let scene_name = Self::name_from_scene(scene, &context.gltf_name);
         let mut nodes = Vec::new();
+        let scene_transform = Mat4::default();
         for node in scene.nodes() {
-            nodes.push(self.load_node(&node, &scene_name, context)?);
+            nodes.push(self.load_node_as_object(&node, &scene_name, &scene_transform, context)?);
         }
         log::debug!(
             "Load {} nodes in {} secs",
             nodes.len(),
             instant.elapsed().as_secs_f32()
         );
+        let scene_object = XrdsObject::default()
+            .with_name(&scene_name)
+            .with_childs(&nodes);
 
-        Ok(XrdsScene {})
+        Ok(scene_object)
     }
 
-    fn load_node(
+    fn load_node_as_object(
         &self,
         node: &gltf::Node,
-        scene_name: &str,
+        parent_name: &str,
+        parent_transform: &Mat4,
         context: &GltfLoadContext,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<XrdsObject> {
+        let name = Self::name_from_node(node, parent_name);
+        let transform =
+            parent_transform.mul_mat4(&glam::Mat4::from_cols_array_2d(&node.transform().matrix()));
+        let mut object = XrdsObject::default()
+            .with_name(&name)
+            .with_transform(Transform::from_matrix(&transform));
         if let Some(mesh) = node.mesh() {
             let instant = Instant::now();
-            self.load_mesh(&mesh, context)?;
+            let mesh = self.load_mesh(&mesh, context)?;
             log::debug!("Load mesh in {} secs", instant.elapsed().as_secs_f32());
+            object.set_mesh(mesh);
         }
-        Ok(())
+        for child in node.children() {
+            let child_object = self.load_node_as_object(&child, &name, &transform, context)?;
+            object.add_child(child_object);
+        }
+        Ok(object)
     }
 
     fn load_mesh(&self, mesh: &gltf::Mesh, context: &GltfLoadContext) -> anyhow::Result<XrdsMesh> {
+        let name = Self::name_from_mesh(mesh, &context.gltf_name);
+
         let instant = Instant::now();
         let mut primitives = Vec::new();
         for primitive in mesh.primitives() {
-            let (vertex_buffers, options) =
-                self.load_vertex_buffers_from_primitive(&primitive, context)?;
-            let index_buffer = if let Some(indices) = primitive.indices() {
-                if let Some(view) = indices.view() {
-                    let handle =
-                        self.load_buffer_from_view(&view, XrdsBufferType::Index, context)?;
-                    let buffer = self.asset_server.get_buffer(&handle).unwrap();
-
-                    Some(XrdsIndexBuffer {
-                        buffer,
-                        index_format: data_type_to_vertex_format(indices.data_type()),
-                    })
-                } else {
-                    todo!("Make empty index?")
-                }
-            } else {
-                None
-            };
-            let material = self.load_material(
-                &vertex_buffers,
-                &options,
-                index_buffer.as_ref(),
-                &primitive.material(),
-                primitive.mode(),
-                context,
-            )?;
-
-            let xrds_primitive = XrdsPrimitive {
-                vertices: vertex_buffers,
-                indices: index_buffer,
-                material: material,
-            };
-
-            primitives.push(xrds_primitive);
+            primitives.push(self.load_primitive(&primitive, context)?);
         }
         log::debug!(
             "Load {} primitives in {} secs",
@@ -186,47 +196,198 @@ impl GltfLoader {
             instant.elapsed().as_secs_f32()
         );
 
-        Ok(XrdsMesh {
-            name: "".to_owned(),
-            primitives,
-        })
+        let mesh = XrdsMesh::default()
+            .with_name(&name)
+            .with_primitives(primitives);
+
+        Ok(mesh)
+    }
+
+    fn load_primitive(
+        &self,
+        primitive: &gltf::Primitive,
+        context: &GltfLoadContext,
+    ) -> anyhow::Result<XrdsPrimitive> {
+        let (vertex_buffers, options) =
+            self.load_vertex_buffers_from_primitive(primitive, context)?;
+        let index_buffer = if let Some(indices) = primitive.indices() {
+            if let Some(view) = indices.view() {
+                let handle = self.load_buffer_from_view(&view, XrdsBufferType::Index, context)?;
+                let buffer = self.asset_server.get_buffer(&handle).unwrap();
+
+                Some(XrdsIndexBuffer {
+                    buffer,
+                    index_format: data_type_to_index_format(indices.data_type()),
+                })
+            } else {
+                todo!("Make empty index?")
+            }
+        } else {
+            None
+        };
+        let material = self.load_material(
+            &vertex_buffers,
+            &options,
+            &primitive.material(),
+            primitive.mode(),
+            context,
+        )?;
+
+        let xrds_primitive = XrdsPrimitive {
+            vertices: vertex_buffers,
+            indices: index_buffer,
+            material,
+        };
+
+        Ok(xrds_primitive)
     }
 
     fn load_material(
         &self,
         vertex_buffers: &[XrdsVertexBuffer],
         vertex_input_options: &pbr::PbrVertexInputOption,
-        index_buffer: Option<&XrdsIndexBuffer>,
         material: &gltf::Material,
         mode: gltf::mesh::Mode,
         context: &GltfLoadContext,
-    ) -> anyhow::Result<AssetHandle<XrdsMaterial>> {
+    ) -> anyhow::Result<XrdsMaterialInstance> {
+        // Material instance name
         let name = Self::name_from_material(material, &context.gltf_name);
         let handle = if let Some(handle) = self
             .asset_server
-            .get_material_handle(&AssetId::Key(name.clone()))
+            .get_material_instance_handle(&AssetId::Key(name.clone()))
         {
             handle
         } else {
             let mut material_input_option = pbr::PbrMaterialInputOption::default();
             Self::update_material_input_options(&mut material_input_option, material);
+            material_input_option.primitive_mode = match mode {
+                gltf::mesh::Mode::Points => pbr::PrimitiveMode::PointList,
+                gltf::mesh::Mode::Lines => pbr::PrimitiveMode::LineList,
+                gltf::mesh::Mode::LineLoop => {
+                    log::warn!("Unsupported primitive mode {:?}", mode);
+                    pbr::PrimitiveMode::LineList
+                }
+                gltf::mesh::Mode::LineStrip => pbr::PrimitiveMode::LineStrip,
+                gltf::mesh::Mode::Triangles => pbr::PrimitiveMode::TriangleList,
+                gltf::mesh::Mode::TriangleStrip => pbr::PrimitiveMode::TriangleStrip,
+                gltf::mesh::Mode::TriangleFan => {
+                    log::warn!("Unsupported primitive mode {:?}", mode);
+                    pbr::PrimitiveMode::TriangleList
+                }
+            };
 
             let options = pbr::Options {
                 vertex_input: *vertex_input_options,
                 material_input: material_input_option,
                 view_count: 2,
             };
+            // Get material unique id from its options.
+            let material_id = AssetId::Key(options.as_hash());
+            let xrds_material =
+                if let Some(material) = self.asset_server.get_material_by_id(&material_id) {
+                    material
+                } else {
+                    // load new material
+                    let handle = self.asset_server.register_material(&MaterialAssetInfo {
+                        id: &material_id,
+                        options: &options,
+                        vertex_buffers,
+                    })?;
+                    self.asset_server.get_material(&handle).unwrap().clone()
+                };
 
-            // load new material
-            let handle = self.asset_server.register_material(&MaterialAssetInfo {
-                id: &AssetId::Key(name.clone()),
-                options: &options,
-                vertex_buffers,
-            })?;
-            handle
+            let get_texture = |index: usize| {
+                context
+                    .textures
+                    .get(index)
+                    .map(|handle| self.asset_server.get_texture(handle).unwrap().clone())
+                    .unwrap()
+            };
+            let get_sampler = |index: Option<usize>| {
+                index
+                    .map(|i| {
+                        context
+                            .samplers
+                            .get(i)
+                            .cloned()
+                            .unwrap_or(context.default_sampler.clone())
+                    })
+                    .unwrap_or(context.default_sampler.clone())
+            };
+
+            // Create material instance
+            let id = AssetId::Key(name);
+            let mut material_input = PbrMaterialInfo::new(&id);
+            material_input.id = &id;
+            material_input.params.base_color_factor =
+                material.pbr_metallic_roughness().base_color_factor().into();
+            if let Some(base_color_texture) = material.pbr_metallic_roughness().base_color_texture()
+            {
+                material_input.params.texcoord_base_color = base_color_texture.tex_coord();
+                material_input.base_color_texture = Some(MaterialTextureInfo {
+                    texture: get_texture(base_color_texture.texture().index()),
+                    sampler: get_sampler(base_color_texture.texture().sampler().index()),
+                });
+            }
+            material_input.params.metallic_factor =
+                material.pbr_metallic_roughness().metallic_factor();
+            material_input.params.roughness_factor =
+                material.pbr_metallic_roughness().roughness_factor();
+            if let Some(metallic_roughness_texture) = material
+                .pbr_metallic_roughness()
+                .metallic_roughness_texture()
+            {
+                material_input.params.texcoord_metallic_roughness =
+                    metallic_roughness_texture.tex_coord();
+                material_input.metallic_roughness_texture = Some(MaterialTextureInfo {
+                    texture: get_texture(metallic_roughness_texture.texture().index()),
+                    sampler: get_sampler(metallic_roughness_texture.texture().sampler().index()),
+                });
+            }
+            let emissive_factor = material.emissive_factor();
+
+            material_input.params.emissive_factor = Vec4::new(
+                emissive_factor[0],
+                emissive_factor[1],
+                emissive_factor[2],
+                1.0,
+            );
+            if let Some(normal_texture) = material.normal_texture() {
+                material_input.params.normal_scale = normal_texture.scale();
+                material_input.params.texcoord_normal = normal_texture.tex_coord();
+                material_input.normal_texture = Some(MaterialTextureInfo {
+                    texture: get_texture(normal_texture.texture().index()),
+                    sampler: get_sampler(normal_texture.texture().sampler().index()),
+                });
+            }
+            if let Some(occlusion_texture) = material.occlusion_texture() {
+                material_input.params.texcoord_occlusion = occlusion_texture.tex_coord();
+                material_input.params.occlusion_strength = occlusion_texture.strength();
+                material_input.occlusion_texture = Some(MaterialTextureInfo {
+                    texture: get_texture(occlusion_texture.texture().index()),
+                    sampler: get_sampler(occlusion_texture.texture().sampler().index()),
+                });
+            }
+            if let Some(emissive_texture) = material.emissive_texture() {
+                material_input.params.texcoord_emissive = emissive_texture.tex_coord();
+                material_input.emissive_texture = Some(MaterialTextureInfo {
+                    texture: get_texture(emissive_texture.texture().index()),
+                    sampler: get_sampler(emissive_texture.texture().sampler().index()),
+                });
+            }
+            material_input.params.alpha_cutoff = material.alpha_cutoff().unwrap_or(0.5);
+
+            self.asset_server
+                .register_material_instance(&xrds_material, &material_input)?
         };
 
-        Ok(handle)
+        let material_instance = self
+            .asset_server
+            .get_material_instance(&handle)
+            .unwrap()
+            .clone(); // must be exists
+
+        Ok(material_instance)
     }
 
     fn load_vertex_buffers_from_primitive(
@@ -295,58 +456,6 @@ impl GltfLoader {
         };
 
         Ok(handle)
-    }
-
-    fn load_sampler_descriptor<'a>(sampler: &'a gltf::texture::Sampler) -> SamplerDescriptor<'a> {
-        let to_address_mode = |wrapping_mode: gltf::texture::WrappingMode| match wrapping_mode {
-            gltf::texture::WrappingMode::ClampToEdge => wgpu::AddressMode::ClampToEdge,
-            gltf::texture::WrappingMode::MirroredRepeat => wgpu::AddressMode::MirrorRepeat,
-            gltf::texture::WrappingMode::Repeat => wgpu::AddressMode::Repeat,
-        };
-        let address_mode_u = to_address_mode(sampler.wrap_s());
-        let address_mode_v = to_address_mode(sampler.wrap_t());
-        let mag_filter = if let Some(sampler_mag) = sampler.mag_filter() {
-            match sampler_mag {
-                gltf::texture::MagFilter::Linear => wgpu::FilterMode::Linear,
-                gltf::texture::MagFilter::Nearest => wgpu::FilterMode::Nearest,
-            }
-        } else {
-            wgpu::FilterMode::Nearest
-        };
-        let (min_filter, mipmap_filter) = if let Some(sampler_min) = sampler.min_filter() {
-            match sampler_min {
-                gltf::texture::MinFilter::Linear => {
-                    (wgpu::FilterMode::Linear, wgpu::FilterMode::Linear)
-                }
-                gltf::texture::MinFilter::LinearMipmapLinear => {
-                    (wgpu::FilterMode::Linear, wgpu::FilterMode::Linear)
-                }
-                gltf::texture::MinFilter::LinearMipmapNearest => {
-                    (wgpu::FilterMode::Linear, wgpu::FilterMode::Nearest)
-                }
-                gltf::texture::MinFilter::Nearest => {
-                    (wgpu::FilterMode::Nearest, wgpu::FilterMode::Linear)
-                }
-                gltf::texture::MinFilter::NearestMipmapLinear => {
-                    (wgpu::FilterMode::Nearest, wgpu::FilterMode::Linear)
-                }
-                gltf::texture::MinFilter::NearestMipmapNearest => {
-                    (wgpu::FilterMode::Nearest, wgpu::FilterMode::Nearest)
-                }
-            }
-        } else {
-            (wgpu::FilterMode::Linear, wgpu::FilterMode::Nearest)
-        };
-        wgpu::SamplerDescriptor {
-            label: sampler.name(),
-            address_mode_u,
-            address_mode_v,
-            address_mode_w: wgpu::AddressMode::ClampToEdge,
-            mag_filter,
-            min_filter,
-            mipmap_filter,
-            ..Default::default()
-        }
     }
 
     fn load_buffer(
@@ -427,18 +536,74 @@ impl GltfLoader {
                 let width = loaded_image.width();
                 let height = loaded_image.height();
                 let depth_or_array = 1;
-                let handle = asset_server.register_texture(&TextureAssetInfo {
+                asset_server.register_texture(&TextureAssetInfo {
                     id: &AssetId::Key(name),
                     data: &data,
                     width,
                     height,
                     depth_or_array,
-                })?;
-                handle
+                })?
             }
         };
 
         Ok(handle)
+    }
+
+    fn load_sampler(&self, sampler: &gltf::texture::Sampler) -> wgpu::Sampler {
+        let to_address_mode = |wrapping_mode: gltf::texture::WrappingMode| match wrapping_mode {
+            gltf::texture::WrappingMode::ClampToEdge => wgpu::AddressMode::ClampToEdge,
+            gltf::texture::WrappingMode::MirroredRepeat => wgpu::AddressMode::MirrorRepeat,
+            gltf::texture::WrappingMode::Repeat => wgpu::AddressMode::Repeat,
+        };
+        let address_mode_u = to_address_mode(sampler.wrap_s());
+        let address_mode_v = to_address_mode(sampler.wrap_t());
+        let mag_filter = if let Some(sampler_mag) = sampler.mag_filter() {
+            match sampler_mag {
+                gltf::texture::MagFilter::Linear => wgpu::FilterMode::Linear,
+                gltf::texture::MagFilter::Nearest => wgpu::FilterMode::Nearest,
+            }
+        } else {
+            wgpu::FilterMode::Nearest
+        };
+        let (min_filter, mipmap_filter) = if let Some(sampler_min) = sampler.min_filter() {
+            match sampler_min {
+                gltf::texture::MinFilter::Linear => {
+                    (wgpu::FilterMode::Linear, wgpu::FilterMode::Linear)
+                }
+                gltf::texture::MinFilter::LinearMipmapLinear => {
+                    (wgpu::FilterMode::Linear, wgpu::FilterMode::Linear)
+                }
+                gltf::texture::MinFilter::LinearMipmapNearest => {
+                    (wgpu::FilterMode::Linear, wgpu::FilterMode::Nearest)
+                }
+                gltf::texture::MinFilter::Nearest => {
+                    (wgpu::FilterMode::Nearest, wgpu::FilterMode::Linear)
+                }
+                gltf::texture::MinFilter::NearestMipmapLinear => {
+                    (wgpu::FilterMode::Nearest, wgpu::FilterMode::Linear)
+                }
+                gltf::texture::MinFilter::NearestMipmapNearest => {
+                    (wgpu::FilterMode::Nearest, wgpu::FilterMode::Nearest)
+                }
+            }
+        } else {
+            (wgpu::FilterMode::Linear, wgpu::FilterMode::Nearest)
+        };
+        let wgpu_sampler = self
+            .asset_server
+            .device()
+            .create_sampler(&wgpu::SamplerDescriptor {
+                label: None,
+                address_mode_u,
+                address_mode_v,
+                address_mode_w: wgpu::AddressMode::ClampToEdge,
+                mag_filter,
+                min_filter,
+                mipmap_filter,
+                ..Default::default()
+            });
+
+        wgpu_sampler
     }
 
     async fn read_file(path: &Path) -> anyhow::Result<Vec<u8>> {
@@ -485,6 +650,14 @@ impl GltfLoader {
         }
     }
 
+    fn name_from_mesh(mesh: &gltf::Mesh, gltf_name: &str) -> String {
+        if let Some(name) = mesh.name() {
+            format!("{}.{}", gltf_name, name)
+        } else {
+            format!("{}.node.{}", gltf_name, mesh.index())
+        }
+    }
+
     fn name_from_buffer_view(view: &gltf::buffer::View, gltf_name: &str) -> String {
         if let Some(name) = view.name() {
             format!("{}.{}", gltf_name, name)
@@ -496,12 +669,10 @@ impl GltfLoader {
     fn name_from_material(material: &gltf::Material, gltf_name: &str) -> String {
         if let Some(name) = material.name() {
             format!("{}.{}", gltf_name, name)
+        } else if let Some(index) = material.index() {
+            format!("{}.material.{}", gltf_name, index)
         } else {
-            if let Some(index) = material.index() {
-                format!("{}.material.{}", gltf_name, index)
-            } else {
-                format!("{}.material.default", gltf_name)
-            }
+            format!("{}.material.default", gltf_name)
         }
     }
 
@@ -550,40 +721,18 @@ impl GltfLoader {
         material: &gltf::Material,
     ) {
         let pbr_metallic_roughness = material.pbr_metallic_roughness();
-        if let Some(base_color) = pbr_metallic_roughness.base_color_texture() {
-            option.base_color = true;
-            option.base_color_texcoord = base_color.tex_coord();
-        }
-        option.base_color_factor = Vec4::from_array(pbr_metallic_roughness.base_color_factor());
-        if let Some(metallic_roughness) = pbr_metallic_roughness.metallic_roughness_texture() {
-            option.metallic_roughness = true;
-            option.metallic_roughness_texcoord = metallic_roughness.tex_coord();
-        }
-        option.metallic_factor = pbr_metallic_roughness.metallic_factor();
-        option.roughness_factor = pbr_metallic_roughness.roughness_factor();
-        if let Some(normal_texture) = material.normal_texture() {
-            option.normal = true;
-            option.normal_scale = normal_texture.scale();
-        }
-        if let Some(emissive) = material.emissive_texture() {
-            option.emissive = true;
-            option.emissive_texcoord = emissive.tex_coord();
-        }
-        option.emissive_factor = Vec3::from_array(material.emissive_factor());
-        if let Some(occlusion) = material.occlusion_texture() {
-            option.occlusion = true;
-            option.occlusion_strength = occlusion.strength();
-            option.occlusion_texcoord = occlusion.tex_coord();
-        }
+        option.base_color = pbr_metallic_roughness.base_color_texture().is_some();
+        option.metallic_roughness = pbr_metallic_roughness
+            .metallic_roughness_texture()
+            .is_some();
+        option.normal = material.normal_texture().is_some();
+        option.emissive = material.emissive_texture().is_some();
+        option.occlusion = material.occlusion_texture().is_some();
         option.double_sided = material.double_sided();
         option.alpha_mode = match material.alpha_mode() {
             gltf::material::AlphaMode::Opaque => AlphaMode::Opaque,
             gltf::material::AlphaMode::Blend => AlphaMode::Blend,
-            gltf::material::AlphaMode::Mask => AlphaMode::Mask {
-                alpha_cutoff: material
-                    .alpha_cutoff()
-                    .unwrap_or(0.5 /* default value from gltf spec */),
-            },
+            gltf::material::AlphaMode::Mask => AlphaMode::Mask,
         };
     }
 }
@@ -676,13 +825,16 @@ fn vertex_format_from_data_type(
 }
 
 #[inline]
-fn data_type_to_vertex_format(data_type: gltf::accessor::DataType) -> wgpu::VertexFormat {
+fn data_type_to_index_format(data_type: gltf::accessor::DataType) -> wgpu::IndexFormat {
     match data_type {
-        gltf::accessor::DataType::I8 => wgpu::VertexFormat::Sint8,
-        gltf::accessor::DataType::U8 => wgpu::VertexFormat::Uint8,
-        gltf::accessor::DataType::I16 => wgpu::VertexFormat::Sint16,
-        gltf::accessor::DataType::U16 => wgpu::VertexFormat::Uint16,
-        gltf::accessor::DataType::U32 => wgpu::VertexFormat::Uint32,
-        gltf::accessor::DataType::F32 => wgpu::VertexFormat::Float32,
+        gltf::accessor::DataType::U16 => wgpu::IndexFormat::Uint16,
+        gltf::accessor::DataType::U32 => wgpu::IndexFormat::Uint32,
+        _ => {
+            log::warn!(
+                "Unsupported index format type {:?}. Assume uint32",
+                data_type
+            );
+            wgpu::IndexFormat::Uint32
+        }
     }
 }

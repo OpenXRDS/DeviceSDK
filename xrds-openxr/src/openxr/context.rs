@@ -193,7 +193,7 @@ impl OpenXrContext {
             .state
             .selected_view_configuration
             .views
-            .get(0)
+            .first()
             .ok_or(OpenXrError::NoViewTypeAvailable)?;
         Ok(openxr::Rect2Di {
             offset: openxr::Offset2Di { x: 0, y: 0 },
@@ -205,7 +205,7 @@ impl OpenXrContext {
     }
 
     fn view_configuration_type(&self) -> ViewConfigurationType {
-        self.state.selected_view_configuration.ty.clone().into()
+        self.state.selected_view_configuration.ty.into()
     }
 }
 
@@ -232,12 +232,12 @@ impl OpenXrContext {
 
         let view_configurations = Self::enumerate_views(&instance, system_id)?;
         let selected_view_configuration = view_configurations
-            .get(0)
+            .first()
             .ok_or(OpenXrError::NoViewTypeAvailable)?
             .clone();
         let selected_blend_mode = selected_view_configuration
             .blend_modes
-            .get(0)
+            .first()
             .ok_or(OpenXrError::NoBlendModeAvailable)?
             .to_owned();
 
@@ -258,7 +258,7 @@ impl OpenXrContext {
         Ok(OpenXrContext {
             instance,
             system_id,
-            inner: inner,
+            inner,
             frame_waiter,
             session,
             swapchain_textures,

@@ -9,7 +9,7 @@ pub struct XrdsTexture {
     inner: wgpu::Texture,
     format: TextureFormat,
     size: wgpu::Extent3d,
-    view: Option<wgpu::TextureView>,
+    view: wgpu::TextureView,
 }
 
 impl XrdsTexture {
@@ -17,7 +17,7 @@ impl XrdsTexture {
         inner: wgpu::Texture,
         format: TextureFormat,
         size: wgpu::Extent3d,
-        view: Option<wgpu::TextureView>,
+        view: wgpu::TextureView,
     ) -> Self {
         Self {
             inner,
@@ -39,7 +39,7 @@ impl XrdsTexture {
         &self.size
     }
 
-    pub fn view(&self) -> Option<&wgpu::TextureView> {
-        self.view.as_ref()
+    pub fn view(&self) -> &wgpu::TextureView {
+        &self.view
     }
 }

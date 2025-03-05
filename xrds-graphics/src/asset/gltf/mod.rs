@@ -1,64 +1,63 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, fmt::Debug, sync::Arc};
 
-use glam::Mat4;
-
-use crate::Transform;
+use crate::XrdsObject;
 
 pub mod loader;
 
-#[derive(Debug, Default, Clone)]
-pub struct Gltf<'a> {
+#[derive(Default, Clone)]
+pub struct Gltf {
     pub name: String,
-    pub scenes: Vec<GltfScene>,
-    pub named_scene: HashMap<String, &'a GltfScene>,
-    pub default_scene: Option<&'a GltfScene>,
-    pub meshes: Vec<GltfMesh>,
-    pub named_meshes: HashMap<String, &'a GltfMesh>,
-    // pub material: Vec<GltfMaterial>,
-    // pub named_material: HashMap<String, &'a GltfMaterial>,
-    pub nodes: Vec<GltfNode>,
-    pub named_nodes: HashMap<String, &'a GltfNode>,
-    pub skins: Vec<GltfSkin>,
-    pub named_skins: HashMap<String, &'a GltfSkin>,
+    pub scenes: Vec<Arc<XrdsObject>>,
+    pub named_scene: HashMap<String, Arc<XrdsObject>>,
+    pub default_scene: Option<Arc<XrdsObject>>,
 }
 
-#[derive(Debug, Clone)]
-pub struct GltfScene {}
+impl Gltf {
+    pub fn with_scenes(mut self, scene_objects: &[Arc<XrdsObject>]) -> Self {
+        self.scenes = scene_objects.to_vec();
+        for scene in &self.scenes {
+            self.named_scene
+                .insert(scene.get_name().to_string(), scene.clone());
+        }
+        self
+    }
 
-#[derive(Debug, Clone)]
-pub struct GltfMesh {}
+    pub fn with_default_scene(mut self, default_scene_index: usize) -> Self {
+        if let Some(scene) = self.scenes.get(default_scene_index) {
+            self.default_scene = Some(scene.clone());
+        }
+        self
+    }
 
-#[derive(Debug, Clone)]
-pub struct GltfNode {
-    pub index: usize,
-    pub name: String,
-    pub children: Vec<GltfNode>,
-    pub mesh: Vec<GltfMesh>,
-    pub skin: Vec<GltfSkin>,
-    pub transform: Transform,
-    pub is_animation_root: bool,
-    pub extras: Option<String>,
+    pub fn get_default_scene(&self) -> Option<&Arc<XrdsObject>> {
+        self.default_scene.as_ref()
+    }
+
+    pub fn get_scene_by_name(&self, name: &str) -> Option<&Arc<XrdsObject>> {
+        self.named_scene.get(name)
+    }
+
+    pub fn get_scene_by_index(&self, index: usize) -> Option<&Arc<XrdsObject>> {
+        self.scenes.get(index)
+    }
+
+    pub fn get_scenes(&self) -> &[Arc<XrdsObject>] {
+        &self.scenes
+    }
 }
 
-#[derive(Debug, Clone)]
-pub struct GltfSkin {
-    pub index: usize,
-    pub name: String,
-    pub joints: Vec<GltfNode>,
-    pub inverse_bind_metrices: Vec<Mat4>,
-    pub extras: Option<String>,
-}
+impl Debug for Gltf {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut debug_struct = f.debug_struct("Gltf");
 
-#[derive(Debug, Clone)]
-pub struct GltfImage {
-    pub name: String,
-    pub index: usize,
-    pub data: Vec<u8>,
-    pub width: u32,
-    pub height: u32,
-}
+        debug_struct.field("name", &self.name);
+        if self.default_scene.is_some() && self.scenes.len() > 1 {
+            debug_struct.field("default_scene", &self.default_scene);
+        }
 
-pub struct GltfTexture {}
+        debug_struct.field("scenes", &self.scenes).finish()
+    }
+}
 
 #[tokio::test]
 async fn test_gltf_loader() {
@@ -80,9 +79,6 @@ async fn test_gltf_loader() {
     let asset_server = Arc::new(AssetServer::new(graphics.clone()).unwrap());
     let gltf_loader = GltfLoader::new(asset_server.clone(), buf.parent().unwrap());
 
-    let gltf = gltf_loader.load_from_file(buf.as_path()).await.unwrap();
-    let gltf2 = gltf_loader.load_from_file(buf.as_path()).await.unwrap();
-
-    log::debug!("{:?}", gltf);
-    log::debug!("{:?}", gltf2);
+    let _gltf = gltf_loader.load_from_file(buf.as_path()).await.unwrap();
+    let _gltf2 = gltf_loader.load_from_file(buf.as_path()).await.unwrap();
 }
