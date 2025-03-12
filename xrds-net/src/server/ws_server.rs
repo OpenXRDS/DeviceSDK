@@ -189,8 +189,9 @@ impl WebSocketServer {
 
                             let client = Client {
                                 client_id: client_id.clone(),
-                                peer_addr,
+                                peer_addr: peer_addr.clone(),
                             };
+                            println!("New client connected: {} from {}", client.client_id, client.peer_addr);
 
                             self_clone.add_client(&client_id, client);
 
