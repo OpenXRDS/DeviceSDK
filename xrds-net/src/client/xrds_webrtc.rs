@@ -1,41 +1,437 @@
-use std::sync::Arc;
-
 use coap::client;
-use webrtc::sdp::description::session;
-use webrtc::{peer_connection::RTCPeerConnection, rtp_transceiver::rtp_codec::RTCRtpCodecCapability};
-use webrtc::peer_connection::configuration::RTCConfiguration;
+use futures::{FutureExt, TryFutureExt};
+
+use tokio::io::AsyncReadExt;
 use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
 use webrtc::ice_transport::ice_server::RTCIceServer;
 use webrtc::api::media_engine::{MediaEngine, MIME_TYPE_H264, MIME_TYPE_OPUS};
-use webrtc::api::APIBuilder;
-use webrtc::track::track_local::track_local_static_rtp::TrackLocalStaticRTP;
-use webrtc::track::track_remote::TrackRemote;
-use webrtc::rtp_transceiver::rtp_sender::RTCRtpSender;
-use webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSample;
-use webrtc::ice_transport::ice_connection_state::RTCIceConnectionState;
-use webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState;
-use std::fs::File;
-use std::io::BufReader;
-use webrtc::media::io::h264_reader::H264Reader;
-use webrtc::media::io::ogg_reader::OggReader;
 use tokio::sync::mpsc::{Sender, Receiver};
-use std::sync::Mutex;
+use webrtc::api::interceptor_registry::register_default_interceptors;
+use webrtc::{peer_connection::RTCPeerConnection, rtp_transceiver::rtp_codec::RTCRtpCodecCapability};
+use webrtc::peer_connection::configuration::RTCConfiguration;
+use webrtc::interceptor::registry::Registry;
+use webrtc::api::APIBuilder;
+use tokio::runtime::Runtime;
 
-
+use tokio_tungstenite::WebSocketStream as WsStream;
+use tokio_tungstenite::MaybeTlsStream;
+use tokio::net::TcpStream;
+use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
+use futures_util::{StreamExt, SinkExt};
+use serde::{Serialize, Deserialize};
+use std::error::Error;
+use tokio::sync::mpsc;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 use crate::common::data_structure::{NetResponse, WebRTCMessage};
 use crate::common::generate_random_string;
-use crate::client::xrds_websocket::XrdsWebsocket;
 use crate::common::data_structure::{CREATE_SESSION, LIST_SESSIONS, JOIN_SESSION, LEAVE_SESSION, CLOSE_SESSION, LIST_PARTICIPANTS, OFFER, ANSWER};
 
-use tokio::sync::Notify;
+pub struct WebRTCClient {
+    client_id: Option<String>,
+    write: Option<futures_util::stream::SplitSink<tokio_tungstenite::WebSocketStream<MaybeTlsStream<TcpStream>>, Message>>,
+    incoming_rx: Option<mpsc::Receiver<WebRTCMessage>>,
+    run_handle: Option<tokio::task::JoinHandle<()>>,
+    session_id: Option<String>,
+}
 
-use async_trait::async_trait;
+#[allow(dead_code)]
+impl WebRTCClient {
+    pub fn new() -> Self {
+        Self {
+            client_id: None,
+            write: None,
+            incoming_rx: None,
+            run_handle: None,
+            session_id: None,
+        }
+    }
+    
+    pub fn get_client_id(&self) -> Option<&String> {
+        self.client_id.as_ref()
+    }
 
-use base64::{engine::general_purpose::STANDARD, Engine as _};
+    pub fn get_session_id(&self) -> Option<&String> {
+        self.session_id.as_ref()
+    }
+
+    pub async fn connect(&mut self, addr: &str) -> Result<(), Box<dyn Error>> {
+        let (ws_stream, _) = connect_async(addr).await?;
+        println!("Connected to {}", addr);
+
+        let (write, mut read) = ws_stream.split();
+        self.write = Some(write);
+
+        let (tx, rx) = mpsc::channel::<WebRTCMessage>(100);
+        self.incoming_rx = Some(rx);
+
+        let run_handle = tokio::spawn(async move {
+            while let Some(msg) = read.next().await {
+                match msg {
+                    Ok(Message::Text(text)) => {
+                        let msg: WebRTCMessage = serde_json::from_str(text.as_ref()).unwrap();
+
+                        if tx.send(msg).await.is_err() {
+                            println!("Receiver dropped, stopping run task");
+                            break;
+                        }
+                    }
+                    Ok(Message::Close(_)) => {
+                        println!("Connection closed by server");
+                        break;
+                    }
+                    Err(e) => {
+                        eprintln!("Error: {}", e);
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+            println!("WebSocket run terminated");
+        });
+
+        self.run_handle = Some(run_handle);
+
+        Ok(())
+    }
+
+    pub async fn receive_message(&mut self) -> Option<WebRTCMessage> {
+        if let Some(ref mut rx) = self.incoming_rx {
+            if let Some(msg) = rx.recv().await {
+                if msg.message_type == "WELCOME" {
+                    self.client_id = Some(msg.client_id.clone());
+                } else if msg.message_type == CREATE_SESSION {
+                    self.session_id = Some(String::from_utf8(msg.payload.clone()).unwrap());
+                }
+                return Some(msg);
+            }
+        }
+        None
+    }
+
+    pub async fn create_session(mut self) -> Result<Self, Box<dyn Error>> {
+        let client_id = self.client_id.as_ref().ok_or("client_id not set")?;
+        
+        let msg = WebRTCMessage {
+            client_id: client_id.clone(),
+            message_type: CREATE_SESSION.to_string(),
+            payload: Vec::new(),
+            sdp: None,
+            error: None,
+        };
+
+        let msg = serde_json::to_string(&msg).map_err(|e| e.to_string())?;
+        println!("Sending message: {}", msg);
+
+        self.write.as_mut().ok_or("WebSocket write stream not initialized")?
+            .send(Message::Text(msg.into())).await?;
+
+        Ok(self)
+    }
+
+    pub async fn send_message(&mut self, message: &str) -> Result<(), Box<dyn Error>> {
+        if let Some(ref mut write) = self.write {
+            write.send(Message::Text(message.to_string().into())).await?;
+        } else {
+            return Err("WebSocket write stream not initialized".into());
+        }
+        Ok(())
+    }
+
+    pub async fn close_connection(&mut self) -> Result<(), Box<dyn Error>> {
+        if let Some(ref mut write) = self.write {
+            write.send(Message::Close(None)).await?;
+        } else {
+            return Err("WebSocket write stream not initialized".into());
+        }
+
+        if let Some(handle) = self.run_handle.take() {
+            handle.await?;
+        }
+        println!("WebRTCClient connection closed");
+
+        Ok(())
+    }
+
+    pub async fn list_sessions(mut self) -> Result<Self, Box<dyn Error>> {
+        let client_id = self.client_id.as_ref().ok_or("client_id not set")?;
+
+        let msg = WebRTCMessage {
+            client_id: client_id.clone(),
+            message_type: LIST_SESSIONS.to_string(),
+            payload: Vec::new(),
+            sdp: None,
+            error: None,
+        };
+
+        let msg = serde_json::to_string(&msg).map_err(|e| e.to_string())?;
+        println!("Sending message: {}", msg);
+
+        self.write.as_mut().ok_or("WebSocket write stream not initialized")?
+            .send(Message::Text(msg.into())).await?;
+
+        Ok(self)
+    }
+
+    pub async fn close_session(&mut self, session_id: &str) -> Result<(), Box<dyn Error>> {
+        // if self.client_id.is_none() {
+        //     return Err("Client ID is not set".into());
+        // }
+
+        // let msg = WebRTCMessage {
+        //     client_id: self.client_id.clone().unwrap(),
+        //     message_type: CLOSE_SESSION.to_string(),
+        //     payload: session_id.as_bytes().to_vec(),
+        //     sdp: None,
+        //     error: None,
+        // };
+
+        // let msg = serde_json::to_string(&msg).map_err(|e| e.to_string())?;
+        // self.send_msg(msg.as_str()).await.map_err(|e| e.to_string())?;
+
+        Ok(())
+    }
+
+    pub async fn join_session(&mut self, session_id: &str) -> Result<(), Box<dyn Error>> {
+        // if self.client_id.is_none() {
+        //     return Err("Client ID is not set".into());
+        // }
+
+        // let msg = WebRTCMessage {
+        //     client_id: self.client_id.clone().unwrap(),
+        //     message_type: JOIN_SESSION.to_string(),
+        //     payload: session_id.as_bytes().to_vec(),
+        //     sdp: None,
+        //     error: None,
+        // };
+
+        // // serialize msg into json
+        // let msg = serde_json::to_string(&msg).map_err(|e| e.to_string())?;
+        
+        // self.send_msg(msg.as_str()).await.map_err(|e| e.to_string())?;
+
+        Ok(())
+    }
+
+    pub async fn leave_session(&mut self, session_id: &str) -> Result<(), Box<dyn Error>> {
+        // if self.client_id.is_none() {
+        //     return Err("Client ID is not set".into());
+        // }
+
+        // let msg = WebRTCMessage {
+        //     client_id: self.client_id.clone().unwrap(),
+        //     message_type: LEAVE_SESSION.to_string(),
+        //     payload: session_id.as_bytes().to_vec(),
+        //     sdp: None,
+        //     error: None,
+        // };
+
+        // // serialize msg into json
+        // let msg = serde_json::to_string(&msg).map_err(|e| e.to_string())?;
+        
+        // self.send_msg(msg.as_str()).await.map_err(|e| e.to_string())?;
+
+        Ok(())
+    }
+
+    pub async fn list_participants(&mut self, session_id: &str) -> Result<(), Box<dyn Error>> {
+        // if self.client_id.is_none() {
+        //     return Err("Client ID is not set".into());
+        // }
+
+        // let msg = WebRTCMessage {
+        //     client_id: self.client_id.clone().unwrap(),
+        //     message_type: LIST_PARTICIPANTS.to_string(),
+        //     payload: session_id.as_bytes().to_vec(),
+        //     sdp: None,
+        //     error: None,
+        // };
+
+        // // serialize msg into json
+        // let msg = serde_json::to_string(&msg).map_err(|e| e.to_string())?;
+        
+        // self.send_msg(msg.as_str()).await.map_err(|e| e.to_string())?;
+
+        Ok(())
+    }
+
+    
+}
+
+impl Drop for WebRTCClient {
+    fn drop(&mut self) {
+        if let Some(handle) = self.run_handle.take() {
+            handle.abort();
+        }
+        println!("WebRTCClient dropped");
+    }
+}
+
+pub struct XrdsWebRTCPublisher {
+    client: WebRTCClient,
+    pc: Option<RTCPeerConnection>,
+    api: Option<webrtc::api::API>,
+    rtc_config: Option<RTCConfiguration>,
+    offer: Option<RTCSessionDescription>,
+}
+
+impl XrdsWebRTCPublisher {
+    pub fn new(client: WebRTCClient) -> Self {
+        let mut publisher = XrdsWebRTCPublisher{
+            client,
+            pc: None,
+            api: None,
+            rtc_config: None,
+            offer: None,
+        };
+        publisher.setup_api().unwrap();
+        publisher
+    }
+
+    /**
+     * Sends OFFER message with SDP to the signaling server
+     */
+    pub fn publish(&self, session_id: &str) -> Result<(), String> {
+        // if self.client.client_id.is_none() {
+        //     return Err("Client ID is not set".to_string());
+        // }        
+
+        // if self.offer.is_none() {
+        //     return Err("Offer is not set".to_string());
+        // }
+
+        // let sdp = Some(self.offer.as_ref().unwrap().sdp.clone());
+        // let msg = WebRTCMessage {
+        //     client_id: self.client.client_id.clone().unwrap(),
+        //     message_type: OFFER.to_string(),
+        //     payload: session_id.as_bytes().to_vec(),
+        //     sdp,
+        //     error: None,
+        // };
+
+        // let ws_client = self.client.ws_client.as_ref().unwrap();
+
+        // // serialize msg into json
+        // let msg = serde_json::to_string(&msg).map_err(|e| e.to_string())?;
+        // ws_client.send_ws(Some("text"), msg.as_bytes().to_vec()).map_err(|e| e.to_string())?;
+
+        Ok(())
+    }
+
+    fn create_offer(&mut self) -> Result<(), String> {
+        let api = match &self.api {
+            Some(api) => api,
+            None => return Err("API is not set".to_string()),
+        };
+    
+        let rtc_config = match &self.rtc_config {
+            Some(config) => config.clone(),
+            None => return Err("RTC config is not set".to_string()),
+        };
+
+        let pc = Runtime::new().unwrap().block_on(api.new_peer_connection(rtc_config))
+            .map_err(|e| e.to_string())?;
+        
+        
+        self.pc = Some(pc);
+        
+        let offer = Runtime::new().unwrap().block_on(self.pc.as_ref().unwrap().create_offer(None))
+            .map_err(|e| e.to_string())?;
+
+        let _ = Runtime::new().unwrap().block_on(self.pc.as_ref().unwrap().set_local_description(offer.clone()))
+            .map_err(|e| e.to_string())?;
+        self.offer = Some(offer.clone());
+        Ok(())
+    }
+
+    fn setup_api(&mut self) -> Result<(), String> {
+        let mut media_engine = MediaEngine::default();
+        media_engine.register_default_codecs().map_err(|e| e.to_string())?;
+
+        let mut registry = Registry::new();
+        registry = register_default_interceptors(registry, &mut media_engine).map_err(|e| e.to_string())?;
+
+        let config = create_default_webrtc_config();
+        let api = APIBuilder::new()
+            .with_media_engine(media_engine)
+            .with_interceptor_registry(registry)
+            .build();
+
+        self.rtc_config = Some(config);
+        self.api = Some(api);
+
+        Ok(())
+    }
+}
+
+pub struct XrdsWebRTCSubscriber {
+    client: WebRTCClient,
+    pc: Option<RTCPeerConnection>,
+    api: Option<webrtc::api::API>,
+    rtc_config: Option<RTCConfiguration>,
+    answer: Option<RTCSessionDescription>,
+}
+
+impl XrdsWebRTCSubscriber {
+    pub fn new(client: WebRTCClient) -> Self {
+        let mut subscriber = XrdsWebRTCSubscriber{
+            client,
+            pc: None,
+            api: None,
+            rtc_config: None,
+            answer: None,
+        };
+        subscriber.setup_api().unwrap();
+        subscriber
+    }
+
+    fn setup_api(&mut self) -> Result<(), String> {
+        let mut media_engine = MediaEngine::default();
+        media_engine.register_default_codecs().map_err(|e| e.to_string())?;
+
+        let mut registry = Registry::new();
+        registry = register_default_interceptors(registry, &mut media_engine).map_err(|e| e.to_string())?;
+
+        let config = create_default_webrtc_config();
+        let api = APIBuilder::new()
+            .with_media_engine(media_engine)
+            .with_interceptor_registry(registry)
+            .build();
+
+        self.rtc_config = Some(config);
+        self.api = Some(api);
+
+        Ok(())
+    }
+
+    pub fn create_answer(&mut self, offer: RTCSessionDescription) -> Result<(), String> {
+        let api = match &self.api {
+            Some(api) => api,
+            None => return Err("API is not set".to_string()),
+        };
+    
+        let rtc_config = match &self.rtc_config {
+            Some(config) => config.clone(),
+            None => return Err("RTC config is not set".to_string()),
+        };
+
+        let pc = Runtime::new().unwrap().block_on(api.new_peer_connection(rtc_config))
+            .map_err(|e| e.to_string())?;
+        
+        self.pc = Some(pc);
+        
+        let answer = Runtime::new().unwrap().block_on(self.pc.as_ref().unwrap().create_answer(None))
+            .map_err(|e| e.to_string())?;
+
+        let _ = Runtime::new().unwrap().block_on(self.pc.as_ref().unwrap().set_local_description(answer.clone()))
+            .map_err(|e| e.to_string())?;
+        self.answer = Some(answer.clone());
+        Ok(())
+    }
 
 
-
+}
 
 fn create_default_webrtc_config() -> RTCConfiguration {
     let config = RTCConfiguration {
@@ -46,264 +442,4 @@ fn create_default_webrtc_config() -> RTCConfiguration {
         ..Default::default()
     };
     config
-}
-
-#[derive(Clone)]
-pub struct WebRTCClient {
-    client_id: Option<String>,  // This field is used to identify the client in the signaling server
-    ws_client: Option<XrdsWebsocket>,
-    session_id: Option<String>, // session_id participating in
-
-}
-
-#[allow(dead_code)]
-impl WebRTCClient {
-    pub fn new() -> Self {
-        WebRTCClient {
-            client_id: None,
-            ws_client: None,
-            session_id: None,   // allow multiple sessions or not?
-        }
-    }
-
-    /**
-     * This procedure contains request for client id from the signaling server
-     * - This handles welcome message containing client id issued by the server
-     */
-    pub fn connect(&mut self, ws_url: &str) -> Result<(), String> {
-        let ws_client = XrdsWebsocket::new()
-            .connect(ws_url)
-            .map_err(|e| e.to_string())?;
-
-        self.ws_client = Some(ws_client);
-
-        let rtc_msg_json = self.ws_client.as_ref().unwrap()
-            .rcv_ws()
-            .map_err(|e| e.to_string())
-            .and_then(|data| String::from_utf8(data).map_err(|e| e.to_string()))?;
-
-        let msg: WebRTCMessage = serde_json::from_str(&rtc_msg_json)
-            .map_err(|e| e.to_string())?;
-
-        println!("Welcome message: {:?}", msg);
-        
-        self.client_id = Some(msg.client_id.clone());
-        
-        Ok(())
-    }
-
-    pub fn close_connection(&self) -> Result<(), String> {
-        self.ws_client.as_ref().unwrap()
-            .close_ws()
-            .map_err(|e| e.to_string())?;
-        Ok(())
-    }
-
-    /**
-     * Send create_session message to the signaling server
-     * - This message is used to create a new session in the signaling server
-     * 
-     */
-    pub fn create_session(&mut self) -> Result<String, String> {
-        if self.client_id.is_none() {
-            return Err("Client ID is not set".to_string());
-        }        
-    
-        let msg = WebRTCMessage {
-            client_id: self.client_id.clone().unwrap(),
-            message_type: CREATE_SESSION.to_string(),
-            payload: Vec::new(),
-            sdp: None,
-            error: None,
-        };
-    
-        let ws_client = self.ws_client.as_ref().unwrap();
-    
-        // Serialize and send message
-        let msg = serde_json::to_string(&msg).map_err(|e| e.to_string())?;
-        ws_client.send_ws(Some("text"), msg.as_bytes().to_vec()).map_err(|e| e)?;
-    
-        // Receive and process response
-        let rcv_data = ws_client.rcv_ws().map_err(|e| e)?;
-        let response_str = String::from_utf8(rcv_data).map_err(|e| e.to_string())?;
-        let msg: WebRTCMessage = serde_json::from_str(&response_str).map_err(|e| e.to_string())?;
-        
-        // Extract session ID
-        let session_id = String::from_utf8(msg.payload.clone()).map_err(|e| e.to_string())?;
-        let session_id = session_id.replace("\"", "");
-        
-        self.session_id = Some(session_id.clone());
-    
-        Ok(session_id)
-    }
-    
-
-    pub fn list_sessions(&self) -> Result<Vec<String>, String> {
-        if self.client_id.is_none() {
-            return Err("Client ID is not set".to_string());
-        }
-
-        let msg = WebRTCMessage {
-            client_id: self.client_id.clone().unwrap(),
-            message_type: LIST_SESSIONS.to_string(),
-            payload: Vec::new(),
-            sdp: None,
-            error: None,
-        };
-
-        let ws_client = self.ws_client.as_ref().unwrap();
-
-        // serialize msg into json
-        let msg = serde_json::to_string(&msg).map_err(|e| e.to_string())?;
-        ws_client.send_ws(Some("text"), msg.as_bytes().to_vec()).map_err(|e| e.to_string())?;
-
-        // wait for response
-        let rtc_msg_json = self.ws_client.as_ref().unwrap()
-            .rcv_ws()
-            .map_err(|e| e.to_string())
-            .and_then(|data| String::from_utf8(data).map_err(|e| e.to_string()))?;
-
-        let msg: WebRTCMessage = serde_json::from_str(&rtc_msg_json)
-                            .map_err(|e| e.to_string())?;
-        let sessions = String::from_utf8(msg.payload.clone()).map_err(|e| e.to_string())?;
-
-        // erase quotation marks from the string
-        let sessions = sessions.replace("\"", "")
-                            .replace("[", "")
-                            .replace("]", "")
-                            .split(",")
-                            .map(|s| s.to_string())
-                            .collect::<Vec<String>>();
-
-        Ok(sessions)
-    }
-
-    pub fn close_session(&self, session_id: &str) -> Result<(), String> {
-        if self.client_id.is_none() {
-            return Err("Client ID is not set".to_string());
-        }
-
-        let msg = WebRTCMessage {
-            client_id: self.client_id.clone().unwrap(),
-            message_type: CLOSE_SESSION.to_string(),
-            payload: session_id.as_bytes().to_vec(),
-            sdp: None,
-            error: None,
-        };
-
-        let ws_client = self.ws_client.as_ref().unwrap();
-
-        // serialize msg into json
-        let msg = serde_json::to_string(&msg).map_err(|e| e.to_string())?;
-
-        ws_client.send_ws(Some("text"), msg.as_bytes().to_vec())
-            .map_err(|e| e.to_string())?;
-
-        Ok(())
-    }
-
-    pub fn join_session(&self, session_id: &str) -> Result<(), String> {
-        if self.client_id.is_none() {
-            return Err("Client ID is not set".to_string());
-        }
-
-        let msg = WebRTCMessage {
-            client_id: self.client_id.clone().unwrap(),
-            message_type: JOIN_SESSION.to_string(),
-            payload: session_id.as_bytes().to_vec(),
-            sdp: None,
-            error: None,
-        };
-
-        let ws_client = self.ws_client.as_ref().unwrap();
-
-        // serialize msg into json
-        let msg = serde_json::to_string(&msg).map_err(|e| e.to_string())?;
-
-        ws_client.send_ws(Some("text"), msg.as_bytes().to_vec())
-            .map_err(|e| e.to_string())?;
-
-        Ok(())
-    }
-
-    pub fn leave_session(&self, session_id: &str) -> Result<(), String> {
-        if self.client_id.is_none() {
-            return Err("Client ID is not set".to_string());
-        }
-
-        let msg = WebRTCMessage {
-            client_id: self.client_id.clone().unwrap(),
-            message_type: LEAVE_SESSION.to_string(),
-            payload: session_id.as_bytes().to_vec(),
-            sdp: None,
-            error: None,
-        };
-
-        let ws_client = self.ws_client.as_ref().unwrap();
-
-        // serialize msg into json
-        let msg = serde_json::to_string(&msg).map_err(|e| e.to_string())?;
-
-        ws_client.send_ws(Some("text"), msg.as_bytes().to_vec())
-                .map_err(|e| e.to_string())?;
-
-        Ok(())
-    }
-
-    pub fn list_participants(&self, session_id: &str) -> Result<Vec<String>, String> {
-        if self.client_id.is_none() {
-            return Err("Client ID is not set".to_string());
-        }
-
-        let msg = WebRTCMessage {
-            client_id: self.client_id.clone().unwrap(),
-            message_type: LIST_PARTICIPANTS.to_string(),
-            payload: session_id.as_bytes().to_vec(),
-            sdp: None,
-            error: None,
-        };
-
-        let ws_client = self.ws_client.as_ref().unwrap();
-
-        // serialize msg into json
-        let msg = serde_json::to_string(&msg).map_err(|e| e.to_string())?;
-
-        ws_client.send_ws(Some("text"), msg.as_bytes().to_vec())
-                .map_err(|e| e.to_string())?;
-
-        // wait for response
-        let rtc_msg_json = self.ws_client.as_ref().unwrap()
-            .rcv_ws()
-            .map_err(|e| e.to_string())
-            .and_then(|data| String::from_utf8(data).map_err(|e| e.to_string()))?;
-
-        let msg: WebRTCMessage = serde_json::from_str(&rtc_msg_json)
-            .map_err(|e| e.to_string())?;
-
-        let participants = String::from_utf8(msg.payload.clone()).map_err(|e| e.to_string())?;
-
-        // erase quotation marks from the string
-        let participants = participants.replace("\"", "")
-                            .replace("[", "")
-                            .replace("]", "")
-                            .split(",")
-                            .map(|s| s.to_string())
-                            .collect::<Vec<String>>();
-
-        Ok(participants)
-    }
-    /**
-     * This is to deliver an offer SDP to the server, so that the server can deliver it to the subscriber
-     * 
-     */
-    pub fn offer(&self, session_id: &str) -> Result<(), String> {
-        if self.client_id.is_none() {
-            return Err("Client ID is not set".to_string());
-        }
-
-        
-
-
-        Ok(())
-    }
 }

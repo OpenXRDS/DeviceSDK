@@ -6126,6 +6126,7 @@ dependencies = [
  "coap-lite",
  "curl",
  "futures 0.3.31",
+ "futures-util",
  "libunftp",
  "mio 1.0.3",
  "quiche",
