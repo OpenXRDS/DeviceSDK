@@ -1,5 +1,6 @@
-mod ffi;
+#[cfg(feature = "core")]
+pub mod core;
+
 mod runtime;
 
-#[allow(unused_imports)]
 pub use runtime::*;

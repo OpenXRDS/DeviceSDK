@@ -1,17 +1,20 @@
+mod camera;
 mod mesh;
 mod scene;
 mod world;
 
+pub use camera::*;
 pub use mesh::*;
 pub use scene::*;
 pub use world::*;
 
+use xrds_core::Transform;
+
 use std::fmt::Debug;
 
 use glam::{Quat, Vec3};
-use wgpu::ShaderStages;
 
-use crate::{RenderPass, Transform};
+use crate::RenderPass;
 
 #[derive(Default, Clone)]
 pub struct XrdsObject {
@@ -77,12 +80,7 @@ impl XrdsObject {
 
     pub fn encode(&self, render_pass: &mut RenderPass) {
         if let Some(mesh) = &self.mesh {
-            render_pass.set_push_constants(
-                ShaderStages::VERTEX,
-                0,
-                bytemuck::cast_slice(&self.transform.to_model_array()),
-            );
-            mesh.encode(render_pass);
+            mesh.encode(render_pass, &self.transform);
         }
         for child in &self.childs {
             child.encode(render_pass);

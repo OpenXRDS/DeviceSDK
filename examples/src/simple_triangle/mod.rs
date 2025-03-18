@@ -1,22 +1,45 @@
-struct App {}
+struct App {
+    objects: Vec<xrds::Object>,
+}
 
 use xrds::*;
 
 impl RuntimeHandler for App {
-    fn on_begin(&mut self) {
-        println!("[SimpleTriangle] on_begin()")
+    fn on_construct(&mut self) -> anyhow::Result<()> {
+        Ok(())
     }
-    fn on_construct(&mut self) {}
-    fn on_deconstruct(&mut self) {}
-    fn on_end(&mut self) {}
-    fn on_resumed(&mut self) {}
-    fn on_suspended(&mut self) {}
-    fn on_update(&mut self) {}
+
+    fn on_begin(&mut self, context: xrds::Context) -> anyhow::Result<()> {
+        println!("[SimpleTriangle] on_begin()");
+        Ok(())
+    }
+
+    fn on_deconstruct(&mut self, _context: xrds::Context) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    fn on_end(&mut self, _context: xrds::Context) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    fn on_resumed(&mut self, _context: xrds::Context) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    fn on_suspended(&mut self, _context: xrds::Context) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    fn on_update(&mut self, _context: xrds::Context) -> anyhow::Result<()> {
+        Ok(())
+    }
 }
 
-pub fn run() {
+pub fn run() -> anyhow::Result<()> {
     let runtime = Runtime::new().expect("Could not create xrds runtime");
-    let app = App {};
+    let app = App { objects: vec![] };
 
-    runtime.run(app).expect("Could not run application");
+    runtime.run(app)?;
+
+    Ok(())
 }

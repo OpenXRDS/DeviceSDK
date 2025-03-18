@@ -18,7 +18,12 @@ pub fn required_wgpu_memory_hints() -> wgpu::MemoryHints {
 }
 
 pub fn required_wgpu_limits() -> wgpu::Limits {
-    wgpu::Limits::default()
+    let mut limits = wgpu::Limits::default();
+
+    limits.max_push_constant_size = 64;
+    limits.max_color_attachment_bytes_per_sample = 64;
+
+    limits
 }
 
 pub fn is_wgpu_supported_vk_format(vk_format: &vk::Format) -> bool {

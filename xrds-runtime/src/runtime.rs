@@ -1,32 +1,57 @@
-use crate::application::{RuntimeApplication, RuntimeEvent};
+use crate::{
+    application::{RuntimeApplication, RuntimeEvent},
+    Context,
+};
 
 use std::{
-    sync::{Arc, RwLock},
     thread::sleep,
     time::{Duration, SystemTime},
 };
 
-use crate::error::RuntimeError;
 use log::debug;
-use tokio::{runtime::Handle, task::JoinHandle};
+use tokio::task::JoinHandle;
 use winit::event_loop;
 
+///
+/// TODO!: Remove anyhow
 pub trait RuntimeHandler {
-    fn on_construct(&mut self);
-    fn on_begin(&mut self);
-    fn on_resumed(&mut self);
-    fn on_suspended(&mut self);
-    fn on_end(&mut self);
-    fn on_update(&mut self);
-    fn on_deconstruct(&mut self);
+    fn on_construct(&mut self) -> anyhow::Result<()>;
+    fn on_begin(&mut self, context: Context) -> anyhow::Result<()>;
+    fn on_resumed(&mut self, context: Context) -> anyhow::Result<()>;
+    fn on_suspended(&mut self, context: Context) -> anyhow::Result<()>;
+    fn on_end(&mut self, context: Context) -> anyhow::Result<()>;
+    fn on_update(&mut self, context: Context) -> anyhow::Result<()>;
+    fn on_deconstruct(&mut self, context: Context) -> anyhow::Result<()>;
 }
 
+#[derive(Debug, Default, Clone, Copy)]
+pub enum RuntimeTarget {
+    #[default]
+    Xr,
+    Window,
+    XrWithPreview,
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct RuntimeWindowOptions {
+    pub width: u32,
+    pub height: u32,
+    pub title: String,
+    pub resizable: bool,
+    pub fullscreen: bool,
+    pub decorated: bool,
+}
+
+#[derive(Debug)]
 pub struct Runtime {
     main_thread: tokio::runtime::Runtime,
 }
 
+#[derive(Debug, Clone)]
 pub struct RuntimeParameters {
     pub app_name: String,
+    pub target: RuntimeTarget,
+    pub window_options: Option<RuntimeWindowOptions>,
 }
 
 impl Runtime {
@@ -56,27 +81,16 @@ impl Runtime {
         A: RuntimeHandler + Send + Sync + 'static,
     {
         // We are running in render thread
-        let render_runtime_handle = Handle::current();
         let main_runtime_handle = self.main_thread.handle().clone();
 
-        let app = Arc::new(RwLock::new(app));
-        let mut runtime_app = RuntimeApplication::default();
+        let mut runtime_app = RuntimeApplication::new(app)?;
 
         let event_loop = event_loop::EventLoop::<RuntimeEvent>::with_user_event().build()?;
         let event_proxy = event_loop.create_proxy();
 
-        let main_app = app.clone();
         let main_event_proxy = event_proxy.clone();
         let main_result: JoinHandle<anyhow::Result<()>> = main_runtime_handle.spawn(async move {
             let event_proxy = main_event_proxy;
-            let app = main_app;
-            let render_handle = render_runtime_handle;
-            {
-                let mut lock = app.write().map_err(|_| RuntimeError::SyncError)?;
-
-                lock.on_construct();
-                lock.on_begin();
-            }
 
             let tick_rate = Duration::from_secs_f32(1.0 / 120.0);
             let mut before = SystemTime::now();

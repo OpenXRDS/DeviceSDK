@@ -1,6 +1,8 @@
 use std::fmt::Debug;
 
-use xrds_core::{XrdsComponent, XrdsObject};
+use log::debug;
+use wgpu::ShaderStages;
+use xrds_core::Transform;
 
 use crate::{RenderPass, XrdsIndexBuffer, XrdsMaterialInstance, XrdsVertexBuffer};
 
@@ -52,38 +54,32 @@ impl XrdsMesh {
         &mut self.primitives
     }
 
-    pub fn encode(&self, render_pass: &mut RenderPass) {
+    pub fn encode(&self, render_pass: &mut RenderPass, transform: &Transform) {
         for primitive in &self.primitives {
-            primitive.encode(render_pass);
+            primitive.encode(render_pass, transform);
         }
     }
 }
 
 impl XrdsPrimitive {
-    pub fn encode(&self, render_pass: &mut RenderPass) {
+    pub fn encode(&self, render_pass: &mut RenderPass, transform: &Transform) {
         render_pass.bind_material(&self.material);
+        render_pass.set_push_constants(
+            ShaderStages::VERTEX,
+            0,
+            bytemuck::cast_slice(&transform.to_model_array()),
+        );
         render_pass.bind_vertex_buffers(&self.vertices);
         if let Some(indices) = self.indices.as_ref() {
             render_pass.bind_index_buffer(indices);
+            render_pass.draw_indexed(
+                indices.as_range(),
+                0, /* all vertex buffers has same count */
+            );
+        } else {
+            render_pass.draw(self.vertices[0].as_range());
         }
     }
-}
-
-impl XrdsComponent for XrdsMesh {
-    fn update(&mut self, _elapsed: std::time::Duration) {
-        // nothing to do
-    }
-    fn query_resources(&self) -> Vec<xrds_core::XrdsResource> {
-        todo!()
-    }
-}
-
-impl XrdsObject for XrdsMesh {
-    fn name(&self) -> Option<&str> {
-        Some(&self.name)
-    }
-    fn on_construct(&self) {}
-    fn on_destroy(&self) {}
 }
 
 impl Debug for XrdsMesh {

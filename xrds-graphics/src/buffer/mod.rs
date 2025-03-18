@@ -1,14 +1,14 @@
 mod buffer_view;
 
-use std::fmt::Debug;
+use std::{fmt::Debug, ops::Range};
 
 pub use buffer_view::*;
-use wgpu::BufferSlice;
+use wgpu::{BufferSlice, IndexFormat, VertexFormat};
 
 #[derive(Debug, Clone, Copy)]
 pub enum XrdsBufferType {
-    Index,
-    Vertex,
+    Index(IndexFormat),
+    Vertex(VertexFormat),
     Uniform,
 }
 
@@ -23,12 +23,14 @@ pub struct XrdsBuffer {
 pub struct XrdsVertexBuffer {
     pub buffer: XrdsBuffer,
     pub vertex_attributes: [wgpu::VertexAttribute; 1], // Currently support discreted vertex buffer only
+    pub count: usize,
 }
 
 #[derive(Clone)]
 pub struct XrdsIndexBuffer {
     pub buffer: XrdsBuffer,
     pub index_format: wgpu::IndexFormat,
+    pub count: usize,
 }
 
 impl XrdsBuffer {
@@ -57,6 +59,10 @@ impl XrdsVertexBuffer {
     pub fn as_slice(&self) -> BufferSlice<'_> {
         self.buffer.as_slice()
     }
+
+    pub fn as_range(&self) -> Range<u32> {
+        0..self.count as u32
+    }
 }
 
 impl XrdsIndexBuffer {
@@ -67,13 +73,17 @@ impl XrdsIndexBuffer {
     pub fn format(&self) -> wgpu::IndexFormat {
         self.index_format
     }
+
+    pub fn as_range(&self) -> Range<u32> {
+        0..self.count as u32
+    }
 }
 
 impl From<XrdsBufferType> for wgpu::BufferUsages {
     fn from(value: XrdsBufferType) -> Self {
         match value {
-            XrdsBufferType::Index => wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
-            XrdsBufferType::Vertex => wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            XrdsBufferType::Index(_) => wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+            XrdsBufferType::Vertex(_) => wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             XrdsBufferType::Uniform => wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         }
     }

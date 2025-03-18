@@ -3,6 +3,8 @@ name = "xrds-examples"
 edition = "2021"
 
 [dependencies]
-xrds = { workspace = true }
+xrds = { workspace = true, features = ["full"] }
 log = { workspace = true }
 env_logger = { workspace = true }
+anyhow = { workspace = true }
+clap = { version = "4.5.31", features = ["cargo", "derive"] }

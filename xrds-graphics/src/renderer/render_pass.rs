@@ -1,3 +1,5 @@
+use std::ops::Range;
+
 use crate::{pbr, XrdsIndexBuffer, XrdsMaterialInstance, XrdsVertexBuffer};
 
 pub struct RenderPass<'encoder> {
@@ -29,7 +31,19 @@ impl<'e> RenderPass<'e> {
             .set_index_buffer(index_buffer.as_slice(), index_buffer.format());
     }
 
+    pub fn set_bind_group(&mut self, index: u32, bind_group: &wgpu::BindGroup, offsets: &[u32]) {
+        self.inner.set_bind_group(index, bind_group, offsets)
+    }
+
     pub fn set_push_constants(&mut self, stages: wgpu::ShaderStages, offset: u32, data: &[u8]) {
         self.inner.set_push_constants(stages, offset, data);
+    }
+
+    pub fn draw_indexed(&mut self, indices: Range<u32>, base_vertex: i32) {
+        self.inner.draw_indexed(indices, base_vertex, 0..1);
+    }
+
+    pub fn draw(&mut self, vertices: Range<u32>) {
+        self.inner.draw(vertices, 0..1);
     }
 }

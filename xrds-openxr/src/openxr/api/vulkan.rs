@@ -13,7 +13,8 @@ use openxr::{
     SwapchainUsageFlags, Vulkan,
 };
 use wgpu::{BackendOptions, Extent3d, InstanceDescriptor};
-use xrds_graphics::{GraphicsInstance, Size2Di, TextureFormat, XrdsTexture};
+use xrds_core::Size2Du;
+use xrds_graphics::{GraphicsInstance, TextureFormat, XrdsTexture};
 
 use crate::{OpenXrError, ViewConfiguration};
 
@@ -41,7 +42,7 @@ impl OpenXrVulkanContext {
     fn wgpu_instance() -> wgpu::Instance {
         wgpu::Instance::new(&InstanceDescriptor {
             backends: wgpu::Backends::VULKAN,
-            flags: wgpu::InstanceFlags::empty(),
+            flags: wgpu::InstanceFlags::debugging(),
             backend_options: BackendOptions::from_env_or_default(),
         })
     }
@@ -492,9 +493,9 @@ impl OpenXrContextApi for OpenXrVulkanContext {
             .ok_or(OpenXrError::SwapchainNotInitialized)?)
     }
 
-    fn swapchain_size(&self) -> anyhow::Result<Size2Di> {
+    fn swapchain_size(&self) -> anyhow::Result<Size2Du> {
         let extent = self.swapchain_extent()?;
-        Ok(Size2Di {
+        Ok(Size2Du {
             width: extent.width,
             height: extent.height,
         })

@@ -75,3 +75,4 @@ uuid = { version = "1.15.1", features = ["v4"] }
 percent-encoding = { version = "2.3.1" }
 base64 = { version = "0.22.1" }
 bytemuck = { version = "1.22.0", features = ["derive"] }
+futures = { version = "0.3.31" }

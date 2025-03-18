@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
 use openxr::SwapchainSubImage;
-use xrds_graphics::{GraphicsInstance, Size2Di, TextureFormat, XrdsTexture};
+use xrds_core::Size2Du;
+use xrds_graphics::{GraphicsInstance, TextureFormat, XrdsTexture};
 
 pub mod vulkan;
 
@@ -41,7 +42,7 @@ pub(crate) trait OpenXrContextApi {
     fn session(&self) -> openxr::Session<openxr::AnyGraphics>;
 
     fn swapchain_format(&self) -> anyhow::Result<TextureFormat>;
-    fn swapchain_size(&self) -> anyhow::Result<Size2Di>;
+    fn swapchain_size(&self) -> anyhow::Result<Size2Du>;
     fn swapchain_extent(&self) -> anyhow::Result<wgpu::Extent3d>;
 }
 

@@ -10,13 +10,14 @@ use std::{
 use glam::{Mat4, Vec4};
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use wgpu::SamplerDescriptor;
+use xrds_core::Transform;
 
 use crate::{
     asset::types::{AssetHandle, AssetId},
     pbr::{self, AlphaMode},
     AssetServer, BufferAssetInfo, MaterialAssetInfo, MaterialTextureInfo, PbrMaterialInfo,
-    TextureAssetInfo, Transform, XrdsBuffer, XrdsBufferType, XrdsIndexBuffer, XrdsMaterialInstance,
-    XrdsMesh, XrdsObject, XrdsPrimitive, XrdsTexture, XrdsVertexBuffer,
+    TextureAssetInfo, XrdsBuffer, XrdsBufferType, XrdsIndexBuffer, XrdsMaterialInstance, XrdsMesh,
+    XrdsObject, XrdsPrimitive, XrdsTexture, XrdsVertexBuffer,
 };
 
 use super::Gltf;
@@ -42,7 +43,11 @@ impl GltfLoader {
         }
     }
 
-    pub async fn load_from_file(&self, path: &Path) -> anyhow::Result<Gltf> {
+    pub async fn load_from_file<P>(&self, path: P) -> anyhow::Result<Gltf>
+    where
+        P: AsRef<Path>,
+    {
+        let path = path.as_ref();
         let gltf_file_name = path
             .file_name()
             .ok_or(anyhow::Error::msg("Invalid file name"))?
@@ -212,12 +217,15 @@ impl GltfLoader {
             self.load_vertex_buffers_from_primitive(primitive, context)?;
         let index_buffer = if let Some(indices) = primitive.indices() {
             if let Some(view) = indices.view() {
-                let handle = self.load_buffer_from_view(&view, XrdsBufferType::Index, context)?;
+                let format = data_type_to_index_format(indices.data_type());
+                let handle =
+                    self.load_buffer_from_view(&view, XrdsBufferType::Index(format), context)?;
                 let buffer = self.asset_server.get_buffer(&handle).unwrap();
 
                 Some(XrdsIndexBuffer {
                     buffer,
-                    index_format: data_type_to_index_format(indices.data_type()),
+                    index_format: format,
+                    count: indices.count(),
                 })
             } else {
                 todo!("Make empty index?")
@@ -279,7 +287,6 @@ impl GltfLoader {
             let options = pbr::Options {
                 vertex_input: *vertex_input_options,
                 material_input: material_input_option,
-                view_count: 2,
             };
             // Get material unique id from its options.
             let material_id = AssetId::Key(options.as_hash());
@@ -400,16 +407,20 @@ impl GltfLoader {
         let mut res = Vec::new();
         for (semantic, accessor) in primitive.attributes() {
             Self::update_vertex_input_options(&mut vertex_input_option, &semantic, &accessor);
+
+            let format = vertex_format_from_data_type(accessor.data_type(), accessor.dimensions())?;
             let vertex_attribute = wgpu::VertexAttribute {
                 offset: 0, // discreted vertex must be started at offset 0
-                format: vertex_format_from_data_type(accessor.data_type(), accessor.dimensions())?,
+                format,
                 shader_location: pbr::PbrVertexSemantic::from(semantic).location(),
             };
             if let Some(view) = accessor.view() {
-                let handle = self.load_buffer_from_view(&view, XrdsBufferType::Vertex, context)?;
+                let handle =
+                    self.load_buffer_from_view(&view, XrdsBufferType::Vertex(format), context)?;
                 let buffer = XrdsVertexBuffer {
                     buffer: self.asset_server.get_buffer(&handle).unwrap(),
                     vertex_attributes: [vertex_attribute],
+                    count: accessor.count(),
                 };
                 res.push(buffer);
             } else {
@@ -438,13 +449,22 @@ impl GltfLoader {
             let raw_buffer = &context.raw_buffers[view.buffer().index()];
             let offset = view.offset();
             let length = view.length();
-            let stride = view.stride().unwrap_or(1) as u64;
+            let stride = if let Some(stride) = view.stride() {
+                stride as u64
+            } else {
+                // Calculate stride from format
+                match buffer_type {
+                    XrdsBufferType::Vertex(format) => format.size(),
+                    XrdsBufferType::Index(format) => format.byte_size() as u64,
+                    _ => 1u64,
+                }
+            };
 
             log::debug!(
                 "  Load buffer '{}': length={}, stride={}",
                 name,
                 length,
-                stride
+                stride,
             );
 
             self.asset_server.register_buffer(&BufferAssetInfo {
@@ -606,7 +626,10 @@ impl GltfLoader {
         wgpu_sampler
     }
 
-    async fn read_file(path: &Path) -> anyhow::Result<Vec<u8>> {
+    async fn read_file<P>(path: P) -> anyhow::Result<Vec<u8>>
+    where
+        P: AsRef<Path>,
+    {
         let mut buf = Vec::new();
         let mut f = File::open(path)?;
         f.read_to_end(&mut buf)?;

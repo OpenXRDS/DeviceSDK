@@ -24,13 +24,14 @@ use crate::{
 
 use super::types::{AssetHandle, AssetId, AssetStrongHandle};
 
+#[derive(Debug)]
 pub struct AssetServer {
     graphics_instance: Arc<GraphicsInstance>,
     resource_buffer: Arc<RwLock<ResourceBuffer>>,
     shader_builder: PbrShaderBuilder,
 }
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct ResourceBuffer {
     textures: HashMap<AssetId, AssetStrongHandle<XrdsTexture>>,
     buffers: HashMap<AssetId, AssetStrongHandle<XrdsBuffer>>,
@@ -247,7 +248,7 @@ impl AssetServer {
 
         // view-proj uniform
         bind_group_layouts.push(device.create_bind_group_layout(&BindGroupLayoutDescriptor {
-            label: None,
+            label: Some("ViewProjectionBindings"),
             entries: &[BindGroupLayoutEntry {
                 binding: 0,
                 visibility: ShaderStages::VERTEX_FRAGMENT,
@@ -262,7 +263,7 @@ impl AssetServer {
 
         let material_bind_group_layout =
             device.create_bind_group_layout(&BindGroupLayoutDescriptor {
-                label: None,
+                label: Some("MaterialBindings"),
                 entries: &Self::into_bind_group_layout_entries(&info.options.material_input),
             });
 
@@ -272,7 +273,7 @@ impl AssetServer {
         // skinning materices
         if info.options.vertex_input.weights_joints_0 {
             bind_group_layouts.push(device.create_bind_group_layout(&BindGroupLayoutDescriptor {
-                label: None,
+                label: Some("SkinningBindings"),
                 entries: &[BindGroupLayoutEntry {
                     binding: 0,
                     visibility: ShaderStages::VERTEX,
@@ -306,33 +307,34 @@ impl AssetServer {
             })
             .collect();
         // Instance buffer layout
-        vertex_layouts.push(VertexBufferLayout {
-            array_stride: std::mem::size_of::<[f32; 16]>() as u64,
-            step_mode: wgpu::VertexStepMode::Instance,
-            attributes: &[
-                VertexAttribute {
-                    format: wgpu::VertexFormat::Float32x4,
-                    offset: 0,
-                    shader_location: 10,
-                },
-                VertexAttribute {
-                    format: wgpu::VertexFormat::Float32x4,
-                    offset: std::mem::size_of::<[f32; 4]>() as u64,
-                    shader_location: 11,
-                },
-                VertexAttribute {
-                    format: wgpu::VertexFormat::Float32x4,
-                    offset: std::mem::size_of::<[f32; 8]>() as u64,
-                    shader_location: 12,
-                },
-                VertexAttribute {
-                    format: wgpu::VertexFormat::Float32x4,
-                    offset: std::mem::size_of::<[f32; 12]>() as u64,
-                    shader_location: 13,
-                },
-            ],
-        });
+        // vertex_layouts.push(VertexBufferLayout {
+        //     array_stride: std::mem::size_of::<[f32; 16]>() as u64,
+        //     step_mode: wgpu::VertexStepMode::Instance,
+        //     attributes: &[
+        //         VertexAttribute {
+        //             format: wgpu::VertexFormat::Float32x4,
+        //             offset: 0,
+        //             shader_location: 10,
+        //         },
+        //         VertexAttribute {
+        //             format: wgpu::VertexFormat::Float32x4,
+        //             offset: std::mem::size_of::<[f32; 4]>() as u64,
+        //             shader_location: 11,
+        //         },
+        //         VertexAttribute {
+        //             format: wgpu::VertexFormat::Float32x4,
+        //             offset: std::mem::size_of::<[f32; 8]>() as u64,
+        //             shader_location: 12,
+        //         },
+        //         VertexAttribute {
+        //             format: wgpu::VertexFormat::Float32x4,
+        //             offset: std::mem::size_of::<[f32; 12]>() as u64,
+        //             shader_location: 13,
+        //         },
+        //     ],
+        // });
 
+        let format = wgpu::TextureFormat::Rgba32Float;
         let pipeline =
             self.graphics_instance
                 .device()
@@ -354,25 +356,25 @@ impl AssetServer {
                         targets: &[
                             Some(ColorTargetState {
                                 // position_metallic
-                                format: wgpu::TextureFormat::Rgba8Unorm,
+                                format,
                                 blend: None,
                                 write_mask: ColorWrites::all(),
                             }),
                             Some(ColorTargetState {
                                 // normal_roughness
-                                format: wgpu::TextureFormat::Rgba8Unorm,
+                                format,
                                 blend: None,
                                 write_mask: ColorWrites::all(),
                             }),
                             Some(ColorTargetState {
                                 // albedo_occlusion
-                                format: wgpu::TextureFormat::Rgba8Unorm,
+                                format,
                                 blend: None,
                                 write_mask: ColorWrites::all(),
                             }),
                             Some(ColorTargetState {
                                 // emissive
-                                format: wgpu::TextureFormat::Rgba8Unorm,
+                                format,
                                 blend: None,
                                 write_mask: ColorWrites::all(),
                             }),
@@ -402,7 +404,7 @@ impl AssetServer {
                     multisample: MultisampleState {
                         ..Default::default()
                     },
-                    multiview: NonZeroU32::new(info.options.view_count),
+                    multiview: NonZeroU32::new(2),
                 });
 
         let xrds_material = XrdsMaterial {

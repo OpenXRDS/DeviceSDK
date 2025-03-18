@@ -18,7 +18,6 @@ pub static BIND_GROUP_INDEX_SKINNING_MATRICES: u32 = 2;
 pub struct Options {
     pub vertex_input: PbrVertexInputOption,
     pub material_input: PbrMaterialInputOption,
-    pub view_count: u32,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Hash)]
@@ -113,6 +112,7 @@ pub struct PbrMaterialParams {
     _pad: [u32; 2],
 }
 
+#[derive(Debug)]
 pub struct PbrShaderBuilder {
     composer: RwLock<Composer>,
 }
@@ -226,10 +226,7 @@ impl Options {
     fn shader_defines(&self) -> HashMap<String, ShaderDefValue> {
         let vertex_key_values = self.vertex_input.shader_defines();
         let material_key_values = self.material_input.shader_defines();
-        let option_key_values = vec![(
-            "VIEW_COUNT".to_owned(),
-            ShaderDefValue::UInt(self.view_count),
-        )];
+        let option_key_values = vec![];
 
         option_key_values
             .into_iter()

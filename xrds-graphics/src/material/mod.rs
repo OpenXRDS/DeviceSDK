@@ -1,5 +1,8 @@
 use crate::{RenderPass, XrdsBuffer};
 
+mod postproc;
+
+pub use postproc::*;
 pub mod pbr;
 
 /// Material interface object

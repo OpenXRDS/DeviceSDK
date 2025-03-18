@@ -1,8 +1,12 @@
 use std::{collections::HashMap, sync::Arc};
 
+use glam::{quat, vec3, Quat};
 use log::{debug, info, warn};
 use openxr::{Posef, ViewConfigurationType};
-use xrds_graphics::{GraphicsApi, GraphicsInstance, Size2Di, TextureFormat, XrdsTexture};
+use xrds_core::Size2Du;
+use xrds_graphics::{
+    CameraBinding, Fov, GraphicsApi, GraphicsInstance, TextureFormat, XrdsTexture,
+};
 
 use crate::OpenXrError;
 
@@ -24,6 +28,7 @@ pub struct OpenXrContext {
     event_buffer: openxr::EventDataBuffer,
     graphics_instance: Arc<GraphicsInstance>,
     state: State,
+    camera_binding: CameraBinding,
 }
 
 struct State {
@@ -134,6 +139,26 @@ impl OpenXrContext {
             &reference_space,
         )?;
 
+        for i in 0..views.len() {
+            let v = &views[i];
+            let c = self.camera_binding.get_camera_mut(i);
+            let p = v.pose.position;
+            let o = v.pose.orientation;
+            c.set_fov(Fov {
+                left: v.fov.angle_left,
+                right: v.fov.angle_right,
+                up: v.fov.angle_up,
+                down: v.fov.angle_down,
+            });
+            c.set_position(vec3(-p.x, p.y, -p.z));
+            c.set_orientation(
+                Quat::from_rotation_x(180.0f32.to_radians()) * quat(o.w, o.z, o.y, o.x),
+            );
+        }
+
+        self.camera_binding
+            .update_uniform(self.graphics_instance.queue());
+
         self.state.frame_state = frame_state;
         self.state.views = views;
 
@@ -158,7 +183,7 @@ impl OpenXrContext {
         self.inner.swapchain_format()
     }
 
-    pub fn swapchain_size(&self) -> anyhow::Result<Size2Di> {
+    pub fn swapchain_size(&self) -> anyhow::Result<Size2Du> {
         self.inner.swapchain_size()
     }
 
@@ -183,6 +208,10 @@ impl OpenXrContext {
             .ok_or(OpenXrError::NoViewTypeAvailable)?
             .clone();
         Ok(())
+    }
+
+    pub fn get_cam_binding(&self) -> &CameraBinding {
+        &self.camera_binding
     }
 }
 
@@ -254,6 +283,7 @@ impl OpenXrContext {
         let event_buffer = openxr::EventDataBuffer::new();
 
         debug!("OpenXr context created");
+        let camera_binding = CameraBinding::new(graphics_instance.device());
 
         Ok(OpenXrContext {
             instance,
@@ -278,6 +308,7 @@ impl OpenXrContext {
                 selected_blend_mode,
                 selected_space_type,
             },
+            camera_binding,
         })
     }
 
@@ -339,12 +370,12 @@ impl OpenXrContext {
             let views: Vec<_> = view_configuration_views
                 .iter()
                 .map(|view| View {
-                    recommended_image_size: Size2Di {
+                    recommended_image_size: Size2Du {
                         width: view.recommended_image_rect_width,
                         height: view.recommended_image_rect_height,
                     },
                     recommended_swapchain_sample_count: view.recommended_swapchain_sample_count,
-                    max_image_size: Size2Di {
+                    max_image_size: Size2Du {
                         width: view.max_image_rect_width,
                         height: view.max_image_rect_height,
                     },

@@ -1,19 +1,20 @@
 mod command_encoder;
 mod framebuffer;
+mod gbuffer;
 mod render_pass;
 
 pub use command_encoder::*;
 pub use framebuffer::*;
+use log::debug;
 pub use render_pass::*;
-use wgpu::{
-    Color, CommandEncoderDescriptor, LoadOp, Operations, Origin3d, StoreOp, TexelCopyTextureInfo,
-    TextureDescriptor, TextureViewDescriptor,
-};
+
+use wgpu::{CommandEncoderDescriptor, Origin3d, TexelCopyTextureInfo};
 
 use std::sync::Arc;
 
 use crate::{
-    GraphicsInstance, RenderTargetOps, RenderTargetTexture, TextureFormat, XrdsScene, XrdsTexture,
+    create_deferred_lighting_proc, GraphicsInstance, Postproc, TextureFormat, XrdsScene,
+    XrdsTexture,
 };
 
 #[derive(Debug, Clone)]
@@ -21,86 +22,40 @@ pub struct Renderer {
     graphics_instance: Arc<GraphicsInstance>,
     framebuffers: Vec<Framebuffer>,
     framebuffer_index: usize,
+    deferred_lighting_proc: Postproc,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ViewInfo {
+    pub view_projection: glam::Mat4,
+    pub cam_position: glam::Vec3,
 }
 
 impl Renderer {
     pub fn new(
         graphics_instance: Arc<GraphicsInstance>,
-        color_format: TextureFormat,
+        output_format: TextureFormat,
         extent: wgpu::Extent3d,
         framebuffer_count: u32,
-    ) -> Self {
+    ) -> anyhow::Result<Self> {
         let framebuffers: Vec<_> = (0..framebuffer_count)
-            .map(|_| {
-                let wgpu_color_texture =
-                    graphics_instance
-                        .device()
-                        .create_texture(&TextureDescriptor {
-                            label: None,
-                            size: extent,
-                            mip_level_count: 1,
-                            sample_count: 1,
-                            dimension: wgpu::TextureDimension::D2,
-                            format: color_format.as_wgpu(),
-                            usage: wgpu::TextureUsages::COPY_SRC
-                                | wgpu::TextureUsages::RENDER_ATTACHMENT
-                                | wgpu::TextureUsages::TEXTURE_BINDING,
-                            view_formats: &[],
-                        });
-                let wgpu_color_view =
-                    wgpu_color_texture.create_view(&TextureViewDescriptor::default());
-                let color_texture =
-                    XrdsTexture::new(wgpu_color_texture, color_format, extent, wgpu_color_view);
-                let wgpu_depth_stencil_texture =
-                    graphics_instance
-                        .device()
-                        .create_texture(&TextureDescriptor {
-                            label: None,
-                            size: extent,
-                            mip_level_count: 1,
-                            sample_count: 1,
-                            dimension: wgpu::TextureDimension::D2,
-                            format: wgpu::TextureFormat::Depth24PlusStencil8,
-                            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-                            view_formats: &[],
-                        });
-                let wgpu_depth_stencil_view =
-                    wgpu_depth_stencil_texture.create_view(&TextureViewDescriptor::default());
-                let depth_stencil_texture = XrdsTexture::new(
-                    wgpu_depth_stencil_texture,
-                    wgpu::TextureFormat::Depth24PlusStencil8.into(),
-                    extent,
-                    wgpu_depth_stencil_view,
-                );
-                Framebuffer::new(
-                    &[RenderTargetTexture::new(
-                        color_texture,
-                        RenderTargetOps::ColorAttachment(Operations {
-                            load: LoadOp::Clear(Color::GREEN),
-                            store: StoreOp::Store,
-                        }),
-                    )],
-                    Some(RenderTargetTexture::new(
-                        depth_stencil_texture,
-                        RenderTargetOps::DepthStencilAttachment {
-                            depth_ops: Some(Operations {
-                                load: LoadOp::Clear(0.0),
-                                store: StoreOp::Store,
-                            }),
-                            stencil_ops: Some(Operations {
-                                load: LoadOp::Clear(0),
-                                store: StoreOp::Store,
-                            }),
-                        },
-                    )),
-                )
-            })
+            .map(|_| Framebuffer::new(graphics_instance.clone(), extent, output_format))
             .collect();
-        Self {
+        debug!("framebuffers created");
+
+        let deferred_lighting_proc = create_deferred_lighting_proc(
+            graphics_instance.clone(),
+            extent.depth_or_array_layers,
+            framebuffers[0].gbuffer_bind_group_layout(),
+            framebuffers[0].final_color(),
+        )?;
+
+        Ok(Self {
             graphics_instance,
             framebuffers,
             framebuffer_index: 0,
-        }
+            deferred_lighting_proc,
+        })
     }
 
     pub fn on_pre_render(&mut self) -> anyhow::Result<()> {
@@ -133,12 +88,34 @@ impl Renderer {
             .encoder_mut()
             .begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: None,
-                color_attachments: &framebuffer.color_attachments()?,
-                depth_stencil_attachment: framebuffer.depth_stencil_attachment()?,
+                color_attachments: &framebuffer.gbuffer().as_color_attachments()?,
+                depth_stencil_attachment: framebuffer.gbuffer().as_depth_stencil_attachment()?,
                 ..Default::default()
             });
 
         Ok(RenderPass::new(render_pass))
+    }
+
+    pub fn create_lighting_pass<'encoder>(
+        &mut self,
+        encoder: &'encoder mut CommandEncoder,
+    ) -> anyhow::Result<RenderPass<'encoder>> {
+        let framebuffer = self.get_current_framebuffer();
+
+        let mut wgpu_render_pass =
+            encoder
+                .encoder_mut()
+                .begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: None,
+                    color_attachments: &framebuffer.final_color_attachment()?,
+                    depth_stencil_attachment: None,
+                    ..Default::default()
+                });
+
+        self.deferred_lighting_proc
+            .encode(&mut wgpu_render_pass, framebuffer.gbuffer_bind_group());
+
+        Ok(RenderPass::new(wgpu_render_pass))
     }
 
     pub fn copy_render_result(
@@ -149,19 +126,18 @@ impl Renderer {
         let framebuffer = self.get_current_framebuffer();
         let encoder = command_encoder.encoder_mut();
 
-        // todo!()
-        let final_color = framebuffer.color_textures()[0];
+        let final_color = framebuffer.final_color();
         let final_color_texture: &XrdsTexture = final_color.texture();
 
         encoder.copy_texture_to_texture(
             TexelCopyTextureInfo {
-                texture: final_color_texture.texture(),
+                texture: final_color_texture.wgpu_texture(),
                 origin: Origin3d::ZERO,
                 mip_level: 0,
                 aspect: wgpu::TextureAspect::All,
             },
             TexelCopyTextureInfo {
-                texture: target_texture.texture(),
+                texture: target_texture.wgpu_texture(),
                 origin: Origin3d::ZERO,
                 mip_level: 0,
                 aspect: wgpu::TextureAspect::All,

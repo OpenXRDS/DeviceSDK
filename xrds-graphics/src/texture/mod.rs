@@ -27,7 +27,7 @@ impl XrdsTexture {
         }
     }
 
-    pub fn texture(&self) -> &wgpu::Texture {
+    pub fn wgpu_texture(&self) -> &wgpu::Texture {
         &self.inner
     }
 

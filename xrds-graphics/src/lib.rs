@@ -6,7 +6,6 @@ mod material;
 mod object;
 mod renderer;
 mod texture;
-mod types;
 mod util;
 mod window;
 
@@ -18,6 +17,5 @@ pub use material::*;
 pub use object::*;
 pub use renderer::*;
 pub use texture::*;
-pub use types::*;
 pub use util::*;
 pub use window::*;

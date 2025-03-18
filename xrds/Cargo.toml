@@ -6,6 +6,16 @@ edition = "2021"
 [lib]
 crate-type = ["lib", "cdylib"]
 
+[features]
+audio = []     # Enable audio core api
+component = [] # Enable component core api
+graphics = []  # Enable graphics core api
+net = []       # Enable net core api
+runtime = []   # Enable runtime core api
+core = []      # Enable core api
+
+full = ["audio", "component", "graphics", "net", "runtime", "core"]
+
 [dependencies]
 xrds-audio = { path = "../xrds-audio" }
 xrds-components = { path = "../xrds-components" }

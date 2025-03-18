@@ -1,9 +1,8 @@
 #define_import_path shader::pbr::vertex_params
 
 struct Input {
-#ifdef VIEW_COUNT > 1
+    @builtin(vertex_index) vertex_index: u32,
     @builtin(view_index) view_index: i32,
-#endif
 #ifdef VERTEX_INPUT_POSITION
     @location(0) position: vec3<f32>,
 #endif
@@ -35,14 +34,14 @@ struct Input {
     @location(9) joints_1n: vec4<u32>,
 #endif
     // Instance buffer value. It is changable model matrix
-    @location(10) model_0n: vec4<f32>,
-    @location(11) model_1n: vec4<f32>,
-    @location(12) model_2n: vec4<f32>,
-    @location(13) model_3n: vec4<f32>,
+    // @location(10) model_0n: vec4<f32>,
+    // @location(11) model_1n: vec4<f32>,
+    // @location(12) model_2n: vec4<f32>,
+    // @location(13) model_3n: vec4<f32>,
 }
 
 struct Output {
-    @builtin(position) clip_position: vec4<f32>,
+    @builtin(position) position: vec4<f32>,
     @location(0) world_position: vec3<f32>,
     @location(1) world_normal: vec3<f32>,
 #ifdef VERTEX_INPUT_TEXCOORD_0

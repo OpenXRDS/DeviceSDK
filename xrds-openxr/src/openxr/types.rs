@@ -1,4 +1,4 @@
-use xrds_graphics::Size2Di;
+use xrds_core::Size2Du;
 
 #[derive(Debug, Clone, Copy)]
 pub enum FormFactor {
@@ -22,9 +22,9 @@ pub enum BlendMode {
 
 #[derive(Debug, Clone, Copy)]
 pub struct View {
-    pub max_image_size: Size2Di,
+    pub max_image_size: Size2Du,
     pub max_swapchain_sample_count: u32,
-    pub recommended_image_size: Size2Di,
+    pub recommended_image_size: Size2Du,
     pub recommended_swapchain_sample_count: u32,
 }
 

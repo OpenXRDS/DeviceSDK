@@ -1,8 +1,3 @@
-mod object;
-mod resource;
-mod world;
+mod transform;
 
-
-pub use object::*;
-pub use resource::*;
-pub use world::*;
+pub use transform::*;

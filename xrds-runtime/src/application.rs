@@ -7,11 +7,10 @@ use winit::{
     event_loop,
     window::{Window, WindowAttributes},
 };
-use xrds_core::XrdsWorld;
-use xrds_graphics::{GraphicsApi, Renderer, Surface};
+use xrds_graphics::{AssetServer, GraphicsApi, Renderer, Surface};
 use xrds_openxr::{FormFactor, OpenXrContext, OpenXrOnPreRenderResult};
 
-use crate::RuntimeError;
+use crate::{Context, RuntimeError, RuntimeHandler};
 
 #[derive(Debug, Clone, Copy)]
 pub struct PreviewWindowAttributes {
@@ -26,13 +25,17 @@ pub(crate) enum RuntimeEvent {
     Closed,
 }
 
-#[derive(Default)]
-pub(crate) struct RuntimeApplication<'window> {
+pub(crate) struct RuntimeApplication<'window, A>
+where
+    A: RuntimeHandler + Send + Sync + 'static,
+{
     preview_window_attr: Option<PreviewWindowAttributes>,
+    xr_enabled: bool,
     preview_window: Option<PreviewWindow<'window>>,
     openxr_context: Option<OpenXrContext>,
     renderer: Option<Renderer>,
-    world: Option<Box<dyn XrdsWorld>>,
+    xrds_context: Option<Context>,
+    app: A,
 }
 
 #[derive(Debug)]
@@ -41,7 +44,31 @@ pub(crate) struct PreviewWindow<'window> {
     surface: Surface<'window>,
 }
 
-impl<'w> RuntimeApplication<'w> {
+impl<'w, A> RuntimeApplication<'w, A>
+where
+    A: RuntimeHandler + Send + Sync + 'static,
+{
+    pub fn new(mut app: A) -> anyhow::Result<Self> {
+        app.on_construct()?;
+        Ok(Self {
+            app,
+            xr_enabled: false,
+            preview_window_attr: None,
+            preview_window: None,
+            openxr_context: None,
+            xrds_context: None,
+            renderer: None,
+        })
+    }
+
+    pub fn enable_xr(&mut self, enabled: bool) {
+        self.xr_enabled = enabled;
+    }
+
+    pub fn enable_window(&mut self, attr: PreviewWindowAttributes) {
+        self.preview_window_attr = Some(attr);
+    }
+
     fn on_resumed(&mut self, event_loop: &event_loop::ActiveEventLoop) -> anyhow::Result<()> {
         debug!("Application on resumed");
         // Select graphics api
@@ -61,7 +88,7 @@ impl<'w> RuntimeApplication<'w> {
             openxr_context.swapchain_format()?,
             openxr_context.swapchain_extent()?,
             1,
-        );
+        )?;
 
         self.openxr_context = Some(openxr_context);
         self.renderer = Some(renderer);
@@ -83,6 +110,13 @@ impl<'w> RuntimeApplication<'w> {
                 surface: Surface::new(surface),
             });
         }
+        self.xrds_context = Some(Context::new(Arc::new(AssetServer::new(
+            graphics_instance.clone(),
+        )?)));
+
+        let xrds_context = self.xrds_context.as_ref().unwrap();
+        self.app.on_begin(xrds_context.clone())?;
+        self.app.on_resumed(xrds_context.clone())?;
 
         Ok(())
     }
@@ -94,7 +128,7 @@ impl<'w> RuntimeApplication<'w> {
         _event: winit::event::WindowEvent,
     ) -> anyhow::Result<()> {
         match _event {
-            winit::event::WindowEvent::Resized(s) => {}
+            winit::event::WindowEvent::Resized(_s) => {}
             winit::event::WindowEvent::CloseRequested => {}
             winit::event::WindowEvent::RedrawRequested => {}
             _ => {}
@@ -102,7 +136,7 @@ impl<'w> RuntimeApplication<'w> {
         Ok(())
     }
 
-    fn on_tick(&mut self, diff: Duration) -> anyhow::Result<()> {
+    fn on_tick(&mut self, _diff: Duration) -> anyhow::Result<()> {
         Ok(())
     }
 
@@ -125,18 +159,22 @@ impl<'w> RuntimeApplication<'w> {
                 return Ok(());
             }
         };
-        renderer.on_pre_render()?;
 
         let mut command_encoder = renderer.create_command_encoder()?;
         // Encode to g-buffers
         {
             let mut gbuffer_pass = renderer.create_gbuffer_pass(&mut command_encoder)?;
-            if let Some(world) = self.world.as_ref() {
-                // world.encode(&render_pass)?;
-            }
+
+            let cam_binding = openxr_context.get_cam_binding();
+            cam_binding.encode(&mut gbuffer_pass);
+
+            let xrds_context = self.xrds_context.as_ref().unwrap();
+            let world = xrds_context.get_current_world()?;
+
+            world.encode(&mut gbuffer_pass)?;
         }
         {
-            // let mut lighting_pass = renderer.create_render_pass(&mut command_encoder)?;
+            let _lighting_pass = renderer.create_lighting_pass(&mut command_encoder)?;
         }
 
         renderer.copy_render_result(&mut command_encoder, &xr_swapchain_texture)?;
@@ -149,8 +187,9 @@ impl<'w> RuntimeApplication<'w> {
     }
 }
 
-impl<'window> ApplicationHandler<RuntimeEvent> for RuntimeApplication<'window>
+impl<'window, A> ApplicationHandler<RuntimeEvent> for RuntimeApplication<'window, A>
 where
+    A: RuntimeHandler + Send + Sync + 'static,
     RuntimeEvent: 'static,
 {
     fn resumed(&mut self, event_loop: &event_loop::ActiveEventLoop) {
