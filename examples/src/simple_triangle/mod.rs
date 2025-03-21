@@ -1,3 +1,4 @@
+#[allow(dead_code)]
 struct App {
     objects: Vec<xrds::Object>,
 }
@@ -9,7 +10,7 @@ impl RuntimeHandler for App {
         Ok(())
     }
 
-    fn on_begin(&mut self, context: xrds::Context) -> anyhow::Result<()> {
+    fn on_begin(&mut self, _context: xrds::Context) -> anyhow::Result<()> {
         println!("[SimpleTriangle] on_begin()");
         Ok(())
     }

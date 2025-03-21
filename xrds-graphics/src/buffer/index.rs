@@ -5,18 +5,22 @@ use wgpu::BufferSlice;
 use super::XrdsBuffer;
 
 #[derive(Clone)]
-pub struct XrdsVertexBuffer {
+pub struct XrdsIndexBuffer {
     pub buffer: XrdsBuffer,
-    pub vertex_attributes: [wgpu::VertexAttribute; 1], // Currently support discreted vertex buffer only
+    pub index_format: wgpu::IndexFormat,
     pub offset: usize,
     pub count: usize,
 }
 
-impl XrdsVertexBuffer {
-    pub fn slice(&self) -> BufferSlice<'_> {
+impl XrdsIndexBuffer {
+    pub fn as_slice(&self) -> BufferSlice<'_> {
         let start = self.offset as u64;
         let end = start + (self.count as u64 * self.buffer.stride());
         self.buffer.slice(start..end)
+    }
+
+    pub fn format(&self) -> wgpu::IndexFormat {
+        self.index_format
     }
 
     pub fn as_range(&self) -> Range<u32> {
@@ -24,10 +28,11 @@ impl XrdsVertexBuffer {
     }
 }
 
-impl Debug for XrdsVertexBuffer {
+impl Debug for XrdsIndexBuffer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("XrdsVertexBuffer")
+        f.debug_struct("XrdsIndexBuffer")
             .field("buffer", &self.buffer)
+            .field("index_format", &self.index_format)
             .finish()
     }
 }

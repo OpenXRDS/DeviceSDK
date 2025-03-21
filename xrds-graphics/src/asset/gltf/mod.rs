@@ -1,20 +1,20 @@
 use std::{collections::HashMap, fmt::Debug, sync::Arc};
 
-use crate::XrdsObject;
+use crate::Renderable;
 
 pub mod loader;
 
 #[derive(Default, Clone)]
 pub struct Gltf {
     pub name: String,
-    pub scenes: Vec<Arc<XrdsObject>>,
-    pub named_scene: HashMap<String, Arc<XrdsObject>>,
-    pub default_scene: Option<Arc<XrdsObject>>,
+    pub scenes: Vec<Arc<Renderable>>,
+    pub named_scene: HashMap<String, Arc<Renderable>>,
+    pub default_scene: Option<Arc<Renderable>>,
 }
 
 impl Gltf {
-    pub fn with_scenes(mut self, scene_objects: &[Arc<XrdsObject>]) -> Self {
-        self.scenes = scene_objects.to_vec();
+    pub fn with_scenes(mut self, scene_objects: Vec<Arc<Renderable>>) -> Self {
+        self.scenes = scene_objects;
         for scene in &self.scenes {
             self.named_scene
                 .insert(scene.get_name().to_string(), scene.clone());
@@ -29,19 +29,19 @@ impl Gltf {
         self
     }
 
-    pub fn get_default_scene(&self) -> Option<&Arc<XrdsObject>> {
+    pub fn get_default_scene(&self) -> Option<&Arc<Renderable>> {
         self.default_scene.as_ref()
     }
 
-    pub fn get_scene_by_name(&self, name: &str) -> Option<&Arc<XrdsObject>> {
+    pub fn get_scene_by_name(&self, name: &str) -> Option<&Arc<Renderable>> {
         self.named_scene.get(name)
     }
 
-    pub fn get_scene_by_index(&self, index: usize) -> Option<&Arc<XrdsObject>> {
+    pub fn get_scene_by_index(&self, index: usize) -> Option<&Arc<Renderable>> {
         self.scenes.get(index)
     }
 
-    pub fn get_scenes(&self) -> &[Arc<XrdsObject>] {
+    pub fn get_scenes(&self) -> &[Arc<Renderable>] {
         &self.scenes
     }
 }
@@ -57,28 +57,4 @@ impl Debug for Gltf {
 
         debug_struct.field("scenes", &self.scenes).finish()
     }
-}
-
-#[tokio::test]
-async fn test_gltf_loader() {
-    use crate::{AssetServer, GraphicsInstance};
-    use loader::GltfLoader;
-    use std::path::PathBuf;
-    use std::sync::Arc;
-
-    env_logger::Builder::from_default_env()
-        .filter_level(log::LevelFilter::Debug)
-        .init();
-    let buf = PathBuf::from("assets/gltf/StainedGlassLamp/StainedGlassLamp.gltf");
-    if !buf.is_file() {
-        log::error!("Requested path '{:?}' is not file", buf.as_path());
-        return;
-    }
-
-    let graphics = GraphicsInstance::new().await;
-    let asset_server = Arc::new(AssetServer::new(graphics.clone()).unwrap());
-    let gltf_loader = GltfLoader::new(asset_server.clone(), buf.parent().unwrap());
-
-    let _gltf = gltf_loader.load_from_file(buf.as_path()).await.unwrap();
-    let _gltf2 = gltf_loader.load_from_file(buf.as_path()).await.unwrap();
 }

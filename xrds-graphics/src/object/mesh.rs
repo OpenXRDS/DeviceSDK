@@ -1,6 +1,5 @@
-use std::fmt::Debug;
+use std::{fmt::Debug, ops::Range};
 
-use log::debug;
 use wgpu::ShaderStages;
 use xrds_core::Transform;
 
@@ -54,30 +53,41 @@ impl XrdsMesh {
         &mut self.primitives
     }
 
-    pub fn encode(&self, render_pass: &mut RenderPass, transform: &Transform) {
+    pub fn encode(
+        &self,
+        render_pass: &mut RenderPass,
+        transform: &Transform,
+        instances: &Range<u32>,
+    ) {
         for primitive in &self.primitives {
-            primitive.encode(render_pass, transform);
+            primitive.encode(render_pass, transform, instances.clone());
         }
     }
 }
 
 impl XrdsPrimitive {
-    pub fn encode(&self, render_pass: &mut RenderPass, transform: &Transform) {
+    pub fn encode(
+        &self,
+        render_pass: &mut RenderPass,
+        transform: &Transform,
+        instances: Range<u32>,
+    ) {
         render_pass.bind_material(&self.material);
         render_pass.set_push_constants(
             ShaderStages::VERTEX,
             0,
             bytemuck::cast_slice(&transform.to_model_array()),
         );
-        render_pass.bind_vertex_buffers(&self.vertices);
+        render_pass.bind_vertex_buffers(&self.vertices, 0);
         if let Some(indices) = self.indices.as_ref() {
             render_pass.bind_index_buffer(indices);
             render_pass.draw_indexed(
                 indices.as_range(),
                 0, /* all vertex buffers has same count */
+                instances,
             );
         } else {
-            render_pass.draw(self.vertices[0].as_range());
+            render_pass.draw(self.vertices[0].as_range(), instances);
         }
     }
 }

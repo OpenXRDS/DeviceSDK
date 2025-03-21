@@ -8,7 +8,10 @@ pub use framebuffer::*;
 use log::debug;
 pub use render_pass::*;
 
-use wgpu::{CommandEncoderDescriptor, Origin3d, TexelCopyTextureInfo};
+use wgpu::{
+    BindGroupLayoutDescriptor, BindGroupLayoutEntry, CommandEncoderDescriptor, Origin3d,
+    TexelCopyTextureInfo,
+};
 
 use std::sync::Arc;
 
@@ -41,11 +44,13 @@ impl Renderer {
         let framebuffers: Vec<_> = (0..framebuffer_count)
             .map(|_| Framebuffer::new(graphics_instance.clone(), extent, output_format))
             .collect();
-        debug!("framebuffers created");
+        debug!(
+            "framebuffers created. view_count: {}",
+            extent.depth_or_array_layers
+        );
 
         let deferred_lighting_proc = create_deferred_lighting_proc(
             graphics_instance.clone(),
-            extent.depth_or_array_layers,
             framebuffers[0].gbuffer_bind_group_layout(),
             framebuffers[0].final_color(),
         )?;
@@ -102,7 +107,7 @@ impl Renderer {
     ) -> anyhow::Result<RenderPass<'encoder>> {
         let framebuffer = self.get_current_framebuffer();
 
-        let mut wgpu_render_pass =
+        let wgpu_render_pass =
             encoder
                 .encoder_mut()
                 .begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -112,10 +117,14 @@ impl Renderer {
                     ..Default::default()
                 });
 
-        self.deferred_lighting_proc
-            .encode(&mut wgpu_render_pass, framebuffer.gbuffer_bind_group());
-
         Ok(RenderPass::new(wgpu_render_pass))
+    }
+
+    pub fn do_deferred_lighting(&mut self, render_pass: &mut RenderPass<'_>) -> anyhow::Result<()> {
+        let framebuffer = self.get_current_framebuffer();
+        render_pass.set_bind_group(1, framebuffer.gbuffer_bind_group(), &[]);
+        self.deferred_lighting_proc.encode(render_pass);
+        Ok(())
     }
 
     pub fn copy_render_result(
@@ -159,7 +168,7 @@ impl Renderer {
         Ok(XrdsScene {})
     }
 
-    fn get_current_framebuffer(&self) -> &Framebuffer {
+    pub fn get_current_framebuffer(&self) -> &Framebuffer {
         let framebuffer = self.framebuffers.get(self.framebuffer_index).unwrap();
 
         framebuffer

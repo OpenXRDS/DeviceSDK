@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use log::debug;
 use wgpu::{Extent3d, Operations};
 
 use crate::{GraphicsInstance, RenderTargetOps, RenderTargetTexture, XrdsTexture};
@@ -44,16 +43,12 @@ impl GBuffer {
         }
     }
 
-    fn create_texture<'a>(
+    fn create_texture(
         device: &wgpu::Device,
         size: Extent3d,
         format: wgpu::TextureFormat,
-        label: &'a str,
+        label: &str,
     ) -> RenderTargetTexture {
-        debug!(
-            "create_texture() label={:?}, size={:?}, format={:?}",
-            label, size, format
-        );
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some(label),
             size,
@@ -80,7 +75,7 @@ impl GBuffer {
             || (format == wgpu::TextureFormat::Depth32Float)
             || (format == wgpu::TextureFormat::Depth24Plus);
 
-        let target = RenderTargetTexture::new(
+        RenderTargetTexture::new(
             XrdsTexture::new(texture, format.into(), size, view),
             if is_depth {
                 RenderTargetOps::DepthStencilAttachment {
@@ -99,9 +94,7 @@ impl GBuffer {
                     store: wgpu::StoreOp::Store,
                 })
             },
-        );
-        debug!("Create texture={:?}", target);
-        target
+        )
     }
 
     pub fn depth_stencil(&self) -> &RenderTargetTexture {
@@ -127,27 +120,28 @@ impl GBuffer {
     pub fn as_color_attachments(
         &self,
     ) -> anyhow::Result<Vec<Option<wgpu::RenderPassColorAttachment>>> {
-        let mut attachments = Vec::new();
-        attachments.push(Some(wgpu::RenderPassColorAttachment {
-            view: self.position_metallic.texture().view(),
-            ops: self.position_metallic.as_color_operation()?,
-            resolve_target: None,
-        }));
-        attachments.push(Some(wgpu::RenderPassColorAttachment {
-            view: self.normal_roughness.texture().view(),
-            ops: self.normal_roughness.as_color_operation()?,
-            resolve_target: None,
-        }));
-        attachments.push(Some(wgpu::RenderPassColorAttachment {
-            view: self.albedo_occlusion.texture().view(),
-            ops: self.albedo_occlusion.as_color_operation()?,
-            resolve_target: None,
-        }));
-        attachments.push(Some(wgpu::RenderPassColorAttachment {
-            view: self.emissive.texture().view(),
-            ops: self.emissive.as_color_operation()?,
-            resolve_target: None,
-        }));
+        let attachments = vec![
+            Some(wgpu::RenderPassColorAttachment {
+                view: self.position_metallic.texture().view(),
+                ops: self.position_metallic.as_color_operation()?,
+                resolve_target: None,
+            }),
+            Some(wgpu::RenderPassColorAttachment {
+                view: self.normal_roughness.texture().view(),
+                ops: self.normal_roughness.as_color_operation()?,
+                resolve_target: None,
+            }),
+            Some(wgpu::RenderPassColorAttachment {
+                view: self.albedo_occlusion.texture().view(),
+                ops: self.albedo_occlusion.as_color_operation()?,
+                resolve_target: None,
+            }),
+            Some(wgpu::RenderPassColorAttachment {
+                view: self.emissive.texture().view(),
+                ops: self.emissive.as_color_operation()?,
+                resolve_target: None,
+            }),
+        ];
 
         Ok(attachments)
     }

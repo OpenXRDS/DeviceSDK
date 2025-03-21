@@ -22,6 +22,7 @@ anyhow = { workspace = true }
 tokio = { workspace = true }
 winit = { workspace = true }
 futures = { workspace = true }
+uuid = { workspace = true }
 
 [target.'cfg(android)'.dependencies]
 winit = { version = "0.30.9", features = ["android-game-activity"] }

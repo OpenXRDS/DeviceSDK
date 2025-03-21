@@ -8,3 +8,5 @@ log = { workspace = true }
 env_logger = { workspace = true }
 anyhow = { workspace = true }
 clap = { version = "4.5.31", features = ["cargo", "derive"] }
+rand = { version = "0.9.0" }
+glam = { version = "0.30.0" }

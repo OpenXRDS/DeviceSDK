@@ -139,21 +139,24 @@ impl OpenXrContext {
             &reference_space,
         )?;
 
-        for i in 0..views.len() {
-            let v = &views[i];
-            let c = self.camera_binding.get_camera_mut(i);
-            let p = v.pose.position;
-            let o = v.pose.orientation;
-            c.set_fov(Fov {
-                left: v.fov.angle_left,
-                right: v.fov.angle_right,
-                up: v.fov.angle_up,
-                down: v.fov.angle_down,
-            });
-            c.set_position(vec3(-p.x, p.y, -p.z));
-            c.set_orientation(
-                Quat::from_rotation_x(180.0f32.to_radians()) * quat(o.w, o.z, o.y, o.x),
-            );
+        for (i, view) in views.iter().enumerate() {
+            let pos = view.pose.position;
+            let ori = view.pose.orientation;
+
+            let fov = Fov {
+                left: view.fov.angle_left,
+                right: view.fov.angle_right,
+                up: view.fov.angle_up,
+                down: view.fov.angle_down,
+            };
+            let position = vec3(-pos.x, pos.y, -pos.z);
+            let orientation =
+                Quat::from_rotation_x(180.0f32.to_radians()) * quat(ori.w, ori.z, ori.y, ori.x);
+
+            let cam = self.camera_binding.get_camera_mut(i);
+            cam.set_fov(fov);
+            cam.set_position(position);
+            cam.set_orientation(orientation);
         }
 
         self.camera_binding

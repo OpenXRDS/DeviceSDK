@@ -1,53 +1,73 @@
 use log::debug;
+use naga_oil::compose::{ComposableModuleDescriptor, Composer, NagaModuleDescriptor};
 use wgpu::{
-    include_wgsl, FragmentState, MultisampleState, PipelineCompilationOptions,
-    PipelineLayoutDescriptor, RenderPipelineDescriptor, VertexState,
+    naga::valid::Capabilities, BindGroupLayoutDescriptor, BindGroupLayoutEntry, BindingType,
+    BufferBindingType, FragmentState, MultisampleState, PipelineCompilationOptions,
+    PipelineLayoutDescriptor, RenderPipelineDescriptor, ShaderModuleDescriptor, ShaderStages,
+    VertexState,
 };
 
-use crate::{GraphicsInstance, RenderTargetTexture};
-use std::{num::NonZeroU32, sync::Arc};
+use crate::{GraphicsInstance, RenderTargetTexture, ViewParams};
+use std::{
+    borrow::Cow,
+    collections::HashMap,
+    num::{NonZeroU32, NonZeroU64},
+    sync::Arc,
+};
 
 use super::Postproc;
 
 pub fn create_deferred_lighting_proc(
     graphics_instance: Arc<GraphicsInstance>,
-    view_count: u32,
-    bind_group_layout: &wgpu::BindGroupLayout,
+    gbuffer_bind_group_layout: &wgpu::BindGroupLayout,
     output: &RenderTargetTexture,
 ) -> anyhow::Result<Postproc> {
     let device = graphics_instance.device();
+
+    // TODO: resuable
+    let view_bind_group_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+        label: Some("ViewProjectionBindings"),
+        entries: &[BindGroupLayoutEntry {
+            binding: 0,
+            visibility: ShaderStages::VERTEX_FRAGMENT,
+            ty: BindingType::Buffer {
+                ty: BufferBindingType::Uniform,
+                has_dynamic_offset: false,
+                min_binding_size: NonZeroU64::new((std::mem::size_of::<ViewParams>() * 2) as u64),
+            },
+            count: None,
+        }],
+    });
+
     let pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
         label: None,
-        bind_group_layouts: &[&bind_group_layout],
+        bind_group_layouts: &[&view_bind_group_layout, gbuffer_bind_group_layout],
         push_constant_ranges: &[],
     });
 
-    // let mut composer = Composer::default()
-    //     .with_capabilities(Capabilities::MULTIVIEW | Capabilities::PUSH_CONSTANT);
-    // let mut defs = HashMap::new();
-    // defs.insert(
-    //     "VIEW_COUNT".to_owned(),
-    //     naga_oil::compose::ShaderDefValue::UInt(view_count),
-    // );
-    // debug!("defs.insert()");
-    // debug!(
-    //     "Shader source: {}",
-    //     include_str!("shader/deferred_lighting.wgsl")
-    // );
-    // let naga_module = composer.make_naga_module(NagaModuleDescriptor {
-    //     source: include_str!("shader/deferred_lighting.wgsl"),
-    //     file_path: "shader/deferred_lighting.wgsl",
-    //     shader_type: naga_oil::compose::ShaderType::Wgsl,
-    //     shader_defs: defs,
-    //     additional_imports: &[],
-    // })?;
-    // debug!("composer.make_naga_module()");
-    // let module = device.create_shader_module(ShaderModuleDescriptor {
-    //     label: None,
-    //     source: wgpu::ShaderSource::Naga(Cow::Owned(naga_module)),
-    // });
-    // debug!("device.create_shader_module()");
-    let module = device.create_shader_module(include_wgsl!("../shader/deferred_lighting.wgsl"));
+    let mut composer = Composer::default().with_capabilities(Capabilities::all());
+    composer.validate = false;
+    log::debug!("composer::default()");
+    let defs = HashMap::new();
+    composer.add_composable_module(ComposableModuleDescriptor {
+        source: include_str!("../shader/view_params.wgsl"),
+        file_path: "../shader/view_params.wgsl",
+        ..Default::default()
+    })?;
+    log::debug!("composer.add_composable_module()");
+    let naga_module = composer.make_naga_module(NagaModuleDescriptor {
+        source: include_str!("../shader/postproc/deferred_lighting.wgsl"),
+        file_path: "../shader/postproc/deferred_lighting.wgsl",
+        shader_type: naga_oil::compose::ShaderType::Wgsl,
+        shader_defs: defs,
+        additional_imports: &[],
+    });
+    log::debug!("composer.make_naga_module()");
+    let module = device.create_shader_module(ShaderModuleDescriptor {
+        label: Some("shader/deferred_lighting.wgsl"),
+        source: wgpu::ShaderSource::Naga(Cow::Owned(naga_module.unwrap())),
+    });
+    debug!("device.create_shader_module()");
 
     let pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
         label: None,
@@ -71,11 +91,7 @@ pub fn create_deferred_lighting_proc(
         layout: Some(&pipeline_layout),
         multisample: MultisampleState::default(),
         primitive: wgpu::PrimitiveState::default(),
-        multiview: if view_count > 0 {
-            NonZeroU32::new(view_count)
-        } else {
-            None
-        },
+        multiview: NonZeroU32::new(2),
         cache: graphics_instance.pipeline_cache(),
     });
     debug!("device.create_render_pipeline()");

@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use ash::vk;
 use wgpu::{DeviceDescriptor, InstanceDescriptor, RequestAdapterOptions, TextureUsages};
 
@@ -22,12 +20,12 @@ pub enum GraphicsApi {
 }
 
 impl GraphicsInstance {
-    pub async fn new() -> Arc<Self> {
+    pub async fn new() -> anyhow::Result<Self> {
         let instance = wgpu::Instance::new(&InstanceDescriptor::from_env_or_default());
         let adapter = instance
             .request_adapter(&RequestAdapterOptions::default())
             .await
-            .unwrap();
+            .unwrap(); // todo: .ok_or(err)?;
         log::debug!("Adapter graphics limits: {:?}", adapter.limits());
         let (device, queue) = adapter
             .request_device(
@@ -38,10 +36,9 @@ impl GraphicsInstance {
                 },
                 None,
             )
-            .await
-            .unwrap();
+            .await?;
         log::debug!("Device graphics limits: {:?}", device.limits());
-        Arc::new(Self {
+        Ok(Self {
             instance,
             adapter,
             device,
@@ -75,14 +72,14 @@ impl GraphicsInstance {
         adapter: wgpu::Adapter,
         device: wgpu::Device,
         queue: wgpu::Queue,
-    ) -> Arc<Self> {
-        Arc::new(Self {
+    ) -> Self {
+        Self {
             instance,
             adapter,
             device,
             queue,
             pipeline_cache: None,
-        })
+        }
     }
 }
 

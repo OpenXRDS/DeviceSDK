@@ -42,7 +42,8 @@ impl OpenXrVulkanContext {
     fn wgpu_instance() -> wgpu::Instance {
         wgpu::Instance::new(&InstanceDescriptor {
             backends: wgpu::Backends::VULKAN,
-            flags: wgpu::InstanceFlags::debugging(),
+            // flags: wgpu::InstanceFlags::debugging(),
+            flags: wgpu::InstanceFlags::empty(),
             backend_options: BackendOptions::from_env_or_default(),
         })
     }
@@ -330,7 +331,7 @@ impl OpenXrContextApi for OpenXrVulkanContext {
                 swapchain_extent: None,
             }),
             frame_waiter,
-            graphics_instance,
+            graphics_instance: Arc::new(graphics_instance),
             _phantom: std::marker::PhantomData,
         })
     }

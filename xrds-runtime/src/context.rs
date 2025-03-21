@@ -3,7 +3,7 @@ use std::{
     sync::{Arc, RwLock},
 };
 
-use xrds_graphics::{loader::GltfLoader, AssetServer};
+use xrds_graphics::{loader::GltfLoader, AssetServer, GraphicsInstance};
 
 use crate::{Object, World};
 
@@ -13,13 +13,14 @@ pub struct Context {
 }
 
 impl Context {
-    pub(crate) fn new(asset_server: Arc<AssetServer>) -> Self {
-        Self {
+    pub(crate) fn new(graphics_instance: Arc<GraphicsInstance>) -> anyhow::Result<Self> {
+        Ok(Self {
             inner: Arc::new(RwLock::new(ContextInner {
-                asset_server,
-                current_world: World::new(),
+                graphics_instance: graphics_instance.clone(),
+                asset_server: Arc::new(AssetServer::new(graphics_instance.clone())?),
+                current_world: World::new(graphics_instance.clone(), 10000usize),
             })),
-        }
+        })
     }
 
     pub fn load_objects_from_gltf<P>(&self, gltf_path: P) -> anyhow::Result<Vec<Object>>
@@ -37,26 +38,29 @@ impl Context {
         Ok(gltf
             .scenes
             .iter()
-            .map(|scene| Object {
-                inner: scene.clone(),
-            })
+            .map(|gltf_scene| Object::new(gltf_scene.clone()))
             .collect())
     }
 
-    pub fn get_current_world(&self) -> anyhow::Result<World> {
+    pub fn get_current_world(&self) -> World {
         let lock = self.inner.read().unwrap();
         lock.get_current_world()
     }
 }
 
-#[derive(Debug, Clone)]
-struct ContextInner {
+#[derive(Debug)]
+pub struct ContextInner {
+    graphics_instance: Arc<GraphicsInstance>,
     asset_server: Arc<AssetServer>,
     current_world: World,
 }
 
 impl ContextInner {
-    pub fn get_current_world(&self) -> anyhow::Result<World> {
-        Ok(self.current_world.clone())
+    pub fn get_current_world(&self) -> World {
+        self.current_world.clone()
+    }
+
+    pub fn get_graphics_instance(&self) -> &Arc<GraphicsInstance> {
+        &self.graphics_instance
     }
 }

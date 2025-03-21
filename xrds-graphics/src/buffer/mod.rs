@@ -1,9 +1,14 @@
-mod buffer_view;
+mod index;
+mod instance;
+mod vertex;
 
-use std::{fmt::Debug, ops::Range};
+pub use index::*;
+pub use instance::*;
+pub use vertex::*;
 
-pub use buffer_view::*;
-use wgpu::{BufferSlice, IndexFormat, VertexFormat};
+use std::{fmt::Debug, ops::RangeBounds};
+
+use wgpu::{BufferAddress, BufferSlice, IndexFormat, VertexFormat};
 
 #[derive(Debug, Clone, Copy)]
 pub enum XrdsBufferType {
@@ -16,25 +21,11 @@ pub enum XrdsBufferType {
 pub struct XrdsBuffer {
     inner: wgpu::Buffer,
     ty: XrdsBufferType,
-    stride: u64,
-}
-
-#[derive(Clone)]
-pub struct XrdsVertexBuffer {
-    pub buffer: XrdsBuffer,
-    pub vertex_attributes: [wgpu::VertexAttribute; 1], // Currently support discreted vertex buffer only
-    pub count: usize,
-}
-
-#[derive(Clone)]
-pub struct XrdsIndexBuffer {
-    pub buffer: XrdsBuffer,
-    pub index_format: wgpu::IndexFormat,
-    pub count: usize,
+    stride: Option<u64>,
 }
 
 impl XrdsBuffer {
-    pub fn new(inner: wgpu::Buffer, ty: XrdsBufferType, stride: u64) -> Self {
+    pub fn new(inner: wgpu::Buffer, ty: XrdsBufferType, stride: Option<u64>) -> Self {
         Self { inner, ty, stride }
     }
 
@@ -47,35 +38,18 @@ impl XrdsBuffer {
     }
 
     pub fn stride(&self) -> u64 {
-        self.stride
+        self.stride.unwrap_or(match self.ty {
+            XrdsBufferType::Index(format) => format.byte_size() as u64,
+            XrdsBufferType::Vertex(format) => format.size(),
+            XrdsBufferType::Uniform => 16,
+        })
     }
 
-    pub fn as_slice(&self) -> BufferSlice<'_> {
-        self.inner.slice(..)
-    }
-}
-
-impl XrdsVertexBuffer {
-    pub fn as_slice(&self) -> BufferSlice<'_> {
-        self.buffer.as_slice()
-    }
-
-    pub fn as_range(&self) -> Range<u32> {
-        0..self.count as u32
-    }
-}
-
-impl XrdsIndexBuffer {
-    pub fn as_slice(&self) -> BufferSlice<'_> {
-        self.buffer.as_slice()
-    }
-
-    pub fn format(&self) -> wgpu::IndexFormat {
-        self.index_format
-    }
-
-    pub fn as_range(&self) -> Range<u32> {
-        0..self.count as u32
+    pub fn slice<S>(&self, bounds: S) -> BufferSlice<'_>
+    where
+        S: RangeBounds<BufferAddress>,
+    {
+        self.inner.slice(bounds)
     }
 }
 
@@ -95,23 +69,6 @@ impl Debug for XrdsBuffer {
             .field("type", &self.ty)
             .field("stride", &self.stride)
             .field("size", &self.inner.size())
-            .finish()
-    }
-}
-
-impl Debug for XrdsVertexBuffer {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("XrdsVertexBuffer")
-            .field("buffer", &self.buffer)
-            .finish()
-    }
-}
-
-impl Debug for XrdsIndexBuffer {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("XrdsIndexBuffer")
-            .field("buffer", &self.buffer)
-            .field("index_format", &self.index_format)
             .finish()
     }
 }

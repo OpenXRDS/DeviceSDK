@@ -1,4 +1,7 @@
-use xrds::RuntimeHandler;
+use std::{f32::consts::PI, path::PathBuf};
+
+use rand::{rng, Rng};
+use xrds::{core::core::Transform, RuntimeHandler};
 
 #[derive(Clone, clap::Args)]
 pub struct GltfOptions {
@@ -35,8 +38,22 @@ impl RuntimeHandler for App {
     fn on_begin(&mut self, context: xrds::Context) -> anyhow::Result<()> {
         self.objects = context.load_objects_from_gltf(self.gltf_path.as_str())?;
 
-        let world = context.get_current_world()?;
-        world.spawn(&self.objects)?;
+        let world = context.get_current_world();
+        let uniform = rand::distr::Uniform::new(0.0f32, 1.0f32)?;
+        for _ in 0..10000 {
+            let distance = rng().sample(uniform) * 50.0 + 0.5;
+            let angle = rng().sample(uniform) * PI * 2.0;
+            let tx = distance * angle.cos();
+            let tz = distance * angle.sin();
+            let s = rng().sample(uniform) + 0.5;
+            let ry = rng().sample(uniform) * PI * 2.0;
+
+            let transform = Transform::default()
+                .with_translation(glam::vec3(tx, 0.0, tz))
+                .with_scale(glam::vec3(s, s, s))
+                .with_rotation(glam::Quat::from_rotation_y(ry));
+            world.spawn(&self.objects[0], &transform)?;
+        }
         Ok(())
     }
 
@@ -68,12 +85,10 @@ pub fn run(options: GltfOptions) -> anyhow::Result<()> {
         } else {
             xrds::RuntimeTarget::XrWithPreview
         }
+    } else if options.disable_window {
+        anyhow::bail!("Both xr and window disabled. At least one must be enabled")
     } else {
-        if options.disable_window {
-            anyhow::bail!("Both xr and window disabled. At least one must be enabled")
-        } else {
-            xrds::RuntimeTarget::Window
-        }
+        xrds::RuntimeTarget::Window
     };
     let mut runtime_builder = xrds::Runtime::builder()
         .with_application_name("gltf_viewer")
@@ -93,8 +108,46 @@ pub fn run(options: GltfOptions) -> anyhow::Result<()> {
     }
     let runtime = runtime_builder.build()?;
 
+    let path = PathBuf::from(options.path);
+
+    let gltf_file = if path.is_file() {
+        if let Some(extension) = path.extension() {
+            let extension_str = extension.to_string_lossy();
+            if extension_str != "gltf" && extension_str != "glb" {
+                anyhow::bail!("Invalid file extension: {}", extension_str);
+            }
+        } else {
+            anyhow::bail!("Invalid file extension");
+        }
+        path
+    } else {
+        let gltf_files: Vec<_> = path
+            .read_dir()?
+            .filter_map(|e| e.ok())
+            .filter_map(|e| {
+                let path = e.path();
+                if let Some(extension) = path.extension() {
+                    let extension_str = extension.to_string_lossy();
+                    if extension_str == "gltf" || extension_str == "glb" {
+                        Some(path)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            })
+            .collect();
+        if gltf_files.is_empty() {
+            anyhow::bail!("No gltf file found");
+        }
+
+        // viewer support only 1 gltf or glb file so we use first gltf file
+        gltf_files[0].clone()
+    };
+
     let app = App {
-        gltf_path: options.path,
+        gltf_path: gltf_file.to_string_lossy().to_string(),
         ..Default::default()
     };
 

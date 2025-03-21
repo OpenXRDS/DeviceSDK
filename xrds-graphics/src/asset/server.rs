@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap,
-    num::NonZeroU32,
+    num::{NonZeroU32, NonZeroU64},
     sync::{Arc, RwLock},
 };
 
@@ -18,8 +18,8 @@ use wgpu::{
 use crate::{
     buffer::XrdsBufferType,
     pbr::{Options, PbrMaterialInputOption, PbrMaterialParams, PbrShaderBuilder},
-    GraphicsInstance, TextureFormat, XrdsBuffer, XrdsMaterial, XrdsMaterialInstance, XrdsTexture,
-    XrdsVertexBuffer,
+    GraphicsInstance, TextureFormat, ViewParams, XrdsBuffer, XrdsMaterial, XrdsMaterialInstance,
+    XrdsTexture, XrdsVertexBuffer,
 };
 
 use super::types::{AssetHandle, AssetId, AssetStrongHandle};
@@ -53,7 +53,7 @@ pub struct BufferAssetInfo<'a> {
     pub id: &'a AssetId,
     pub data: &'a [u8],
     pub ty: XrdsBufferType,
-    pub stride: u64,
+    pub stride: Option<u64>,
 }
 
 pub struct MaterialAssetInfo<'a> {
@@ -255,9 +255,11 @@ impl AssetServer {
                 ty: BindingType::Buffer {
                     ty: BufferBindingType::Uniform,
                     has_dynamic_offset: false,
-                    min_binding_size: None,
+                    min_binding_size: NonZeroU64::new(
+                        (std::mem::size_of::<ViewParams>() * 2) as u64,
+                    ),
                 },
-                count: NonZeroU32::new(2),
+                count: None,
             }],
         }));
 
@@ -297,42 +299,42 @@ impl AssetServer {
             }],
         });
 
-        let mut vertex_layouts: Vec<_> = info
-            .vertex_buffers
-            .iter()
-            .map(|vb| VertexBufferLayout {
+        // Instance buffer layout.
+        // Instance always located in slot 0. But shader location is 10~13
+        let mut vertex_layouts = vec![VertexBufferLayout {
+            array_stride: std::mem::size_of::<[f32; 16]>() as u64,
+            step_mode: wgpu::VertexStepMode::Instance,
+            attributes: &[
+                VertexAttribute {
+                    format: wgpu::VertexFormat::Float32x4,
+                    offset: 0,
+                    shader_location: 10,
+                },
+                VertexAttribute {
+                    format: wgpu::VertexFormat::Float32x4,
+                    offset: std::mem::size_of::<[f32; 4]>() as u64,
+                    shader_location: 11,
+                },
+                VertexAttribute {
+                    format: wgpu::VertexFormat::Float32x4,
+                    offset: std::mem::size_of::<[f32; 8]>() as u64,
+                    shader_location: 12,
+                },
+                VertexAttribute {
+                    format: wgpu::VertexFormat::Float32x4,
+                    offset: std::mem::size_of::<[f32; 12]>() as u64,
+                    shader_location: 13,
+                },
+            ],
+        }];
+
+        info.vertex_buffers.iter().for_each(|vb| {
+            vertex_layouts.push(VertexBufferLayout {
                 array_stride: vb.buffer.stride(),
                 step_mode: wgpu::VertexStepMode::Vertex,
                 attributes: &vb.vertex_attributes,
             })
-            .collect();
-        // Instance buffer layout
-        // vertex_layouts.push(VertexBufferLayout {
-        //     array_stride: std::mem::size_of::<[f32; 16]>() as u64,
-        //     step_mode: wgpu::VertexStepMode::Instance,
-        //     attributes: &[
-        //         VertexAttribute {
-        //             format: wgpu::VertexFormat::Float32x4,
-        //             offset: 0,
-        //             shader_location: 10,
-        //         },
-        //         VertexAttribute {
-        //             format: wgpu::VertexFormat::Float32x4,
-        //             offset: std::mem::size_of::<[f32; 4]>() as u64,
-        //             shader_location: 11,
-        //         },
-        //         VertexAttribute {
-        //             format: wgpu::VertexFormat::Float32x4,
-        //             offset: std::mem::size_of::<[f32; 8]>() as u64,
-        //             shader_location: 12,
-        //         },
-        //         VertexAttribute {
-        //             format: wgpu::VertexFormat::Float32x4,
-        //             offset: std::mem::size_of::<[f32; 12]>() as u64,
-        //             shader_location: 13,
-        //         },
-        //     ],
-        // });
+        });
 
         let format = wgpu::TextureFormat::Rgba32Float;
         let pipeline =
@@ -385,7 +387,7 @@ impl AssetServer {
                     depth_stencil: Some(DepthStencilState {
                         format: wgpu::TextureFormat::Depth24PlusStencil8,
                         depth_write_enabled: true,
-                        depth_compare: wgpu::CompareFunction::Less,
+                        depth_compare: wgpu::CompareFunction::LessEqual,
                         stencil: StencilState::default(),
                         bias: DepthBiasState::default(),
                     }),
@@ -396,14 +398,13 @@ impl AssetServer {
                         } else {
                             Some(wgpu::Face::Back)
                         },
-                        topology: wgpu::PrimitiveTopology::TriangleList,
                         front_face: wgpu::FrontFace::Ccw,
                         polygon_mode: wgpu::PolygonMode::Fill,
+                        strip_index_format: None,
+                        topology: wgpu::PrimitiveTopology::TriangleList,
                         ..Default::default()
                     },
-                    multisample: MultisampleState {
-                        ..Default::default()
-                    },
+                    multisample: MultisampleState::default(),
                     multiview: NonZeroU32::new(2),
                 });
 
@@ -506,7 +507,7 @@ impl AssetServer {
                     usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
                     contents: bytemuck::bytes_of(&info.params),
                 });
-        let buffer = XrdsBuffer::new(material_params, XrdsBufferType::Uniform, 1);
+        let buffer = XrdsBuffer::new(material_params, XrdsBufferType::Uniform, None);
         let mut bind_group_entries = Vec::new();
 
         bind_group_entries.push(BindGroupEntry {

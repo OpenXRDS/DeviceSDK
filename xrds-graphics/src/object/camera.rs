@@ -1,9 +1,9 @@
-use std::num::{NonZeroU32, NonZeroU64};
+use std::num::NonZeroU64;
 
 use glam::Mat4;
 use wgpu::{BindingResource, BufferBinding};
 
-use crate::RenderPass;
+use crate::{pbr, RenderPass};
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default, bytemuck::Pod, bytemuck::Zeroable)]
@@ -32,8 +32,6 @@ pub struct Camera {
     position: glam::Vec3,
     orientation: glam::Quat,
     fov: Fov,
-    near: f32,
-    far: f32,
 }
 
 /// Multiple camera binding
@@ -45,29 +43,24 @@ pub struct CameraBinding {
 }
 
 impl Camera {
-    pub fn new(
-        position: glam::Vec3,
-        orientation: glam::Quat,
-        fov: Fov,
-        near: f32,
-        far: f32,
-    ) -> Self {
+    pub fn new(position: glam::Vec3, orientation: glam::Quat, fov: Fov) -> Self {
         Camera {
             position,
             orientation,
             fov,
-            near,
-            far,
         }
     }
 
     pub fn as_view_params(&self) -> ViewParams {
+        const Z_NEAR: f32 = 0.05;
+        const Z_FAR: f32 = 10000.0;
+
         let view_mat = Mat4::look_at_rh(
             self.position,
             self.position + self.orientation * glam::Vec3::Z,
             self.orientation * glam::Vec3::Y,
         );
-        let inv_view_mat = view_mat.inverse();
+
         let proj_mat = {
             let [tan_left, tan_right, tan_down, tan_up] =
                 [self.fov.left, self.fov.right, self.fov.down, self.fov.up].map(f32::tan);
@@ -79,9 +72,9 @@ impl Camera {
 
             let a31 = (tan_right + tan_left) / tan_width;
             let a32 = (tan_up + tan_down) / tan_height;
-            let a33 = -self.far / (self.far - self.near);
+            let a33 = -Z_FAR / (Z_FAR - Z_NEAR);
 
-            let a43 = -(self.far * self.near) / (self.far - self.near);
+            let a43 = -(Z_FAR * Z_NEAR) / (Z_FAR - Z_NEAR);
 
             glam::Mat4::from_cols_array(&[
                 a11, 0.0, 0.0, 0.0, //
@@ -90,8 +83,10 @@ impl Camera {
                 0.0, 0.0, a43, 0.0, //
             ])
         };
-        let inv_proj_mat = proj_mat.inverse();
         let view_proj_mat = proj_mat * view_mat;
+
+        let inv_view_mat = view_mat.inverse();
+        let inv_proj_mat = proj_mat.inverse();
         let inv_view_proj_mat = view_proj_mat.inverse();
 
         ViewParams {
@@ -118,14 +113,6 @@ impl Camera {
         self.fov = fov;
     }
 
-    pub fn set_near(&mut self, near: f32) {
-        self.near = near;
-    }
-
-    pub fn set_far(&mut self, far: f32) {
-        self.far = far;
-    }
-
     pub fn get_position(&self) -> glam::Vec3 {
         self.position
     }
@@ -136,14 +123,6 @@ impl Camera {
 
     pub fn get_fov(&self) -> Fov {
         self.fov
-    }
-
-    pub fn get_near(&self) -> f32 {
-        self.near
-    }
-
-    pub fn get_far(&self) -> f32 {
-        self.far
     }
 }
 
@@ -158,8 +137,6 @@ impl Default for Camera {
                 down: 45.0f32.to_radians(),
                 up: 45.0f32.to_radians(),
             },
-            near: 0.05,
-            far: 10000.0,
         }
     }
 }
@@ -174,9 +151,11 @@ impl CameraBinding {
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
-                    min_binding_size: None,
+                    min_binding_size: NonZeroU64::new(
+                        (std::mem::size_of::<ViewParams>() * 2) as u64,
+                    ),
                 },
-                count: NonZeroU32::new(2),
+                count: None,
             }],
         });
 
@@ -225,6 +204,6 @@ impl CameraBinding {
     }
 
     pub fn encode(&self, render_pass: &mut RenderPass) {
-        render_pass.set_bind_group(0, &self.bind_group, &[]);
+        render_pass.set_bind_group(pbr::BIND_GROUP_INDEX_VIEW_PARAMS, &self.bind_group, &[]);
     }
 }

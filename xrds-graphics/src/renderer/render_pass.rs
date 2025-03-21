@@ -1,6 +1,6 @@
 use std::ops::Range;
 
-use crate::{pbr, XrdsIndexBuffer, XrdsMaterialInstance, XrdsVertexBuffer};
+use crate::{pbr, XrdsIndexBuffer, XrdsInstanceBuffer, XrdsMaterialInstance, XrdsVertexBuffer};
 
 pub struct RenderPass<'encoder> {
     inner: wgpu::RenderPass<'encoder>,
@@ -9,6 +9,10 @@ pub struct RenderPass<'encoder> {
 impl<'e> RenderPass<'e> {
     pub fn new(inner: wgpu::RenderPass<'e>) -> Self {
         RenderPass { inner }
+    }
+
+    pub fn bind_pipeline(&mut self, pipeline: &wgpu::RenderPipeline) {
+        self.inner.set_pipeline(pipeline);
     }
 
     pub fn bind_material(&mut self, material: &XrdsMaterialInstance) {
@@ -20,10 +24,16 @@ impl<'e> RenderPass<'e> {
         );
     }
 
-    pub fn bind_vertex_buffers(&mut self, vertex_buffers: &[XrdsVertexBuffer]) {
+    pub fn bind_vertex_buffers(&mut self, vertex_buffers: &[XrdsVertexBuffer], base_vertex: u32) {
         for (index, vb) in vertex_buffers.iter().enumerate() {
-            self.inner.set_vertex_buffer(index as _, vb.as_slice());
+            // Vertex buffer slot 0 is for instance buffer. So slot index of actual vertices started from 1
+            self.inner
+                .set_vertex_buffer(index as u32 + 1 + base_vertex, vb.slice());
         }
+    }
+
+    pub fn bind_instance_buffer(&mut self, instance_buffer: &XrdsInstanceBuffer) {
+        self.inner.set_vertex_buffer(0, instance_buffer.slice());
     }
 
     pub fn bind_index_buffer(&mut self, index_buffer: &XrdsIndexBuffer) {
@@ -39,11 +49,11 @@ impl<'e> RenderPass<'e> {
         self.inner.set_push_constants(stages, offset, data);
     }
 
-    pub fn draw_indexed(&mut self, indices: Range<u32>, base_vertex: i32) {
-        self.inner.draw_indexed(indices, base_vertex, 0..1);
+    pub fn draw_indexed(&mut self, indices: Range<u32>, base_vertex: i32, instances: Range<u32>) {
+        self.inner.draw_indexed(indices, base_vertex, instances);
     }
 
-    pub fn draw(&mut self, vertices: Range<u32>) {
-        self.inner.draw(vertices, 0..1);
+    pub fn draw(&mut self, vertices: Range<u32>, instances: Range<u32>) {
+        self.inner.draw(vertices, instances);
     }
 }

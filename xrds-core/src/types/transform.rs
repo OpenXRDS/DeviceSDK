@@ -41,6 +41,21 @@ impl Default for Transform {
 }
 
 impl Transform {
+    pub fn with_translation(mut self, translation: glam::Vec3) -> Self {
+        self.translation = translation;
+        self
+    }
+
+    pub fn with_rotation(mut self, rotation: glam::Quat) -> Self {
+        self.rotation = rotation;
+        self
+    }
+
+    pub fn with_scale(mut self, scale: glam::Vec3) -> Self {
+        self.scale = scale;
+        self
+    }
+
     pub fn from_matrix(matrix: &glam::Mat4) -> Self {
         let (scale, rotation, translation) = matrix.to_scale_rotation_translation();
         Self {
@@ -79,5 +94,17 @@ impl Transform {
 
     pub fn to_model_array(&self) -> [f32; 16] {
         self.to_model_matrix().to_cols_array()
+    }
+
+    pub fn get_translation(&self) -> glam::Vec3 {
+        self.translation
+    }
+
+    pub fn get_rotation(&self) -> glam::Quat {
+        self.rotation
+    }
+
+    pub fn get_scale(&self) -> glam::Vec3 {
+        self.scale
     }
 }
