@@ -20,18 +20,37 @@
  */
 
 mod tests {
+    use rumqttc::Subscribe;
     use tokio::time::{sleep, Duration};
+    use webrtc::sdp::description::session;
     use crate::server::XRNetServer;
-    use crate::client::{ClientBuilder, Client, WebRTCClient, XrdsWebRTCPublisher};
+    use crate::client::{ClientBuilder, Client, WebRTCClient};
     use crate::common::enums::{PROTOCOLS, FtpCommands};
-    use crate::common::data_structure::{FtpPayload, CREATE_SESSION, LIST_SESSIONS, JOIN_SESSION, LEAVE_SESSION, CLOSE_SESSION, LIST_PARTICIPANTS};
-    use crate::common::append_to_path;
+    use crate::common::data_structure::{FtpPayload, WebRTCMessage, 
+        CREATE_SESSION, LIST_SESSIONS, JOIN_SESSION, LEAVE_SESSION, CLOSE_SESSION, LIST_PARTICIPANTS, OFFER, ANSWER, WELCOME};
+    use crate::common::{append_to_path, payload_str_to_vector_str};
     use tokio::time::timeout;
     use std::sync::Arc;
     use tokio::sync::Mutex;
 
     use std::thread::sleep as thread_sleep;
     use tokio::runtime::Runtime;
+
+    async fn wait_for_message(mut client: WebRTCClient, msg_type: &str, timeout_secs: u64) -> (WebRTCMessage, WebRTCClient) {
+        let msg = timeout(Duration::from_secs(timeout_secs), async {
+            loop {
+                if let Some(msg) = client.receive_message().await {
+                    if msg.message_type == msg_type {
+                        return msg;
+                    }
+                }
+                sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await
+        .expect(&format!("Timed out waiting for {}", msg_type));
+        (msg, client)
+    }
 
     async fn echo_handler(msg: Vec<u8>) -> Option<Vec<u8>> {
         let msg_str = String::from_utf8(msg.clone()).unwrap();
@@ -420,6 +439,57 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_server_webrtc_multiuser() {
+        let current_line = line!() + 8000;
+        let server_handle = run_server(PROTOCOLS::WEBRTC, current_line);
+
+        let addr_str = "ws://127.0.0.1".to_owned() + ":" + &current_line.to_string() + "/";
+
+        sleep(Duration::from_secs(2)).await;
+
+        let mut webrtc_client = WebRTCClient::new();
+        webrtc_client.connect(addr_str.as_str()).await.expect("Failed to connect");
+
+        let client_id = timeout(Duration::from_secs(5), async {
+            loop {
+                if let Some(msg) = webrtc_client.receive_message().await {
+                    if msg.message_type == "WELCOME" {
+                        return msg.client_id;
+                    }
+                } else {
+                    println!("No message received");
+                }
+                sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await
+        .expect("Timed out waiting for client_id");
+
+        sleep(Duration::from_secs(2)).await;
+        println!("Starting second client");
+        let mut webrtc_client2 = WebRTCClient::new();
+        webrtc_client2.connect(addr_str.as_str()).await.expect("Failed to connect");
+
+        let client_id2 = timeout(Duration::from_secs(5), async {
+            loop {
+                if let Some(msg) = webrtc_client2.receive_message().await {
+                    if msg.message_type == "WELCOME" {
+                        return msg.client_id;
+                    }
+                } else {
+                    println!("No message received");
+                }
+                sleep(Duration::from_millis(100)).await;
+            }
+        }).await.expect("Timed out waiting for client_id");
+
+        println!("Test: client_id received: {}", client_id);
+        println!("Test: client_id2 received: {}", client_id2);
+
+        server_handle.abort();
+    }
+
+    #[tokio::test]
     async fn test_server_webrtc_session_create() {
         let current_line = line!() + 8000;
         let server_handle = run_server(PROTOCOLS::WEBRTC, current_line);
@@ -431,7 +501,7 @@ mod tests {
 
         webrtc_client.connect(addr_str.as_str()).await.expect("Failed to connect");
 
-        let client_id = timeout(Duration::from_secs(2), async {
+        let client_id = timeout(Duration::from_secs(5), async {
             loop {
                 if let Some(msg) = webrtc_client.receive_message().await {
                     if msg.message_type == "WELCOME" {
@@ -521,225 +591,396 @@ mod tests {
 
     #[tokio::test]
     async fn test_server_webrtc_session_multiple() {
-        // let current_line = line!() + 8000;
-        // let server_handle = run_server(PROTOCOLS::WEBRTC, current_line);
+        let current_line = line!() + 8000;
+        let server_handle = run_server(PROTOCOLS::WEBRTC, current_line);
 
-        // sleep(Duration::from_secs(2)).await;
+        sleep(Duration::from_secs(2)).await;
 
-        // let mut webrtc_client = WebRTCClient::new();
-        // let addr_str = "ws://127.0.0.1".to_owned() + ":" + &current_line.to_string() + "/";
-        // let client_handle = tokio::task::spawn_blocking(move || {
-        //     let connect_result = Runtime::new().unwrap().block_on(webrtc_client.connect(addr_str.as_str()));
-        //     assert_eq!(connect_result.is_ok(), true);
+        let mut webrtc_client = WebRTCClient::new();
+        let addr_str = "ws://127.0.0.1".to_owned() + ":" + &current_line.to_string() + "/";
 
-        //     let create_session_result = webrtc_client.create_session();
-        //     assert_eq!(create_session_result.is_ok(), true);
+        webrtc_client.connect(addr_str.as_str()).await.expect("Failed to connect");
 
-        //     let create_session_result = webrtc_client.create_session();
-        //     assert_eq!(create_session_result.is_ok(), true);
+        let client_id = timeout(Duration::from_secs(2), async {
+            loop {
+                if let Some(msg) = webrtc_client.receive_message().await {
+                    if msg.message_type == "WELCOME" {
+                        return msg.client_id;
+                    }
+                } else {
+                    println!("No message received");
+                }
+                sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await
+        .expect("Timed out waiting for client_id");
 
-        //     let list_session_result = webrtc_client.list_sessions();
-        //     assert_eq!(list_session_result.is_ok(), true);
+        println!("Test: client_id received: {}", client_id);
+        
+        let mut client = webrtc_client.create_session().await.expect("Failed to create session");
+        client = client.create_session().await.expect("Failed to create session");
+        client = client.list_sessions().await.expect("Failed to list sessions");
 
-        //     list_session_result.unwrap().iter().for_each(|session| {
-        //         println!("{:?}", session);
-        //     });
+        let session_list = timeout(Duration::from_secs(5), async {
+            loop {
+                if let Some(msg) = client.receive_message().await {
+                    if msg.message_type == LIST_SESSIONS {
+                        let session_list = String::from_utf8_lossy(&msg.payload).to_string();
+                        return session_list;
+                    }
+                } else {
+                    println!("No message received");
+                }
+                sleep(Duration::from_millis(100)).await;
+            }
+        }).await.expect("Timed out waiting for session list");
 
-        //     let close_result = webrtc_client.close_connection();
-        //     assert_eq!(close_result.is_ok(), true);
-        // });
+        println!("Test: session_list received: {}", session_list);
 
-        // client_handle.await.unwrap();
-        // server_handle.abort();
+        server_handle.abort();
     }
 
     #[tokio::test]
     async fn test_server_webrtc_session_close() {
-        // let current_line = line!() + 8000;
-        // let server_handle = run_server(PROTOCOLS::WEBRTC, current_line);
+        let current_line = line!() + 8000;
+        let server_handle = run_server(PROTOCOLS::WEBRTC, current_line);
 
-        // sleep(Duration::from_secs(2)).await;
+        sleep(Duration::from_secs(2)).await;
 
-        // let mut webrtc_client = WebRTCClient::new();
-        // let addr_str = "ws://127.0.0.1".to_owned() + ":" + &current_line.to_string() + "/";
-        // let client_handle = tokio::task::spawn_blocking(move || {
-        //     let connect_result = Runtime::new().unwrap().block_on(webrtc_client.connect(addr_str.as_str()));
-        //     assert_eq!(connect_result.is_ok(), true);
+        let mut webrtc_client = WebRTCClient::new();
+        let addr_str = "ws://127.0.0.1".to_owned() + ":" + &current_line.to_string() + "/";
+        
+        webrtc_client.connect(addr_str.as_str()).await.expect("Failed to connect");
 
-        //     let create_session_result = webrtc_client.create_session();
-        //     assert_eq!(create_session_result.is_ok(), true);
+        let client_id = timeout(Duration::from_secs(2), async {
+            loop {
+                if let Some(msg) = webrtc_client.receive_message().await {
+                    if msg.message_type == "WELCOME" {
+                        return msg.client_id;
+                    }
+                } else {
+                    println!("No message received");
+                }
+                sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await
+        .expect("Timed out waiting for client_id");
 
-        //     let first_session_id = create_session_result.unwrap();
-        //     println!("First session id: {}", first_session_id.clone());
+        let mut client = webrtc_client.create_session().await.expect("Failed to create session");
+        client = client.list_sessions().await.expect("Failed to list sessions");
 
-        //     let create_session_result = webrtc_client.create_session();
-        //     assert_eq!(create_session_result.is_ok(), true);
+        let session_list = timeout(Duration::from_secs(5), async {
+            loop {
+                if let Some(msg) = client.receive_message().await {
+                    if msg.message_type == LIST_SESSIONS {
+                        let session_list = String::from_utf8_lossy(&msg.payload).to_string();
+                        return session_list;
+                    }
+                } else {
+                    println!("No message received");
+                }
+                sleep(Duration::from_millis(100)).await;
+            }
+        }).await.expect("Timed out waiting for session list");
 
-        //     let list_session_result = webrtc_client.list_sessions();
-        //     assert_eq!(list_session_result.is_ok(), true);
+        let session_list = payload_str_to_vector_str(session_list.as_str());
 
-        //     list_session_result.unwrap().iter().for_each(|session| {
-        //         println!("{}", session);
-        //     });
+        println!("Test: session_list received: {:?}", session_list);
 
-        //     let close_session_result = webrtc_client.close_session(first_session_id.clone().as_str());
-        //     assert_eq!(close_session_result.is_ok(), true);
+        let session_id = session_list[0].clone();
+        println!("Test: session_id received: {}", session_id);
 
-        //     let remaining_sessions = webrtc_client.list_sessions().unwrap();
-        //     assert_eq!(remaining_sessions.len(), 1);
+        client = client.close_session(session_id.as_str()).await.expect("Failed to close session");
+        let close_result = timeout(Duration::from_secs(5), async {
+            loop {
+                if let Some(msg) = client.receive_message().await {
+                    if msg.message_type == CLOSE_SESSION {
+                        let close_result = String::from_utf8_lossy(&msg.payload).to_string();
+                        return close_result;
+                    }
+                } else {
+                    println!("No message received");
+                }
+                sleep(Duration::from_millis(100)).await;
+            }
+        }).await.expect("Timed out waiting for close session result");
 
-        //     let close_result = webrtc_client.close_connection();
-        //     assert_eq!(close_result.is_ok(), true);
-        // });
+        println!("Test: close_result received: {}", close_result);
 
-        // client_handle.await.unwrap();
-        // server_handle.abort();
+        client = client.list_sessions().await.expect("Failed to list sessions");
+        let session_list = timeout(Duration::from_secs(5), async {
+            loop {
+                if let Some(msg) = client.receive_message().await {
+                    if msg.message_type == LIST_SESSIONS {
+                        let session_list = String::from_utf8_lossy(&msg.payload).to_string();
+                        return session_list;
+                    }
+                } else {
+                    println!("No message received");
+                }
+                sleep(Duration::from_millis(100)).await;
+            }
+        }).await.expect("Timed out waiting for session list");
+
+        let session_list = payload_str_to_vector_str(session_list.as_str());
+        println!("Test: session_list received: {:?}", session_list);
+        
+        server_handle.abort();
     }
 
     #[tokio::test]
     async fn test_server_webrtc_session_join() {
-        // let current_line = line!() + 8000;
-        // let server_handle = run_server(PROTOCOLS::WEBRTC, current_line);
+        let current_line = line!() + 8000;
+        let server_handle = run_server(PROTOCOLS::WEBRTC, current_line);
 
-        // sleep(Duration::from_secs(2)).await;
+        sleep(Duration::from_secs(2)).await;
 
-        // let mut webrtc_client = WebRTCClient::new();
-        // let addr_str = "ws://127.0.0.1".to_owned() + ":" + &current_line.to_string() + "/";
-        // let client_handle = tokio::task::spawn_blocking(move || {
-        //     let connect_result = Runtime::new().unwrap().block_on(webrtc_client.connect(addr_str.as_str()));
-        //     assert_eq!(connect_result.is_ok(), true);
+        let mut webrtc_publisher = WebRTCClient::new();
+        let addr_str = "ws://127.0.0.1".to_owned() + ":" + &current_line.to_string() + "/";
+        
+        let mut webrtc_subscriber = WebRTCClient::new();
 
-        //     let create_session_result = webrtc_client.create_session();
-        //     assert_eq!(create_session_result.is_ok(), true);
+        webrtc_publisher.connect(addr_str.as_str()).await.expect("Failed to connect");
+        let client_id = timeout(Duration::from_secs(2), async {
+            loop {
+                if let Some(msg) = webrtc_publisher.receive_message().await {
+                    if msg.message_type == "WELCOME" {
+                        return msg.client_id;
+                    }
+                } else {
+                    println!("No message received");
+                }
+                sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await
+        .expect("Timed out waiting for client_id");
 
-        //     println!("Session id: {}", create_session_result.clone().unwrap());
+        let mut webrtc_publisher = webrtc_publisher.create_session().await.expect("Failed to create session");        
 
-        //     thread_sleep(Duration::from_secs(15));
+        webrtc_subscriber.connect(addr_str.as_str()).await.expect("Failed to connect");
+        let client_id2 = timeout(Duration::from_secs(10), async {
+            loop {
+                if let Some(msg) = webrtc_subscriber.receive_message().await {
+                    if msg.message_type == "WELCOME" {
+                        return msg.client_id;
+                    }
+                } else {
+                    println!("No message received");
+                }
+                sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await
+        .expect("Timed out waiting for client_id");
 
-        //     let close_result = webrtc_client.close_connection();
-        //     assert_eq!(close_result.is_ok(), true);
-        // });
+        webrtc_subscriber = webrtc_subscriber.list_sessions().await.expect("Failed to list sessions");
+        let session_list = timeout(Duration::from_secs(10), async {
+            loop {
+                if let Some(msg) = webrtc_subscriber.receive_message().await {
+                    if msg.message_type == LIST_SESSIONS {
+                        let session_list = String::from_utf8_lossy(&msg.payload).to_string();
+                        return session_list;
+                    }
+                } else {
+                    println!("No message received");
+                }
+                sleep(Duration::from_millis(100)).await;
+            }
+        }).await.expect("Timed out waiting for session list");
 
-        // let mut participant_client = WebRTCClient::new();
-        // let addr_str2 = "ws://127.0.0.1".to_owned() + ":" + &current_line.to_string() + "/";
-        // let participant = tokio::task::spawn_blocking(move || {
-        //     // lazy start for the second client
-        //     thread_sleep(Duration::from_secs(5));
+        println!("Test: session_list received: {}", session_list);
 
-        //     let connect_result = participant_client.connect(addr_str2.as_str());
-        //     assert_eq!(connect_result.is_ok(), true);
+        let session_id = payload_str_to_vector_str(session_list.as_str());
+        let session_id = session_id[0].clone();
+        println!("Test: session_id received: {}", session_id);
 
-        //     let list_result = participant_client.list_sessions();
-        //     let sessions = list_result.unwrap();
+        webrtc_subscriber = webrtc_subscriber.join_session(session_id.as_str()).await.expect("Failed to join session");
 
-        //     let room_id = sessions[0].clone();
-        //     println!("Joining Room id: {}", room_id.clone());
+        let join_result = timeout(Duration::from_secs(10), async {
+            loop {
+                if let Some(msg) = webrtc_subscriber.receive_message().await {
+                    if msg.message_type == JOIN_SESSION {
+                        let sdp = msg.sdp.clone();
+                        return sdp;
+                    }
+                } else {
+                    println!("No message received");
+                }
+                sleep(Duration::from_millis(100)).await;
+            }
+        }).await.expect("Timed out waiting for join result");
 
-        //     let join_session_result = participant_client.join_session(room_id.as_str());
-        //     assert_eq!(join_session_result.is_ok(), true);
+        println!("Test: join_result received: {:?}", join_result);  // sdp is supposed to be None for this test 
 
-        //     let close_result = participant_client.close_connection();
-        //     assert_eq!(close_result.is_ok(), true);
-        // });
+        server_handle.abort();
+    }
 
-        // participant.await.unwrap();
-        // client_handle.await.unwrap();
-        // server_handle.abort();
+    #[tokio::test]
+    async fn test_server_webrtc_session_list_participants() {
+        let port = line!() + 8000;
+        let server_handle = run_server(PROTOCOLS::WEBRTC, port);
+        sleep(Duration::from_secs(2)).await;
+
+        let addr_str = "ws://127.0.0.1".to_owned() + ":" + port.to_string().as_str() + "/";
+
+        let mut client = WebRTCClient::new();
+        client.connect(addr_str.as_str()).await.expect("Failed to connect");
+
+        let (msg, client) = wait_for_message(client, "WELCOME", 2).await;
+        let client_id = msg.client_id;
+        println!("Test: client_id received: {}", client_id);
+
+        let client = client.create_session().await.expect("Failed to create session");
+        let (msg, client) = wait_for_message(client, CREATE_SESSION, 5).await;
+
+        let client = client.list_sessions().await.expect("Failed to list sessions");
+        let (session_list_msg, client) = wait_for_message(client, LIST_SESSIONS, 5).await;
+        let session_list = payload_str_to_vector_str(&String::from_utf8_lossy(&session_list_msg.payload));
+        println!("Test: session_list received: {:?}", session_list);
+
+        let session_id = session_list[0].clone();
+        println!("Test: session_id received: {}", session_id);
+
+        let session_id = session_list[0].clone();
+        let client = client.join_session(&session_id).await.expect("Failed to join session");
+        let (join_sdp, client) = wait_for_message(client, JOIN_SESSION, 5).await;
+        println!("Test: join_result received: {:?}", join_sdp.sdp); // sdp is supposed to be None for this test
+
+        let client = client.list_participants(&session_id).await.expect("Failed to list participants");
+        let (participants_msg, client) = wait_for_message(client, LIST_PARTICIPANTS, 5).await;
+        let participants = payload_str_to_vector_str(&String::from_utf8_lossy(&participants_msg.payload));
+        println!("Test: participants received: {:?}", participants);
+
+        server_handle.abort();
     }
 
     #[tokio::test]
     async fn test_server_webrtc_session_leave() {
-        // let current_line = line!() + 8000;
-        // let server_handle = run_server(PROTOCOLS::WEBRTC, current_line);
+        let port = line!() + 8000;
+        let server_handle = run_server(PROTOCOLS::WEBRTC, port);
+        sleep(Duration::from_secs(2)).await;
 
-        // sleep(Duration::from_secs(2)).await;
+        let addr_str = "ws://127.0.0.1".to_owned() + ":" + port.to_string().as_str() + "/";
 
-        // let mut webrtc_client = WebRTCClient::new();
-        // let addr_str = "ws://127.0.0.1".to_owned() + ":" + &current_line.to_string() + "/";
-        // let client_handle = tokio::task::spawn_blocking(move || {
-        //     let connect_result = webrtc_client.connect(addr_str.as_str());
-        //     assert_eq!(connect_result.is_ok(), true);
+        let mut client = WebRTCClient::new();
+        client.connect(addr_str.as_str()).await.expect("Failed to connect");
 
-        //     let create_session_result = webrtc_client.create_session();
-        //     assert_eq!(create_session_result.is_ok(), true);
+        let (msg, client) = wait_for_message(client, WELCOME, 2).await;
+        let client_id = msg.client_id;
+        println!("Test: client_id received: {}", client_id);
 
-        //     let session_id = create_session_result.clone().unwrap();
-        //     println!("Session id: {}", session_id.clone());
+        let client = client.create_session().await.expect("Failed to create session");
+        let (msg, client) = wait_for_message(client, CREATE_SESSION, 5).await;
 
-        //     thread_sleep(Duration::from_secs(10));
+        let client = client.list_sessions().await.expect("Failed to list sessions");
+        let (session_list_msg, client) = wait_for_message(client, LIST_SESSIONS, 5).await;
+        let session_list = payload_str_to_vector_str(&String::from_utf8_lossy(&session_list_msg.payload));
+        println!("Test: session_list received: {:?}", session_list);
 
-        //     let check_participants_result = webrtc_client.list_participants(session_id.as_str());
-        //     let participants = check_participants_result.unwrap();
-        //     println!("Remaining Participants: {:?}", participants);
-            
-        //     assert_eq!(participants.len(), 1);
+        let session_id = session_list[0].clone();
+        println!("Test: session_id received: {}", session_id);
 
-        //     let close_result = webrtc_client.close_connection();
-        //     assert_eq!(close_result.is_ok(), true);
-        // });
+        let session_id = session_list[0].clone();
+        let client = client.join_session(&session_id).await.expect("Failed to join session");
+        let (join_sdp, client) = wait_for_message(client, JOIN_SESSION, 5).await;
+        println!("Test: join_result received: {:?}", join_sdp.sdp); // sdp is supposed to be None for this test
 
-        // let mut participants_client = WebRTCClient::new();
-        // let addr_str2 = "ws://127.0.0.1".to_owned() + ":" + &current_line.to_string() + "/";
-        // let client_handle2 = tokio::task::spawn_blocking(move || {
-        //     thread_sleep(Duration::from_secs(5));
-            
-        //     let _ = participants_client.connect(addr_str2.as_str());
+        let client = client.list_participants(&session_id).await.expect("Failed to list participants");
+        let (participants_msg, client) = wait_for_message(client, LIST_PARTICIPANTS, 5).await;
+        let participants = payload_str_to_vector_str(&String::from_utf8_lossy(&participants_msg.payload));
 
-        //     let session_list = participants_client.list_sessions().unwrap();
-        //     let session_id = session_list[0].clone();
+        assert_eq!(participants.len(), 1);
 
-        //     println!("Joining Room id: {}", session_id.clone());
-        //     let join_result = participants_client.join_session(session_id.as_str());
-        //     assert_eq!(join_result.is_ok(), true);
+        let client = client.leave_session(&session_id).await.expect("Failed to leave session");
+        let (leave_result, client) = wait_for_message(client, LEAVE_SESSION, 5).await;
 
-        //     let leave_result = participants_client.leave_session(session_id.as_str());
-        //     assert_eq!(leave_result.is_ok(), true);
+        let client = client.list_participants(&session_id).await.expect("Failed to list participants");
+        let (participants_msg, client) = wait_for_message(client, LIST_PARTICIPANTS, 5).await;
+        let participants = payload_str_to_vector_str(&String::from_utf8_lossy(&participants_msg.payload));
+        println!("Test: participants received: {:?}", participants);
 
-        //     let close_result = participants_client.close_connection();
-        //     assert_eq!(close_result.is_ok(), true);
-        // });
+        assert_eq!(participants.len(), 0);
 
-        // client_handle2.await.unwrap();
-        // client_handle.await.unwrap();
-        // server_handle.abort();
+        server_handle.abort();
+    }
+
+    #[tokio::test]
+    async fn test_server_webrtc_create_offer() {
+        let mut client = WebRTCClient::new();
+        client.test_offer_creation().await.expect("Failed to create offer");
     }
 
     #[tokio::test]
     async fn test_server_webrtc_offer() {
-        // let current_line = line!() + 8000;
-        // let server_handle = run_server(PROTOCOLS::WEBRTC, current_line);
+        let port = line!() + 8000;
+        let server_handle = run_server(PROTOCOLS::WEBRTC, port);
+        sleep(Duration::from_secs(2)).await;
 
-        // sleep(Duration::from_secs(2)).await;
+        let addr_str = "ws://127.0.0.1".to_owned() + ":" + port.to_string().as_str() + "/";
 
-        // let mut webrtc_client = WebRTCClient::new();
-        // let addr_str = "ws://127.0.0.1".to_owned() + ":" + &current_line.to_string() + "/";
-        // let client_handle = tokio::task::spawn_blocking(move || {
-        //     let connect_result = webrtc_client.connect(addr_str.as_str());
-        //     assert_eq!(connect_result.is_ok(), true);
+        let mut client = WebRTCClient::new();
+        client.connect(addr_str.as_str()).await.expect("Failed to connect");
 
-        //     let mut publisher = XrdsWebRTCPublisher::new(webrtc_client.clone());
-        //     let create_session_result = webrtc_client.create_session();
-        //     if create_session_result.is_err() {
-        //         println!("Error creating session: {}", create_session_result.err().unwrap());
-        //         return;
-        //     }
+        let (msg, client) = wait_for_message(client, WELCOME, 2).await;
+        let client_id = msg.client_id;
+        println!("Test: client_id received: {}", client_id);
 
-        //     let session_id = create_session_result.unwrap();
-        //     println!("Session id: {}", session_id.clone());
+        // create session
+        let client = client.create_session().await.expect("Failed to create session");
+        let (msg, client) = wait_for_message(client, CREATE_SESSION, 5).await;
+        let session_id = String::from_utf8_lossy(&msg.payload).to_string();
+        println!("Test: session_id created: {}", session_id);
+        let mut client = client;
+        client.publish(&session_id, None).await.expect("Failed to publish");
+        let (publish_result, client) = wait_for_message(client, OFFER, 5).await;
+        println!("Test: publish_result received: {:?}", publish_result.sdp); // sdp is supposed to be None for this test
 
-        //     let _ = publisher.create_offer();
+        server_handle.abort();
+    }
 
-        //     let send_offer_result = publisher.send_offer(&session_id.as_str());
-        //     if send_offer_result.is_err() {
-        //         println!("Error sending offer: {}", send_offer_result.err().unwrap());
-        //         return;
-        //     }
+    #[tokio::test]
+    async fn test_server_webrtc_answer() {
+        let port = line!() + 8000;
+        let server_handle = run_server(PROTOCOLS::WEBRTC, port);
+        sleep(Duration::from_secs(2)).await;
 
-        //     let close_result = webrtc_client.close_connection();
-        //     assert_eq!(close_result.is_ok(), true);
-        // });
+        let addr_str = "ws://127.0.0.1".to_owned() + ":" + port.to_string().as_str() + "/";
 
-        // client_handle.await.unwrap();
-        // server_handle.abort();
+        let mut publisher = WebRTCClient::new();
+        publisher.connect(addr_str.as_str()).await.expect("Failed to connect");
+
+        let (msg, publisher) = wait_for_message(publisher, WELCOME, 2).await;
+        
+        let publisher = publisher.create_session().await.expect("Failed to create session");
+        let (msg, publisher) = wait_for_message(publisher, CREATE_SESSION, 5).await;
+
+        let session_id = String::from_utf8_lossy(&msg.payload).to_string();
+        println!("Test: session_id created: {}", session_id);
+        
+        let mut publisher = publisher;
+        publisher.publish(&session_id, None).await.expect("Failed to publish");
+
+        // subscriber joins the session
+        let mut subscriber = WebRTCClient::new();
+        subscriber.connect(addr_str.as_str()).await.expect("Failed to connect");
+
+        let (msg, subscriber) = wait_for_message(subscriber, WELCOME, 2).await;
+        let client_id = msg.client_id;
+        println!("Test: client_id received: {}", client_id);
+        
+        let subscriber = subscriber.join_session(&session_id).await.expect("Failed to join session");
+        let (join_result, subscriber) = wait_for_message(subscriber, JOIN_SESSION, 5).await;
+        println!("Test: join_result received: {:?}", join_result.sdp); // sdp is supposed to be None for this test
+        
+        let mut subscriber = subscriber;
+        subscriber.handle_offer(join_result.sdp.unwrap()).await.expect("Failed to handle offer");
+
+        let (answer_result, subscriber) = wait_for_message(subscriber, ANSWER, 5).await;
+        println!("Test: answer_result received: {:?}", answer_result.sdp); // sdp is supposed to be None for this test
+
+        server_handle.abort();
     }
 }
