@@ -227,6 +227,20 @@ pub fn read_file_from_disk(path: &str) -> Result<Vec<u8>, String> {
     }
 }
 
+pub fn payload_str_to_vector_str(payload: &str) -> Vec<String> {
+    let payload_tokens = payload.split(",").collect::<Vec<&str>>();
+    let mut payload_vector = Vec::new();
+    for token in payload_tokens {
+        let token = token.trim().replace('\"', "")
+            .replace('[', "")
+            .replace(']',"");
+        if !token.is_empty() {
+            payload_vector.push(token.to_string());
+        }
+    }
+    payload_vector
+}
+
 pub fn generate_random_string(length: usize) -> String {
     let charset_str = RANDOM_STRING_CHARSET;
 
