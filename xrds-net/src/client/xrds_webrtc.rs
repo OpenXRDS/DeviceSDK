@@ -510,7 +510,28 @@ impl WebRTCClient {
     }
 
     /**
-     * Client works as a subscriber and creates an answer to the offer received from the server.
+     * Client works as a publisher and receives an answer from the subscriber
+     */
+    pub async fn handle_answer(&mut self, msg: WebRTCMessage) -> Result<(), String> {
+        if self.client_id.is_none() {
+            return Err("Client ID is not set".to_string());
+        }
+
+        self.answer = Some(RTCSessionDescription::answer(msg.sdp.unwrap()).map_err(|e| e.to_string())?);
+        
+        // set remote description
+        let pc = match &self.pc {
+            Some(pc) => pc,
+            None => return Err("PeerConnection is not set".to_string()),
+        };
+        pc.set_remote_description(self.answer.clone().unwrap()).await.map_err(|e| e.to_string())?;
+
+        Ok(())
+    }
+
+    /**
+     * Client works as a subscriber and creates an answer to the offer received from publisher
+     * 
      */
     pub async fn handle_offer(&mut self, offer_string: String) -> Result<(), String> {
         let offer = RTCSessionDescription::offer(offer_string.clone()).map_err(|e| e.to_string())?;
@@ -552,7 +573,7 @@ impl WebRTCClient {
             None => return Err("RTC config is not set".to_string()),
         };
 
-        // Connection to the server from the subscriber
+        // p2p connection to the publisher
         let pc = api.new_peer_connection(rtc_config).await.map_err(|e| e.to_string())?;
         self.pc = Some(pc);
 
@@ -594,15 +615,4 @@ impl Drop for WebRTCClient {
         }
         println!("WebRTCClient dropped");
     }
-}
-
-fn create_default_webrtc_config() -> RTCConfiguration {
-    let config = RTCConfiguration {
-        ice_servers: vec![RTCIceServer {
-            urls: vec!["stun:stun.l.google.com:19302".to_owned()],
-            ..Default::default()
-        }],
-        ..Default::default()
-    };
-    config
 }

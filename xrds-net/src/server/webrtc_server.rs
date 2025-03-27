@@ -55,8 +55,8 @@ use crate::common::data_structure::{CREATE_SESSION, LIST_SESSIONS, JOIN_SESSION,
 pub struct WebRTCServer {
     clients: Arc<AsyncMutex<HashMap<String, WebRTCClient>>>, // simple client_id, WebRTCClient
     sessions: Arc<AsyncMutex<HashMap<String, Session>>>,  // <session_id, Session>
-    api: Option<webrtc::api::API>,
-    rtc_config: Option<RTCConfiguration>,
+    // api: Option<webrtc::api::API>,   // in case of SFU
+    // rtc_config: Option<RTCConfiguration>,
 }
 
 /**
@@ -71,8 +71,8 @@ pub struct Session {
     offer: Option<String>,  // SDP offer from the creator. Participants will receive this. base64 encoded
     answers: Option<HashMap<String, String>>,  // <client_id, SDP answer> base64 encoded
 
-    publisher_pc: Option<Arc<AsyncMutex<RTCPeerConnection>>>,    // publisher's RTCPeerConnection
-    subscriber_pcs: Option<Arc<AsyncMutex<HashMap<String, RTCPeerConnection>>>>,  // <client_id, RTCPeerConnection>
+    // publisher_pc: Option<Arc<AsyncMutex<RTCPeerConnection>>>,    // publisher's RTCPeerConnection
+    // subscriber_pcs: Option<Arc<AsyncMutex<HashMap<String, RTCPeerConnection>>>>,  // <client_id, RTCPeerConnection>
 }
 
 struct WebRTCClient {
@@ -99,10 +99,10 @@ impl WebRTCServer {
         let mut server = WebRTCServer {
             clients: Arc::new(AsyncMutex::new(HashMap::new())),
             sessions: Arc::new(AsyncMutex::new(HashMap::new())),
-            api: None,
-            rtc_config: None,
+            // api: None,
+            // rtc_config: None,
         };
-        server.setup_webrtc().unwrap();  // setup webrtc
+        // server.setup_webrtc().unwrap();  // setup webrtc
         server
     }
 
@@ -126,8 +126,8 @@ impl WebRTCServer {
             ..Default::default()
         };
 
-        self.api = Some(api);
-        self.rtc_config = Some(rtc_config.clone());
+        // self.api = Some(api);
+        // self.rtc_config = Some(rtc_config.clone());
 
         Ok(())
     }
@@ -195,9 +195,6 @@ impl WebRTCServer {
                 Arc::clone(&client.receiver),
             )
         };  // lock on clients is released here
-
-        let mut sender = sender.lock().await;
-        let mut receiver = receiver.lock().await;
         
         // Send welcome message with the issued client id
         let welcome_msg = WebRTCMessage {
@@ -210,42 +207,48 @@ impl WebRTCServer {
         
         let client_id_msg_json = serde_json::to_string(&welcome_msg).unwrap();
         let client_id_msg = Message::text(client_id_msg_json.to_string());
-        
-        if let Err(e) = sender.send(client_id_msg).await {
-            println!("Error sending welcome message: {}", e);
-            return Err(Box::new(e));
+        {
+            let mut sender = sender.lock().await;
+            if let Err(e) = sender.send(client_id_msg).await {
+                println!("Error sending welcome message: {}", e);
+                return Err(Box::new(e));
+            }
         }
-
-        // handle incoming messages
-        while let Some(msg) = receiver.next().await {
-            let msg = match msg {
-                Ok(msg) => msg,
-                Err(e) => {
-                    log_error_connection(e);
-
-                    if let Err(close_err) = sender.send(Message::Close(None)).await {
-                        println!("Failed to send close frame: {}", close_err);
+        
+        {
+            let mut receiver = receiver.lock().await;
+            // handle incoming messages
+            while let Some(msg) = receiver.next().await {
+                let msg = match msg {
+                    Ok(msg) => msg,
+                    Err(e) => {
+                        log_error_connection(e);
+                        let mut sender = sender.lock().await;
+                        if let Err(close_err) = sender.send(Message::Close(None)).await {
+                            println!("Failed to send close frame: {}", close_err);
+                        }
+                        break;
                     }
+                };
+
+                if msg.is_close() {
+                    self.remove_client(&client_id);
+                    // TODO: remove the session if the client is the creator
+                    println!("Connection closed by client");
                     break;
                 }
-            };
 
-            if msg.is_close() {
-                self.remove_client(&client_id);
-                // TODO: remove the session if the client is the creator
-                println!("Connection closed by client");
-                break;
-            }
-
-            // println!("preparing message back to client");
-            let result = self.signaling_handler(msg.into_data().to_vec()).await;
-            // prepare message back to client
-            if result.is_some() {
-                // send message in text since it's json only
-                let msg = Message::text(String::from_utf8_lossy(&result.unwrap()).to_string());
-                if let Err(e) = sender.send(msg).await {
-                    println!("Error sending message: {}", e);
-                    continue;
+                // println!("preparing message back to client");
+                let result = self.signaling_handler(msg.into_data().to_vec()).await;
+                // prepare message back to client
+                if result.is_some() {
+                    // send message in text since it's json only
+                    let msg = Message::text(String::from_utf8_lossy(&result.unwrap()).to_string());
+                    let mut sender = sender.lock().await;
+                    if let Err(e) = sender.send(msg).await {
+                        println!("Error sending message: {}", e);
+                        continue;
+                    }
                 }
             }
         }
@@ -320,13 +323,23 @@ impl WebRTCServer {
             session.answers = Some(HashMap::new());
         }
         // Store the corresponding answer in the session for each subscriber
-        session.answers.as_mut().unwrap().insert(subscriber_id.clone(), request.sdp.unwrap());
+        session.answers.as_mut().unwrap().insert(subscriber_id.clone(), request.sdp.clone().unwrap());
         println!("Number of answers in session {}: {}", session_id, session.answers.as_ref().unwrap().len());
         
-        //TODO: create RTCPeerConnection for the subscriber
-
+        // send answer to the publisher
+        let publisher_id = session.creator_id.clone();
+        println!("publisher id: {}", publisher_id);  // temporal log
+        let publisher_msg = WebRTCMessage {
+            client_id: publisher_id.clone(),
+            message_type: ANSWER.to_string(),
+            payload: session_id.clone().into_bytes(),
+            sdp: request.sdp.clone(),
+            error: None,
+        };
         
+        let _ = self.broadcast_message(vec![publisher_id], publisher_msg.clone()).await;
 
+        // response to the subscriber
         let answer_msg = WebRTCMessage {
             client_id: subscriber_id.clone(),
             message_type: ANSWER.to_string(),
@@ -346,8 +359,8 @@ impl WebRTCServer {
             participants: vec![request.client_id.clone()],
             offer: None,
             answers: None,
-            publisher_pc: None,
-            subscriber_pcs: None,
+            // publisher_pc: None,
+            // subscriber_pcs: None,
         };
 
         self.sessions.lock().await.insert(session_id.clone(), session);
@@ -387,14 +400,6 @@ impl WebRTCServer {
         let session = sessions.get_mut(&session_id).unwrap();
         session.offer = Some(request.sdp.clone().unwrap());
 
-        // TODO: establish RTCPeerConnection for the publisher
-        let api = self.api.as_ref().unwrap();
-        let rtc_config = self.rtc_config.as_ref().unwrap();
-
-        let pc = api.new_peer_connection(rtc_config.clone()).await.map_err(|e| e.to_string()).unwrap();
-        session.publisher_pc = Some(Arc::new(AsyncMutex::new(pc)));
-
-
         // send offer to all participants except the creator
         let participants = session.participants.clone();
         let participants = participants.into_iter().filter(|x| x != &publisher_id).collect::<Vec<String>>();
@@ -415,7 +420,7 @@ impl WebRTCServer {
             client_id: publisher_id.clone(),
             message_type: OFFER.to_string(),
             payload: session_id.into_bytes(),
-            sdp: None,
+            sdp: session.offer.clone(),
             error: None,
         };
         response
@@ -503,16 +508,22 @@ impl WebRTCServer {
 
     async fn broadcast_message(&self, client_ids: Vec<String>, message: WebRTCMessage) {
         let clients = self.clients.lock().await;
-        for client_id in client_ids {
+        let senders: Vec<(String, Arc<AsyncMutex<SplitSink<WsStream<TcpStream>, Message>>>)> = client_ids
+            .into_iter()
+            .filter_map(|client_id| {
+                clients.get(&client_id).map(|client| (client_id, Arc::clone(&client.sender)))
+            })
+            .collect();
+        drop(clients);
 
-            if let Some(client) = clients.get(&client_id) {
-                let mut sender = client.sender.lock().await;
-                let msg = Message::text(serde_json::to_string(&message).unwrap());
-                if let Err(e) = sender.send(msg).await {
-                    println!("Error sending message to {}: {}", client_id, e);
-                }
+        for (client_id, sender) in senders {
+            let mut sender = sender.lock().await;
+            let msg = Message::text(serde_json::to_string(&message).unwrap());
+            if let Err(e) = sender.send(msg).await {
+                println!("Error sending message to {}: {}", client_id, e);
             }
         }
+        // println!("Broadcast message: {:?}", message);  // temporal log
     }
 }
 

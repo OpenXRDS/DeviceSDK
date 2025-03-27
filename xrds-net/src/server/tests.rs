@@ -962,6 +962,8 @@ mod tests {
         
         let mut publisher = publisher;
         publisher.publish(&session_id, None).await.expect("Failed to publish");
+        let (publish_result, publisher) = wait_for_message(publisher, OFFER, 5).await;
+        println!("Test: publish_result received: {:?}", publish_result.sdp); // sdp is supposed to be None for this test
 
         // subscriber joins the session
         let mut subscriber = WebRTCClient::new();
@@ -969,17 +971,22 @@ mod tests {
 
         let (msg, subscriber) = wait_for_message(subscriber, WELCOME, 2).await;
         let client_id = msg.client_id;
-        println!("Test: client_id received: {}", client_id);
+        // println!("Test: client_id received: {}", client_id);
         
         let subscriber = subscriber.join_session(&session_id).await.expect("Failed to join session");
         let (join_result, subscriber) = wait_for_message(subscriber, JOIN_SESSION, 5).await;
-        println!("Test: join_result received: {:?}", join_result.sdp); // sdp is supposed to be None for this test
+        // println!("Test: join_result received: {:?}", join_result.sdp); // sdp is supposed to be None for this test
         
         let mut subscriber = subscriber;
         subscriber.handle_offer(join_result.sdp.unwrap()).await.expect("Failed to handle offer");
 
         let (answer_result, subscriber) = wait_for_message(subscriber, ANSWER, 5).await;
-        println!("Test: answer_result received: {:?}", answer_result.sdp); // sdp is supposed to be None for this test
+        // println!("Test: answer_result received: {:?}", answer_result.sdp); // sdp is supposed to be None for this test
+
+        let (offer_result, publisher) = wait_for_message(publisher, ANSWER, 5).await;
+        println!("Test: offer_result received: {:?}", offer_result.sdp); // This must be different with the offer
+
+        assert_ne!(publish_result.sdp, offer_result.sdp);
 
         server_handle.abort();
     }
