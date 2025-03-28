@@ -15,11 +15,11 @@
  */
 
 use std::collections::HashMap;
-use std::sync::{Arc};
+use std::sync::Arc;
 
 use futures::stream::SplitSink;
 use futures::stream::SplitStream;
-use futures::{SinkExt, StreamExt, TryStreamExt};
+use futures::{SinkExt, StreamExt};
 use tokio::sync::Mutex as AsyncMutex;
 use tokio::net::{TcpListener, TcpStream};
 use tokio_tungstenite::tungstenite::error::Error;
@@ -27,17 +27,12 @@ use tokio_tungstenite::accept_async;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::WebSocketStream as WsStream;
 
-use webrtc::api::media_engine::{MediaEngine, MIME_TYPE_H264, MIME_TYPE_OPUS};
-use webrtc::api::interceptor_registry::register_default_interceptors;
-use webrtc::interceptor::registry::Registry;
-use webrtc::api::APIBuilder;
-use webrtc::peer_connection::RTCPeerConnection;
-use webrtc::peer_connection::configuration::RTCConfiguration;
-use webrtc::ice_transport::ice_server::RTCIceServer;
-
+use crate::common::data_structure::ICE_CANDIDATE_ACK;
 use crate::common::data_structure::{WebRTCMessage, WELCOME};
 use crate::common::generate_uuid;
-use crate::common::data_structure::{CREATE_SESSION, LIST_SESSIONS, JOIN_SESSION, LEAVE_SESSION, CLOSE_SESSION, LIST_PARTICIPANTS, OFFER, ANSWER};
+use crate::common::data_structure::{
+    CREATE_SESSION, LIST_SESSIONS, JOIN_SESSION, LEAVE_SESSION, 
+    CLOSE_SESSION, LIST_PARTICIPANTS, OFFER, ANSWER, ICE_CANDIDATE};
 
 
 /**
@@ -68,9 +63,9 @@ pub struct Session {
     session_id: String,
     creator_id: String,  // client_id. Only creator can close the session
     participants: Vec<String>,  // a vector of client_ids
-    offer: Option<String>,  // SDP offer from the creator. Participants will receive this. base64 encoded
-    answers: Option<HashMap<String, String>>,  // <client_id, SDP answer> base64 encoded
-
+    offer: Option<String>,  // SDP offer from the creator. Participants will receive this.
+    answers: Option<HashMap<String, String>>,  // <client_id, SDP answer>
+    publisher_ice_candidates: Option<Vec<String>>,  // json str of RTCIceCandidate
     // publisher_pc: Option<Arc<AsyncMutex<RTCPeerConnection>>>,    // publisher's RTCPeerConnection
     // subscriber_pcs: Option<Arc<AsyncMutex<HashMap<String, RTCPeerConnection>>>>,  // <client_id, RTCPeerConnection>
 }
@@ -96,7 +91,7 @@ impl WebRTCClient {
 
 impl WebRTCServer {
     pub fn new() -> Self {
-        let mut server = WebRTCServer {
+        let server = WebRTCServer {
             clients: Arc::new(AsyncMutex::new(HashMap::new())),
             sessions: Arc::new(AsyncMutex::new(HashMap::new())),
             // api: None,
@@ -106,31 +101,31 @@ impl WebRTCServer {
         server
     }
 
-    fn setup_webrtc(&mut self) -> Result<(), String> {
-        let mut m = MediaEngine::default();
-        let _ = m.register_default_codecs();
+    // fn setup_webrtc(&mut self) -> Result<(), String> {
+    //     let mut m = MediaEngine::default();
+    //     let _ = m.register_default_codecs();
 
-        let mut registry = Registry::new();
-        registry = register_default_interceptors(registry, &mut m).map_err(|e| e.to_string())?;
+    //     let mut registry = Registry::new();
+    //     registry = register_default_interceptors(registry, &mut m).map_err(|e| e.to_string())?;
 
-        let api = APIBuilder::new()
-            .with_media_engine(m)
-            .with_interceptor_registry(registry)
-            .build();
+    //     let api = APIBuilder::new()
+    //         .with_media_engine(m)
+    //         .with_interceptor_registry(registry)
+    //         .build();
 
-        let rtc_config = RTCConfiguration {
-            ice_servers: vec![RTCIceServer {
-                urls: vec!["stun:stun.l.google.com:19302".to_owned()],
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
+    //     let rtc_config = RTCConfiguration {
+    //         ice_servers: vec![RTCIceServer {
+    //             urls: vec!["stun:stun.l.google.com:19302".to_owned()],
+    //             ..Default::default()
+    //         }],
+    //         ..Default::default()
+    //     };
 
-        // self.api = Some(api);
-        // self.rtc_config = Some(rtc_config.clone());
+    //     // self.api = Some(api);
+    //     // self.rtc_config = Some(rtc_config.clone());
 
-        Ok(())
-    }
+    //     Ok(())
+    // }
 
     async fn add_client(&self, client_id: &String, peer_addr: &String, ws_stream: WsStream<TcpStream>) {
         println!("wait for client lock");  // temporal log
@@ -199,8 +194,9 @@ impl WebRTCServer {
         // Send welcome message with the issued client id
         let welcome_msg = WebRTCMessage {
             client_id: client_id.clone(),
+            session_id: "".to_string(),
             message_type: WELCOME.to_string(),
-            payload: "".as_bytes().to_vec(),
+            ice_candidates: None,
             sdp: None,
             error: None,
         };
@@ -278,8 +274,9 @@ impl WebRTCServer {
                 let response = self.handle_list_session(msg).await;
                 Some(serde_json::to_string(&response).unwrap().into_bytes())
             },
-            CLOSE_SESSION | JOIN_SESSION | LEAVE_SESSION | LIST_PARTICIPANTS => {
-                let session_id = String::from_utf8_lossy(&msg.payload).to_string();
+            CLOSE_SESSION | JOIN_SESSION | LEAVE_SESSION | 
+                LIST_PARTICIPANTS | ICE_CANDIDATE | ICE_CANDIDATE_ACK=> {
+                let session_id = msg.session_id.clone();
                 
                 // print session id
                 println!("signalhandling.Session ID: {}", session_id);  // temporal log
@@ -289,6 +286,8 @@ impl WebRTCServer {
                     JOIN_SESSION => self.join_session(session_id.clone(), &msg.client_id).await,
                     LEAVE_SESSION => self.leave_session(session_id, &msg.client_id).await,
                     LIST_PARTICIPANTS => self.list_participants(&session_id).await,
+                    ICE_CANDIDATE => self.handle_ice_candidate(msg).await,
+                    ICE_CANDIDATE_ACK => self.handle_ice_candidate_ack(msg).await,
                     _ => unreachable!(), // This won't happen due to the outer match
                 };
                 Some(serde_json::to_string(&response).unwrap().into_bytes())
@@ -314,7 +313,7 @@ impl WebRTCServer {
     async fn handle_answer(&self, request: WebRTCMessage) -> WebRTCMessage {
         // println!("Answer {:?}", request);  // temporal log
 
-        let session_id = String::from_utf8_lossy(&request.payload).to_string();
+        let session_id = request.session_id.clone();
         let subscriber_id = request.client_id.clone();
         let mut sessions = self.sessions.lock().await;
         let session = sessions.get_mut(&session_id).unwrap();
@@ -331,8 +330,9 @@ impl WebRTCServer {
         println!("publisher id: {}", publisher_id);  // temporal log
         let publisher_msg = WebRTCMessage {
             client_id: publisher_id.clone(),
+            session_id: session_id.clone(),
             message_type: ANSWER.to_string(),
-            payload: session_id.clone().into_bytes(),
+            ice_candidates: None,
             sdp: request.sdp.clone(),
             error: None,
         };
@@ -342,8 +342,9 @@ impl WebRTCServer {
         // response to the subscriber
         let answer_msg = WebRTCMessage {
             client_id: subscriber_id.clone(),
+            session_id: session_id.clone(),
             message_type: ANSWER.to_string(),
-            payload: session_id.clone().into_bytes(),
+            ice_candidates: None,
             sdp: None,
             error: None,
         };        
@@ -359,6 +360,7 @@ impl WebRTCServer {
             participants: vec![request.client_id.clone()],
             offer: None,
             answers: None,
+            publisher_ice_candidates: None,
             // publisher_pc: None,
             // subscriber_pcs: None,
         };
@@ -369,8 +371,9 @@ impl WebRTCServer {
 
         let response = WebRTCMessage {
             client_id: request.client_id,
+            session_id: session_id.clone(),
             message_type: CREATE_SESSION.to_string(),
-            payload: session_id.into_bytes(),
+            ice_candidates: None,
             sdp: None,
             error: None,
         };
@@ -381,11 +384,13 @@ impl WebRTCServer {
         // list all sessions
         let sessions = self.sessions.lock().await;
         let session_ids: Vec<String> = sessions.keys().cloned().collect();
+        let session_ids_str = session_ids.join(",");
 
         let response = WebRTCMessage {
             client_id: request.client_id,
+            session_id: session_ids_str.clone(),
             message_type: LIST_SESSIONS.to_string(),
-            payload: serde_json::to_string(&session_ids).unwrap().into_bytes(),
+            ice_candidates: None,
             sdp: None,
             error: None,
         };
@@ -394,7 +399,7 @@ impl WebRTCServer {
 
     async fn handle_offer(&self, request: WebRTCMessage) -> WebRTCMessage {
         // handle offer
-        let session_id = String::from_utf8_lossy(&request.payload).to_string();
+        let session_id = request.session_id.clone();
         let publisher_id = request.client_id.clone();
         let mut sessions = self.sessions.lock().await;
         let session = sessions.get_mut(&session_id).unwrap();
@@ -406,8 +411,9 @@ impl WebRTCServer {
 
         let offer_msg = WebRTCMessage { // message to be sent to participants
             client_id: publisher_id.clone(),
+            session_id: session_id.clone(),
             message_type: OFFER.to_string(),
-            payload: session_id.clone().into_bytes(),
+            ice_candidates: None,
             sdp: session.offer.clone(),
             error: None,
         };
@@ -418,8 +424,9 @@ impl WebRTCServer {
         // make a result for publisher
         let response = WebRTCMessage {
             client_id: publisher_id.clone(),
+            session_id: session_id.clone(),
             message_type: OFFER.to_string(),
-            payload: session_id.into_bytes(),
+            ice_candidates: None,
             sdp: session.offer.clone(),
             error: None,
         };
@@ -441,14 +448,18 @@ impl WebRTCServer {
 
         let response = WebRTCMessage {
             client_id: "".to_string(),
+            session_id: session_ids.join(","),
             message_type: CLOSE_SESSION.to_string(),
-            payload: session_ids.join(",").into_bytes(),
+            ice_candidates: None,
             sdp: None,
             error: None,
         };
         response
     }
 
+    /**
+     * Subscriber joins the session
+     */
     async fn join_session(&self, session_id: String, client_id: &str) -> WebRTCMessage{
         let mut sessions = self.sessions.lock().await;
         let session = sessions.get_mut(&session_id).unwrap();
@@ -466,8 +477,9 @@ impl WebRTCServer {
 
         let response = WebRTCMessage {
             client_id: client_id.to_string(),
+            session_id: session_id.clone(),
             message_type: JOIN_SESSION.to_string(),
-            payload: session_id.into_bytes(),
+            ice_candidates: None,
             sdp: Some(sdp),
             error: None,
         };
@@ -484,8 +496,9 @@ impl WebRTCServer {
 
         let response = WebRTCMessage {
             client_id: client_id.to_string(),
+            session_id: session_id.clone(),
             message_type: LEAVE_SESSION.to_string(),
-            payload: session_id.into_bytes(),
+            ice_candidates: None,
             sdp: None,
             error: None,
         };
@@ -495,15 +508,91 @@ impl WebRTCServer {
     async fn list_participants(&self, session_id: &str) -> WebRTCMessage {
         let sessions = self.sessions.lock().await;
         let session = sessions.get(session_id).unwrap();
-        let participants = session.participants.clone();
+        let participants_str = session.participants.clone().join(",");
         let response = WebRTCMessage {
             client_id: "".to_string(),
+            session_id: session_id.to_string(),
             message_type: LIST_PARTICIPANTS.to_string(),
-            payload: serde_json::to_string(&participants).unwrap().into_bytes(),
+            ice_candidates: Some(participants_str),
             sdp: None,
             error: None,
         };
         response
+    }
+
+    async fn handle_ice_candidate(&self, message: WebRTCMessage) -> WebRTCMessage {
+        println!("Handling ICE candidate: {:?}", message);  // temporal log
+
+        // pass ice candidate to the subscriber
+        let session_id = message.session_id.clone();
+        let sessions = self.sessions.lock().await;
+        let mut session = sessions.get(&session_id).unwrap().clone();
+        
+        let ice_candidates_json = message.ice_candidates.clone().unwrap_or_default();
+        let ice_candidates: Vec<String> = serde_json::from_str(&ice_candidates_json).unwrap_or_default();
+        // println!("ICE candidates: {:?}", ice_candidates);  // temporal log
+        // session.publisher_ice_candidates = Some(ice_candidates.clone());
+
+        // collect client ids from the session
+        let participants = session.participants.clone();
+        let participants = participants.into_iter().filter(|x| x != &message.client_id).collect::<Vec<String>>();
+
+        println!("Target clients: {:?}, {:?}", message.client_id, participants);  // temporal log
+        self.broadcast_message(participants, message.clone()).await;        
+
+        // message back to the caller
+        let response = WebRTCMessage {
+            client_id: message.client_id.clone(),
+            session_id: session_id.clone(),
+            message_type: ICE_CANDIDATE.to_string(),
+            ice_candidates: None,
+            sdp: None,
+            error: None,
+        };
+        response
+    }
+
+    async fn handle_ice_candidate_ack(&self, message: WebRTCMessage) -> WebRTCMessage {
+        // pass ice candidate ack to the publisher
+        let session_id = message.session_id.clone();
+        let sessions = self.sessions.lock().await;
+        let session = sessions.get(&session_id).unwrap().clone();
+
+        // collect creator id from the session
+        let publisher_id = session.creator_id.clone();
+        println!("Publisher id: {}", publisher_id);  // temporal log
+        
+        // send ice candidate ack to the publisher
+        let publisher_msg = WebRTCMessage {
+            client_id: publisher_id.clone(),
+            session_id: session_id.clone(),
+            message_type: ICE_CANDIDATE_ACK.to_string(),
+            ice_candidates: message.ice_candidates.clone(),
+            sdp: None,
+            error: None,
+        };
+
+        // get a sender of the publisher
+        let clients = self.clients.lock().await;
+        let publisher_sender = clients.get(&publisher_id).unwrap().sender.clone();
+        let mut publisher_sender = publisher_sender.lock().await;
+
+        println!("Ice candidate to publisher: {:?}", publisher_msg.ice_candidates.clone());  // temporal log
+        let msg = Message::text(serde_json::to_string(&publisher_msg).unwrap());
+        if let Err(e) = publisher_sender.send(msg).await {
+            println!("Error sending ICE candidate ack to publisher: {}", e);
+        }
+
+        // message back to the subscriber
+        let response = WebRTCMessage {
+            client_id: message.client_id.clone(),
+            session_id: session_id.clone(),
+            message_type: ICE_CANDIDATE_ACK.to_string(),
+            ice_candidates: None,
+            sdp: None,
+            error: None,
+        };
+        response    
     }
 
     async fn broadcast_message(&self, client_ids: Vec<String>, message: WebRTCMessage) {

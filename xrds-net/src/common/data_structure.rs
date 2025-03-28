@@ -29,6 +29,8 @@ pub const LIST_PARTICIPANTS: &str = "list_participants"; // server to client (pu
 pub const OFFER: &str = "offer";                   // publisher to server, server to subscriber
 pub const ANSWER: &str = "answer";                 // subscriber to server
 pub const WELCOME: &str = "welcome";               // server to client (publisher or subscriber)
+pub const ICE_CANDIDATE: &str = "ice_candidate"; // publisher to server, server to subscriber
+pub const ICE_CANDIDATE_ACK: &str = "ice_candidate_ack"; // subscriber to server
 
 /**
  * In case of Using CoAP protocol, refer to the following link:
@@ -111,8 +113,9 @@ impl XrUrl {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct WebRTCMessage {
     pub client_id: String,
+    pub session_id: String,
     pub message_type: String,
-    pub payload: Vec<u8>,
+    pub ice_candidates: Option<String>, // ICE candidates, participants, etc.
     pub sdp: Option<String>,    // Session Description Protocol. base64 encoded
     pub error: Option<String>,
 }
