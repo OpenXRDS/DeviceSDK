@@ -642,6 +642,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_client_webrtc_send_video_file() {
+        CryptoProvider::install_default(ring::default_provider()).unwrap();
+
         let port = line!() + 8000;
         let server_handle = run_server(PROTOCOLS::WEBRTC, port);
         sleep(Duration::from_secs(2)).await;
@@ -685,14 +687,26 @@ mod tests {
         let (offer_result, mut publisher) = wait_for_message(publisher, ANSWER, 5).await;
         publisher.handle_answer(offer_result).await.expect("Failed to handle answer");
 
+        publisher.send_ice_candidates(false).await.expect("Failed to send ICE candidates");
+
+        let (msg, mut subscriber) = wait_for_message(subscriber, ICE_CANDIDATE, 5).await;
+        println!("Test: ICE candidate received: {:?}", msg.ice_candidates);
+        subscriber.handle_ice_candidate(msg).await.expect("Failed to handle ICE candidate");
+
+        subscriber.send_ice_candidates(true).await.expect("Failed to send ICE candidates");
+        
+        let (msg, mut publisher) = wait_for_message(publisher, ICE_CANDIDATE_ACK, 5).await;
+        println!("Test: ICE candidate ACK received: {:?}", msg.ice_candidates);
+        publisher.handle_ice_candidate(msg).await.expect("Failed to handle ICE candidate ACK");
+
         // let sample_file_path = "samples/tsm_1080p.mp4";
-        let sample_file_path = "samples/sample_1280x720_surfing_with_audio.hevc";
+        let sample_file_path = "samples/sample_video.h264";
         // try open the file
         std::fs::File::open(sample_file_path).expect("Failed to open file");
         publisher.start_streaming(Some(sample_file_path)).await.expect("Failed to start streaming");
 
         // wait till the video file is sent
-        sleep(Duration::from_secs(10)).await;
+        sleep(Duration::from_secs(60)).await;
 
         server_handle.abort();
         assert!(true);

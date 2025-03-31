@@ -1191,7 +1191,7 @@ impl Client {
 
             if let Some(h3) = http3_conn.as_mut() {
                 if !req_sent {
-                    let _ = Self::send_http3_request(h3, &mut conn, &req_headers);
+                    let _ = Self::send_http3_request(h3, &mut conn, req_headers.as_slice());
                     req_sent = true;
                 }
                 is_exit = match Self::handle_http3_events(h3, &mut conn, &mut buf, &mut response) {
