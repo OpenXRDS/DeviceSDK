@@ -1,15 +1,19 @@
-use futures::{FutureExt, TryFutureExt};
-use serde::Deserialize;
-use webrtc::data::message::message_type;
-use webrtc::sdp::description::session;
 use std::io::{BufReader, Write};
 use std::thread::sleep;
+use anyhow::Result as AnyResult;
+use webrtc::util::marshal::Marshal;
 use std::time::Duration;
 use tokio::sync::Mutex;
+use tokio::io::AsyncWriteExt;
 use webrtc::media::io::h264_reader::H264Reader;
+use webrtc::media::io::h264_writer::H264Writer;
+use webrtc::rtp::codecs::h264::H264Packet;
+use webrtc::rtp::packetizer::Depacketizer;
+use webrtc::rtp::packet::Packet;
 use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
 use webrtc::ice_transport::ice_candidate::RTCIceCandidate;
 use webrtc::ice_transport::ice_server::RTCIceServer;
+use webrtc::ice_transport::ice_connection_state::RTCIceConnectionState;
 use webrtc::api::media_engine::{MediaEngine, MIME_TYPE_H264, MIME_TYPE_OPUS};
 use tokio::sync::mpsc::{Sender, Receiver};
 use webrtc::api::interceptor_registry::register_default_interceptors;
@@ -17,10 +21,11 @@ use webrtc::{peer_connection::RTCPeerConnection, rtp_transceiver::rtp_codec::RTC
 use webrtc::peer_connection::configuration::RTCConfiguration;
 use webrtc::interceptor::registry::Registry;
 use webrtc::api::APIBuilder;
+use webrtc::track::track_remote::TrackRemote;
 use std::fs::File;
+use tokio::fs::File as TokioFile;
 use webrtc::media::Sample;
 use std::sync::Arc;
-use webrtc::rtp_transceiver::rtp_codec::RTPCodecType;
 use tokio_tungstenite::WebSocketStream as WsStream;
 use webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSample;
 use webrtc::track::track_local::TrackLocal;
@@ -30,11 +35,15 @@ use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
 use futures_util::{StreamExt, SinkExt};
 use futures_util::stream::SplitSink;
 use std::error::Error;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Notify};
 
-use crate::common::data_structure::{NetResponse, WebRTCMessage};
+use crate::common::data_structure::WebRTCMessage;
 use crate::common::data_structure::{CREATE_SESSION, LIST_SESSIONS, JOIN_SESSION, 
         LEAVE_SESSION, CLOSE_SESSION, LIST_PARTICIPANTS, OFFER, ANSWER, WELCOME, ICE_CANDIDATE, ICE_CANDIDATE_ACK};
+
+const NALU_TTYPE_STAP_A: u32 = 24;
+const NALU_TTYPE_SPS: u32 = 7;
+const NALU_TYPE_BITMASK: u32 = 0x1F;
 
 pub struct WebRTCClient {
     client_id: Option<String>,
@@ -372,12 +381,16 @@ impl WebRTCClient {
         let mut ticker = tokio::time::interval(Duration::from_millis(33));  // 30 fps
         let video_track = self.video_track.as_ref().ok_or("Video track not set")?.clone();
         
+        let video_track = video_track.clone();
+        let mut total_nal_size = 0;
         // start loop with a separate thread
         tokio::spawn(async move {
+            // start time
+            let start_time = std::time::Instant::now();
+
             loop {
                 let nal = match h264_reader.next_nal() {
                     Ok(nal) => {
-                        // println!("Reading NAL...");
                         nal
                     },
                     Err(e) => {
@@ -386,14 +399,19 @@ impl WebRTCClient {
                     }
                 };
                 
+                total_nal_size += nal.data.len();
+                // println!("NAL size: {}", nal.data.len());
+
                 let _ = video_track.write_sample(&Sample {
                     data: nal.data.freeze(),
-                    duration: Duration::from_secs(1),
+                    duration: Duration::from_millis(33),
                     ..Default::default()
                 }).await;
 
                 let _ = ticker.tick().await;
             }
+            let elapsed = start_time.elapsed();
+            println!("Ending stream from file. {}, {}", total_nal_size, elapsed.as_secs_f32());
         });
 
         Ok(())
@@ -677,6 +695,8 @@ impl WebRTCClient {
         // collect ICE candidates of the subscriber
         self.ice_candidates = Some(Arc::new(Mutex::new(Vec::new())));
         let candidates_vec = Arc::clone(&self.ice_candidates.as_ref().unwrap());
+        let notify_tx = Arc::new(Notify::new());
+        let notify_rx = notify_tx.clone();
         // for the given candidate, accumulate it to the vector, then send them all to the server when completed
         pc.on_ice_candidate(Box::new({
             let candidates = Arc::clone(&candidates_vec);
@@ -695,11 +715,23 @@ impl WebRTCClient {
             }
         }));
 
-        pc.on_ice_connection_state_change(Box::new(|state| {
-            Box::pin(async move {
-                println!("subscriber.ICE Connection State: {:?}", state);
-            })
-        }));
+        let (done_tx, mut done_rx) = tokio::sync::mpsc::channel::<()>(1);
+
+        pc.on_ice_connection_state_change(Box::new(
+            move |connection_state: RTCIceConnectionState| {
+                println!("Connection State has changed {connection_state}");
+    
+                if connection_state == RTCIceConnectionState::Connected {
+                    println!("Ctrl+C the remote client to stop the demo");
+                } else if connection_state == RTCIceConnectionState::Closed {
+                    println!("Connection closed");
+                } else if connection_state == RTCIceConnectionState::Failed {
+                    notify_tx.notify_waiters();
+                    println!("Done writing media files");
+                }
+                Box::pin(async {})
+            },
+        ));
 
         self.pc = Some(pc);
         self.pc.as_ref().unwrap().set_remote_description(offer.clone()).await.map_err(|e| e.to_string())?;
@@ -708,15 +740,28 @@ impl WebRTCClient {
         let _ = self.pc.as_ref().unwrap().set_local_description(answer.clone()).await.map_err(|e| e.to_string())?;
         self.answer = Some(answer.clone());
         
+        // let video_file = "samples/output.hevc";
+
+        
+        let notify_rx2 = Arc::clone(&notify_rx);
         // set handlers for processing video/audio tracks
         self.pc.as_ref().unwrap().on_track(Box::new(move |track, _, _| {    // temporary closure
-            println!("On track");
+            // get a reference of self.pc
             
-            Box::pin(async move {   // temporal handling
-                if track.kind() == RTPCodecType::Video {
-                    println!("Received video track: {:?}", track);
-                } else if track.kind() == RTPCodecType::Audio {
-                    println!("Received audio track: {:?}", track);
+            let notify_rx2 = Arc::clone(&notify_rx2);
+            Box::pin(async move {
+                let notify_rx2 = Arc::clone(&notify_rx2);
+
+                let codec = track.codec();
+                let mime_type = codec.capability.mime_type.to_lowercase();
+                if mime_type == MIME_TYPE_H264.to_lowercase() {
+                    println!("Got h264 track, saving to disk as received.hevc");
+                    tokio::spawn(async move {
+                        let file = TokioFile::create("test_output/received.h264").await.unwrap();
+                        let track = track.clone();
+                        let notify = notify_rx2.clone();
+                        save_to_disk_direct(file, track, notify).await.unwrap();
+                    });
                 }
             })
         }));
@@ -731,5 +776,101 @@ impl Drop for WebRTCClient {
             handle.abort();
         }
         println!("WebRTCClient dropped");
+    }
+}
+
+//TODO: Find a way to use H264Writer
+
+async fn save_to_disk_direct(
+    mut file: TokioFile,
+    track: Arc<TrackRemote>,
+    notify: Arc<Notify>,
+) -> AnyResult<()> {
+    println!("save_to_disk_direct: file opened, waiting for packets...");
+    let mut total_payload_size = 0;
+    let mut cached_packet: Option<H264Packet> = None;
+
+    loop {
+        tokio::select! {
+            result = track.read_rtp() => {
+                match result {
+                    Ok((rtp_packet, _)) => {
+                        total_payload_size += rtp_packet.payload.len();
+                        write_rtp(&mut file, &rtp_packet, &mut cached_packet, &mut false).await?;
+
+                        if let Err(e) = file.flush().await {
+                            println!("Failed to flush file: {}", e);
+                        }
+                    }
+                    Err(e) => {
+                        println!("read_rtp error: {:?}", e);
+                        println!("file closing begin after read_rtp error");
+                        if let Err(err) = file.shutdown().await {
+                            println!("file close err: {}", err);
+                        }
+                        println!("file closing end after read_rtp error");
+                        return Ok(());
+                    }
+                }
+            }
+
+            _ = notify.notified() => {
+                println!("notified.file closing begin after notified");
+                if let Err(err) = file.shutdown().await {
+                    println!("file close err: {}", err);
+                }
+                println!("notified.file closing end after notified");
+                return Ok(());
+            }
+        }
+    }
+}
+
+async fn write_rtp(
+    file: &mut TokioFile,
+    rtp_packet: &Packet, cached_packet: &mut Option<H264Packet>, has_key_frame: &mut bool
+) -> Result<(), std::io::Error> {
+    if rtp_packet.payload.is_empty() {
+        println!("Empty payload");
+        return Ok(());
+    }
+
+    // if !*has_key_frame {
+    //     *has_key_frame = is_key_frame(&rtp_packet.payload);
+    //     if !*has_key_frame {
+    //         // key frame not defined yet. discarding packet
+    //         return Ok(());
+    //     }
+    // }
+
+    if cached_packet.is_none() {
+        println!("Creating new cached packet");
+        *cached_packet = Some(H264Packet::default());
+    }
+
+    if let Some(cached_packet) = cached_packet {
+        let payload = cached_packet.depacketize(&rtp_packet.payload);
+        if payload.is_err() {
+            println!("Error depacketizing: {:?}", payload.err().unwrap());
+            return Ok(());
+        }
+        let payload = payload.unwrap();
+        // println!("Writing H264 packet with size: {}", payload.len());
+        file.write_all(&payload).await?;
+    }
+    Ok(())
+}
+
+fn is_key_frame(data: &[u8]) -> bool {
+    if data.len() < 4 {
+        println!("Data length is less than 4 bytes, cannot determine key frame");
+        false
+    } else {
+        let word = u32::from_be_bytes([data[0], data[1], data[2], data[3]]);
+        let nalu_type = (word >> 24) & NALU_TYPE_BITMASK;
+        let result = (nalu_type == NALU_TTYPE_STAP_A && (word & NALU_TYPE_BITMASK) == NALU_TTYPE_SPS)
+            || (nalu_type == NALU_TTYPE_SPS);
+        println!("Data length: {}, NALU type: {}", data.len(), result);
+        result
     }
 }
