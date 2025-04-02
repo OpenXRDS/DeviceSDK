@@ -640,7 +640,7 @@ mod tests {
         server_handle.abort();
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn test_client_webrtc_send_video_file() {
         CryptoProvider::install_default(ring::default_provider()).unwrap();
 
@@ -706,7 +706,7 @@ mod tests {
         publisher.start_streaming(Some(sample_file_path)).await.expect("Failed to start streaming");
 
         // wait till the video file is sent
-        sleep(Duration::from_secs(60)).await;
+        sleep(Duration::from_secs(80)).await;
 
         server_handle.abort();
         assert!(true);
