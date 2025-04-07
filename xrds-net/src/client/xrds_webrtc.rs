@@ -1,15 +1,9 @@
-use std::io::{BufReader, Write};
-use std::thread::sleep;
+use std::io::BufReader;
 use anyhow::Result as AnyResult;
-use webrtc::util::marshal::MarshalSize;
 use std::time::Duration;
 use tokio::sync::Mutex;
-use tokio::io::AsyncWriteExt;
 use webrtc::media::io::h264_reader::H264Reader;
 use webrtc::media::io::h264_writer::H264Writer;
-use webrtc::rtp::codecs::h264::H264Packet;
-use webrtc::rtp::packetizer::Depacketizer;
-use webrtc::rtp::packet::Packet;
 use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
 use webrtc::rtp_transceiver::RTCPFeedback;
 use webrtc::ice_transport::ice_candidate::RTCIceCandidate;
@@ -17,6 +11,7 @@ use webrtc::ice_transport::ice_server::RTCIceServer;
 use webrtc::ice_transport::ice_connection_state::RTCIceConnectionState;
 use webrtc::api::media_engine::{MediaEngine, MIME_TYPE_H264, MIME_TYPE_OPUS};
 use tokio::sync::mpsc::{Sender, Receiver};
+use webrtc::rtp::packet::Packet;
 use webrtc::api::interceptor_registry::register_default_interceptors;
 use webrtc::{peer_connection::RTCPeerConnection, rtp_transceiver::rtp_codec::RTCRtpCodecCapability};
 use webrtc::rtp_transceiver::rtp_sender::RTCRtpSender;
@@ -26,7 +21,6 @@ use webrtc::interceptor::registry::Registry;
 use webrtc::api::APIBuilder;
 use webrtc::track::track_remote::TrackRemote;
 use std::fs::File;
-use tokio::fs::File as TokioFile;
 use webrtc::media::Sample;
 use std::sync::Arc;
 use tokio_tungstenite::WebSocketStream as WsStream;
@@ -43,10 +37,6 @@ use tokio::sync::{mpsc, Notify};
 use crate::common::data_structure::WebRTCMessage;
 use crate::common::data_structure::{CREATE_SESSION, LIST_SESSIONS, JOIN_SESSION, 
         LEAVE_SESSION, CLOSE_SESSION, LIST_PARTICIPANTS, OFFER, ANSWER, WELCOME, ICE_CANDIDATE, ICE_CANDIDATE_ACK};
-
-const NALU_TTYPE_STAP_A: u32 = 24;
-const NALU_TTYPE_SPS: u32 = 7;
-const NALU_TYPE_BITMASK: u32 = 0x1F;
 
 pub struct WebRTCClient {
     client_id: Option<String>,
@@ -67,6 +57,8 @@ pub struct WebRTCClient {
 
     ice_candidates: Option<Arc<Mutex<Vec<RTCIceCandidate>>>>,
     rtp_sernder: Option<Arc<RTCRtpSender>>,
+
+    read_flag: bool,
 }
 
 #[allow(dead_code)]
@@ -90,6 +82,8 @@ impl WebRTCClient {
 
             ice_candidates: None,
             rtp_sernder: None,
+
+            read_flag: false,
         }
     }
     
@@ -105,6 +99,9 @@ impl WebRTCClient {
         self.answer.as_ref()
     }
 
+    /**
+     * Connect to the WebRTC server using WebSocket.
+     */
     pub async fn connect(&mut self, addr: &str) -> Result<(), Box<dyn Error>> {
         let (ws_stream, _) = connect_async(addr).await?;
         println!("Connected to {}", addr);
@@ -145,15 +142,62 @@ impl WebRTCClient {
         Ok(())
     }
 
+    /**
+     * This function is supposed to run in a separate thread.
+     * It will receive messages from the server and process them.
+     */
+    pub async fn run(&mut self) {
+        self.read_flag = true;
+        while self.read_flag {
+            self.handle_incoming_message().await;
+        }
+    }
+
+    /**
+     * These messages are from both signaling server and webrtc peer connection.
+     */
+    async fn handle_incoming_message(&mut self) {
+        if let Some(ref mut rx) = self.incoming_rx {
+            if let Some(msg) = rx.recv().await {
+
+                if msg.message_type == WELCOME {
+                    self.client_id = Some(msg.client_id.clone());
+                } else if msg.message_type == CREATE_SESSION {  // 
+                    self.session_id = msg.session_id.clone().into();
+                } else if msg.message_type == OFFER {
+                    self.handle_offer(msg.sdp.unwrap()).await.unwrap();
+                } else if msg.message_type == ANSWER {
+                    self.handle_answer(msg).await.unwrap();
+                    self.send_ice_candidates(false).await.unwrap();
+                } else if msg.message_type == ICE_CANDIDATE {
+                    self.handle_ice_candidate(msg).await.unwrap();
+                    self.send_ice_candidates(true).await.unwrap();
+                } else if msg.message_type == ICE_CANDIDATE_ACK {
+                    self.handle_ice_candidate(msg).await.unwrap();
+                }
+                else {
+                    println!("Unhandled message type: {}", msg.message_type);
+                }
+            }
+        }
+    }
+
+    /**
+     * This function is designed for step by step unit testing.
+     * For actual usage, use run_receive_loop instead.
+     */
     pub async fn receive_message(&mut self) -> Option<WebRTCMessage> {
         if let Some(ref mut rx) = self.incoming_rx {
             if let Some(msg) = rx.recv().await {
+                let msg_clone = msg.clone();
                 if msg.message_type == WELCOME {
                     self.client_id = Some(msg.client_id.clone());
                 } else if msg.message_type == CREATE_SESSION {
                     self.session_id = msg.session_id.clone().into();
+                } else {
+                    // do nothing
                 }
-                return Some(msg);
+                return Some(msg_clone);
             }
         }
         None
@@ -397,7 +441,6 @@ impl WebRTCClient {
         
         let video_track = video_track.clone();
         let mut total_nal_size = 0;
-        let rtp_sender = self.rtp_sernder.as_ref().ok_or("RTP sender not set")?.clone();
 
         let mut nal_count = 0;
         tokio::spawn(async move {
@@ -667,7 +710,8 @@ impl WebRTCClient {
         // serialize msg into json
         let msg = serde_json::to_string(&msg).map_err(|e| e.to_string())?;
         // println!("Sending message: {}", msg);
-
+        
+        // send the answer to the server, so that it can be delivered to the publisher
         if let Some(write) = &self.write {
             let mut write_guard = write.lock().await;
             let _ = write_guard.send(Message::Text(msg.into())).await;
@@ -744,8 +788,6 @@ impl WebRTCClient {
             }
         }));
 
-        let (done_tx, mut done_rx) = tokio::sync::mpsc::channel::<()>(1);
-
         let notify_tx_clone = Arc::clone(&notify_tx);
         pc.on_ice_connection_state_change(Box::new(
             move |connection_state: RTCIceConnectionState| {
@@ -772,7 +814,6 @@ impl WebRTCClient {
         self.answer = Some(answer.clone());
         
         let notify_rx2 = Arc::clone(&notify_rx);
-        let notify_tx2 = Arc::clone(&notify_tx);
         let pc_clone = self.pc.clone().unwrap();
         let video_file = "test_output/received.h264";
 
@@ -817,7 +858,7 @@ impl WebRTCClient {
                         // save_to_disk_direct(file, track, notify).await.unwrap();
 
                         let writer = Arc::clone(&h264_writer2);
-                        save_to_disk_by_writer(writer, track, notify).await.unwrap();
+                        save_to_disk_by_writer2(writer, track, notify).await.unwrap();
                     });
 
                 }
@@ -837,13 +878,56 @@ impl Drop for WebRTCClient {
     }
 }
 
+async fn save_to_disk_by_writer2(
+    writer: Arc<Mutex<dyn webrtc::media::io::Writer + Send + Sync>>,
+    track: Arc<TrackRemote>,
+    notify: Arc<Notify>,
+) -> AnyResult<()> {
+    let mut total_size = 0;
+    let mut last_seq = None;
+    let mut received_count = 0;
+    let (tx, mut rx) = mpsc::channel::<Packet>(1000);
+
+    // 읽기 태스크
+    let track_clone = track.clone();
+    let notify_clone = notify.clone();
+    tokio::spawn(async move {
+        while let Ok((rtp_packet, _)) = track_clone.read_rtp().await {
+            if tx.send(rtp_packet).await.is_err() {
+                break;
+            }
+        }
+    });
+
+    loop {
+        tokio::select! {
+            Some(rtp_packet) = rx.recv() => {
+                total_size += rtp_packet.payload.len();
+                if let Some(last) = last_seq {
+                    let current = rtp_packet.header.sequence_number as u32;
+                    if current != (last as u32 + 1) % 65536 {
+                        println!("Packet loss: {} -> {} (missed: {})", last, current, (current.wrapping_sub(last as u32 + 1)) % 65536);
+                    }
+                }
+                last_seq = Some(rtp_packet.header.sequence_number);
+                received_count += 1;
+                let mut w = writer.lock().await;
+                w.write_rtp(&rtp_packet)?;
+            }
+            _ = notify_clone.notified() => break,
+        }
+    }
+    println!("Total received packets: {}", received_count);
+    println!("Total size: {}", total_size);
+    Ok(())
+}
+
 async fn save_to_disk_by_writer(
     writer: Arc<Mutex<dyn webrtc::media::io::Writer + Send + Sync>>,
     track: Arc<TrackRemote>,
     notify: Arc<Notify>,
 ) -> AnyResult<()> {
     let mut total_rtp_packet_payload_size = 0;
-    let mut last_seq = None;
     let mut received_count = 0;
     
     let (first_packet, _) = track.read_rtp().await?;
@@ -860,7 +944,7 @@ async fn save_to_disk_by_writer(
         received_count += 1;
     }
     total_rtp_packet_payload_size += first_packet.payload.len();
-    last_seq = Some(first_packet.header.sequence_number as u32);
+    let mut last_seq = Some(first_packet.header.sequence_number as u32);
 
     loop {
         tokio::select! {
@@ -903,102 +987,4 @@ async fn save_to_disk_by_writer(
             }
         }
     }
-}
-
-async fn handle_stap_a(packet: &Packet, writer: &Arc<Mutex<dyn webrtc::media::io::Writer + Send + Sync>>) -> Result<(), webrtc::Error> {
-    let mut offset = 1;
-    println!("handle_stap_a: packet payload len: {}", packet.payload.len());
-    while offset < packet.payload.len() {
-        let size = u16::from_be_bytes([packet.payload[offset], packet.payload[offset + 1]]) as usize;
-        offset += 2;
-        if offset + size <= packet.payload.len() {
-            let nal_data = &packet.payload[offset..offset + size];
-            let mut w = writer.lock().await;
-            //convert nal_data to Byte
-            let nal_data = nal_data.to_vec();
-            let _ = w.write_rtp(&Packet {
-                header: packet.header.clone(),
-                payload: nal_data.into(),
-            });
-        }
-        offset += size;
-    }
-    Ok(())
-}
-
-async fn save_to_disk_direct(
-    mut file: TokioFile,
-    track: Arc<TrackRemote>,
-    notify: Arc<Notify>,
-) -> AnyResult<()> {
-    println!("save_to_disk_direct: file opened, waiting for packets...");
-    let mut total_rtp_packet_payload_size = 0;
-    let mut total_rtp_packet_header_size = 0;
-    let mut cached_packet: Option<H264Packet> = None;
-    
-    println!("notify in save: {:p}", Arc::as_ptr(&notify));
-    let mut total_write_size = 0;
-    loop {
-        tokio::select! {
-            result = track.read_rtp() => {
-                match result {
-                    Ok((rtp_packet, _)) => {
-                        let header = rtp_packet.header.clone();
-                        let header_size = header.marshal_size();
-
-                        total_rtp_packet_header_size += header_size;
-                        total_rtp_packet_payload_size += rtp_packet.payload.len();
-
-                        // let nalu_type = if !rtp_packet.payload.is_empty() { rtp_packet.payload[0] & 0x1F } else { 0 };
-                        // println!("Received NAL type: {}, size: {}", nalu_type, rtp_packet.payload.len());
-                        write_rtp(&mut file, &rtp_packet, &mut cached_packet, &mut total_write_size).await?;
-                        file.flush().await?;
-                    }
-                    Err(e) => {
-                        println!("read_rtp error: {:?}", e);
-                        file.shutdown().await?;
-                        return Err(e.into());
-                    }
-                }
-            }
-
-            _ = notify.notified() => {
-                println!("Notify triggered, stopping file write...");
-                file.shutdown().await?;
-                println!("Total received header size: {}, payload size: {}", total_rtp_packet_header_size, total_rtp_packet_payload_size);
-                println!("Total write size: {}", total_write_size);
-                return Ok(());
-            }
-        }
-    }
-}
-
-async fn write_rtp(
-    file: &mut TokioFile,
-    rtp_packet: &Packet, cached_packet: &mut Option<H264Packet>, total_write_size: &mut i32
-) -> Result<(), std::io::Error> {
-    if rtp_packet.payload.is_empty() {
-        println!("Empty payload");
-        return Ok(());
-    }
-
-    if cached_packet.is_none() {
-        println!("Creating new cached packet");
-        *cached_packet = Some(H264Packet::default());
-    }
-
-    if let Some(cached_packet) = cached_packet {
-        // println!("Received NAL type: {}, size: {}", rtp_packet.payload[0] & 0x1F, rtp_packet.payload.len());
-        let payload = cached_packet.depacketize(&rtp_packet.payload);
-        if payload.is_err() {
-            println!("Error depacketizing: {:?}", payload.err().unwrap());
-            return Ok(());
-        }
-        let payload = payload.unwrap();
-        if payload.len() > 0 {
-            *total_write_size += payload.len() as i32;
-            file.write_all(&payload).await?;
-        }
-    }
-    Ok(())
 }

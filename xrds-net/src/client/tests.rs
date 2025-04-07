@@ -706,7 +706,7 @@ mod tests {
         publisher.start_streaming(Some(sample_file_path)).await.expect("Failed to start streaming");
 
         // wait till the video file is sent
-        sleep(Duration::from_secs(80)).await;
+        sleep(Duration::from_secs(300)).await;
 
         server_handle.abort();
         assert!(true);
