@@ -1,4 +1,5 @@
-#define_import_path shader::view_params
+#ifndef VIEW_PARAMS_WGSL
+#define VIEW_PARAMS_WGSL
 
 struct ViewParams {
     view_projection: mat4x4<f32>,
@@ -22,3 +23,5 @@ fn get_view_params(view_index: i32) -> ViewParams {
 fn get_local_model() -> mat4x4<f32> {
     return u_local_model;
 }
+
+#endif  // VIEW_PARAMS_WGSL

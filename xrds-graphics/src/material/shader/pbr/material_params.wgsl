@@ -1,4 +1,5 @@
-#define_import_path shader::pbr::material_params
+#ifndef PBR_MATERIAL_PARAMS_WGSL
+#define PBR_MATERIAL_PARAMS_WGSL
 
 struct PbrParams {
     base_color_factor: vec4<f32>,
@@ -8,17 +9,18 @@ struct PbrParams {
     normal_scale: f32,
     occlusion_strength: f32,
     alpha_cutoff: f32,
-    texcoord_base_color: u32,
-    texcoord_emissive: u32,
-    texcoord_metallic_roughness: u32,
-    texcoord_normal: u32,
-    texcoord_occlusion: u32,
-    texcoord_diffuse: u32,
-    texcoord_specular_glossiness: u32,
+    texcoord_base_color: i32,
+    texcoord_emissive: i32,
+    texcoord_metallic_roughness: i32,
+    texcoord_normal: i32,
+    texcoord_occlusion: i32,
+    texcoord_diffuse: i32,
+    texcoord_specular_glossiness: i32,
 }
 
 @group(1) @binding(0)
 var<uniform> u_pbr_params: PbrParams;
+
 #ifdef MATERIAL_INPUT_BASE_COLOR_TEXTURE
 @group(1) @binding(1)
 var base_color_texture: texture_2d<f32>;
@@ -82,83 +84,51 @@ var brdf_texture: texture_2d<f32>;
 var brdf_sampler: sampler;
 #endif
 
-fn get_base_color_texture(uv: vec2<f32>) -> vec4<f32> {
-    var base_color = u_pbr_params.base_color_factor;
+struct GetPbrParamsOutput {
+    base_color: vec4<f32>,
+    emissive: vec4<f32>,
+    occlusion_metallic_roughness: vec4<f32>,
+    normal: vec4<f32>,
+    normal_scale: f32,
+}
+
+fn get_pbr_params(uvs: vec4<f32>) -> GetPbrParamsOutput{
+    var out: GetPbrParamsOutput;
+
+    var auvs = array<vec2<f32>, 2>(
+        vec2<f32>(uvs.x, uvs.y),
+        vec2<f32>(uvs.z, uvs.w)
+    );
+
+    out.base_color = u_pbr_params.base_color_factor;
+    out.emissive = u_pbr_params.emissive_factor;
+    out.occlusion_metallic_roughness = vec4<f32>(u_pbr_params.occlusion_strength, u_pbr_params.metallic_factor, u_pbr_params.roughness_factor, 1.0);
+    out.normal = vec4<f32>(u_pbr_params.normal_scale, u_pbr_params.normal_scale, u_pbr_params.normal_scale, 1.0);
+    out.normal_scale = u_pbr_params.normal_scale;
+
 #ifdef MATERIAL_INPUT_BASE_COLOR_TEXTURE
-    base_color *= textureSample(base_color_texture, base_color_sampler, uv);
+    out.base_color *= textureSample(base_color_texture, base_color_sampler, auvs[u_pbr_params.texcoord_base_color]);
 #endif
-    return base_color;
-}
-
-fn get_diffuse_texture(uv: vec2<f32>) -> vec4<f32> {
-#ifdef MATERIAL_INPUT_DIFFUSE_TEXTURE
-    return textureSample(diffuse_texture, diffuse_sampler, uv);
-#else
-    return vec4<f32>(0.0, 0.0, 0.0, 1.0);
-#endif
-}
-
-fn get_emissive_texture(uv: vec2<f32>) -> vec4<f32> {
-    var emissive = u_pbr_params.emissive_factor;
 #ifdef MATERIAL_INPUT_EMISSIVE_TEXTURE
-    emissive *= textureSample(emissive_texture, emissive_sampler, uv);
+    out.emissive *= textureSample(emissive_texture, emissive_sampler, auvs[u_pbr_params.texcoord_emissive]);
 #endif
-    return emissive;
-}
-
-fn get_metallic_roughness_texture(uv: vec2<f32>) -> vec4<f32> {
-    var metallic_roughness = vec4<f32>(u_pbr_params.metallic_factor, u_pbr_params.roughness_factor, 0.0, 1.0);
 #ifdef MATERIAL_INPUT_METALLIC_ROUGHNESS_TEXTURE
-    metallic_roughness *= textureSample(metallic_roughness_texture, metallic_roughness_sampler, uv);
+    var metallic_roughness = textureSample(metallic_roughness_texture, metallic_roughness_sampler, auvs[u_pbr_params.texcoord_metallic_roughness]);
+    out.occlusion_metallic_roughness *= vec4<f32>(1.0, metallic_roughness.g, metallic_roughness.b, 1.0);
 #endif
-    return metallic_roughness;
-}
-
-fn get_normal_texture(uv: vec2<f32>) -> vec4<f32> {
-#ifdef MATERIAL_INPUT_NORMAL_TEXTURE
-    return textureSample(normal_texture, normal_sampler, uv);
-#else
-    return vec4<f32>(0.0, 0.0, 1.0, 1.0);
-#endif
-}
-
-fn get_occlusion_texture(uv: vec2<f32>) -> vec4<f32> {
-    var strength: f32 = u_pbr_params.occlusion_strength;
 #ifdef MATERIAL_INPUT_OCCLUSION_TEXTURE
-    return textureSample(occlusion_texture, occlusion_sampler, uv) * strength;
-#else
-    return vec4<f32>(strength, strength, strength, 1.0);
+    var occlusion = textureSample(occlusion_texture, occlusion_sampler, auvs[u_pbr_params.texcoord_occlusion]);
+    out.occlusion_metallic_roughness *= vec4<f32>(occlusion.r, 1.0, 1.0, 1.0);
 #endif
+#ifdef MATERIAL_INPUT_NORMAL_TEXTURE
+    out.normal = textureSample(normal_texture, normal_sampler, auvs[u_pbr_params.texcoord_normal]);
+#endif
+
+    return out;
 }
 
-fn get_specular_glossiness_texture(uv: vec2<f32>) -> vec4<f32> {
-#ifdef MATERIAL_INPUT_SPECULAR_GLOSSINESS_TEXTURE
-    return textureSample(specular_glossiness_texture, specular_glossiness_sampler, uv);
-#else
-    return vec4<f32>(1.0, 1.0, 1.0, 1.0);
-#endif
+fn get_alpha_cutoff() -> f32 {
+    return u_pbr_params.alpha_cutoff;
 }
 
-fn get_ibl_diffuse_texture(coord: vec3<f32>) -> vec4<f32> {
-#ifdef MATERIAL_INPUT_IBL_DIFFUSE_TEXTURE
-    return textureSample(ibl_diffuse_sampler, ibl_diffuse_sampler, coord);
-#else
-    return vec4<f32>(1.0, 1.0, 1.0, 1.0);
-#endif
-}
-
-fn get_ibl_specular_texture(coord: vec3<f32>) -> vec4<f32> {
-#ifdef MATERIAL_INPUT_IBL_SPECULAR_TEXTURE
-    return textureSample(ibl_specular_sampler, ibl_specular_sampler, coord);
-#else
-    return vec4<f32>(1.0, 1.0, 1.0, 1.0);
-#endif
-}
-
-fn get_brdf_texture(uv: vec2<f32>) -> vec4<f32> {
-#ifdef MATERIAL_INPUT_BRDF_TEXTURE
-    return textureSample(brdf_texture, brdf_sampler, uv);
-#else
-    return vec4<f32>(1.0, 1.0, 1.0, 1.0);
-#endif
-}
+#endif  // PBR_MATERIAL_PARAMS_WGSL

@@ -2,13 +2,27 @@ use std::ops::Range;
 
 use crate::{pbr, XrdsIndexBuffer, XrdsInstanceBuffer, XrdsMaterialInstance, XrdsVertexBuffer};
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum RenderPassType {
+    /// Renderpass for draw g-buffers
+    PbrGbuffer,
+    /// Rnderpass for draw shadowmaps
+    PbrShadow,
+    /// Renderpass for deferred lighting
+    PbrLight,
+    /// Renderpass for postprocess
+    Postprocess,
+}
+
+#[derive(Debug)]
 pub struct RenderPass<'encoder> {
     inner: wgpu::RenderPass<'encoder>,
+    ty: RenderPassType,
 }
 
 impl<'e> RenderPass<'e> {
-    pub fn new(inner: wgpu::RenderPass<'e>) -> Self {
-        RenderPass { inner }
+    pub fn new(inner: wgpu::RenderPass<'e>, ty: RenderPassType) -> Self {
+        RenderPass { inner, ty }
     }
 
     pub fn bind_pipeline(&mut self, pipeline: &wgpu::RenderPipeline) {
@@ -55,5 +69,9 @@ impl<'e> RenderPass<'e> {
 
     pub fn draw(&mut self, vertices: Range<u32>, instances: Range<u32>) {
         self.inner.draw(vertices, instances);
+    }
+
+    pub fn ty(&self) -> RenderPassType {
+        self.ty
     }
 }

@@ -1,5 +1,3 @@
-use xrds_core::Size2Du;
-
 #[derive(Debug, Clone, Copy)]
 pub enum FormFactor {
     HeadMountedDisplay,
@@ -22,9 +20,9 @@ pub enum BlendMode {
 
 #[derive(Debug, Clone, Copy)]
 pub struct View {
-    pub max_image_size: Size2Du,
+    pub max_image_size: wgpu::Extent3d,
     pub max_swapchain_sample_count: u32,
-    pub recommended_image_size: Size2Du,
+    pub recommended_image_size: wgpu::Extent3d,
     pub recommended_swapchain_sample_count: u32,
 }
 

@@ -1,5 +1,4 @@
 pub use xrds_runtime::Context;
-pub use xrds_runtime::Object;
 pub use xrds_runtime::RuntimeError;
 pub use xrds_runtime::RuntimeHandler;
 pub use xrds_runtime::RuntimeTarget;

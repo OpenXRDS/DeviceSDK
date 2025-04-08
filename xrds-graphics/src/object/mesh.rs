@@ -1,40 +1,35 @@
 use std::{fmt::Debug, ops::Range};
 
-use wgpu::ShaderStages;
+use wgpu::{RenderPass, ShaderStages};
 use xrds_core::Transform;
 
-use crate::{RenderPass, XrdsIndexBuffer, XrdsMaterialInstance, XrdsVertexBuffer};
+use crate::{AssetHandle, Constant, XrdsIndexBuffer, XrdsMaterialInstance, XrdsVertexBuffer};
 
-#[derive(Default, Clone)]
+#[derive(Debug, Default, Clone)]
 pub struct XrdsMesh {
     name: String,
     primitives: Vec<XrdsPrimitive>,
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct XrdsPrimitive {
     pub vertices: Vec<XrdsVertexBuffer>,
     pub indices: Option<XrdsIndexBuffer>,
-    pub material: XrdsMaterialInstance,
+    pub material: AssetHandle<XrdsMaterialInstance>,
 }
 
 impl XrdsMesh {
-    pub fn with_name(mut self, name: &str) -> Self {
-        self.name = name.to_owned();
-        self
-    }
-
     pub fn with_primitives(mut self, primitives: Vec<XrdsPrimitive>) -> Self {
         self.primitives = primitives;
         self
     }
 
-    pub fn set_name(&mut self, name: &str) {
-        self.name = name.to_owned();
+    pub fn name(&self) -> &str {
+        &self.name
     }
 
-    pub fn get_name(&self) -> &str {
-        &self.name
+    pub fn set_name(&mut self, name: &str) {
+        self.name = name.to_string();
     }
 
     pub fn set_primitives(&mut self, primitives: Vec<XrdsPrimitive>) {
@@ -55,7 +50,7 @@ impl XrdsMesh {
 
     pub fn encode(
         &self,
-        render_pass: &mut RenderPass,
+        render_pass: &mut RenderPass<'_>,
         transform: &Transform,
         instances: &Range<u32>,
     ) {
@@ -66,21 +61,34 @@ impl XrdsMesh {
 }
 
 impl XrdsPrimitive {
+    pub fn material_handle(&self) -> &AssetHandle<XrdsMaterialInstance> {
+        &self.material
+    }
+
+    pub fn vertices(&self) -> &[XrdsVertexBuffer] {
+        &self.vertices
+    }
+
+    pub fn indices(&self) -> Option<&XrdsIndexBuffer> {
+        self.indices.as_ref()
+    }
+
     pub fn encode(
         &self,
-        render_pass: &mut RenderPass,
+        render_pass: &mut RenderPass<'_>,
         transform: &Transform,
         instances: Range<u32>,
     ) {
-        render_pass.bind_material(&self.material);
         render_pass.set_push_constants(
             ShaderStages::VERTEX,
             0,
             bytemuck::cast_slice(&transform.to_model_array()),
         );
-        render_pass.bind_vertex_buffers(&self.vertices, 0);
+        self.vertices.iter().enumerate().for_each(|(i, v)| {
+            render_pass.set_vertex_buffer(i as u32 + Constant::VERTEX_ID_BASEMENT, v.slice());
+        });
         if let Some(indices) = self.indices.as_ref() {
-            render_pass.bind_index_buffer(indices);
+            render_pass.set_index_buffer(indices.as_slice(), indices.format());
             render_pass.draw_indexed(
                 indices.as_range(),
                 0, /* all vertex buffers has same count */
@@ -89,24 +97,5 @@ impl XrdsPrimitive {
         } else {
             render_pass.draw(self.vertices[0].as_range(), instances);
         }
-    }
-}
-
-impl Debug for XrdsMesh {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("XrdsMesh")
-            .field("name", &self.name)
-            .field("primitives", &self.primitives)
-            .finish()
-    }
-}
-
-impl Debug for XrdsPrimitive {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("XrdsPrimitive")
-            .field("vertices", &self.vertices)
-            .field("indices", &self.indices)
-            .field("material", &self.material)
-            .finish()
     }
 }

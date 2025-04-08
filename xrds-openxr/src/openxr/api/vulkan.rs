@@ -13,7 +13,6 @@ use openxr::{
     SwapchainUsageFlags, Vulkan,
 };
 use wgpu::{BackendOptions, Extent3d, InstanceDescriptor};
-use xrds_core::Size2Du;
 use xrds_graphics::{GraphicsInstance, TextureFormat, XrdsTexture};
 
 use crate::{OpenXrError, ViewConfiguration};
@@ -319,6 +318,7 @@ impl OpenXrContextApi for OpenXrVulkanContext {
             wgpu_limits,
             wgpu_memory_hints,
         )?;
+
         let graphics_instance =
             GraphicsInstance::from_init(wgpu_instance, wgpu_adapter, wgpu_device, wgpu_queue);
 
@@ -331,7 +331,7 @@ impl OpenXrContextApi for OpenXrVulkanContext {
                 swapchain_extent: None,
             }),
             frame_waiter,
-            graphics_instance: Arc::new(graphics_instance),
+            graphics_instance,
             _phantom: std::marker::PhantomData,
         })
     }
@@ -339,7 +339,7 @@ impl OpenXrContextApi for OpenXrVulkanContext {
     fn create_swapchain(
         &mut self,
         view_configuration: &ViewConfiguration,
-        graphics_instance: Arc<GraphicsInstance>,
+        graphics_instance: &GraphicsInstance,
     ) -> anyhow::Result<Vec<XrdsTexture>> {
         let swapchain_formats = self.session.enumerate_swapchain_formats()?;
         let swapchain_formats: Vec<TextureFormat> = swapchain_formats
@@ -492,14 +492,6 @@ impl OpenXrContextApi for OpenXrVulkanContext {
         Ok(self
             .swapchain_format
             .ok_or(OpenXrError::SwapchainNotInitialized)?)
-    }
-
-    fn swapchain_size(&self) -> anyhow::Result<Size2Du> {
-        let extent = self.swapchain_extent()?;
-        Ok(Size2Du {
-            width: extent.width,
-            height: extent.height,
-        })
     }
 
     fn swapchain_extent(&self) -> anyhow::Result<wgpu::Extent3d> {

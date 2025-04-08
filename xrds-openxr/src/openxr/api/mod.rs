@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use openxr::SwapchainSubImage;
-use xrds_core::Size2Du;
 use xrds_graphics::{GraphicsInstance, TextureFormat, XrdsTexture};
 
 pub mod vulkan;
@@ -11,7 +10,7 @@ use super::ViewConfiguration;
 pub(crate) struct OpenXrContextCreateResult<T: OpenXrContextApi> {
     pub(crate) context: Box<dyn OpenXrContextApi>,
     pub(crate) frame_waiter: openxr::FrameWaiter,
-    pub(crate) graphics_instance: Arc<GraphicsInstance>,
+    pub(crate) graphics_instance: GraphicsInstance,
     pub(crate) _phantom: std::marker::PhantomData<T>,
 }
 
@@ -25,7 +24,7 @@ pub(crate) trait OpenXrContextApi {
     fn create_swapchain(
         &mut self,
         view_configuration: &ViewConfiguration,
-        graphics_instance: Arc<GraphicsInstance>,
+        graphics_instance: &GraphicsInstance,
     ) -> anyhow::Result<Vec<XrdsTexture>>;
     fn swapchain_wait(&mut self) -> anyhow::Result<u32>;
     fn swapchain_release_image(&mut self) -> anyhow::Result<()>;
@@ -42,7 +41,6 @@ pub(crate) trait OpenXrContextApi {
     fn session(&self) -> openxr::Session<openxr::AnyGraphics>;
 
     fn swapchain_format(&self) -> anyhow::Result<TextureFormat>;
-    fn swapchain_size(&self) -> anyhow::Result<Size2Du>;
     fn swapchain_extent(&self) -> anyhow::Result<wgpu::Extent3d>;
 }
 

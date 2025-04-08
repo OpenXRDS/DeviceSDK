@@ -1,30 +1,32 @@
 use std::{
     borrow::Cow,
+    collections::HashMap,
     fs::File,
     io::Read,
     path::{Path, PathBuf},
-    sync::Arc,
     time::Instant,
 };
 
-use glam::{Mat4, Vec4};
+use glam::Vec4;
 use log::debug;
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
+use uuid::Uuid;
 use wgpu::SamplerDescriptor;
 use xrds_core::Transform;
 
 use crate::{
     asset::types::{AssetHandle, AssetId},
     pbr::{self, AlphaMode},
-    AssetServer, BufferAssetInfo, MaterialAssetInfo, MaterialTextureInfo, PbrMaterialInfo,
-    Renderable, TextureAssetInfo, XrdsBuffer, XrdsBufferType, XrdsIndexBuffer,
-    XrdsMaterialInstance, XrdsMesh, XrdsPrimitive, XrdsTexture, XrdsVertexBuffer,
+    AssetServer, BufferAssetInfo, Component, Entity, GltfScene, GraphicsInstance,
+    MaterialAssetInfo, MaterialTextureInfo, MeshComponent, PbrMaterialInfo, TextureAssetInfo,
+    TransformComponent, XrdsBuffer, XrdsBufferType, XrdsIndexBuffer, XrdsMaterialInstance,
+    XrdsMesh, XrdsPrimitive, XrdsTexture, XrdsVertexBuffer,
 };
 
 use super::Gltf;
 
 pub struct GltfLoader {
-    asset_server: Arc<AssetServer>,
+    graphics_instance: GraphicsInstance,
     asset_path: PathBuf,
 }
 
@@ -36,15 +38,30 @@ struct GltfLoadContext<'a> {
     default_sampler: wgpu::Sampler,
 }
 
+enum LoadImageResult {
+    Cached(AssetHandle<XrdsTexture>),
+    Loaded {
+        id: AssetId,
+        data: Vec<u8>,
+        width: u32,
+        height: u32,
+        depth_or_array: u32,
+    },
+}
+
 impl GltfLoader {
-    pub fn new(asset_server: Arc<AssetServer>, asset_path: &Path) -> Self {
+    pub fn new(graphics_instance: GraphicsInstance, asset_path: &Path) -> Self {
         Self {
-            asset_server,
+            graphics_instance,
             asset_path: asset_path.to_path_buf(),
         }
     }
 
-    pub async fn load_from_file<P>(&self, path: P) -> anyhow::Result<Gltf>
+    pub async fn load_from_file<P>(
+        &self,
+        path: P,
+        asset_server: &mut AssetServer,
+    ) -> anyhow::Result<Gltf>
     where
         P: AsRef<Path>,
     {
@@ -54,10 +71,15 @@ impl GltfLoader {
             .ok_or(anyhow::Error::msg("Invalid file name"))?
             .to_string_lossy();
         let buf = Self::read_file(path).await?;
-        self.load(&buf, &gltf_file_name).await
+        self.load(&buf, &gltf_file_name, asset_server).await
     }
 
-    pub async fn load(&self, data: &[u8], name: &str) -> anyhow::Result<Gltf> {
+    pub async fn load(
+        &self,
+        data: &[u8],
+        name: &str,
+        asset_server: &mut AssetServer,
+    ) -> anyhow::Result<Gltf> {
         let instant = Instant::now();
         let gltf = gltf::Gltf::from_slice(data)?;
         let gltf_key = self.asset_path.join(name).to_string_lossy().to_string();
@@ -82,7 +104,7 @@ impl GltfLoader {
             let instant = Instant::now();
             log::debug!("  + Load images");
             let images: Vec<_> = gltf.images().collect();
-            let textures: Vec<_> = images
+            let load_image_results: Vec<_> = images
                 .par_iter()
                 .map(|image| {
                     Self::load_image(
@@ -90,11 +112,31 @@ impl GltfLoader {
                         &raw_buffers,
                         &self.asset_path,
                         &gltf_key,
-                        self.asset_server.clone(),
+                        asset_server,
                     )
                 })
                 .filter_map(|res| res.ok())
                 .collect();
+            let mut textures = Vec::new();
+            for result in load_image_results {
+                let handle = match result {
+                    LoadImageResult::Cached(handle) => handle,
+                    LoadImageResult::Loaded {
+                        id,
+                        data,
+                        width,
+                        height,
+                        depth_or_array,
+                    } => asset_server.register_texture(&TextureAssetInfo {
+                        id: &id,
+                        data: &data,
+                        width,
+                        height,
+                        depth_or_array,
+                    })?,
+                };
+                textures.push(handle);
+            }
             debug!(
                 "  - Load images in {} secs",
                 instant.elapsed().as_secs_f32()
@@ -106,7 +148,7 @@ impl GltfLoader {
             .map(|sampler| self.load_sampler(&sampler))
             .collect();
         let default_sampler = self
-            .asset_server
+            .graphics_instance
             .device()
             .create_sampler(&SamplerDescriptor {
                 label: None,
@@ -125,12 +167,19 @@ impl GltfLoader {
             samplers,
             default_sampler,
         };
+
         let gltf = {
             let instant = Instant::now();
             log::debug!("  + Load scenes");
+
             let mut scenes = Vec::new();
             for scene in gltf.scenes() {
-                scenes.push(Arc::new(self.load_scene_as_object(&scene, &context)?));
+                let scene_entities = self.load_scene(&scene, &context, asset_server)?;
+                asset_server.register_entities(&scene_entities);
+                scenes.push(GltfScene {
+                    name: scene.name().map(|n| n.to_string()),
+                    id: scene_entities[0].id().clone(),
+                });
             }
             let mut res = Gltf::default().with_scenes(scenes);
             if let Some(default_scene) = gltf.default_scene() {
@@ -153,101 +202,231 @@ impl GltfLoader {
         Ok(gltf)
     }
 
-    fn load_scene_as_object(
+    fn load_scene(
         &self,
         scene: &gltf::Scene,
         context: &GltfLoadContext,
-    ) -> anyhow::Result<Renderable> {
+        asset_server: &mut AssetServer,
+    ) -> anyhow::Result<Vec<Entity>> {
         let instant = Instant::now();
         debug!("    + Load scene #{}", scene.index());
+        let mut node_entity_map: HashMap<usize, Entity> = HashMap::new();
+
         let scene_name = Self::name_from_scene(scene, &context.gltf_name);
-        let mut nodes = Vec::new();
-        let scene_transform = Mat4::default();
+        let scene_id = Uuid::new_v4();
+        let mut scene_entity = Entity::default().with_id(&scene_id).with_name(&scene_name);
+        let mut scene_transform_component = TransformComponent::default();
+
+        // Phase1. create entities
+        // iterate all nodes in scene graph
         for node in scene.nodes() {
-            if let Some(child_node) =
-                self.load_node_as_object(&node, &scene_name, &scene_transform, context)?
-            {
-                nodes.push(child_node);
-            }
+            let entity = self.load_node(
+                &node,
+                &scene_name,
+                &glam::Mat4::IDENTITY,
+                context,
+                &mut node_entity_map,
+                asset_server,
+            )?;
+            node_entity_map.insert(node.index(), entity);
         }
-        let scene_object = Renderable::default()
-            .with_name(&scene_name)
-            .with_childs(&nodes);
+
+        // Phase2. build entitiy relationships
+        for node in scene.nodes() {
+            if let Some(entity) = node_entity_map.get(&node.index()) {
+                scene_transform_component.add_child(entity.id());
+            }
+            Self::build_node_relationsip(&node, &scene_id, &mut node_entity_map)?;
+        }
+        scene_entity.add_component(Component::Transform(scene_transform_component));
+
+        let mut entities: Vec<_> = node_entity_map
+            .into_iter()
+            .map(|(_, entity)| entity)
+            .collect();
+        entities.insert(0, scene_entity);
 
         log::debug!(
             "    - Load scene #{} in {} secs",
             scene.index(),
             instant.elapsed().as_secs_f32()
         );
-        Ok(scene_object)
+
+        Ok(entities)
     }
 
-    fn load_node_as_object(
+    /// Load node as entity from gltf node
+    /// * Requires parent transform matrix for pre-calculated local transform.
+    fn load_node(
         &self,
         node: &gltf::Node,
         parent_name: &str,
-        parent_transform: &Mat4,
+        parent_transform: &glam::Mat4,
         context: &GltfLoadContext,
-    ) -> anyhow::Result<Option<Renderable>> {
+        node_entity_map: &mut HashMap<usize, Entity>,
+        asset_server: &mut AssetServer,
+    ) -> anyhow::Result<Entity> {
         let instant = Instant::now();
-        debug!("    + Load node #{}", node.index());
 
-        if node.mesh().is_none() && node.children().len() == 0 {
-            log::warn!(
-                "    - Node #{} has no mesh and children. Maybe utility node. Skip loading",
-                node.index()
-            );
-            Ok(None)
-        } else {
-            let name = Self::name_from_node(node, parent_name);
-            let transform = parent_transform
-                .mul_mat4(&glam::Mat4::from_cols_array_2d(&node.transform().matrix()));
-            let mut object = Renderable::default()
-                .with_name(&name)
-                .with_transform(Transform::from_matrix(&transform));
-            if let Some(mesh) = node.mesh() {
-                let mesh = self.load_mesh(&mesh, context)?;
-                object.set_mesh(mesh);
+        let name: String = Self::name_from_node(node, parent_name);
+        let transform =
+            parent_transform.mul_mat4(&glam::Mat4::from_cols_array_2d(&node.transform().matrix()));
+        let entity_id = Uuid::new_v4();
+        let mut entity = Entity::default().with_id(&entity_id).with_name(&name);
+        entity.add_component(Component::Transform(
+            TransformComponent::default().with_local_transform(Transform::from_matrix(&transform)),
+        ));
+        if let Some(mesh) = node.mesh() {
+            let mesh = self.load_mesh(&mesh, &name, context, asset_server)?;
+            entity.add_component(Component::Mesh(MeshComponent::new(mesh)));
+        }
+        if node.children().len() > 0 {
+            let instant = Instant::now();
+            debug!("    + Load children of node #{}", node.index());
+            for child in node.children() {
+                let child_entity = self.load_node(
+                    &child,
+                    &name,
+                    &transform,
+                    context,
+                    node_entity_map,
+                    asset_server,
+                )?;
+                node_entity_map.insert(child.index(), child_entity);
             }
-            if node.children().len() > 0 {
-                let instant = Instant::now();
-                debug!("    + Load children of node #{}", node.index());
-                for child in node.children() {
-                    if let Some(child_object) =
-                        self.load_node_as_object(&child, &name, &transform, context)?
-                    {
-                        object.add_child(child_object);
-                    }
-                }
-                debug!(
-                    "    + Load children of node #{} in {} secs",
-                    node.index(),
-                    instant.elapsed().as_secs_f32()
-                );
-            }
-            log::debug!(
-                "    - Load node #{} in {} secs",
+            debug!(
+                "    + Load children of node #{} in {} secs",
                 node.index(),
                 instant.elapsed().as_secs_f32()
             );
-
-            Ok(Some(object))
         }
+        log::debug!(
+            "    - Load node #{} in {} secs",
+            node.index(),
+            instant.elapsed().as_secs_f32()
+        );
+
+        Ok(entity)
     }
 
-    fn load_mesh(&self, mesh: &gltf::Mesh, context: &GltfLoadContext) -> anyhow::Result<XrdsMesh> {
+    fn build_node_relationsip(
+        node: &gltf::Node,
+        parent_uuid: &Uuid,
+        node_entity_map: &mut HashMap<usize, Entity>,
+    ) -> anyhow::Result<()> {
+        if let Some(entity) = node_entity_map.get_mut(&node.index()) {
+            let uuid = *entity.id();
+            let entity_transform_component = entity.get_transform_component_mut().unwrap();
+            entity_transform_component.set_parent(parent_uuid);
+
+            for child in node.children() {
+                Self::build_node_relationsip(&child, &uuid, node_entity_map)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    // fn load_scene_as_object(
+    //     &self,
+    //     scene: &gltf::Scene,
+    //     context: &GltfLoadContext,
+    // ) -> anyhow::Result<Renderable> {
+    //     let instant = Instant::now();
+    //     debug!("    + Load scene #{}", scene.index());
+    //     let scene_name = Self::name_from_scene(scene, &context.gltf_name);
+    //     let mut nodes = Vec::new();
+    //     let scene_transform = Mat4::default();
+    //     for node in scene.nodes() {
+    //         if let Some(child_node) =
+    //             self.load_node_as_object(&node, &scene_name, &scene_transform, context)?
+    //         {
+    //             nodes.push(child_node);
+    //         }
+    //     }
+    //     let scene_object = Renderable::default()
+    //         .with_name(&scene_name)
+    //         .with_childs(&nodes);
+
+    //     log::debug!(
+    //         "    - Load scene #{} in {} secs",
+    //         scene.index(),
+    //         instant.elapsed().as_secs_f32()
+    //     );
+    //     Ok(scene_object)
+    // }
+
+    // fn load_node_as_object(
+    //     &self,
+    //     node: &gltf::Node,
+    //     parent_name: &str,
+    //     parent_transform: &Mat4,
+    //     context: &GltfLoadContext,
+    // ) -> anyhow::Result<Option<Renderable>> {
+    //     let instant = Instant::now();
+    //     debug!("    + Load node #{}", node.index());
+
+    //     if node.mesh().is_none() && node.children().len() == 0 {
+    //         log::warn!(
+    //             "    - Node #{} has no mesh and children. Maybe utility node. Skip loading",
+    //             node.index()
+    //         );
+    //         Ok(None)
+    //     } else {
+    //         let name = Self::name_from_node(node, parent_name);
+    //         let transform = parent_transform
+    //             .mul_mat4(&glam::Mat4::from_cols_array_2d(&node.transform().matrix()));
+    //         let mut object = Renderable::default()
+    //             .with_name(&name)
+    //             .with_transform(Transform::from_matrix(&transform));
+    //         if let Some(mesh) = node.mesh() {
+    //             let mesh = self.load_mesh(&mesh, context)?;
+    //             object.set_mesh(mesh);
+    //         }
+    //         if node.children().len() > 0 {
+    //             let instant = Instant::now();
+    //             debug!("    + Load children of node #{}", node.index());
+    //             for child in node.children() {
+    //                 if let Some(child_object) =
+    //                     self.load_node_as_object(&child, &name, &transform, context)?
+    //                 {
+    //                     object.add_child(child_object);
+    //                 }
+    //             }
+    //             debug!(
+    //                 "    + Load children of node #{} in {} secs",
+    //                 node.index(),
+    //                 instant.elapsed().as_secs_f32()
+    //             );
+    //         }
+    //         log::debug!(
+    //             "    - Load node #{} in {} secs",
+    //             node.index(),
+    //             instant.elapsed().as_secs_f32()
+    //         );
+
+    //         Ok(Some(object))
+    //     }
+    // }
+
+    fn load_mesh(
+        &self,
+        mesh: &gltf::Mesh,
+        parent_name: &str,
+        context: &GltfLoadContext,
+        asset_server: &mut AssetServer,
+    ) -> anyhow::Result<XrdsMesh> {
         let instant = Instant::now();
         debug!("      + Load mesh #{}", mesh.index());
-        let name = Self::name_from_mesh(mesh, &context.gltf_name);
+
+        Self::name_from_mesh(mesh, parent_name);
 
         let mut primitives = Vec::new();
         for primitive in mesh.primitives() {
-            primitives.push(self.load_primitive(&primitive, context)?);
+            primitives.push(self.load_primitive(&primitive, context, asset_server)?);
         }
 
-        let xrds_mesh = XrdsMesh::default()
-            .with_name(&name)
-            .with_primitives(primitives);
+        let xrds_mesh = XrdsMesh::default().with_primitives(primitives);
 
         log::debug!(
             "      - Load mesh #{} in {} secs",
@@ -261,11 +440,12 @@ impl GltfLoader {
         &self,
         primitive: &gltf::Primitive,
         context: &GltfLoadContext,
+        asset_server: &mut AssetServer,
     ) -> anyhow::Result<XrdsPrimitive> {
         let instant = Instant::now();
         debug!("        + Load primitive #{}", primitive.index());
         let (vertex_buffers, options) =
-            self.load_vertex_buffers_from_primitive(primitive, context)?;
+            self.load_vertex_buffers_from_primitive(primitive, context, asset_server)?;
         let index_buffer = if let Some(indices) = primitive.indices() {
             let instant = Instant::now();
             debug!(
@@ -274,9 +454,13 @@ impl GltfLoader {
             );
             let index_buffer = if let Some(view) = indices.view() {
                 let format = data_type_to_index_format(indices.data_type());
-                let handle =
-                    self.load_buffer_from_view(&view, XrdsBufferType::Index(format), context)?;
-                let buffer = self.asset_server.get_buffer(&handle).unwrap();
+                let handle = self.load_buffer_from_view(
+                    &view,
+                    XrdsBufferType::Index(format),
+                    context,
+                    asset_server,
+                )?;
+                let buffer = asset_server.get_buffer(&handle).unwrap();
 
                 debug!(
                     "            + range={:?}, format={:?}",
@@ -311,6 +495,7 @@ impl GltfLoader {
             &primitive.material(),
             primitive.mode(),
             context,
+            asset_server,
         )?;
 
         let xrds_primitive = XrdsPrimitive {
@@ -319,7 +504,7 @@ impl GltfLoader {
             material,
         };
         log::debug!(
-            "        - Load primitive #{} in {} secs",
+            "        + Load primitive #{} in {} secs",
             primitive.index(),
             instant.elapsed().as_secs_f32()
         );
@@ -333,15 +518,18 @@ impl GltfLoader {
         material: &gltf::Material,
         mode: gltf::mesh::Mode,
         context: &GltfLoadContext,
-    ) -> anyhow::Result<XrdsMaterialInstance> {
+        asset_server: &mut AssetServer,
+    ) -> anyhow::Result<AssetHandle<XrdsMaterialInstance>> {
         // Material instance name
+        let instant = Instant::now();
         let name = Self::name_from_material(material, &context.gltf_name);
-        let handle = if let Some(handle) = self
-            .asset_server
-            .get_material_instance_handle(&AssetId::Key(name.clone()))
+        let handle = if let Some(handle) =
+            asset_server.get_material_instance_handle(&AssetId::Key(name.clone()))
         {
+            debug!("        + Load material '{}' from cache", name);
             handle
         } else {
+            debug!("        + Load material '{}'", name);
             let mut material_input_option = pbr::PbrMaterialInputOption::default();
             Self::update_material_input_options(&mut material_input_option, material);
             material_input_option.primitive_mode = match mode {
@@ -367,23 +555,26 @@ impl GltfLoader {
             // Get material unique id from its options.
             let material_id = AssetId::Key(options.as_hash());
             let xrds_material =
-                if let Some(material) = self.asset_server.get_material_by_id(&material_id) {
+                if let Some(material) = asset_server.get_material_by_id(&material_id) {
                     material
                 } else {
                     // load new material
-                    let handle = self.asset_server.register_material(&MaterialAssetInfo {
+                    let handle = asset_server.register_material(&MaterialAssetInfo {
                         id: &material_id,
                         options: &options,
                         vertex_buffers,
                     })?;
-                    self.asset_server.get_material(&handle).unwrap().clone()
+                    asset_server.get_material(&handle).unwrap().clone()
                 };
 
             let get_texture = |index: usize| {
                 context
                     .textures
                     .get(index)
-                    .map(|handle| self.asset_server.get_texture(handle).unwrap().clone())
+                    .map(|handle| {
+                        debug!("          + Get texture #{}", index);
+                        asset_server.get_texture(handle).unwrap().clone()
+                    })
                     .unwrap()
             };
             let get_sampler = |index: Option<usize>| {
@@ -399,7 +590,7 @@ impl GltfLoader {
             };
 
             // Create material instance
-            let id = AssetId::Key(name);
+            let id = AssetId::Key(name.clone());
             let mut material_input = PbrMaterialInfo::new(&id);
             material_input.id = &id;
             material_input.params.base_color_factor =
@@ -408,7 +599,7 @@ impl GltfLoader {
             {
                 material_input.params.texcoord_base_color = base_color_texture.tex_coord();
                 material_input.base_color_texture = Some(MaterialTextureInfo {
-                    texture: get_texture(base_color_texture.texture().index()),
+                    texture: get_texture(base_color_texture.texture().source().index()),
                     sampler: get_sampler(base_color_texture.texture().sampler().index()),
                 });
             }
@@ -423,7 +614,7 @@ impl GltfLoader {
                 material_input.params.texcoord_metallic_roughness =
                     metallic_roughness_texture.tex_coord();
                 material_input.metallic_roughness_texture = Some(MaterialTextureInfo {
-                    texture: get_texture(metallic_roughness_texture.texture().index()),
+                    texture: get_texture(metallic_roughness_texture.texture().source().index()),
                     sampler: get_sampler(metallic_roughness_texture.texture().sampler().index()),
                 });
             }
@@ -439,7 +630,7 @@ impl GltfLoader {
                 material_input.params.normal_scale = normal_texture.scale();
                 material_input.params.texcoord_normal = normal_texture.tex_coord();
                 material_input.normal_texture = Some(MaterialTextureInfo {
-                    texture: get_texture(normal_texture.texture().index()),
+                    texture: get_texture(normal_texture.texture().source().index()),
                     sampler: get_sampler(normal_texture.texture().sampler().index()),
                 });
             }
@@ -447,36 +638,41 @@ impl GltfLoader {
                 material_input.params.texcoord_occlusion = occlusion_texture.tex_coord();
                 material_input.params.occlusion_strength = occlusion_texture.strength();
                 material_input.occlusion_texture = Some(MaterialTextureInfo {
-                    texture: get_texture(occlusion_texture.texture().index()),
+                    texture: get_texture(occlusion_texture.texture().source().index()),
                     sampler: get_sampler(occlusion_texture.texture().sampler().index()),
                 });
             }
             if let Some(emissive_texture) = material.emissive_texture() {
                 material_input.params.texcoord_emissive = emissive_texture.tex_coord();
                 material_input.emissive_texture = Some(MaterialTextureInfo {
-                    texture: get_texture(emissive_texture.texture().index()),
+                    texture: get_texture(emissive_texture.texture().source().index()),
                     sampler: get_sampler(emissive_texture.texture().sampler().index()),
                 });
             }
             material_input.params.alpha_cutoff = material.alpha_cutoff().unwrap_or(0.5);
 
-            self.asset_server
-                .register_material_instance(&xrds_material, &material_input)?
+            let handle =
+                asset_server.register_material_instance(&xrds_material, &material_input)?;
+
+            debug!(
+                "        + Load material '{}' in {} secs",
+                name,
+                instant.elapsed().as_secs_f32()
+            );
+
+            handle
         };
 
-        let material_instance = self
-            .asset_server
-            .get_material_instance(&handle)
-            .unwrap()
-            .clone(); // must be exists
+        // let material_instance = asset_server.get_material_instance(&handle).unwrap().clone(); // must be exists
 
-        Ok(material_instance)
+        Ok(handle)
     }
 
     fn load_vertex_buffers_from_primitive(
         &self,
         primitive: &gltf::Primitive,
         context: &GltfLoadContext,
+        asset_server: &mut AssetServer,
     ) -> anyhow::Result<(Vec<XrdsVertexBuffer>, pbr::PbrVertexInputOption)> {
         let mut vertex_input_option = pbr::PbrVertexInputOption::default();
 
@@ -496,10 +692,14 @@ impl GltfLoader {
                 shader_location: pbr::PbrVertexSemantic::from(semantic).location(),
             };
             if let Some(view) = accessor.view() {
-                let handle =
-                    self.load_buffer_from_view(&view, XrdsBufferType::Vertex(format), context)?;
+                let handle = self.load_buffer_from_view(
+                    &view,
+                    XrdsBufferType::Vertex(format),
+                    context,
+                    asset_server,
+                )?;
                 let buffer = XrdsVertexBuffer {
-                    buffer: self.asset_server.get_buffer(&handle).unwrap(),
+                    buffer: asset_server.get_buffer(&handle).unwrap(),
                     vertex_attributes: [vertex_attribute],
                     offset: accessor.offset(),
                     count: accessor.count(),
@@ -530,35 +730,34 @@ impl GltfLoader {
         view: &gltf::buffer::View,
         buffer_type: XrdsBufferType,
         context: &GltfLoadContext,
+        asset_server: &mut AssetServer,
     ) -> anyhow::Result<AssetHandle<XrdsBuffer>> {
         let name = Self::name_from_buffer_view(view, &context.gltf_name);
 
-        let handle = if let Some(buffer) = self
-            .asset_server
-            .get_buffer_handle(&AssetId::Key(name.clone()))
-        {
-            debug!("            # Load buffer '{}' from cache", name);
-            buffer
-        } else {
-            let instant = Instant::now();
-            let raw_buffer = &context.raw_buffers[view.buffer().index()];
-            let offset = view.offset();
-            let length = view.length();
-            log::debug!("            + Load buffer '{}'", name);
+        let handle =
+            if let Some(buffer) = asset_server.get_buffer_handle(&AssetId::Key(name.clone())) {
+                debug!("            # Load buffer '{}' from cache", name);
+                buffer
+            } else {
+                let instant = Instant::now();
+                let raw_buffer = &context.raw_buffers[view.buffer().index()];
+                let offset = view.offset();
+                let length = view.length();
+                log::debug!("            + Load buffer '{}'", name);
 
-            let registerd_buffer = self.asset_server.register_buffer(&BufferAssetInfo {
-                id: &AssetId::Key(name.clone()),
-                data: &raw_buffer[offset..(offset + length)],
-                ty: buffer_type,
-                stride: view.stride().map(|v| v as u64),
-            })?;
-            debug!(
-                "            - load buffer '{}' in {} secs",
-                name,
-                instant.elapsed().as_secs_f32()
-            );
-            registerd_buffer
-        };
+                let registerd_buffer = asset_server.register_buffer(&BufferAssetInfo {
+                    id: &AssetId::Key(name.clone()),
+                    data: &raw_buffer[offset..(offset + length)],
+                    ty: buffer_type,
+                    stride: view.stride().map(|v| v as u64),
+                })?;
+                debug!(
+                    "            - load buffer '{}' in {} secs",
+                    name,
+                    instant.elapsed().as_secs_f32()
+                );
+                registerd_buffer
+            };
         Ok(handle)
     }
 
@@ -568,7 +767,6 @@ impl GltfLoader {
         asset_path: &Path,
     ) -> anyhow::Result<Vec<u8>> {
         let instant = Instant::now();
-        debug!("    + Load raw buffer #{}", buffer.index());
         let data = match buffer.source() {
             gltf::buffer::Source::Bin => {
                 if let Some(blob) = gltf.blob.as_deref() {
@@ -594,7 +792,7 @@ impl GltfLoader {
         };
 
         debug!(
-            "    - Load raw buffer #{} in {} secs",
+            "    + Load raw buffer #{} in {} secs",
             buffer.index(),
             instant.elapsed().as_secs_f32()
         );
@@ -606,14 +804,14 @@ impl GltfLoader {
         raw_buffers: &[Vec<u8>],
         asset_path: &Path,
         super_key: &str,
-        asset_server: Arc<AssetServer>,
-    ) -> anyhow::Result<AssetHandle<XrdsTexture>> {
+        asset_server: &AssetServer,
+    ) -> anyhow::Result<LoadImageResult> {
         let name = Self::name_from_image(image, super_key)?;
         let handle = if let Some(handle) =
             asset_server.get_texture_handle(&AssetId::Key(name.clone()))
         {
-            debug!("    # Load image '{}' from cache", name);
-            handle
+            debug!("    + Load image '{}' from cache", name);
+            LoadImageResult::Cached(handle)
         } else {
             let instant = Instant::now();
             let loaded_image = match image.source() {
@@ -624,7 +822,6 @@ impl GltfLoader {
                     let length = view.length();
                     let slice = &buffer[offset..offset + length];
 
-                    log::debug!("    + Load image #{} '{}' from blob", image.index(), name);
                     image::load_from_memory(slice)?
                 }
                 gltf::image::Source::Uri { uri, mime_type: _ } => {
@@ -639,7 +836,6 @@ impl GltfLoader {
                         let mut res = Vec::new();
                         file.read_to_end(&mut res)?;
 
-                        log::debug!("    + Load image #{} '{}' from file", image.index(), name);
                         res
                     };
                     image::load_from_memory(&blob)?
@@ -650,19 +846,20 @@ impl GltfLoader {
             let width = loaded_image.width();
             let height = loaded_image.height();
             let depth_or_array = 1;
-            let registered_texture = asset_server.register_texture(&TextureAssetInfo {
-                id: &AssetId::Key(name),
-                data: &data,
+            let res = LoadImageResult::Loaded {
+                id: AssetId::Key(name.clone()),
+                data,
                 width,
                 height,
                 depth_or_array,
-            })?;
+            };
+
             debug!(
-                "    - Load image '{}' in {} secs",
-                image.index(),
+                "    + Load image '{}' in {} secs",
+                name,
                 instant.elapsed().as_secs_f32()
             );
-            registered_texture
+            res
         };
 
         Ok(handle)
@@ -708,19 +905,19 @@ impl GltfLoader {
         } else {
             (wgpu::FilterMode::Linear, wgpu::FilterMode::Nearest)
         };
-        let wgpu_sampler = self
-            .asset_server
-            .device()
-            .create_sampler(&wgpu::SamplerDescriptor {
-                label: None,
-                address_mode_u,
-                address_mode_v,
-                address_mode_w: wgpu::AddressMode::ClampToEdge,
-                mag_filter,
-                min_filter,
-                mipmap_filter,
-                ..Default::default()
-            });
+        let wgpu_sampler =
+            self.graphics_instance
+                .device()
+                .create_sampler(&wgpu::SamplerDescriptor {
+                    label: None,
+                    address_mode_u,
+                    address_mode_v,
+                    address_mode_w: wgpu::AddressMode::ClampToEdge,
+                    mag_filter,
+                    min_filter,
+                    mipmap_filter,
+                    ..Default::default()
+                });
 
         wgpu_sampler
     }
@@ -739,62 +936,62 @@ impl GltfLoader {
 
 /// Utilities
 impl GltfLoader {
-    fn name_from_image(image: &gltf::Image, gltf_name: &str) -> anyhow::Result<String> {
+    fn name_from_image(image: &gltf::Image, parent_name: &str) -> anyhow::Result<String> {
         let name = match image.source() {
             gltf::image::Source::View { view, mime_type: _ } => {
                 if let Some(name) = view.name() {
-                    format!("{}.{}", gltf_name, name)
+                    format!("{}.{}", parent_name, name)
                 } else {
-                    format!("{}.image.{}", gltf_name, image.index())
+                    format!("{}.image.{}", parent_name, image.index())
                 }
             }
             gltf::image::Source::Uri { uri, mime_type: _ } => {
                 let decoded_uri = percent_encoding::percent_decode_str(uri).decode_utf8()?;
-                format!("{}.{}", gltf_name, decoded_uri)
+                format!("{}.{}", parent_name, decoded_uri)
             }
         };
         Ok(name)
     }
 
-    fn name_from_scene(scene: &gltf::Scene, gltf_name: &str) -> String {
+    fn name_from_scene(scene: &gltf::Scene, parent_name: &str) -> String {
         if let Some(name) = scene.name() {
-            format!("{}.{}", gltf_name, name)
+            format!("{}.{}", parent_name, name)
         } else {
-            format!("{}.scene.{}", gltf_name, scene.index())
+            format!("{}.scene.{}", parent_name, scene.index())
         }
     }
 
-    fn name_from_node(node: &gltf::Node, scene_name: &str) -> String {
+    fn name_from_node(node: &gltf::Node, parent_name: &str) -> String {
         if let Some(name) = node.name() {
-            format!("{}.{}", scene_name, name)
+            format!("{}.{}", parent_name, name)
         } else {
-            format!("{}.node.{}", scene_name, node.index())
+            format!("{}.node.{}", parent_name, node.index())
         }
     }
 
-    fn name_from_mesh(mesh: &gltf::Mesh, gltf_name: &str) -> String {
+    fn name_from_mesh(mesh: &gltf::Mesh, parent_name: &str) -> String {
         if let Some(name) = mesh.name() {
-            format!("{}.{}", gltf_name, name)
+            format!("{}.{}", parent_name, name)
         } else {
-            format!("{}.node.{}", gltf_name, mesh.index())
+            format!("{}.mesh.{}", parent_name, mesh.index())
         }
     }
 
-    fn name_from_buffer_view(view: &gltf::buffer::View, gltf_name: &str) -> String {
+    fn name_from_buffer_view(view: &gltf::buffer::View, parent_name: &str) -> String {
         if let Some(name) = view.name() {
-            format!("{}.{}", gltf_name, name)
+            format!("{}.{}", parent_name, name)
         } else {
-            format!("{}.buffer_view.{}", gltf_name, view.index(),)
+            format!("{}.buffer_view.{}", parent_name, view.index(),)
         }
     }
 
-    fn name_from_material(material: &gltf::Material, gltf_name: &str) -> String {
+    fn name_from_material(material: &gltf::Material, parent_name: &str) -> String {
         if let Some(name) = material.name() {
-            format!("{}.{}", gltf_name, name)
+            format!("{}.{}", parent_name, name)
         } else if let Some(index) = material.index() {
-            format!("{}.material.{}", gltf_name, index)
+            format!("{}.material.{}", parent_name, index)
         } else {
-            format!("{}.material.default", gltf_name)
+            format!("{}.material.default", parent_name)
         }
     }
 

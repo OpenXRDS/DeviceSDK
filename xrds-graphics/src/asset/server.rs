@@ -1,6 +1,5 @@
 use std::{
     collections::HashMap,
-    num::{NonZeroU32, NonZeroU64},
     sync::{Arc, RwLock},
 };
 
@@ -12,13 +11,13 @@ use wgpu::{
     DepthStencilState, FragmentState, MultisampleState, PipelineCompilationOptions,
     PipelineLayoutDescriptor, PrimitiveState, PushConstantRange, RenderPipelineDescriptor,
     SamplerBindingType, ShaderStages, StencilState, TextureDescriptor, TextureSampleType,
-    TextureViewDimension, VertexAttribute, VertexBufferLayout, VertexState,
+    TextureViewDescriptor, TextureViewDimension, VertexAttribute, VertexBufferLayout, VertexState,
 };
 
 use crate::{
     buffer::XrdsBufferType,
     pbr::{Options, PbrMaterialInputOption, PbrMaterialParams, PbrShaderBuilder},
-    GraphicsInstance, TextureFormat, ViewParams, XrdsBuffer, XrdsMaterial, XrdsMaterialInstance,
+    Entity, GraphicsInstance, TextureFormat, XrdsBuffer, XrdsMaterial, XrdsMaterialInstance,
     XrdsTexture, XrdsVertexBuffer,
 };
 
@@ -26,8 +25,8 @@ use super::types::{AssetHandle, AssetId, AssetStrongHandle};
 
 #[derive(Debug)]
 pub struct AssetServer {
-    graphics_instance: Arc<GraphicsInstance>,
-    resource_buffer: Arc<RwLock<ResourceBuffer>>,
+    graphics_instance: GraphicsInstance,
+    resource_buffer: ResourceBuffer,
     shader_builder: PbrShaderBuilder,
 }
 
@@ -37,6 +36,7 @@ pub struct ResourceBuffer {
     buffers: HashMap<AssetId, AssetStrongHandle<XrdsBuffer>>,
     materials: HashMap<AssetId, AssetStrongHandle<XrdsMaterial>>,
     material_instances: HashMap<AssetId, AssetStrongHandle<XrdsMaterialInstance>>,
+    entities: HashMap<Uuid, Entity>,
 }
 
 #[derive(Debug)]
@@ -104,19 +104,27 @@ impl<'a> PbrMaterialInfo<'a> {
 }
 
 impl AssetServer {
-    pub fn new(graphics_instance: Arc<GraphicsInstance>) -> anyhow::Result<Self> {
-        let resource_buffer = Arc::new(RwLock::new(ResourceBuffer::default()));
+    pub fn new(graphics_instance: GraphicsInstance) -> anyhow::Result<Arc<RwLock<Self>>> {
+        let resource_buffer = ResourceBuffer::default();
         let shader_builder = PbrShaderBuilder::new()?;
 
-        Ok(Self {
+        Ok(Arc::new(RwLock::new(Self {
             graphics_instance,
             resource_buffer,
             shader_builder,
-        })
+        })))
     }
 
     pub fn device(&self) -> &wgpu::Device {
         self.graphics_instance.device()
+    }
+
+    pub fn register_entities(&mut self, entities: &[Entity]) {
+        entities.into_iter().for_each(|entity| {
+            self.resource_buffer
+                .entities
+                .insert(*entity.id(), entity.clone());
+        });
     }
 
     /// Register new texture to asset server.
@@ -128,12 +136,11 @@ impl AssetServer {
     /// let texture: Option<XrdsTexture> = asset_server.get_texture(&handle);
     /// ```
     pub fn register_texture(
-        &self,
+        &mut self,
         info: &TextureAssetInfo,
     ) -> anyhow::Result<AssetHandle<XrdsTexture>> {
         {
-            let lock = self.resource_buffer.read().unwrap();
-            if let Some(handle) = lock.textures.get(info.id) {
+            if let Some(handle) = self.resource_buffer.textures.get(info.id) {
                 log::debug!(
                     "id '{:?}' already exists. Skip loading and return exsiting handle",
                     info.id
@@ -179,19 +186,19 @@ impl AssetServer {
         );
         let handle = AssetStrongHandle::new(info.id.clone(), xrds_texture);
         let weak_handle = handle.as_weak_handle();
-        let mut lock = self.resource_buffer.write().unwrap();
-        lock.textures.insert(info.id.clone(), handle);
+        self.resource_buffer
+            .textures
+            .insert(info.id.clone(), handle);
 
         Ok(weak_handle)
     }
 
     pub fn register_buffer(
-        &self,
+        &mut self,
         info: &BufferAssetInfo,
     ) -> anyhow::Result<AssetHandle<XrdsBuffer>> {
         {
-            let lock = self.resource_buffer.read().unwrap();
-            if let Some(handle) = lock.buffers.get(info.id) {
+            if let Some(handle) = self.resource_buffer.buffers.get(info.id) {
                 log::debug!(
                     "id '{:?}' already exists. Skip loading and return exsiting handle",
                     info.id
@@ -217,19 +224,17 @@ impl AssetServer {
         let xrds_buffer = XrdsBuffer::new(buffer, info.ty, info.stride);
         let handle = AssetStrongHandle::new(info.id.clone(), xrds_buffer);
         let weak_handle = handle.as_weak_handle();
-        let mut lock = self.resource_buffer.write().unwrap();
-        lock.buffers.insert(info.id.clone(), handle);
+        self.resource_buffer.buffers.insert(info.id.clone(), handle);
 
         Ok(weak_handle)
     }
 
     pub fn register_material(
-        &self,
+        &mut self,
         info: &MaterialAssetInfo,
     ) -> anyhow::Result<AssetHandle<XrdsMaterial>> {
         {
-            let lock = self.resource_buffer.read().unwrap();
-            if let Some(handle) = lock.materials.get(info.id) {
+            if let Some(handle) = self.resource_buffer.materials.get(info.id) {
                 log::debug!(
                     "id '{:?}' already exists. Skip loading and return exsiting handle",
                     info.id
@@ -255,9 +260,7 @@ impl AssetServer {
                 ty: BindingType::Buffer {
                     ty: BufferBindingType::Uniform,
                     has_dynamic_offset: false,
-                    min_binding_size: NonZeroU64::new(
-                        (std::mem::size_of::<ViewParams>() * 2) as u64,
-                    ),
+                    min_binding_size: None,
                 },
                 count: None,
             }],
@@ -337,6 +340,12 @@ impl AssetServer {
         });
 
         let format = wgpu::TextureFormat::Rgba32Float;
+        let vertex_module = self
+            .shader_builder
+            .build_vertex_module(&device, info.options)?;
+        let fragment_module = self
+            .shader_builder
+            .build_fragment_module(&device, info.options)?;
         let pipeline =
             self.graphics_instance
                 .device()
@@ -344,17 +353,13 @@ impl AssetServer {
                     label: Some(&label),
                     layout: Some(&pipeline_layout),
                     vertex: VertexState {
-                        module: &self
-                            .shader_builder
-                            .build_vertex_module(&device, info.options)?,
+                        module: &vertex_module,
                         buffers: &vertex_layouts,
                         compilation_options: PipelineCompilationOptions::default(),
                         entry_point: None,
                     },
                     fragment: Some(FragmentState {
-                        module: &self
-                            .shader_builder
-                            .build_fragment_module(&device, info.options)?,
+                        module: &fragment_module,
                         targets: &[
                             Some(ColorTargetState {
                                 // position_metallic
@@ -405,7 +410,7 @@ impl AssetServer {
                         ..Default::default()
                     },
                     multisample: MultisampleState::default(),
-                    multiview: NonZeroU32::new(2),
+                    multiview: self.graphics_instance.multiview(),
                 });
 
         let xrds_material = XrdsMaterial {
@@ -414,8 +419,9 @@ impl AssetServer {
         };
         let handle = AssetStrongHandle::new(info.id.clone(), xrds_material);
         let weak_handle = handle.as_weak_handle();
-        let mut lock = self.resource_buffer.write().unwrap();
-        lock.materials.insert(info.id.clone(), handle);
+        self.resource_buffer
+            .materials
+            .insert(info.id.clone(), handle);
 
         Ok(weak_handle)
     }
@@ -495,7 +501,7 @@ impl AssetServer {
     }
 
     pub fn register_material_instance(
-        &self,
+        &mut self,
         material: &XrdsMaterial,
         info: &PbrMaterialInfo,
     ) -> anyhow::Result<AssetHandle<XrdsMaterialInstance>> {
@@ -578,7 +584,7 @@ impl AssetServer {
             self.graphics_instance
                 .device()
                 .create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: None,
+                    label: Some("MaterialInstance"),
                     layout: &material.bind_group_layout,
                     entries: &bind_group_entries,
                 });
@@ -587,13 +593,94 @@ impl AssetServer {
             material_params: buffer,
             bind_group,
         };
-        let mut lock = self.resource_buffer.write().unwrap();
         let instance_handle = AssetStrongHandle::new(info.id.clone(), instance);
         let weak_handle = instance_handle.as_weak_handle();
-        lock.material_instances
+        self.resource_buffer
+            .material_instances
             .insert(info.id.clone(), instance_handle);
 
         Ok(weak_handle)
+    }
+
+    /// Create 2d render target.
+    /// * Create array texture if size.depth_or_array_layers > 1
+    pub fn create_render_target_2d(
+        &mut self,
+        size: wgpu::Extent3d,
+        format: TextureFormat,
+    ) -> anyhow::Result<AssetId> {
+        let id = self.generate_id();
+
+        let device = self.graphics_instance.device();
+        let is_array = size.depth_or_array_layers > 1;
+
+        let inner = device.create_texture(&TextureDescriptor {
+            label: None,
+            size,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: format.as_wgpu(),
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+
+        let view = inner.create_view(&TextureViewDescriptor {
+            label: None,
+            dimension: if is_array {
+                Some(wgpu::TextureViewDimension::D2Array)
+            } else {
+                Some(wgpu::TextureViewDimension::D2)
+            },
+            array_layer_count: is_array.then(|| size.depth_or_array_layers),
+            ..Default::default()
+        });
+
+        let render_target = XrdsTexture::new(inner, format, size, view);
+        self.resource_buffer.textures.insert(
+            id.clone(),
+            AssetStrongHandle::new(id.clone(), render_target),
+        );
+
+        Ok(id)
+    }
+
+    pub fn create_render_target_cube(
+        &mut self,
+        size: wgpu::Extent3d,
+        format: TextureFormat,
+    ) -> anyhow::Result<AssetId> {
+        let id = self.generate_id();
+
+        let device = self.graphics_instance.device();
+        let inner = device.create_texture(&TextureDescriptor {
+            label: None,
+            size,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D3,
+            format: format.as_wgpu(),
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+
+        let view = inner.create_view(&TextureViewDescriptor {
+            label: None,
+            dimension: Some(wgpu::TextureViewDimension::Cube),
+            ..Default::default()
+        });
+
+        let render_target = XrdsTexture::new(inner, format, size, view);
+        self.resource_buffer.textures.insert(
+            id.clone(),
+            AssetStrongHandle::new(id.clone(), render_target),
+        );
+
+        Ok(id)
     }
 
     pub fn get_texture(&self, handle: &AssetHandle<XrdsTexture>) -> Option<XrdsTexture> {
@@ -601,13 +688,17 @@ impl AssetServer {
     }
 
     pub fn get_texture_by_id(&self, id: &AssetId) -> Option<XrdsTexture> {
-        let lock = self.resource_buffer.read().unwrap();
-        lock.textures.get(id).map(|h| h.asset().clone())
+        self.resource_buffer
+            .textures
+            .get(id)
+            .map(|h| h.asset().clone())
     }
 
     pub fn get_texture_handle(&self, id: &AssetId) -> Option<AssetHandle<XrdsTexture>> {
-        let lock = self.resource_buffer.read().unwrap();
-        lock.textures.get(id).map(|h| h.as_weak_handle())
+        self.resource_buffer
+            .textures
+            .get(id)
+            .map(|h| h.as_weak_handle())
     }
 
     pub fn get_buffer(&self, handle: &AssetHandle<XrdsBuffer>) -> Option<XrdsBuffer> {
@@ -615,13 +706,17 @@ impl AssetServer {
     }
 
     pub fn get_buffer_by_id(&self, id: &AssetId) -> Option<XrdsBuffer> {
-        let lock = self.resource_buffer.read().unwrap();
-        lock.buffers.get(id).map(|h| h.asset().clone())
+        self.resource_buffer
+            .buffers
+            .get(id)
+            .map(|h| h.asset().clone())
     }
 
     pub fn get_buffer_handle(&self, id: &AssetId) -> Option<AssetHandle<XrdsBuffer>> {
-        let lock = self.resource_buffer.read().unwrap();
-        lock.buffers.get(id).map(|h| h.as_weak_handle())
+        self.resource_buffer
+            .buffers
+            .get(id)
+            .map(|h| h.as_weak_handle())
     }
 
     pub fn get_material(&self, handle: &AssetHandle<XrdsMaterial>) -> Option<XrdsMaterial> {
@@ -629,13 +724,17 @@ impl AssetServer {
     }
 
     pub fn get_material_by_id(&self, id: &AssetId) -> Option<XrdsMaterial> {
-        let lock = self.resource_buffer.read().unwrap();
-        lock.materials.get(id).map(|h| h.asset().clone())
+        self.resource_buffer
+            .materials
+            .get(id)
+            .map(|h| h.asset().clone())
     }
 
     pub fn get_material_handle(&self, id: &AssetId) -> Option<AssetHandle<XrdsMaterial>> {
-        let lock = self.resource_buffer.read().unwrap();
-        lock.materials.get(id).map(|h| h.as_weak_handle())
+        self.resource_buffer
+            .materials
+            .get(id)
+            .map(|h| h.as_weak_handle())
     }
 
     pub fn get_material_instance(
@@ -646,16 +745,24 @@ impl AssetServer {
     }
 
     pub fn get_material_instance_by_id(&self, id: &AssetId) -> Option<XrdsMaterialInstance> {
-        let lock = self.resource_buffer.read().unwrap();
-        lock.material_instances.get(id).map(|h| h.asset().clone())
+        self.resource_buffer
+            .material_instances
+            .get(id)
+            .map(|h| h.asset().clone())
     }
 
     pub fn get_material_instance_handle(
         &self,
         id: &AssetId,
     ) -> Option<AssetHandle<XrdsMaterialInstance>> {
-        let lock = self.resource_buffer.read().unwrap();
-        lock.material_instances.get(id).map(|h| h.as_weak_handle())
+        self.resource_buffer
+            .material_instances
+            .get(id)
+            .map(|h| h.as_weak_handle())
+    }
+
+    pub fn get_entity(&self, uuid: &Uuid) -> Option<&Entity> {
+        self.resource_buffer.entities.get(&*uuid)
     }
 
     pub fn generate_id(&self) -> AssetId {

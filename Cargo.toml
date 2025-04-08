@@ -53,24 +53,28 @@ path = "./xrds-runtime"
 xrds = { version = "0.1.0", path = "./xrds" }
 tokio = { version = "1.44.1", features = ["rt-multi-thread", "sync", "macros"] }
 anyhow = "1.0.97"
-env_logger = "0.11.7"
-log = "0.4.26"
+env_logger = "0.11.8"
+log = "0.4.27"
 regex = "1.11.1"
 wgpu = { version = "24.0.3", features = [
     "vulkan-portability",
     "glsl",
     "naga-ir",
 ] }
-wgpu-hal = { version = "24.0.2", features = ["vulkan"] }
+wgpu-hal = { version = "24.0.4", features = ["vulkan"] }
+wgpu-types = { version = "24.0.0" }
 naga_oil = { version = "0.17.0" }
 ash = "0.38.0"
 glam = { version = "0.30.1", features = ["bytemuck"] }
 winit = "0.30.9"
 openxr = { version = "0.19.0", features = ["linked", "static"] }
 rustc-hash = "2.1.1"
-image = { version = "0.25.5", features = ["rayon"] }
+image = { version = "0.25.6", features = ["rayon"] }
 rayon = { version = "1.10.0" }
-gltf = { version = "1.4.1" }
+gltf = { version = "1.4.1", features = [
+    "KHR_lights_punctual",
+    "KHR_materials_ior",
+] }
 uuid = { version = "1.16.0", features = ["v4"] }
 percent-encoding = { version = "2.3.1" }
 base64 = { version = "0.22.1" }

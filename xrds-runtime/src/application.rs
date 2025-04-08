@@ -1,16 +1,17 @@
 use std::{sync::Arc, time::Duration};
 
 use log::debug;
+use uuid::Uuid;
 use winit::{
     application::ApplicationHandler,
     dpi::LogicalSize,
     event_loop,
     window::{Window, WindowAttributes},
 };
-use xrds_graphics::{GraphicsApi, Renderer, Surface};
-use xrds_openxr::{FormFactor, OpenXrContext, OpenXrOnPreRenderResult};
+use xrds_graphics::{GraphicsApi, Surface};
+use xrds_openxr::{FormFactor, HmdEntity, OpenXrContext, OpenXrOnPreRenderResult};
 
-use crate::{Context, RuntimeError, RuntimeHandler};
+use crate::{Context, RuntimeError, RuntimeHandler, WorldEvent, WorldOnCameraUpdated};
 
 #[derive(Debug, Clone, Copy)]
 pub struct PreviewWindowAttributes {
@@ -32,8 +33,8 @@ where
     preview_window_attr: Option<PreviewWindowAttributes>,
     preview_window: Option<PreviewWindow<'window>>,
     openxr_context: Option<OpenXrContext>,
-    renderer: Option<Renderer>,
     xrds_context: Option<Context>,
+    primary_camera_id: Option<Uuid>,
     app: A,
 }
 
@@ -55,7 +56,7 @@ where
             preview_window: None,
             openxr_context: None,
             xrds_context: None,
-            renderer: None,
+            primary_camera_id: None,
         })
     }
 
@@ -65,7 +66,7 @@ where
         // Currently vulkan is the only supported api
         let graphics_api = GraphicsApi::Vulkan;
 
-        // Initialize xr
+        // Initialize xr. Make it optional
         let openxr_context = xrds_openxr::OpenXrContextBuilder::default()
             .with_application_name("XRDS runtime application")
             .with_form_factor(FormFactor::HeadMountedDisplay)
@@ -73,17 +74,20 @@ where
             .build()?;
 
         let graphics_instance = openxr_context.graphics_instance().clone();
-        let renderer = xrds_graphics::Renderer::new(
-            openxr_context.graphics_instance().clone(),
-            openxr_context.swapchain_format()?,
-            openxr_context.swapchain_extent()?,
-            1,
-        )?;
-        let xrds_context = Context::new(graphics_instance.clone())?;
 
-        self.openxr_context = Some(openxr_context);
-        self.renderer = Some(renderer);
-        self.xrds_context = Some(xrds_context.clone());
+        let mut xrds_context = Context::new(graphics_instance.clone())?;
+        // Initialize OpenXr Camera
+        let primary_camera_id = {
+            let mut asset_server = xrds_context.get_asset_server().write().unwrap();
+            HmdEntity::build(&mut asset_server)?
+        };
+        {
+            let extent = openxr_context.swapchain_extent()?;
+            let format = openxr_context.swapchain_format()?;
+            let world = xrds_context.get_current_world_mut();
+            let camera_ids = world.spawn_camera(&primary_camera_id, Some(extent), format)?;
+            self.primary_camera_id = Some(camera_ids[0]); // we spawned one camera for HMD
+        }
 
         // Initialize preview/debug window
         if let Some(pwa) = self.preview_window_attr {
@@ -102,10 +106,15 @@ where
                 window,
                 surface: Surface::new(surface),
             });
+
+            // make camera and spawn to world
         }
 
-        self.app.on_begin(xrds_context.clone())?;
-        self.app.on_resumed(xrds_context.clone())?;
+        self.app.on_begin(&mut xrds_context)?;
+        self.app.on_resumed(&mut xrds_context)?;
+
+        self.openxr_context = Some(openxr_context);
+        self.xrds_context = Some(xrds_context);
 
         Ok(())
     }
@@ -127,8 +136,10 @@ where
 
     fn on_tick(&mut self, diff: Duration) -> anyhow::Result<()> {
         if let Some(xrds_context) = &mut self.xrds_context {
-            let mut world = xrds_context.get_current_world();
-            world.update(diff)?;
+            let world = xrds_context.get_current_world_mut();
+            world.on_update(diff)?;
+
+            self.app.on_update(xrds_context, diff)?;
         }
         Ok(())
     }
@@ -139,12 +150,7 @@ where
             .as_mut()
             .ok_or(RuntimeError::OpenXrNotInitialized)?;
 
-        let renderer = self
-            .renderer
-            .as_mut()
-            .ok_or(RuntimeError::RendererNotInitialized)?;
-
-        let xr_swapchain_texture = match openxr_context.on_pre_render()? {
+        let xr_render_params = match openxr_context.on_pre_render()? {
             OpenXrOnPreRenderResult::DoRender(t) => t,
             OpenXrOnPreRenderResult::SkipRender => return Ok(()),
             OpenXrOnPreRenderResult::Exit => {
@@ -153,28 +159,21 @@ where
             }
         };
 
-        let xrds_context = self.xrds_context.as_ref().unwrap();
-        let world = xrds_context.get_current_world();
-        world.update_instances()?;
-        let cam_binding = openxr_context.get_cam_binding();
+        let xrds_context = self.xrds_context.as_mut().unwrap();
+        let world = xrds_context.get_current_world_mut();
 
-        let mut command_encoder = renderer.create_command_encoder()?;
-        // Encode to g-buffers
-        {
-            let mut gbuffer_pass = renderer.create_gbuffer_pass(&mut command_encoder)?;
-            cam_binding.encode(&mut gbuffer_pass);
-            world.encode(&mut gbuffer_pass)?;
-        }
-        {
-            let mut lighting_pass = renderer.create_lighting_pass(&mut command_encoder)?;
-            cam_binding.encode(&mut lighting_pass);
-            renderer.do_deferred_lighting(&mut lighting_pass)?;
+        if let Some(primary_camera_id) = &self.primary_camera_id {
+            world.emit_event(WorldEvent::OnCameraUpdated(WorldOnCameraUpdated {
+                camera_id: primary_camera_id,
+                camera_update_infos: xr_render_params.xr_camera_infos,
+                copy_target: Some(xr_render_params.swapchain_texture),
+            }))?;
+
+            world.on_pre_render()?;
+            world.on_render()?;
+            world.on_post_render()?;
         }
 
-        renderer.copy_render_result(&mut command_encoder, &xr_swapchain_texture)?;
-        renderer.summit(command_encoder)?;
-
-        renderer.on_post_render()?;
         openxr_context.on_post_render()?;
 
         Ok(())

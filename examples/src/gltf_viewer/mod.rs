@@ -1,33 +1,17 @@
-use std::{f32::consts::PI, path::PathBuf};
+use std::{path::PathBuf, time::Duration};
 
-use rand::{rng, Rng};
-use xrds::{core::core::Transform, RuntimeHandler};
+use xrds::{
+    core::{core::Transform, graphics::ObjectInstance},
+    RuntimeHandler,
+};
 
-#[derive(Clone, clap::Args)]
-pub struct GltfOptions {
-    /// Enable openxr rendering
-    #[arg(long, default_value_t = false)]
-    pub enable_xr: bool,
-    /// Disable window rendering
-    #[arg(long, default_value_t = false)]
-    pub disable_window: bool,
-    /// Viewer window width
-    #[arg(long, default_value_t = 1280)]
-    pub width: u32,
-    /// Viewer window height
-    #[arg(long, default_value_t = 720)]
-    pub height: u32,
-    /// Make viewer window resizable
-    #[arg(long, default_value_t = false)]
-    pub resizable: bool,
-    /// Path of .gltf or .glb file
-    pub path: String,
-}
+mod program_args;
+pub use program_args::*;
 
 #[derive(Default)]
 struct App {
     gltf_path: String,
-    objects: Vec<xrds::Object>,
+    spawned: Option<ObjectInstance>,
 }
 
 impl RuntimeHandler for App {
@@ -35,60 +19,72 @@ impl RuntimeHandler for App {
         Ok(())
     }
 
-    fn on_begin(&mut self, context: xrds::Context) -> anyhow::Result<()> {
-        self.objects = context.load_objects_from_gltf(self.gltf_path.as_str())?;
+    fn on_begin(&mut self, context: &mut xrds::Context) -> anyhow::Result<()> {
+        let objects = context.load_objects_from_gltf(self.gltf_path.as_str())?;
 
-        let world = context.get_current_world();
+        let world = context.get_current_world_mut();
         let uniform = rand::distr::Uniform::new(0.0f32, 1.0f32)?;
-        for _ in 0..10000 {
-            let distance = rng().sample(uniform) * 50.0 + 0.5;
-            let angle = rng().sample(uniform) * PI * 2.0;
-            let tx = distance * angle.cos();
-            let tz = distance * angle.sin();
-            let s = rng().sample(uniform) + 0.5;
-            let ry = rng().sample(uniform) * PI * 2.0;
 
-            let transform = Transform::default()
-                .with_translation(glam::vec3(tx, 0.0, tz))
-                .with_scale(glam::vec3(s, s, s))
-                .with_rotation(glam::Quat::from_rotation_y(ry));
-            world.spawn(&self.objects[0], &transform)?;
+        let transform = Transform::default()
+            .with_translation(glam::vec3(0.0, 0.0, 0.0))
+            .with_scale(glam::vec3(1.0, 1.0, 1.0));
+        self.spawned = Some(world.spawn(&objects[0], &transform)?);
+        // for _ in 0..100 {
+        //     let distance = rng().sample(uniform) * 10.0;
+        //     let angle = rng().sample(uniform) * PI * 2.0;
+        //     let tx = distance * angle.cos();
+        //     let tz = distance * angle.sin();
+        //     let s = rng().sample(uniform) + 0.5;
+        //     let ry = rng().sample(uniform) * PI * 2.0;
+
+        //     let transform = Transform::default()
+        //         .with_translation(glam::vec3(tx, 0.0, tz))
+        //         .with_scale(glam::vec3(s, s, s))
+        //         .with_rotation(glam::Quat::from_rotation_y(ry));
+        //     world.spawn(&self.objects[0], &transform)?;
+        // }
+        Ok(())
+    }
+
+    fn on_resumed(&mut self, _context: &mut xrds::Context) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    fn on_update(&mut self, context: &mut xrds::Context, diff: Duration) -> anyhow::Result<()> {
+        let world = context.get_current_world();
+        if let Some(spawned) = &mut self.spawned {
+            // spawned.transform_mut().rotate(Quat::from_rotation_y(
+            //     60.0f32.to_radians() * diff.as_secs_f32(),
+            // ));
+            // world.update_object(spawned);
         }
         Ok(())
     }
 
-    fn on_resumed(&mut self, _context: xrds::Context) -> anyhow::Result<()> {
+    fn on_suspended(&mut self, _context: &mut xrds::Context) -> anyhow::Result<()> {
         Ok(())
     }
 
-    fn on_update(&mut self, _context: xrds::Context) -> anyhow::Result<()> {
+    fn on_end(&mut self, _context: &mut xrds::Context) -> anyhow::Result<()> {
         Ok(())
     }
 
-    fn on_suspended(&mut self, _context: xrds::Context) -> anyhow::Result<()> {
-        Ok(())
-    }
-
-    fn on_end(&mut self, _context: xrds::Context) -> anyhow::Result<()> {
-        Ok(())
-    }
-
-    fn on_deconstruct(&mut self, _context: xrds::Context) -> anyhow::Result<()> {
+    fn on_deconstruct(&mut self, _context: &mut xrds::Context) -> anyhow::Result<()> {
         Ok(())
     }
 }
 
-pub fn run(options: GltfOptions) -> anyhow::Result<()> {
-    let target = if options.enable_xr {
-        if options.disable_window {
-            xrds::RuntimeTarget::Xr
-        } else {
+pub fn run(options: GltfViewerOptions) -> anyhow::Result<()> {
+    let target = if options.xr.enable_xr {
+        if options.window.enable_window {
             xrds::RuntimeTarget::XrWithPreview
+        } else {
+            xrds::RuntimeTarget::Xr
         }
-    } else if options.disable_window {
-        anyhow::bail!("Both xr and window disabled. At least one must be enabled")
-    } else {
+    } else if options.window.enable_window {
         xrds::RuntimeTarget::Window
+    } else {
+        anyhow::bail!("Both xr and window disabled. At least one must be enabled")
     };
     let mut runtime_builder = xrds::Runtime::builder()
         .with_application_name("gltf_viewer")
@@ -97,9 +93,9 @@ pub fn run(options: GltfOptions) -> anyhow::Result<()> {
     match target {
         xrds::RuntimeTarget::Window | xrds::RuntimeTarget::XrWithPreview => {
             runtime_builder = runtime_builder.with_window_options(xrds::RuntimeWindowOptions {
-                width: options.width,
-                height: options.height,
-                resizable: options.resizable,
+                width: options.window.width,
+                height: options.window.height,
+                resizable: options.window.resizable,
                 title: "gitf_viewer".to_owned(),
                 ..Default::default()
             })
@@ -108,7 +104,10 @@ pub fn run(options: GltfOptions) -> anyhow::Result<()> {
     }
     let runtime = runtime_builder.build()?;
 
-    let path = PathBuf::from(options.path);
+    let path = match options.mode {
+        RenderMode::Single(options) => PathBuf::from(options.path),
+        RenderMode::Multi(options) => PathBuf::from(options.path),
+    };
 
     let gltf_file = if path.is_file() {
         if let Some(extension) = path.extension() {

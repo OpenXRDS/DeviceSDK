@@ -15,7 +15,6 @@ xrds-core = { workspace = true }
 anyhow = { workspace = true }
 wgpu = { workspace = true }
 wgpu-hal = { workspace = true }
-naga_oil = { workspace = true }
 glam = { workspace = true }
 ash = { workspace = true }
 regex = { workspace = true }

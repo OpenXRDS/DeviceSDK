@@ -16,12 +16,12 @@ use winit::event_loop;
 /// TODO!: Remove anyhow
 pub trait RuntimeHandler {
     fn on_construct(&mut self) -> anyhow::Result<()>;
-    fn on_begin(&mut self, context: Context) -> anyhow::Result<()>;
-    fn on_resumed(&mut self, context: Context) -> anyhow::Result<()>;
-    fn on_suspended(&mut self, context: Context) -> anyhow::Result<()>;
-    fn on_end(&mut self, context: Context) -> anyhow::Result<()>;
-    fn on_update(&mut self, context: Context) -> anyhow::Result<()>;
-    fn on_deconstruct(&mut self, context: Context) -> anyhow::Result<()>;
+    fn on_begin(&mut self, context: &mut Context) -> anyhow::Result<()>;
+    fn on_resumed(&mut self, context: &mut Context) -> anyhow::Result<()>;
+    fn on_suspended(&mut self, context: &mut Context) -> anyhow::Result<()>;
+    fn on_end(&mut self, context: &mut Context) -> anyhow::Result<()>;
+    fn on_update(&mut self, context: &mut Context, diff: Duration) -> anyhow::Result<()>;
+    fn on_deconstruct(&mut self, context: &mut Context) -> anyhow::Result<()>;
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -92,7 +92,7 @@ impl Runtime {
         let main_result: JoinHandle<anyhow::Result<()>> = main_runtime_handle.spawn(async move {
             let event_proxy = main_event_proxy;
 
-            let tick_rate = Duration::from_secs_f32(1.0 / 120.0);
+            let tick_rate = Duration::from_secs_f32(1.0 / 240.0);
             let mut before = SystemTime::now();
 
             loop {

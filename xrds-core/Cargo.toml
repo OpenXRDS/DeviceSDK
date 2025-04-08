@@ -8,3 +8,4 @@ crate-type = ["lib"]
 
 [dependencies]
 glam = { workspace = true }
+wgpu-types = { workspace = true }

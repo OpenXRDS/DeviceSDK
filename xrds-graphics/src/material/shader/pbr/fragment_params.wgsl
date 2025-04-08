@@ -1,4 +1,5 @@
-#define_import_path shader::pbr::fragment_params
+#ifndef PBR_FRAGMENT_PARAMS_WGSL
+#define PBR_FRAGMENT_PARAMS_WGSL
 
 struct GBuffer {
     @location(0) position_metallic: vec4<f32>,
@@ -6,3 +7,5 @@ struct GBuffer {
     @location(2) albedo_occlusion: vec4<f32>,
     @location(3) emissive: vec4<f32>,
 }
+
+#endif  // PBR_FRAGMENT_PARAMS_WGSL

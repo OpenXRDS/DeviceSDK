@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use wgpu::{Extent3d, Operations};
 
 use crate::{GraphicsInstance, RenderTargetOps, RenderTargetTexture, XrdsTexture};
@@ -15,7 +13,7 @@ pub struct GBuffer {
 
 impl GBuffer {
     pub fn new(
-        graphics_instance: Arc<GraphicsInstance>,
+        graphics_instance: &GraphicsInstance,
         size: Extent3d,
         format: wgpu::TextureFormat,
     ) -> Self {

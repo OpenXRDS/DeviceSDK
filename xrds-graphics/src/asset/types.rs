@@ -17,7 +17,7 @@ where
     asset: A,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct AssetHandle<A>
 where
     A: Clone,

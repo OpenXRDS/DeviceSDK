@@ -16,3 +16,4 @@ anyhow = { workspace = true }
 ash = { workspace = true }
 log = { workspace = true }
 glam = { workspace = true }
+uuid = { workspace = true }

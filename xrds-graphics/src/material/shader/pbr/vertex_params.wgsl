@@ -1,6 +1,7 @@
-#define_import_path shader::pbr::vertex_params
+#ifndef PBR_VERTEX_PARAMS_WGSL
+#define PBR_VERTEX_PARAMS_WGSL
 
-struct Input {
+struct VertexInput {
     @builtin(vertex_index) vertex_index: u32,
     @builtin(view_index) view_index: i32,
 #ifdef VERTEX_INPUT_POSITION
@@ -14,9 +15,9 @@ struct Input {
 #endif
 #endif
 #ifdef VERTEX_INPUT_TEXCOORD_0
-    @location(2) texcoord_0n: vec2<f32>,
+    @location(2) texcoord_0: vec2<f32>,
 #ifdef VERTEX_INPUT_TEXCOORD_1
-    @location(3) texcoord_1n: vec2<f32>,
+    @location(2) texcoord_1: vec2<f32>,
 #endif
 #endif
 #ifdef VERTEX_INPUT_NORMAL
@@ -26,27 +27,27 @@ struct Input {
     @location(5) tangent: vec4<f32>,
 #endif
 #ifdef VERTEX_INPUT_WEIGHTS_JOINTS_0
-    @location(6) weights_0n: vec4<f32>,
-    @location(7) joints_0n: vec4<u32>,
+    @location(6) weights_0: vec4<f32>,
+    @location(7) joints_0: vec4<u32>,
 #endif
 #ifdef VERTEX_INPUT_WEIGHTS_JOINTS_1
-    @location(8) weights_1n: vec4<f32>,
-    @location(9) joints_1n: vec4<u32>,
+    @location(8) weights_1: vec4<f32>,
+    @location(9) joints_1: vec4<u32>,
 #endif
-    @location(10) model_0n: vec4<f32>,
-    @location(11) model_1n: vec4<f32>,
-    @location(12) model_2n: vec4<f32>,
-    @location(13) model_3n: vec4<f32>,
+    @location(10) model_0: vec4<f32>,
+    @location(11) model_1: vec4<f32>,
+    @location(12) model_2: vec4<f32>,
+    @location(13) model_3: vec4<f32>,
 }
 
-struct Output {
+struct VertexOutput {
     @builtin(position) position: vec4<f32>,
     @location(0) view_index: i32,
     @location(1) world_position: vec3<f32>,
 #ifdef VERTEX_INPUT_TEXCOORD_0
-    @location(2) texcoord_0n: vec2<f32>,
+    @location(2) texcoord_0: vec2<f32>,
 #ifdef VERTEX_INPUT_TEXCOORD_1
-    @location(3) texcoord_1n: vec2<f32>,
+    @location(3) texcoord_1: vec2<f32>,
 #endif
 #endif
 #ifdef VERTEX_INPUT_COLOR
@@ -58,19 +59,21 @@ struct Output {
 #ifdef VERTEX_INPUT_TANGENT
     @location(6) tangent: vec4<f32>,
 #endif
-    @location(7) model_0n: vec4<f32>,
-    @location(8) model_1n: vec4<f32>,
-    @location(9) model_2n: vec4<f32>,
-    @location(10) model_3n: vec4<f32>,
+    @location(7) model_0: vec4<f32>,
+    @location(8) model_1: vec4<f32>,
+    @location(9) model_2: vec4<f32>,
+    @location(10) model_3: vec4<f32>,
 }
 
-fn get_instance_model(in: Input) -> mat4x4<f32> {
+fn get_instance_model(in: VertexInput) -> mat4x4<f32> {
     var model = mat4x4<f32>(
-        in.model_0n,
-        in.model_1n,
-        in.model_2n,
-        in.model_3n
+        in.model_0,
+        in.model_1,
+        in.model_2,
+        in.model_3
     );
 
     return model;
 }
+
+#endif  // PBR_VERTEX_PARAMS_WGSL

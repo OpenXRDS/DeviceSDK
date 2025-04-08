@@ -1,28 +1,5 @@
 use std::fmt::Debug;
 
-#[derive(Debug, Clone, Copy)]
-pub struct Rect2D<T> {
-    pub x: T,
-    pub y: T,
-    pub width: T,
-    pub height: T,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct Size2D<T> {
-    pub width: T,
-    pub height: T,
-}
-
-pub type Rect2Di = Rect2D<i32>;
-pub type Rect2Du = Rect2D<u32>;
-pub type Rect2Df = Rect2D<f32>;
-pub type Rect2Dd = Rect2D<f64>;
-pub type Size2Di = Size2D<i32>;
-pub type Size2Du = Size2D<u32>;
-pub type Size2Df = Size2D<f32>;
-pub type Size2Dd = Size2D<f64>;
-
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Transform {
     translation: glam::Vec3,

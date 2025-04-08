@@ -1,21 +1,26 @@
-#import shader::view_params as View
+#include common::view_params
+#include postproc::types
 
-struct DeferredVertexInput {
-    @builtin(vertex_index) vertex_index: u32,
-    @builtin(view_index) view_index: i32,
+#define LIGHT_PARAMS_INPUT
+#include common::light_params
+
+struct MaterialInfo {
+    roughness: f32,
+    alpha_roughness: f32,
+    diffuse: vec3<f32>,
+    specular: vec3<f32>,
+    reflectance_0: vec3<f32>,
+    reflectance_90: vec3<f32>,
 }
 
-struct DeferredVertexOutput {
-    @builtin(position) position: vec4<f32>,
-    @location(0) uv: vec2<f32>,
-    @location(1) view_index: i32,
+struct AngularInfo {
+    n_dot_l: f32,
+    n_dot_v: f32,
+    n_dot_h: f32,
+    l_dot_h: f32,
+    v_dot_h: f32,
 }
 
-struct DeferredFragmentOutput {
-    @location(0) final_color: vec4<f32>,
-}
-
-// Separate groups per textures because texture_2d_array has multiple binding index
 @group(1) @binding(0)
 var position_metallic_sampler: sampler;
 @group(1) @binding(1)
@@ -33,55 +38,41 @@ var emissive_sampler: sampler;
 @group(1) @binding(7)
 var emissive_texture: texture_2d_array<f32>;
 
-const PI = 3.14159265359;
-
-@vertex
-fn vs_main(in: DeferredVertexInput) -> DeferredVertexOutput {
-    var output: DeferredVertexOutput;
-
-    var uv: vec2<f32> = vec2<f32>(f32((in.vertex_index << 1) & 2), f32(in.vertex_index & 2));
-    output.position = vec4<f32>(uv * 2.0 - 1.0, 0.0, 1.0);
-
-    // Flip uv for wgpu texture coordinates correction
-    uv.y = 1.0 - uv.y;
-    output.uv = uv;
-    output.view_index = in.view_index;
-
-    return output;
-}
+const CONST_PI = 3.14159265359;
 
 // For test
-const LIGHT_COUNT: u32 = 6;
+const LIGHT_COUNT: u32 = 3;
 
 const LIGHT_POSITIONS = array(
+    vec3<f32>(3.0, 0.0, 0.0),
     vec3<f32>(0.0, 3.0, 0.0),
-    vec3<f32>(0.0, 1.0, 3.0),
-    vec3<f32>(2.0, 1.0, 4.0),
-    vec3<f32>(0.0, 1.0, 10.0),
-    vec3<f32>(10.0, 0.0, 2.0),
-    vec3<f32>(5.0, 5.0, 5.0),
+    vec3<f32>(0.0, 0.0, 3.0),
+    vec3<f32>(-3.0, 0.0, 0.0),
+    vec3<f32>(0.0, -3.0, 0.0),
+    vec3<f32>(0.0, 0.0, -3.0),
 );
 
 const LIGHT_COLORS = array(
-    vec4<f32>(1.0, 0.0, 0.0, 20.0),
-    vec4<f32>(0.0, 1.0, 0.0, 20.0),
-    vec4<f32>(0.0, 0.0, 1.0, 20.0),
-    vec4<f32>(1.0, 1.0, 0.0, 20.0),
-    vec4<f32>(1.0, 0.0, 1.0, 20.0),
-    vec4<f32>(0.0, 1.0, 1.0, 20.0),
+    vec4<f32>(1.0, 0.0, 0.0, 4.0),
+    vec4<f32>(0.0, 1.0, 0.0, 4.0),
+    vec4<f32>(0.0, 0.0, 1.0, 4.0),
+    vec4<f32>(1.0, 1.0, 0.0, 4.0),
+    vec4<f32>(1.0, 0.0, 1.0, 4.0),
+    vec4<f32>(0.0, 1.0, 1.0, 4.0),
 );
 
-@fragment
-fn fs_main(in: DeferredVertexOutput) -> DeferredFragmentOutput {
-    // Do deferred lighting
-    var output: DeferredFragmentOutput;
+const DIRECTIONAL_LIGHT_DIRECTION: vec3<f32> = vec3<f32>(1.0, 1.0, 0.0);
+const DIRECTIONAL_LIGHT_COLOR: vec4<f32> = vec4<f32>(1.0, 1.0, 1.0, 3.0);
 
-    var view_params = View::get_view_params(in.view_index);
+@fragment
+fn fs_main(in: SimpleQuadOutput) -> @location(0) vec4<f32> {
+    // Do deferred lighting
+    var view_params = get_view_params(in.view_index);
     var cam_pos = view_params.world_position;
 
+    var albedo_occlusion = get_albedo_occlusion(in);
     var position_metallic = get_position_metallic(in);
     var normal_roughness = get_normal_roughness(in);
-    var albedo_occlusion = get_albedo_occlusion(in);
     var emissive: vec4<f32> = get_emissive(in);
 
     var position: vec3<f32> = position_metallic.rgb;
@@ -91,93 +82,152 @@ fn fs_main(in: DeferredVertexOutput) -> DeferredFragmentOutput {
     var albedo: vec3<f32> = albedo_occlusion.rgb;
     var occlusion: f32 = albedo_occlusion.a;
 
-    var n: vec3<f32> = normalize(normal);
-    var v: vec3<f32> = normalize(cam_pos - position.rgb);
-    var lo: vec3<f32> = vec3(0.0);
+#ifdef DEFERRED_LIGHTING_UNLIT
+    // Return unlit color
+    return vec4<f32>(albedo.rgb, 1.0);
+#endif
 
-    // Loop all lights
-    for (var i: u32 = 0; i < LIGHT_COUNT; i++) {
-        var light_position = LIGHT_POSITIONS[i];
-        var light_color = LIGHT_COLORS[i];
-    
-        var l: vec3<f32> = normalize(light_position - position.rgb);
-        var h: vec3<f32> = normalize(v + l);
-        var distance: f32 = length(light_position - position.rgb);
-        var attenuation: f32 = 1.0 / (distance * distance);
-        var radiance: vec3<f32> = light_color.rgb * light_color.a * attenuation;
+    // Convert to specular glossiness
+    var f0 = vec3(0.04, 0.04, 0.04);
+    var diffuse = albedo * (vec3(1.0, 1.0, 1.0) - f0) * (1.0 - metallic);
+    var specular = mix(f0, albedo, metallic);
 
-        var f0: vec3<f32> = vec3(0.04);
-        f0 = mix(f0, albedo.rgb, metallic);
-        var ndf: f32 = distribution_ggx(n, h, roughness);
-        var g: f32 = geometry_smith(n, v, l, roughness);
-        var f: vec3<f32> = fresnel_schlick(max(dot(h, v), 1.0), f0);
+    var alpha_roughness = roughness * roughness;
+    var reflectance = max(max(specular.r, specular.g), specular.b);
+    var reflectance_0 = specular.rgb;
+    var reflectance_90 = vec3<f32>(clamp(reflectance * 50.0, 0.0, 1.0));
 
-        var ks: vec3<f32> = f;
-        var kd: vec3<f32> = vec3(1.0) - ks;
-        kd *= (1.0 - metallic);
+    var material_info: MaterialInfo;
+    material_info.roughness = roughness;
+    material_info.alpha_roughness = alpha_roughness;
+    material_info.diffuse = diffuse;
+    material_info.specular = specular;
+    material_info.reflectance_0 = reflectance_0;
+    material_info.reflectance_90 = reflectance_90;
 
-        var numerator: vec3<f32> = ndf * g * f;
-        var denominator: f32 = 4.0 * max(dot(n, v), 0.0) * max(dot(n, l), 0.0) + 0.0001;
-        var specular: vec3<f32> = numerator / denominator;
+#ifdef DOUBLE_SIDED
+    if dot(normal, view) < 0 {
+        normal = -normal;
+    }
+#endif
 
-        var n_dot_l: f32 = max(dot(n, l), 0.0);
-        lo += (kd * albedo.rgb / PI + specular) * radiance * n_dot_l;
+    var color = vec3<f32>(0.0, 0.0, 0.0);
+    var view = normalize(cam_pos - position);
+
+    {
+        var point_to_light: vec3<f32> = DIRECTIONAL_LIGHT_DIRECTION;
+        var shade: vec3<f32> = get_point_shade(material_info, point_to_light, normal, view);
+
+        color += DIRECTIONAL_LIGHT_COLOR.a * DIRECTIONAL_LIGHT_COLOR.rgb * shade;
     }
 
-    var ambient: vec3<f32> = vec3(0.03) * albedo.rgb * occlusion;
-    var color: vec3<f32> = ambient + emissive.rgb + lo;
+    for (var i: u32 = 0; i < 6; i++) {
+        // var light = u_lights[i];
+        // var shadow_factor: f32 = do_spot_shadow(position, light);
+        // if light.type == 0 {  // directional light
+        //     color += do_directional_light(light, );
+        // } else if light.type == 1 {  // pointlight
+            var point_to_light: vec3<f32> = LIGHT_POSITIONS[i] - position;
+            var distance: f32 = length(point_to_light);
+            var attenuation: f32 = get_range_attenuation(5.0, distance);
+            var shade: vec3<f32> = get_point_shade(material_info, point_to_light, normal, view);
 
-    output.final_color = vec4<f32>(color, 1.0);
+            color += attenuation * LIGHT_COLORS[i].a * LIGHT_COLORS[i].rgb * shade;
+        // } else if light.type == 2 {  // spotlight
+        //     color += do_spot_light(light, );
+        // }
+    }
 
-    return output;
+    // occlusion
+    color = color * occlusion;
+
+    // emissive
+    color += emissive.rgb;
+
+    return vec4<f32>(color, 1.0);
 }
 
-fn get_position_metallic(in: DeferredVertexOutput) -> vec4<f32> {
+fn get_range_attenuation(range: f32, distance: f32) -> f32 {
+    if range < 0.0 {
+        return 1.0;
+    }
+    return max(min(1.0 - pow(distance / range, 4.0), 1.0), 0.0);
+}
+
+fn get_point_shade(material_info: MaterialInfo, point_to_light: vec3<f32>, normal: vec3<f32>, view: vec3<f32>) -> vec3<f32> {
+    var angular_info: AngularInfo = get_angular_info(point_to_light, normal, view);
+
+    if angular_info.n_dot_l > 0.0 && angular_info.n_dot_v > 0.0 {
+        var f: vec3<f32> = get_specular_reflection(material_info, angular_info);
+        var vis: f32 = get_visibility_occlusion(material_info, angular_info);
+        var d = get_microfacet_distribution(material_info, angular_info);
+
+        var diffuse_contrib: vec3<f32> = (1.0 - f) * (material_info.diffuse / CONST_PI);
+        var specular_contrib: vec3<f32> = f * vis * d;
+
+        return angular_info.n_dot_l * (diffuse_contrib + specular_contrib);
+    } else {
+        return vec3(0.0, 0.0, 0.0);
+    }
+}
+
+fn get_angular_info(point_to_light: vec3<f32>, normal: vec3<f32>, view: vec3<f32>) -> AngularInfo {
+    var out: AngularInfo;
+
+    var n = normalize(normal);  // Outward direction of surface point
+    var v = normalize(view);  // Direction from surface point to view
+    var l = normalize(point_to_light);  // Direction from surface point to light
+    var h = normalize(l + view);  // Direction of the vector between l and v
+
+    out.n_dot_l = clamp(dot(n, l), 0.0, 1.0);
+    out.n_dot_v = clamp(dot(n, v), 0.0, 1.0);
+    out.n_dot_h = clamp(dot(n, h), 0.0, 1.0);
+    out.l_dot_h = clamp(dot(l, h), 0.0, 1.0);
+    out.v_dot_h = clamp(dot(v, h), 0.0, 1.0);
+
+    return out;    
+}
+
+fn get_specular_reflection(material_info: MaterialInfo, angular_info: AngularInfo) -> vec3<f32> {
+    return material_info.reflectance_0 +
+        (material_info.reflectance_90 - material_info.reflectance_0) *
+        pow(clamp(1.0 - angular_info.v_dot_h, 0.0, 1.0), 5.0);
+}
+
+fn get_visibility_occlusion(material_info: MaterialInfo, angular_info: AngularInfo) -> f32 {
+    var n_dot_l: f32 = angular_info.n_dot_l;
+    var n_dot_v: f32 = angular_info.n_dot_v;
+    var alpha_roughness_sq: f32 = material_info.alpha_roughness * material_info.alpha_roughness;
+    var ggxv: f32 = n_dot_v * sqrt(n_dot_l * n_dot_l * (1.0 - alpha_roughness_sq) + alpha_roughness_sq);
+    var ggxl: f32 = n_dot_l * sqrt(n_dot_v * n_dot_v * (1.0 - alpha_roughness_sq) + alpha_roughness_sq);
+    var ggx: f32 = ggxv + ggxl;
+    
+    if ggx > 0.0 {
+        return 0.5 / ggx;
+    } else {
+        return 0.0;
+    }
+}
+
+fn get_microfacet_distribution(material_info: MaterialInfo, angular_info: AngularInfo) -> f32 {
+    var alpha_roughness_sq: f32 = material_info.alpha_roughness * material_info.alpha_roughness;
+    // var f: f32 = (angular_info.n_dot_h * alpha_roughness_sq - angular_info.n_dot_h) * angular_info.n_dot_h * 1.0;
+    var f: f32 = (angular_info.n_dot_h * angular_info.n_dot_h * (alpha_roughness_sq - 1.0) + 1.0);
+    return alpha_roughness_sq / (CONST_PI * f * f + 0.000001);
+}
+
+fn get_position_metallic(in: SimpleQuadOutput) -> vec4<f32> {
     return textureSample(position_metallic_texture, position_metallic_sampler, in.uv, in.view_index);
 }
 
-fn get_normal_roughness(in: DeferredVertexOutput) -> vec4<f32> {
+fn get_normal_roughness(in: SimpleQuadOutput) -> vec4<f32> {
     return textureSample(normal_roughness_texture, normal_roughness_sampler, in.uv, in.view_index);
 }
 
-fn get_albedo_occlusion(in: DeferredVertexOutput) -> vec4<f32> {
+fn get_albedo_occlusion(in: SimpleQuadOutput) -> vec4<f32> {
     return textureSample(albedo_occlusion_texture, albedo_occlusion_sampler, in.uv, in.view_index);
 }
 
-fn get_emissive(in: DeferredVertexOutput) -> vec4<f32> {
+fn get_emissive(in: SimpleQuadOutput) -> vec4<f32> {
     return textureSample(emissive_texture, emissive_sampler, in.uv, in.view_index);
-}
-
-fn fresnel_schlick(cos_theta: f32, f0: vec3<f32>) -> vec3<f32> {
-    return f0 + (1.0 - f0) * pow(clamp(1.0 - cos_theta, 0.0, 1.0), 5.0);
-}
-
-fn distribution_ggx(n: vec3<f32>, h: vec3<f32>, roughness: f32) -> f32 {
-    var a = roughness * roughness;
-    var a2 = a * a;
-    var n_dot_h = max(dot(n, h), 0.0);
-    var n_dot_h2 = n_dot_h * n_dot_h;
-    var num = a2;
-    var denom = (n_dot_h2 * (a2 - 1.0) + 1.0);
-    denom = PI * denom * denom;
-
-    return num / denom;
-}
-
-fn geometry_schlick_ggx(n_dot_v: f32, roughness: f32) -> f32 {
-    var r = roughness + 1.0;
-    var k = (r * r) / 8.0;
-    var num = n_dot_v;
-    var denom = n_dot_v * (1.0 - k) + k;
-
-    return num / denom;
-}
-
-fn geometry_smith(n: vec3<f32>, v: vec3<f32>, l: vec3<f32>, roughness: f32) -> f32 {
-    var n_dot_v = max(dot(n, v), 0.0);
-    var n_dot_l = max(dot(n, l), 0.0);
-    var ggx2 = geometry_schlick_ggx(n_dot_v, roughness);
-    var ggx1 = geometry_schlick_ggx(n_dot_l, roughness);
-
-    return ggx1 * ggx2;
 }

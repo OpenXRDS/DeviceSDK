@@ -9,7 +9,6 @@ pub enum RuntimeError {
     WinitEventLoopError(winit::error::EventLoopError),
     SyncError,
     OpenXrNotInitialized,
-    RendererNotInitialized,
     NoWorldLoaded,
 }
 
@@ -20,7 +19,6 @@ impl fmt::Display for RuntimeError {
             Self::OpenXrNotInitialized => write!(f, "OpenXR not initialized"),
             Self::WinitEventLoopError(e) => write!(f, "Winit event loop error: {}", e),
             Self::SyncError => write!(f, "Sync error"),
-            Self::RendererNotInitialized => write!(f, "Renderer not initialized"),
             Self::NoWorldLoaded => write!(f, "No world loaded"),
         }
     }

@@ -1,3 +1,5 @@
+use std::num::NonZero;
+
 use ash::vk;
 use wgpu::{DeviceDescriptor, InstanceDescriptor, RequestAdapterOptions, TextureUsages};
 
@@ -9,6 +11,7 @@ pub struct GraphicsInstance {
     adapter: wgpu::Adapter,
     device: wgpu::Device,
     queue: wgpu::Queue,
+    multiview: Option<NonZero<u32>>,
     pipeline_cache: Option<wgpu::PipelineCache>,
 }
 
@@ -43,6 +46,7 @@ impl GraphicsInstance {
             adapter,
             device,
             queue,
+            multiview: None,
             pipeline_cache: None,
         })
     }
@@ -67,6 +71,10 @@ impl GraphicsInstance {
         self.pipeline_cache.as_ref()
     }
 
+    pub fn multiview(&self) -> Option<NonZero<u32>> {
+        self.multiview
+    }
+
     pub fn from_init(
         instance: wgpu::Instance,
         adapter: wgpu::Adapter,
@@ -78,8 +86,19 @@ impl GraphicsInstance {
             adapter,
             device,
             queue,
+            multiview: None,
             pipeline_cache: None,
         }
+    }
+
+    pub fn with_multiview(mut self, multiview: Option<NonZero<u32>>) -> Self {
+        self.multiview = multiview;
+        self
+    }
+
+    pub fn with_pipeline_cache(mut self, pipeline_cache: wgpu::PipelineCache) -> Self {
+        self.pipeline_cache = Some(pipeline_cache);
+        self
     }
 }
 

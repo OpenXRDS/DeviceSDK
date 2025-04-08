@@ -1,9 +1,11 @@
-use crate::{RenderPass, XrdsBuffer};
+use crate::{Constant, XrdsBuffer};
 
 mod postproc;
 
 pub use postproc::*;
+use wgpu::RenderPass;
 pub mod pbr;
+pub mod preprocessor;
 
 /// Material interface object
 #[derive(Debug, Clone)]
@@ -35,7 +37,8 @@ impl XrdsMaterialInstance {
     }
 
     pub fn encode(&self, render_pass: &mut RenderPass) {
-        render_pass.bind_material(self);
+        render_pass.set_pipeline(self.pipeline());
+        render_pass.set_bind_group(Constant::BIND_GROUP_ID_TEXTURE_INPUT, &self.bind_group, &[]);
     }
 
     pub fn bind_group(&self) -> &wgpu::BindGroup {

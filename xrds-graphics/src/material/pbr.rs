@@ -1,14 +1,13 @@
 use std::{
-    borrow::Cow,
     collections::HashMap,
     hash::{DefaultHasher, Hash, Hasher},
-    sync::RwLock,
 };
 
-use naga_oil::compose::{
-    ComposableModuleDescriptor, Composer, NagaModuleDescriptor, ShaderDefValue,
-};
-use wgpu::{naga::valid::Capabilities, Device, ShaderModuleDescriptor};
+use wgpu::Device;
+
+use crate::preprocessor::ShaderValue;
+
+use super::preprocessor::Preprocessor;
 
 pub static BIND_GROUP_INDEX_VIEW_PARAMS: u32 = 0;
 pub static BIND_GROUP_INDEX_MATERIAL_INPUT: u32 = 1;
@@ -90,7 +89,7 @@ pub struct PbrMaterialInputOption {
 }
 
 #[repr(C)]
-#[derive(Debug, Default, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+#[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct PbrMaterialParams {
     pub base_color_factor: glam::Vec4,
     pub emissive_factor: glam::Vec4,
@@ -112,46 +111,62 @@ pub struct PbrMaterialParams {
     _pad: [u32; 2],
 }
 
+impl Default for PbrMaterialParams {
+    fn default() -> Self {
+        Self {
+            base_color_factor: glam::Vec4::splat(1.0),
+            emissive_factor: glam::Vec4::splat(0.0),
+            metallic_factor: 0.0,
+            roughness_factor: 1.0,
+            normal_scale: 1.0,
+            occlusion_strength: 1.0,
+            alpha_cutoff: 0.5,
+            texcoord_base_color: 0,
+            texcoord_emissive: 0,
+            texcoord_metallic_roughness: 0,
+            texcoord_normal: 0,
+            texcoord_occlusion: 0,
+            #[cfg(feature = "material_spec_gloss")]
+            texcoord_diffuse: 0,
+            #[cfg(feature = "material_spec_gloss")]
+            texcoord_specular_glossiness: 0,
+            #[cfg(not(feature = "material_spec_gloss"))]
+            _pad: [0; 2],
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct PbrShaderBuilder {
-    composer: RwLock<Composer>,
+    preprocessor: Preprocessor,
 }
 
 impl PbrShaderBuilder {
     pub fn new() -> anyhow::Result<Self> {
-        let mut composer = Composer::default()
-            .with_capabilities(Capabilities::MULTIVIEW | Capabilities::PUSH_CONSTANT);
+        let mut preprocessor = Preprocessor::default();
 
-        composer.add_composable_module(ComposableModuleDescriptor {
-            source: include_str!("shader/pbr/vertex_params.wgsl"),
-            file_path: "shader/pbr/vertex_params.wgsl",
-            ..Default::default()
-        })?;
-        composer.add_composable_module(ComposableModuleDescriptor {
-            source: include_str!("shader/view_params.wgsl"),
-            file_path: "shader/view_params.wgsl",
+        preprocessor.add_include_module(
+            "common::view_params",
+            include_str!("shader/common/view_params.wgsl"),
+        );
+        preprocessor.add_include_module(
+            "common::skinning",
+            include_str!("shader/common/skinning.wgsl"),
+        );
+        preprocessor.add_include_module(
+            "pbr::vertex_params",
+            include_str!("shader/pbr/vertex_params.wgsl"),
+        );
+        preprocessor.add_include_module(
+            "pbr::fragment_params",
+            include_str!("shader/pbr/fragment_params.wgsl"),
+        );
+        preprocessor.add_include_module(
+            "pbr::material_params",
+            include_str!("shader/pbr/material_params.wgsl"),
+        );
 
-            ..Default::default()
-        })?;
-        composer.add_composable_module(ComposableModuleDescriptor {
-            source: include_str!("shader/skinning.wgsl"),
-            file_path: "shader/skinning.wgsl",
-            ..Default::default()
-        })?;
-        composer.add_composable_module(ComposableModuleDescriptor {
-            source: include_str!("shader/pbr/fragment_params.wgsl"),
-            file_path: "shader/pbr/fragment_params.wgsl",
-            ..Default::default()
-        })?;
-        composer.add_composable_module(ComposableModuleDescriptor {
-            source: include_str!("shader/pbr/material_params.wgsl"),
-            file_path: "shader/pbr/material_params.wgsl",
-            ..Default::default()
-        })?;
-
-        Ok(Self {
-            composer: RwLock::new(composer),
-        })
+        Ok(Self { preprocessor })
     }
 
     pub fn build_shader_module(
@@ -166,27 +181,12 @@ impl PbrShaderBuilder {
         // Additional defines for device limits
         let limits = device.limits();
         if limits.max_push_constant_size >= 64 {
-            defs.insert(
-                "PUSH_CONSTANT_SUPPORTED".to_owned(),
-                ShaderDefValue::Bool(true),
-            );
+            defs.insert("PUSH_CONSTANT_SUPPORTED".to_owned(), ShaderValue::Def);
         }
 
-        let naga_module = {
-            let mut lock = self.composer.write().unwrap();
-            lock.make_naga_module(NagaModuleDescriptor {
-                source,
-                file_path,
-                shader_defs: defs,
-                shader_type: naga_oil::compose::ShaderType::Wgsl,
-                ..Default::default()
-            })?
-        };
+        let descriptor = self.preprocessor.build(source, &defs, Some(file_path))?;
 
-        Ok(device.create_shader_module(ShaderModuleDescriptor {
-            label: Some(file_path),
-            source: wgpu::ShaderSource::Naga(Cow::Owned(naga_module)),
-        }))
+        Ok(device.create_shader_module(descriptor))
     }
 
     pub fn build_vertex_module(
@@ -216,14 +216,14 @@ impl PbrShaderBuilder {
     }
 }
 
-impl From<&Options> for HashMap<String, ShaderDefValue> {
+impl From<&Options> for HashMap<String, ShaderValue> {
     fn from(value: &Options) -> Self {
         value.shader_defines().into_iter().collect()
     }
 }
 
 impl Options {
-    fn shader_defines(&self) -> HashMap<String, ShaderDefValue> {
+    fn shader_defines(&self) -> HashMap<String, ShaderValue> {
         let vertex_key_values = self.vertex_input.shader_defines();
         let material_key_values = self.material_input.shader_defines();
         let option_key_values = vec![];
@@ -258,70 +258,41 @@ impl PbrVertexInputOption {
     const VERTEX_INPUT_WEIGHTS_JOINTS_1: &str = "VERTEX_INPUT_WEIGHTS_1";
     const VERTEX_INPUT_INSTANCE: &str = "VERTEX_INPUT_INSTANCE";
 
-    fn shader_defines(&self) -> Vec<(String, ShaderDefValue)> {
+    fn shader_defines(&self) -> Vec<(String, ShaderValue)> {
         let mut res = Vec::new();
-        self.position.then(|| {
-            res.push((
-                Self::VERTEX_INPUT_POSITION.to_owned(),
-                ShaderDefValue::Bool(self.position),
-            ))
-        });
+        self.position
+            .then(|| res.push((Self::VERTEX_INPUT_POSITION.to_owned(), ShaderValue::Def)));
         self.color.is_some().then(|| {
-            res.push((
-                Self::VERTEX_INPUT_COLOR.to_owned(),
-                ShaderDefValue::Bool(self.color.is_some()),
-            ));
+            res.push((Self::VERTEX_INPUT_COLOR.to_owned(), ShaderValue::Def));
             if let Some(ch) = self.color {
                 if ch == ColorChannel::Ch3 {
-                    res.push((
-                        Self::VERTEX_INPUT_COLOR_3CH.to_owned(),
-                        ShaderDefValue::Bool(true),
-                    ));
+                    res.push((Self::VERTEX_INPUT_COLOR_3CH.to_owned(), ShaderValue::Def));
                 }
             }
         });
-        self.normal.then(|| {
-            res.push((
-                Self::VERTEX_INPUT_NORMAL.to_owned(),
-                ShaderDefValue::Bool(self.normal),
-            ))
-        });
-        self.tangent.then(|| {
-            res.push((
-                Self::VERTEX_INPUT_TANGENT.to_owned(),
-                ShaderDefValue::Bool(self.tangent),
-            ))
-        });
+        self.normal
+            .then(|| res.push((Self::VERTEX_INPUT_NORMAL.to_owned(), ShaderValue::Def)));
+        self.tangent
+            .then(|| res.push((Self::VERTEX_INPUT_TANGENT.to_owned(), ShaderValue::Def)));
         self.texcoord_0.then(|| {
-            res.push((
-                Self::VERTEX_INPUT_TEXCOORD_0.to_owned(),
-                ShaderDefValue::Bool(self.texcoord_0),
-            ));
-            self.texcoord_1.then(|| {
-                res.push((
-                    Self::VERTEX_INPUT_TEXCOORD_1.to_owned(),
-                    ShaderDefValue::Bool(false),
-                ))
-            });
+            res.push((Self::VERTEX_INPUT_TEXCOORD_0.to_owned(), ShaderValue::Def));
+            self.texcoord_1
+                .then(|| res.push((Self::VERTEX_INPUT_TEXCOORD_1.to_owned(), ShaderValue::Def)));
         });
         self.weights_joints_0.then(|| {
             res.push((
                 Self::VERTEX_INPUT_WEIGHTS_JOINTS_0.to_owned(),
-                ShaderDefValue::Bool(self.weights_joints_0),
+                ShaderValue::Def,
             ));
             self.weights_joints_1.then(|| {
                 res.push((
                     Self::VERTEX_INPUT_WEIGHTS_JOINTS_1.to_owned(),
-                    ShaderDefValue::Bool(self.weights_joints_1),
+                    ShaderValue::Def,
                 ))
             });
         });
-        self.instance.then(|| {
-            res.push((
-                Self::VERTEX_INPUT_INSTANCE.to_owned(),
-                ShaderDefValue::Bool(self.instance),
-            ))
-        });
+        self.instance
+            .then(|| res.push((Self::VERTEX_INPUT_INSTANCE.to_owned(), ShaderValue::Def)));
 
         res
     }
@@ -334,6 +305,9 @@ impl PbrMaterialInputOption {
         "MATERIAL_INPUT_METALLIC_ROUGHNESS_TEXTURE";
     const MATERIAL_INPUT_NORMAL_TEXTURE: &str = "MATERIAL_INPUT_NORMAL_TEXTURE";
     const MATERIAL_INPUT_OCCLUSION_TEXTURE: &str = "MATERIAL_INPUT_OCCLUSION_TEXTURE";
+    const MATERIAL_INPUT_ALPHA_MODE_OPAQUE: &str = "MATERIAL_INPUT_ALPHA_MODE_OPAQUE";
+    const MATERIAL_INPUT_ALPHA_MODE_MASK: &str = "MATERIAL_INPUT_ALPHA_MODE_MASK";
+    const MATERIAL_INPUT_ALPHA_MODE_BLEND: &str = "MATERIAL_INPUT_ALPHA_MODE_BLEND";
     #[cfg(feature = "material_spec_gloss")]
     const MATERIAL_INPUT_DIFFUSE_TEXTURE: &str = "MATERIAL_INPUT_DIFFUSE_TEXTURE";
     #[cfg(feature = "material_spec_gloss")]
@@ -348,72 +322,83 @@ impl PbrMaterialInputOption {
     #[cfg(feature = "material_ibl")]
     const MATERIAL_INPUT_BRDF_TEXTURE: &str = "MATERIAL_INPUT_BRDF_TEXTURE";
 
-    fn shader_defines(&self) -> Vec<(String, ShaderDefValue)> {
+    fn shader_defines(&self) -> Vec<(String, ShaderValue)> {
         let mut res = Vec::new();
         self.base_color.then(|| {
             res.push((
                 Self::MATERIAL_INPUT_BASE_COLOR_TEXTURE.to_owned(),
-                ShaderDefValue::Bool(self.base_color),
+                ShaderValue::Def,
             ))
         });
         self.emissive.then(|| {
             res.push((
                 Self::MATERIAL_INPUT_EMISSIVE_TEXTURE.to_owned(),
-                ShaderDefValue::Bool(self.emissive),
+                ShaderValue::Def,
             ))
         });
         self.metallic_roughness.then(|| {
             res.push((
                 Self::MATERIAL_INPUT_METALLIC_ROUGHNESS_TEXTURE.to_owned(),
-                ShaderDefValue::Bool(self.metallic_roughness),
+                ShaderValue::Def,
             ))
         });
         self.normal.then(|| {
             res.push((
                 Self::MATERIAL_INPUT_NORMAL_TEXTURE.to_owned(),
-                ShaderDefValue::Bool(self.normal),
+                ShaderValue::Def,
             ))
         });
         self.occlusion.then(|| {
             res.push((
                 Self::MATERIAL_INPUT_OCCLUSION_TEXTURE.to_owned(),
-                ShaderDefValue::Bool(self.occlusion),
+                ShaderValue::Def,
             ))
+        });
+        res.push(match self.alpha_mode {
+            AlphaMode::Opaque => (
+                Self::MATERIAL_INPUT_ALPHA_MODE_OPAQUE.to_owned(),
+                ShaderValue::Def,
+            ),
+            AlphaMode::Mask => (
+                Self::MATERIAL_INPUT_ALPHA_MODE_MASK.to_owned(),
+                ShaderValue::Def,
+            ),
+            AlphaMode::Blend => (
+                Self::MATERIAL_INPUT_ALPHA_MODE_BLEND.to_owned(),
+                ShaderValue::Def,
+            ),
         });
         #[cfg(feature = "material_spec_gloss")]
         self.diffuse.then(|| {
             res.push((
                 Self::MATERIAL_INPUT_DIFFUSE_TEXTURE.to_owned(),
-                ShaderDefValue::Bool(self.diffuse),
+                ShaderValue::Def,
             ))
         });
         #[cfg(feature = "material_spec_gloss")]
         self.specular_glossiness.then(|| {
             res.push((
                 Self::MATERIAL_INPUT_SPECULAR_GLOSSINESS_TEXTURE.to_owned(),
-                ShaderDefValue::Bool(self.specular_glossiness),
+                ShaderValue::Def,
             ))
         });
         #[cfg(feature = "material_ibl")]
         self.ibl.then(|| {
-            res.push((
-                Self::MATERIAL_INPUT_IBL.to_owned(),
-                ShaderDefValue::Bool(self.ibl),
-            ));
+            res.push((Self::MATERIAL_INPUT_IBL.to_owned(), ShaderValue::Def));
             res.push((
                 Self::MATERIAL_INPUT_IBL_DIFFUSE_TEXTURE.to_owned(),
-                ShaderDefValue::Bool(true),
+                ShaderValue::Def,
             ));
             res.push((
                 Self::MATERIAL_INPUT_IBL_SPECULAR_TEXTURE.to_owned(),
-                ShaderDefValue::Bool(true),
+                ShaderValue::Def,
             ));
         });
         #[cfg(feature = "material_ibl")]
         self.brdf.then(|| {
             res.push((
                 Self::MATERIAL_INPUT_BRDF_TEXTURE.to_owned(),
-                ShaderDefValue::Bool(self.brdf),
+                ShaderValue::Def,
             ))
         });
 

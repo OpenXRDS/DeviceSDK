@@ -1,60 +1,54 @@
-use std::{collections::HashMap, fmt::Debug, sync::Arc};
+use std::{collections::HashMap, fmt::Debug};
 
-use crate::Renderable;
+use uuid::Uuid;
 
 pub mod loader;
 
-#[derive(Default, Clone)]
+#[derive(Debug, Default, Clone)]
 pub struct Gltf {
     pub name: String,
-    pub scenes: Vec<Arc<Renderable>>,
-    pub named_scene: HashMap<String, Arc<Renderable>>,
-    pub default_scene: Option<Arc<Renderable>>,
+    pub scenes: Vec<GltfScene>,
+    pub named_scene: HashMap<String, usize>,
+    pub default_scene_index: usize,
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct GltfScene {
+    pub name: Option<String>,
+    pub id: Uuid,
 }
 
 impl Gltf {
-    pub fn with_scenes(mut self, scene_objects: Vec<Arc<Renderable>>) -> Self {
-        self.scenes = scene_objects;
-        for scene in &self.scenes {
-            self.named_scene
-                .insert(scene.get_name().to_string(), scene.clone());
+    pub fn with_scenes(mut self, scenes: Vec<GltfScene>) -> Self {
+        self.scenes = scenes;
+        for (i, scene) in self.scenes.iter().enumerate() {
+            // First entity is scene entity
+            if let Some(name) = &scene.name {
+                self.named_scene.insert(name.clone(), i);
+            }
         }
         self
     }
 
     pub fn with_default_scene(mut self, default_scene_index: usize) -> Self {
-        if let Some(scene) = self.scenes.get(default_scene_index) {
-            self.default_scene = Some(scene.clone());
-        }
+        self.default_scene_index = default_scene_index;
+
         self
     }
 
-    pub fn get_default_scene(&self) -> Option<&Arc<Renderable>> {
-        self.default_scene.as_ref()
+    pub fn get_default_scene(&self) -> Option<&GltfScene> {
+        self.scenes.get(self.default_scene_index)
     }
 
-    pub fn get_scene_by_name(&self, name: &str) -> Option<&Arc<Renderable>> {
-        self.named_scene.get(name)
+    pub fn get_scene_by_name(&self, name: &str) -> Option<&GltfScene> {
+        self.scenes.get(*self.named_scene.get(name).unwrap_or(&0))
     }
 
-    pub fn get_scene_by_index(&self, index: usize) -> Option<&Arc<Renderable>> {
+    pub fn get_scene_by_index(&self, index: usize) -> Option<&GltfScene> {
         self.scenes.get(index)
     }
 
-    pub fn get_scenes(&self) -> &[Arc<Renderable>] {
+    pub fn get_scenes(&self) -> &[GltfScene] {
         &self.scenes
-    }
-}
-
-impl Debug for Gltf {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut debug_struct = f.debug_struct("Gltf");
-
-        debug_struct.field("name", &self.name);
-        if self.default_scene.is_some() && self.scenes.len() > 1 {
-            debug_struct.field("default_scene", &self.default_scene);
-        }
-
-        debug_struct.field("scenes", &self.scenes).finish()
     }
 }

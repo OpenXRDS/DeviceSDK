@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use wgpu::{BufferDescriptor, BufferSlice, BufferUsages, VertexFormat};
 use xrds_core::Transform;
 
@@ -27,7 +25,7 @@ impl XrdsInstance {
 }
 
 impl XrdsInstanceBuffer {
-    pub fn new(graphics_instance: Arc<GraphicsInstance>, max_instances: usize) -> Self {
+    pub fn new(graphics_instance: &GraphicsInstance, max_instances: usize) -> Self {
         let buffer = graphics_instance.device().create_buffer(&BufferDescriptor {
             label: None,
             size: (std::mem::size_of::<XrdsInstance>() * max_instances) as u64,

@@ -1,10 +1,11 @@
-use std::sync::Arc;
 use wgpu::{
     BindGroupDescriptor, BindGroupLayoutDescriptor, BindGroupLayoutEntry, BindingType, Extent3d,
     TextureSampleType,
 };
 
-use crate::{GraphicsInstance, RenderTargetOps, RenderTargetTexture, TextureFormat, XrdsTexture};
+use crate::{
+    Constant, GraphicsInstance, RenderTargetOps, RenderTargetTexture, TextureFormat, XrdsTexture,
+};
 
 use super::gbuffer::GBuffer;
 
@@ -19,15 +20,11 @@ pub struct Framebuffer {
 
 impl Framebuffer {
     pub fn new(
-        graphics_instance: Arc<GraphicsInstance>,
+        graphics_instance: &GraphicsInstance,
         size: Extent3d,
         output_format: TextureFormat,
     ) -> Self {
-        let gbuffer = GBuffer::new(
-            graphics_instance.clone(),
-            size,
-            wgpu::TextureFormat::Rgba32Float,
-        );
+        let gbuffer = GBuffer::new(graphics_instance, size, wgpu::TextureFormat::Rgba32Float);
         let device = graphics_instance.device();
 
         let final_color_texture = device.create_texture(&wgpu::TextureDescriptor {
@@ -42,8 +39,14 @@ impl Framebuffer {
                 | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });
-        let final_color_view =
-            final_color_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let final_color_view = final_color_texture.create_view(&wgpu::TextureViewDescriptor {
+            dimension: if size.depth_or_array_layers > 1 {
+                Some(wgpu::TextureViewDimension::D2Array)
+            } else {
+                Some(wgpu::TextureViewDimension::D2)
+            },
+            ..Default::default()
+        });
         let final_color = RenderTargetTexture::new(
             XrdsTexture::new(final_color_texture, output_format, size, final_color_view),
             RenderTargetOps::ColorAttachment(wgpu::Operations {
@@ -53,13 +56,14 @@ impl Framebuffer {
         );
 
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: None,
             address_mode_u: wgpu::AddressMode::ClampToEdge,
             address_mode_v: wgpu::AddressMode::ClampToEdge,
             address_mode_w: wgpu::AddressMode::ClampToEdge,
+            label: None,
             mag_filter: wgpu::FilterMode::Nearest,
             min_filter: wgpu::FilterMode::Nearest,
             mipmap_filter: wgpu::FilterMode::Nearest,
+            anisotropy_clamp: 1,
             ..Default::default()
         });
 
@@ -100,7 +104,7 @@ impl Framebuffer {
         &self.gbuffer_sampler
     }
 
-    pub fn final_color_attachment(
+    pub fn final_color_attachments(
         &self,
     ) -> anyhow::Result<Vec<Option<wgpu::RenderPassColorAttachment>>> {
         let attachments = vec![Some(wgpu::RenderPassColorAttachment {
@@ -248,5 +252,13 @@ impl Framebuffer {
                 },
             ],
         })
+    }
+
+    pub fn encode(&self, render_pass: &mut wgpu::RenderPass<'_>) {
+        render_pass.set_bind_group(
+            Constant::BIND_GROUP_ID_TEXTURE_INPUT,
+            &self.gbuffer_bind_group,
+            &[],
+        );
     }
 }

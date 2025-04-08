@@ -2,30 +2,23 @@ mod command_encoder;
 mod framebuffer;
 mod gbuffer;
 mod render_pass;
+mod shadowmap_pool;
 
 pub use command_encoder::*;
 pub use framebuffer::*;
 use log::debug;
 pub use render_pass::*;
+pub use shadowmap_pool::*;
 
-use wgpu::{
-    BindGroupLayoutDescriptor, BindGroupLayoutEntry, CommandEncoderDescriptor, Origin3d,
-    TexelCopyTextureInfo,
-};
+use wgpu::{CommandEncoderDescriptor, Origin3d, TexelCopyTextureInfo};
 
-use std::sync::Arc;
-
-use crate::{
-    create_deferred_lighting_proc, GraphicsInstance, Postproc, TextureFormat, XrdsScene,
-    XrdsTexture,
-};
+use crate::{Constant, GraphicsInstance, TextureFormat, XrdsTexture};
 
 #[derive(Debug, Clone)]
 pub struct Renderer {
-    graphics_instance: Arc<GraphicsInstance>,
+    graphics_instance: GraphicsInstance,
     framebuffers: Vec<Framebuffer>,
     framebuffer_index: usize,
-    deferred_lighting_proc: Postproc,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -36,30 +29,23 @@ pub struct ViewInfo {
 
 impl Renderer {
     pub fn new(
-        graphics_instance: Arc<GraphicsInstance>,
+        graphics_instance: GraphicsInstance,
         output_format: TextureFormat,
         extent: wgpu::Extent3d,
         framebuffer_count: u32,
     ) -> anyhow::Result<Self> {
         let framebuffers: Vec<_> = (0..framebuffer_count)
-            .map(|_| Framebuffer::new(graphics_instance.clone(), extent, output_format))
+            .map(|_| Framebuffer::new(&graphics_instance, extent, output_format))
             .collect();
         debug!(
             "framebuffers created. view_count: {}",
             extent.depth_or_array_layers
         );
 
-        let deferred_lighting_proc = create_deferred_lighting_proc(
-            graphics_instance.clone(),
-            framebuffers[0].gbuffer_bind_group_layout(),
-            framebuffers[0].final_color(),
-        )?;
-
         Ok(Self {
             graphics_instance,
             framebuffers,
             framebuffer_index: 0,
-            deferred_lighting_proc,
         })
     }
 
@@ -98,7 +84,26 @@ impl Renderer {
                 ..Default::default()
             });
 
-        Ok(RenderPass::new(render_pass))
+        Ok(RenderPass::new(render_pass, RenderPassType::PbrGbuffer))
+    }
+
+    pub fn create_shadow_pass<'encoder>(
+        &mut self,
+        encoder: &'encoder mut CommandEncoder,
+    ) -> anyhow::Result<RenderPass<'encoder>> {
+        let framebuffer = self.get_current_framebuffer();
+        let wgpu_render_pass =
+            encoder
+                .encoder_mut()
+                .begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: None,
+                    color_attachments: &framebuffer.final_color_attachment()?,
+                    // color_attachments: &framebuffer.shadowmap_attachments()?,
+                    depth_stencil_attachment: None,
+                    ..Default::default()
+                });
+
+        Ok(RenderPass::new(wgpu_render_pass, RenderPassType::PbrShadow))
     }
 
     pub fn create_lighting_pass<'encoder>(
@@ -117,13 +122,17 @@ impl Renderer {
                     ..Default::default()
                 });
 
-        Ok(RenderPass::new(wgpu_render_pass))
+        Ok(RenderPass::new(wgpu_render_pass, RenderPassType::PbrLight))
     }
 
     pub fn do_deferred_lighting(&mut self, render_pass: &mut RenderPass<'_>) -> anyhow::Result<()> {
         let framebuffer = self.get_current_framebuffer();
-        render_pass.set_bind_group(1, framebuffer.gbuffer_bind_group(), &[]);
-        self.deferred_lighting_proc.encode(render_pass);
+        render_pass.set_bind_group(
+            Constant::BIND_GROUP_ID_GBUFFER,
+            framebuffer.gbuffer_bind_group(),
+            &[],
+        );
+        // self.deferred_lighting_proc.encode(render_pass);
         Ok(())
     }
 
@@ -162,10 +171,6 @@ impl Renderer {
         self.graphics_instance.queue().submit([command_buffer]);
 
         Ok(())
-    }
-
-    pub fn load_scene(&mut self) -> anyhow::Result<XrdsScene> {
-        Ok(XrdsScene {})
     }
 
     pub fn get_current_framebuffer(&self) -> &Framebuffer {

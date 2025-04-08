@@ -1,12 +1,12 @@
 use clap::Parser;
-use gltf_viewer::GltfOptions;
+use gltf_viewer::GltfViewerOptions;
 
 mod gltf_viewer;
 mod simple_triangle;
 
-#[derive(Clone, clap::Subcommand)]
+#[derive(clap::Subcommand)]
 enum ProgramTarget {
-    GltfViewer(GltfOptions),
+    GltfViewer(GltfViewerOptions),
     SimpleTriangle,
 }
 
@@ -19,7 +19,7 @@ struct ProgramArgs {
 fn main() -> anyhow::Result<()> {
     env_logger::Builder::from_default_env()
         .filter(Some("xrds_"), log::LevelFilter::Debug)
-        // .filter_level(log::LevelFilter::Debug)
+        // .filter_level(log::LevelFilter::Trace)
         .init();
     let args = ProgramArgs::try_parse()?;
 

@@ -1,12 +1,10 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, num::NonZeroU32, sync::Arc};
 
 use glam::{quat, vec3, Quat};
 use log::{debug, info, warn};
 use openxr::{Posef, ViewConfigurationType};
-use xrds_core::Size2Du;
-use xrds_graphics::{
-    CameraBinding, Fov, GraphicsApi, GraphicsInstance, TextureFormat, XrdsTexture,
-};
+use xrds_core::Transform;
+use xrds_graphics::{Fov, GraphicsApi, GraphicsInstance, TextureFormat, XrdsTexture};
 
 use crate::OpenXrError;
 
@@ -26,9 +24,8 @@ pub struct OpenXrContext {
     view_configurations: Vec<ViewConfiguration>,
     space_map: HashMap<i32, Arc<openxr::Space>>,
     event_buffer: openxr::EventDataBuffer,
-    graphics_instance: Arc<GraphicsInstance>,
+    graphics_instance: GraphicsInstance,
     state: State,
-    camera_binding: CameraBinding,
 }
 
 struct State {
@@ -51,8 +48,14 @@ pub struct OpenXrContextBuilder {
     params: OpenXrContextParams,
 }
 
+#[derive(Debug)]
+pub struct XrRenderParams {
+    pub swapchain_texture: XrdsTexture,
+    pub xr_camera_infos: Vec<(Fov, Transform)>,
+}
+
 pub enum OpenXrOnPreRenderResult {
-    DoRender(XrdsTexture),
+    DoRender(XrRenderParams),
     SkipRender,
     Exit,
 }
@@ -100,12 +103,16 @@ impl OpenXrContext {
                 openxr::Event::EventsLost(e) => {
                     warn!("OpenXr lost {} events", e.lost_event_count());
                 }
-                _ => {}
+                _ => {
+                    //Do extension event processing
+                    // ex: self.fb_event_handle.on_xr_event(event)
+                }
             }
         }
 
         // Block until previous frame is finished displaying
         let frame_state = self.frame_waiter.wait()?;
+        self.state.frame_state = frame_state;
         self.inner.stream_begin()?;
 
         if !frame_state.should_render {
@@ -139,33 +146,37 @@ impl OpenXrContext {
             &reference_space,
         )?;
 
-        for (i, view) in views.iter().enumerate() {
-            let pos = view.pose.position;
-            let ori = view.pose.orientation;
+        // Change coordinate system from OpenXr to Wgpu
+        let xr_camera_infos = views
+            .iter()
+            .map(|view| {
+                let pos = view.pose.position;
+                let ori = view.pose.orientation;
 
-            let fov = Fov {
-                left: view.fov.angle_left,
-                right: view.fov.angle_right,
-                up: view.fov.angle_up,
-                down: view.fov.angle_down,
-            };
-            let position = vec3(-pos.x, pos.y, -pos.z);
-            let orientation =
-                Quat::from_rotation_x(180.0f32.to_radians()) * quat(ori.w, ori.z, ori.y, ori.x);
+                let fov = Fov {
+                    left: view.fov.angle_left,
+                    right: view.fov.angle_right,
+                    up: view.fov.angle_up,
+                    down: view.fov.angle_down,
+                };
+                let position = vec3(-pos.x, pos.y, -pos.z);
+                let orientation =
+                    Quat::from_rotation_x(180.0f32.to_radians()) * quat(ori.w, ori.z, ori.y, ori.x);
 
-            let cam = self.camera_binding.get_camera_mut(i);
-            cam.set_fov(fov);
-            cam.set_position(position);
-            cam.set_orientation(orientation);
-        }
-
-        self.camera_binding
-            .update_uniform(self.graphics_instance.queue());
-
-        self.state.frame_state = frame_state;
+                (
+                    fov,
+                    Transform::default()
+                        .with_translation(position)
+                        .with_rotation(orientation),
+                )
+            })
+            .collect();
         self.state.views = views;
 
-        Ok(OpenXrOnPreRenderResult::DoRender(swapchain_texture))
+        Ok(OpenXrOnPreRenderResult::DoRender(XrRenderParams {
+            swapchain_texture,
+            xr_camera_infos,
+        }))
     }
 
     pub fn on_post_render(&mut self) -> anyhow::Result<()> {
@@ -184,10 +195,6 @@ impl OpenXrContext {
 
     pub fn swapchain_format(&self) -> anyhow::Result<TextureFormat> {
         self.inner.swapchain_format()
-    }
-
-    pub fn swapchain_size(&self) -> anyhow::Result<Size2Du> {
-        self.inner.swapchain_size()
     }
 
     pub fn swapchain_extent(&self) -> anyhow::Result<wgpu::Extent3d> {
@@ -211,10 +218,6 @@ impl OpenXrContext {
             .ok_or(OpenXrError::NoViewTypeAvailable)?
             .clone();
         Ok(())
-    }
-
-    pub fn get_cam_binding(&self) -> &CameraBinding {
-        &self.camera_binding
     }
 }
 
@@ -273,9 +276,17 @@ impl OpenXrContext {
             .ok_or(OpenXrError::NoBlendModeAvailable)?
             .to_owned();
 
+        // Enable multiview if openxr has multiple views
+        let graphics_instance = if selected_view_configuration.views.len() > 1 {
+            graphics_instance
+                .with_multiview(NonZeroU32::new(selected_view_configuration.views.len() as _))
+        } else {
+            graphics_instance
+        };
+
         let swapchain_textures = inner
             .as_mut()
-            .create_swapchain(&selected_view_configuration, graphics_instance.clone())?;
+            .create_swapchain(&selected_view_configuration, &graphics_instance)?;
 
         let mut space_map = HashMap::new();
         for ty in session.enumerate_reference_spaces()? {
@@ -286,7 +297,6 @@ impl OpenXrContext {
         let event_buffer = openxr::EventDataBuffer::new();
 
         debug!("OpenXr context created");
-        let camera_binding = CameraBinding::new(graphics_instance.device());
 
         Ok(OpenXrContext {
             instance,
@@ -311,7 +321,6 @@ impl OpenXrContext {
                 selected_blend_mode,
                 selected_space_type,
             },
-            camera_binding,
         })
     }
 
@@ -373,14 +382,16 @@ impl OpenXrContext {
             let views: Vec<_> = view_configuration_views
                 .iter()
                 .map(|view| View {
-                    recommended_image_size: Size2Du {
+                    recommended_image_size: wgpu::Extent3d {
                         width: view.recommended_image_rect_width,
                         height: view.recommended_image_rect_height,
+                        depth_or_array_layers: 1,
                     },
                     recommended_swapchain_sample_count: view.recommended_swapchain_sample_count,
-                    max_image_size: Size2Du {
+                    max_image_size: wgpu::Extent3d {
                         width: view.max_image_rect_width,
                         height: view.max_image_rect_height,
+                        depth_or_array_layers: 1,
                     },
                     max_swapchain_sample_count: view.max_swapchain_sample_count,
                 })
@@ -403,7 +414,7 @@ impl OpenXrContext {
         Ok(results)
     }
 
-    pub fn graphics_instance(&self) -> &Arc<GraphicsInstance> {
+    pub fn graphics_instance(&self) -> &GraphicsInstance {
         &self.graphics_instance
     }
 
