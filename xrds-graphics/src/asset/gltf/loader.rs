@@ -8,7 +8,6 @@ use std::{
 };
 
 use glam::Vec4;
-use log::debug;
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use uuid::Uuid;
 use wgpu::SamplerDescriptor;
@@ -83,18 +82,18 @@ impl GltfLoader {
         let instant = Instant::now();
         let gltf = gltf::Gltf::from_slice(data)?;
         let gltf_key = self.asset_path.join(name).to_string_lossy().to_string();
-        log::debug!("+ Load gltf {}", &gltf_key);
+        log::trace!("+ Load gltf {}", &gltf_key);
 
         let raw_buffers = {
             let instant = Instant::now();
-            log::debug!("  + Load raw buffers");
+            log::trace!("  + Load raw buffers");
             let buffers: Vec<_> = gltf.buffers().collect();
             let raw_buffers: Vec<_> = buffers
                 .par_iter()
                 .map(|buffer| Self::load_buffer(&gltf, buffer, &self.asset_path))
                 .filter_map(|res| res.ok())
                 .collect();
-            log::debug!(
+            log::trace!(
                 "  - Load raw buffers in {} secs",
                 instant.elapsed().as_secs_f32()
             );
@@ -102,7 +101,7 @@ impl GltfLoader {
         };
         let textures = {
             let instant = Instant::now();
-            log::debug!("  + Load images");
+            log::trace!("  + Load images");
             let images: Vec<_> = gltf.images().collect();
             let load_image_results: Vec<_> = images
                 .par_iter()
@@ -137,7 +136,7 @@ impl GltfLoader {
                 };
                 textures.push(handle);
             }
-            debug!(
+            log::trace!(
                 "  - Load images in {} secs",
                 instant.elapsed().as_secs_f32()
             );
@@ -170,7 +169,7 @@ impl GltfLoader {
 
         let gltf = {
             let instant = Instant::now();
-            log::debug!("  + Load scenes");
+            log::trace!("  + Load scenes");
 
             let mut scenes = Vec::new();
             for scene in gltf.scenes() {
@@ -185,7 +184,7 @@ impl GltfLoader {
             if let Some(default_scene) = gltf.default_scene() {
                 res = res.with_default_scene(default_scene.index());
             }
-            log::debug!(
+            log::trace!(
                 "  - Load scenes in {} secs",
                 instant.elapsed().as_secs_f32()
             );
@@ -193,7 +192,7 @@ impl GltfLoader {
             res
         };
 
-        debug!(
+        log::debug!(
             "- Load gltf '{}' in {} secs",
             gltf_key,
             instant.elapsed().as_secs_f32()
@@ -209,7 +208,7 @@ impl GltfLoader {
         asset_server: &mut AssetServer,
     ) -> anyhow::Result<Vec<Entity>> {
         let instant = Instant::now();
-        debug!("    + Load scene #{}", scene.index());
+        log::trace!("    + Load scene #{}", scene.index());
         let mut node_entity_map: HashMap<usize, Entity> = HashMap::new();
 
         let scene_name = Self::name_from_scene(scene, &context.gltf_name);
@@ -246,7 +245,7 @@ impl GltfLoader {
             .collect();
         entities.insert(0, scene_entity);
 
-        log::debug!(
+        log::trace!(
             "    - Load scene #{} in {} secs",
             scene.index(),
             instant.elapsed().as_secs_f32()
@@ -282,7 +281,7 @@ impl GltfLoader {
         }
         if node.children().len() > 0 {
             let instant = Instant::now();
-            debug!("    + Load children of node #{}", node.index());
+            log::trace!("    + Load children of node #{}", node.index());
             for child in node.children() {
                 let child_entity = self.load_node(
                     &child,
@@ -294,13 +293,13 @@ impl GltfLoader {
                 )?;
                 node_entity_map.insert(child.index(), child_entity);
             }
-            debug!(
+            log::trace!(
                 "    + Load children of node #{} in {} secs",
                 node.index(),
                 instant.elapsed().as_secs_f32()
             );
         }
-        log::debug!(
+        log::trace!(
             "    - Load node #{} in {} secs",
             node.index(),
             instant.elapsed().as_secs_f32()
@@ -333,7 +332,7 @@ impl GltfLoader {
     //     context: &GltfLoadContext,
     // ) -> anyhow::Result<Renderable> {
     //     let instant = Instant::now();
-    //     debug!("    + Load scene #{}", scene.index());
+    //     log::trace!("    + Load scene #{}", scene.index());
     //     let scene_name = Self::name_from_scene(scene, &context.gltf_name);
     //     let mut nodes = Vec::new();
     //     let scene_transform = Mat4::default();
@@ -348,7 +347,7 @@ impl GltfLoader {
     //         .with_name(&scene_name)
     //         .with_childs(&nodes);
 
-    //     log::debug!(
+    //     log::log::trace!(
     //         "    - Load scene #{} in {} secs",
     //         scene.index(),
     //         instant.elapsed().as_secs_f32()
@@ -364,7 +363,7 @@ impl GltfLoader {
     //     context: &GltfLoadContext,
     // ) -> anyhow::Result<Option<Renderable>> {
     //     let instant = Instant::now();
-    //     debug!("    + Load node #{}", node.index());
+    //     log::trace!("    + Load node #{}", node.index());
 
     //     if node.mesh().is_none() && node.children().len() == 0 {
     //         log::warn!(
@@ -385,7 +384,7 @@ impl GltfLoader {
     //         }
     //         if node.children().len() > 0 {
     //             let instant = Instant::now();
-    //             debug!("    + Load children of node #{}", node.index());
+    //             log::trace!("    + Load children of node #{}", node.index());
     //             for child in node.children() {
     //                 if let Some(child_object) =
     //                     self.load_node_as_object(&child, &name, &transform, context)?
@@ -393,13 +392,13 @@ impl GltfLoader {
     //                     object.add_child(child_object);
     //                 }
     //             }
-    //             debug!(
+    //             log::trace!(
     //                 "    + Load children of node #{} in {} secs",
     //                 node.index(),
     //                 instant.elapsed().as_secs_f32()
     //             );
     //         }
-    //         log::debug!(
+    //         log::log::trace!(
     //             "    - Load node #{} in {} secs",
     //             node.index(),
     //             instant.elapsed().as_secs_f32()
@@ -417,7 +416,7 @@ impl GltfLoader {
         asset_server: &mut AssetServer,
     ) -> anyhow::Result<XrdsMesh> {
         let instant = Instant::now();
-        debug!("      + Load mesh #{}", mesh.index());
+        log::trace!("      + Load mesh #{}", mesh.index());
 
         Self::name_from_mesh(mesh, parent_name);
 
@@ -428,7 +427,7 @@ impl GltfLoader {
 
         let xrds_mesh = XrdsMesh::default().with_primitives(primitives);
 
-        log::debug!(
+        log::trace!(
             "      - Load mesh #{} in {} secs",
             mesh.index(),
             instant.elapsed().as_secs_f32()
@@ -443,12 +442,12 @@ impl GltfLoader {
         asset_server: &mut AssetServer,
     ) -> anyhow::Result<XrdsPrimitive> {
         let instant = Instant::now();
-        debug!("        + Load primitive #{}", primitive.index());
+        log::trace!("        + Load primitive #{}", primitive.index());
         let (vertex_buffers, options) =
             self.load_vertex_buffers_from_primitive(primitive, context, asset_server)?;
         let index_buffer = if let Some(indices) = primitive.indices() {
             let instant = Instant::now();
-            debug!(
+            log::trace!(
                 "          + Load index buffer of primitive #{}",
                 primitive.index(),
             );
@@ -462,7 +461,7 @@ impl GltfLoader {
                 )?;
                 let buffer = asset_server.get_buffer(&handle).unwrap();
 
-                debug!(
+                log::trace!(
                     "            + range={:?}, format={:?}",
                     indices.offset()
                         ..indices.offset()
@@ -480,7 +479,7 @@ impl GltfLoader {
             } else {
                 todo!("Make empty index?");
             };
-            debug!(
+            log::trace!(
                 "          + Load index buffer of primitive #{} in {} secs",
                 primitive.index(),
                 instant.elapsed().as_secs_f32()
@@ -503,7 +502,7 @@ impl GltfLoader {
             indices: index_buffer,
             material,
         };
-        log::debug!(
+        log::trace!(
             "        + Load primitive #{} in {} secs",
             primitive.index(),
             instant.elapsed().as_secs_f32()
@@ -526,10 +525,10 @@ impl GltfLoader {
         let handle = if let Some(handle) =
             asset_server.get_material_instance_handle(&AssetId::Key(name.clone()))
         {
-            debug!("        + Load material '{}' from cache", name);
+            log::trace!("        + Load material '{}' from cache", name);
             handle
         } else {
-            debug!("        + Load material '{}'", name);
+            log::trace!("        + Load material '{}'", name);
             let mut material_input_option = pbr::PbrMaterialInputOption::default();
             Self::update_material_input_options(&mut material_input_option, material);
             material_input_option.primitive_mode = match mode {
@@ -572,7 +571,7 @@ impl GltfLoader {
                     .textures
                     .get(index)
                     .map(|handle| {
-                        debug!("          + Get texture #{}", index);
+                        log::trace!("          + Get texture #{}", index);
                         asset_server.get_texture(handle).unwrap().clone()
                     })
                     .unwrap()
@@ -654,7 +653,7 @@ impl GltfLoader {
             let handle =
                 asset_server.register_material_instance(&xrds_material, &material_input)?;
 
-            debug!(
+            log::trace!(
                 "        + Load material '{}' in {} secs",
                 name,
                 instant.elapsed().as_secs_f32()
@@ -682,9 +681,11 @@ impl GltfLoader {
             Self::update_vertex_input_options(&mut vertex_input_option, &semantic, &accessor);
 
             let format = vertex_format_from_data_type(accessor.data_type(), accessor.dimensions())?;
-            debug!(
+            log::trace!(
                 "          + Load vertex buffer #{} ty={:?}, format={:?}",
-                i, semantic, format
+                i,
+                semantic,
+                format
             );
             let vertex_attribute = wgpu::VertexAttribute {
                 offset: 0, // discreted vertex must be started at offset 0
@@ -704,7 +705,7 @@ impl GltfLoader {
                     offset: accessor.offset(),
                     count: accessor.count(),
                 };
-                debug!(
+                log::trace!(
                     "            + range={:?}, format={:?}",
                     accessor.offset()
                         ..accessor.offset()
@@ -715,7 +716,7 @@ impl GltfLoader {
             } else {
                 todo!("Generate empty buffer")
             }
-            debug!(
+            log::trace!(
                 "          - Load vertex buffers #{} in {} secs",
                 i,
                 instant.elapsed().as_secs_f32()
@@ -736,14 +737,14 @@ impl GltfLoader {
 
         let handle =
             if let Some(buffer) = asset_server.get_buffer_handle(&AssetId::Key(name.clone())) {
-                debug!("            # Load buffer '{}' from cache", name);
+                log::trace!("            # Load buffer '{}' from cache", name);
                 buffer
             } else {
                 let instant = Instant::now();
                 let raw_buffer = &context.raw_buffers[view.buffer().index()];
                 let offset = view.offset();
                 let length = view.length();
-                log::debug!("            + Load buffer '{}'", name);
+                log::trace!("            + Load buffer '{}'", name);
 
                 let registerd_buffer = asset_server.register_buffer(&BufferAssetInfo {
                     id: &AssetId::Key(name.clone()),
@@ -751,7 +752,7 @@ impl GltfLoader {
                     ty: buffer_type,
                     stride: view.stride().map(|v| v as u64),
                 })?;
-                debug!(
+                log::trace!(
                     "            - load buffer '{}' in {} secs",
                     name,
                     instant.elapsed().as_secs_f32()
@@ -791,7 +792,7 @@ impl GltfLoader {
             }
         };
 
-        debug!(
+        log::trace!(
             "    + Load raw buffer #{} in {} secs",
             buffer.index(),
             instant.elapsed().as_secs_f32()
@@ -810,7 +811,7 @@ impl GltfLoader {
         let handle = if let Some(handle) =
             asset_server.get_texture_handle(&AssetId::Key(name.clone()))
         {
-            debug!("    + Load image '{}' from cache", name);
+            log::trace!("    + Load image '{}' from cache", name);
             LoadImageResult::Cached(handle)
         } else {
             let instant = Instant::now();
@@ -854,7 +855,7 @@ impl GltfLoader {
                 depth_or_array,
             };
 
-            debug!(
+            log::trace!(
                 "    + Load image '{}' in {} secs",
                 name,
                 instant.elapsed().as_secs_f32()

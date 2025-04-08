@@ -7,11 +7,15 @@ use xrds_core::Transform;
 
 use std::{
     collections::HashMap,
+    num::NonZeroU32,
     ops::Range,
     sync::{Arc, RwLock},
 };
 
-use wgpu::{CommandEncoder, CommandEncoderDescriptor, RenderPassDescriptor};
+use wgpu::{
+    CommandEncoder, CommandEncoderDescriptor, QuerySet, QuerySetDescriptor, RenderPassDescriptor,
+    RenderPassTimestampWrites,
+};
 
 use crate::{
     AssetId, AssetServer, CameraData, GraphicsInstance, XrdsInstance, XrdsInstanceBuffer,
@@ -23,6 +27,7 @@ use super::Constant;
 #[derive(Debug, Clone)]
 pub struct RenderItem {
     pub primitive: XrdsPrimitive,
+    pub local_transform: Transform,
     pub instances: Range<u32>,
 }
 
@@ -32,6 +37,7 @@ pub struct RenderSystem {
     asset_server: Arc<RwLock<AssetServer>>,
     instance_buffer: XrdsInstanceBuffer,
     material_renderitem_map: HashMap<AssetId, Vec<RenderItem>>,
+    // query_set: QuerySet,
 }
 
 impl RenderSystem {
@@ -47,11 +53,20 @@ impl RenderSystem {
             maximum_instances.unwrap_or(Self::DEFAULT_MAXIMUM_INSTANCES),
         );
 
+        // let query_set = graphics_instance
+        //     .device()
+        //     .create_query_set(&QuerySetDescriptor {
+        //         label: Some("RenderSystem"),
+        //         ty: wgpu::QueryType::Timestamp,
+        //         count: 4,
+        //     });
+
         Self {
             graphics_instance,
             instance_buffer,
             asset_server,
             material_renderitem_map: HashMap::new(),
+            // query_set,
         }
     }
 
@@ -71,7 +86,7 @@ impl RenderSystem {
         camera_data: &CameraData,
     ) -> anyhow::Result<()> {
         // Iterate over cameras (that has render target)
-        let framebuffer = camera_data.get_next_framebuffer();
+        let framebuffer = camera_data.current_frame();
 
         camera_data.update_uniform(&self.graphics_instance);
 
@@ -93,7 +108,7 @@ impl RenderSystem {
                     for render_item in render_items {
                         render_item.primitive.encode(
                             &mut render_pass,
-                            &Transform::default(),
+                            &render_item.local_transform,
                             render_item.instances.clone(),
                         );
                     }
@@ -135,8 +150,11 @@ impl RenderSystem {
 
     pub fn on_post_render(&mut self, command_encoder: CommandEncoder) {
         // Do something for finishing rendering. Maybe submit queue?
+        // command_encoder.resolve_query_set(&self.query_set, 0..4, &self.query_buffer, 0);
         let command_buffer = command_encoder.finish();
         self.graphics_instance.queue().submit([command_buffer]);
+
+        self.graphics_instance.queue().get_timestamp_period();
     }
 
     pub fn update_instances(
@@ -160,6 +178,11 @@ impl RenderSystem {
             label: None,
             color_attachments: &framebuffer.gbuffer().as_color_attachments()?,
             depth_stencil_attachment: framebuffer.gbuffer().as_depth_stencil_attachment()?,
+            // timestamp_writes: Some(RenderPassTimestampWrites {
+            //     query_set: &self.query_set,
+            //     beginning_of_pass_write_index: Some(0),
+            //     end_of_pass_write_index: Some(1),
+            // }),
             ..Default::default()
         });
 
@@ -191,6 +214,11 @@ impl RenderSystem {
             label: None,
             color_attachments: &framebuffer.final_color_attachments()?,
             depth_stencil_attachment: None,
+            // timestamp_writes: Some(RenderPassTimestampWrites {
+            //     query_set: &self.query_set,
+            //     beginning_of_pass_write_index: Some(2),
+            //     end_of_pass_write_index: Some(3),
+            // }),
             ..Default::default()
         });
 

@@ -1,8 +1,8 @@
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, HashMap, HashSet},
     ops::Range,
     sync::{Arc, RwLock},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use uuid::Uuid;
@@ -90,12 +90,16 @@ impl World {
 
         // Collect all primitives in entire transform hierachy and indexing by primitive's material id
         let mut primitive_collector = PrimitiveCollector::new();
-        for (_, obj) in &visible_objects {
-            let root_entity_id = obj.entity_id();
-            let root_entity = asset_server
-                .get_entity(root_entity_id)
-                .expect("Entity not found");
-            root_entity.accept(&mut primitive_collector, &asset_server)?;
+        // Prevent duplication of multi-spawned entity
+        let mut unique_entity_ids: HashSet<Uuid> = HashSet::new();
+        for (_, obj) in visible_objects {
+            if unique_entity_ids.insert(*obj.entity_id()) {
+                let root_entity = asset_server
+                    .get_entity(obj.entity_id())
+                    .expect("Entity not found");
+
+                root_entity.accept(&mut primitive_collector, &asset_server)?;
+            }
         }
         let material_primitive_map = primitive_collector.primitives();
         let mut material_renderitem_map = HashMap::new();
@@ -115,6 +119,7 @@ impl World {
                         .get(&mapped_primitive.root_entity_id)
                         .expect("Could not found matched entity id")
                         .clone(),
+                    local_transform: mapped_primitive.local_transform,
                 };
                 render_items.push(render_item);
             }
@@ -134,13 +139,15 @@ impl World {
     }
 
     pub(crate) fn on_render(&mut self) -> anyhow::Result<()> {
+        self.camera_system.begin_frame();
+
+        let mut command_encoder = self.render_system.on_pre_render();
         for camera_data in self.camera_system.cameras() {
-            let mut command_encoder = self.render_system.on_pre_render();
             self.update_instances(&camera_data)?;
             self.render_system
                 .on_render(&mut command_encoder, &camera_data)?;
-            self.render_system.on_post_render(command_encoder);
         }
+        self.render_system.on_post_render(command_encoder);
         Ok(())
     }
 
@@ -152,18 +159,18 @@ impl World {
     pub fn spawn(
         &mut self,
         entity_id: &Uuid,
-        transform: &Transform,
+        transform: &Transform, // global transform
     ) -> anyhow::Result<ObjectInstance> {
         let spawned_id = Uuid::new_v4();
         let spawned_object = ObjectInstance::new(spawned_id);
         let object_data = ObjectData::new(*entity_id, *transform, State::default());
 
-        log::debug!(
-            "Spawn object: {{spawn_id={}, entity_id={}, world_pos={:?}}}",
-            spawned_object.spawn_id(),
-            object_data.entity_id(),
-            object_data.transform().get_translation()
-        );
+        // log::debug!(
+        //     "Spawn object: {{spawn_id={}, entity_id={}, world_pos={:?}}}",
+        //     spawned_object.spawn_id(),
+        //     object_data.entity_id(),
+        //     object_data.transform().get_translation()
+        // );
 
         // Pre-defined camera from source (like gltf)
         // So use fixed size and format for camera rendering
@@ -235,7 +242,7 @@ impl World {
 
                 let transforms =
                     if let Some(transform_component) = camera_entity.get_transform_component() {
-                        vec![transform_component.local_transform; cameras.len()]
+                        vec![*transform_component.local_transform(); cameras.len()]
                     } else {
                         vec![Transform::default(); cameras.len()]
                     };

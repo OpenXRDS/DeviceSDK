@@ -90,11 +90,14 @@ impl CameraSystem {
             });
 
         // TODO: backbuffering
-        let framebuffer = Framebuffer::new(&self.graphics_instance, extent, output_format);
+        let framebuffers = vec![
+            Framebuffer::new(&self.graphics_instance, extent, output_format),
+            Framebuffer::new(&self.graphics_instance, extent, output_format),
+        ];
 
         let deferred_lighting_proc = create_deferred_lighting_proc(
             &self.graphics_instance,
-            framebuffer.gbuffer_bind_group_layout(),
+            framebuffers[0].gbuffer_bind_group_layout(),
             output_format,
         )?;
         log::info!("deferred_lighing_proc: {:?}", deferred_lighting_proc);
@@ -107,12 +110,19 @@ impl CameraSystem {
                 transforms: transforms.to_vec(),
                 cam_uniform_buffer: uniform_buffer,
                 cam_bind_group: bind_group,
-                framebuffer,
+                framebuffers,
+                framebuffer_index: 0,
                 copy_target: None,
                 deferred_lighting: deferred_lighting_proc,
             },
         );
         Ok(spawn_id)
+    }
+
+    pub fn begin_frame(&mut self) {
+        for (_, camera) in &mut self.cameras {
+            camera.begin_frame();
+        }
     }
 
     pub fn cameras(&self) -> Vec<CameraData> {

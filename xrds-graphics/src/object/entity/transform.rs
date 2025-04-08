@@ -3,10 +3,10 @@ use xrds_core::Transform;
 
 #[derive(Debug, Default, Clone)]
 pub struct TransformComponent {
-    pub local_transform: Transform,
-    pub global_transform: Transform,
-    pub parent: Option<Uuid>,
-    pub childs: Vec<Uuid>,
+    local_transform: Transform,
+    global_transform: Transform,
+    parent: Option<Uuid>,
+    childs: Vec<Uuid>,
 }
 
 impl TransformComponent {
@@ -40,6 +40,22 @@ impl TransformComponent {
 
     pub fn add_child(&mut self, child: &Uuid) {
         self.childs.push(child.clone());
+    }
+
+    pub fn local_transform(&self) -> &Transform {
+        &self.local_transform
+    }
+
+    pub fn global_transform(&self) -> &Transform {
+        &self.global_transform
+    }
+
+    pub fn parent(&self) -> Option<&Uuid> {
+        self.parent.as_ref()
+    }
+
+    pub fn childs(&self) -> &[Uuid] {
+        &self.childs
     }
 
     pub fn is_root(&self) -> bool {

@@ -1,4 +1,4 @@
-use std::{collections::HashMap, num::NonZeroU32, sync::Arc};
+use std::{collections::HashMap, num::NonZeroU32, sync::Arc, time::Instant};
 
 use glam::{quat, vec3, Quat};
 use log::{debug, info, warn};
@@ -181,7 +181,6 @@ impl OpenXrContext {
 
     pub fn on_post_render(&mut self) -> anyhow::Result<()> {
         self.inner.swapchain_release_image()?;
-
         self.inner.stream_end(
             self.state.frame_state.predicted_display_time,
             self.state.selected_blend_mode.into(),
@@ -189,7 +188,6 @@ impl OpenXrContext {
             self.reference_space()?,
             &self.state.views,
         )?;
-
         Ok(())
     }
 

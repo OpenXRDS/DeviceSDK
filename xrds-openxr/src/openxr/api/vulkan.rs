@@ -3,6 +3,7 @@ use std::{
     ffi::{CStr, CString},
     os::raw::c_void,
     sync::Arc,
+    time::Instant,
 };
 
 use anyhow::Context;
@@ -468,7 +469,6 @@ impl OpenXrContextApi for OpenXrVulkanContext {
 
                 get_projection_views(rect, views, swapchain)
             };
-
             self.frame_stream.end(
                 display_time,
                 environment_blend_mode,

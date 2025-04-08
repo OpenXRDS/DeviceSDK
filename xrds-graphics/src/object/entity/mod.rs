@@ -143,7 +143,7 @@ impl Entity {
 
         // Traverse entity hierachy using transform component
         if let Some(transform_component) = &self.transform_component {
-            for child in &transform_component.childs {
+            for child in transform_component.childs() {
                 if let Some(child_entity) = asset_server.get_entity(child) {
                     child_entity.accept(visitor, asset_server)?;
                 }

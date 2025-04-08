@@ -1,5 +1,6 @@
-use std::{path::PathBuf, time::Duration};
+use std::{f32::consts::PI, path::PathBuf, time::Duration};
 
+use rand::Rng;
 use xrds::{
     core::{core::Transform, graphics::ObjectInstance},
     RuntimeHandler,
@@ -21,14 +22,15 @@ impl RuntimeHandler for App {
 
     fn on_begin(&mut self, context: &mut xrds::Context) -> anyhow::Result<()> {
         let objects = context.load_objects_from_gltf(self.gltf_path.as_str())?;
-
         let world = context.get_current_world_mut();
-        let uniform = rand::distr::Uniform::new(0.0f32, 1.0f32)?;
 
         let transform = Transform::default()
             .with_translation(glam::vec3(0.0, 0.0, 0.0))
             .with_scale(glam::vec3(1.0, 1.0, 1.0));
         self.spawned = Some(world.spawn(&objects[0], &transform)?);
+
+        // let rng = rand::rng;
+        // let uniform = rand::distr::Uniform::new(0.0f32, 1.0f32)?;
         // for _ in 0..100 {
         //     let distance = rng().sample(uniform) * 10.0;
         //     let angle = rng().sample(uniform) * PI * 2.0;
@@ -41,7 +43,7 @@ impl RuntimeHandler for App {
         //         .with_translation(glam::vec3(tx, 0.0, tz))
         //         .with_scale(glam::vec3(s, s, s))
         //         .with_rotation(glam::Quat::from_rotation_y(ry));
-        //     world.spawn(&self.objects[0], &transform)?;
+        //     world.spawn(&objects[0], &transform)?;
         // }
         Ok(())
     }

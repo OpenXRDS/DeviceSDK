@@ -12,7 +12,8 @@ pub struct CameraData {
     pub(crate) transforms: Vec<Transform>,
     pub(crate) cam_uniform_buffer: wgpu::Buffer,
     pub(crate) cam_bind_group: wgpu::BindGroup,
-    pub(crate) framebuffer: Framebuffer,
+    pub(crate) framebuffers: Vec<Framebuffer>,
+    pub(crate) framebuffer_index: usize,
     pub(crate) copy_target: Option<XrdsTexture>,
     pub(crate) deferred_lighting: Postproc,
 }
@@ -68,9 +69,12 @@ impl CameraData {
         &[]
     }
 
-    pub fn get_next_framebuffer(&self) -> &Framebuffer {
-        // temporal code
-        &self.framebuffer
+    pub fn begin_frame(&mut self) {
+        self.framebuffer_index = self.framebuffer_index + 1;
+    }
+
+    pub fn current_frame(&self) -> &Framebuffer {
+        &self.framebuffers[self.framebuffer_index % self.framebuffers.len()]
     }
 
     pub fn update_uniform(&self, graphics_instance: &GraphicsInstance) {
@@ -94,7 +98,7 @@ impl CameraData {
     pub fn get_copy_from(&self) -> wgpu::TexelCopyTextureInfo {
         // TODO: error handling
         wgpu::TexelCopyTextureInfo {
-            texture: self.framebuffer.final_color().texture().wgpu_texture(),
+            texture: self.current_frame().final_color().texture().wgpu_texture(),
             mip_level: 0,
             origin: wgpu::Origin3d::ZERO,
             aspect: wgpu::TextureAspect::All,
@@ -113,7 +117,7 @@ impl CameraData {
 
     pub fn get_copy_size(&self) -> wgpu::Extent3d {
         // TODO: error handling
-        *self.framebuffer.final_color().texture().size()
+        *self.current_frame().final_color().texture().size()
     }
 
     pub fn encode_view_params(&self, render_pass: &mut wgpu::RenderPass<'_>) {
@@ -125,10 +129,9 @@ impl CameraData {
     }
 
     pub fn encode_framebuffers(&self, render_pass: &mut wgpu::RenderPass<'_>) {
-        let framebuffer = self.get_next_framebuffer();
         render_pass.set_bind_group(
             Constant::BIND_GROUP_ID_TEXTURE_INPUT,
-            framebuffer.gbuffer_bind_group(),
+            self.current_frame().gbuffer_bind_group(),
             &[],
         );
     }
