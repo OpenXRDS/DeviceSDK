@@ -10,6 +10,10 @@ XRDS Audio plays WAV audio streams stored either through file I/O or in a memory
 The audio stream can be played back all at once or in real-time by continuously accumulating data into the buffer using a custom BufReader.
 It also supports spatial audio playback by receiving 3D coordinate inputs in real time.
 
+## Support Protocols
+
+- Wav
+
 ## Platform/Architecture
 
 - Windows arm/arm64
