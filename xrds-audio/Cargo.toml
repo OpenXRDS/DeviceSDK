@@ -5,3 +5,9 @@ edition = "2021"
 
 [lib]
 crate-type = ["lib"]
+
+[dependencies]
+rodio = { workspace = true }
+cpal = { workspace = true }
+anyhow = { workspace = true }
+log = { workspace = true }
