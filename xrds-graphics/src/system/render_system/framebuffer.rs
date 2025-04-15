@@ -1,10 +1,8 @@
-use wgpu::{
-    BindGroupDescriptor, BindGroupLayoutDescriptor, BindGroupLayoutEntry, BindingType, Extent3d,
-    TextureSampleType,
-};
+use wgpu::{BindGroupDescriptor, Extent3d};
 
 use crate::{
-    Constant, GraphicsInstance, RenderTargetOps, RenderTargetTexture, TextureFormat, XrdsTexture,
+    BindGroupLayoutHelper, Constant, GraphicsInstance, RenderTargetOps, RenderTargetTexture,
+    TextureFormat, XrdsTexture,
 };
 
 use super::gbuffer::GBuffer;
@@ -13,9 +11,9 @@ use super::gbuffer::GBuffer;
 pub struct Framebuffer {
     final_color: RenderTargetTexture,
     gbuffer: GBuffer,
-    gbuffer_sampler: wgpu::Sampler,
-    gbuffer_bind_group_layout: wgpu::BindGroupLayout,
+    sampler: wgpu::Sampler,
     gbuffer_bind_group: wgpu::BindGroup,
+    final_color_bind_group: wgpu::BindGroup,
 }
 
 impl Framebuffer {
@@ -24,7 +22,11 @@ impl Framebuffer {
         size: Extent3d,
         output_format: TextureFormat,
     ) -> Self {
-        let gbuffer = GBuffer::new(graphics_instance, size, wgpu::TextureFormat::Rgba32Float);
+        let gbuffer = GBuffer::new(
+            graphics_instance,
+            size,
+            Constant::INTERMEDIATE_RENDER_FORMAT,
+        );
         let device = graphics_instance.device();
 
         let final_color_texture = device.create_texture(&wgpu::TextureDescriptor {
@@ -60,23 +62,33 @@ impl Framebuffer {
             address_mode_v: wgpu::AddressMode::ClampToEdge,
             address_mode_w: wgpu::AddressMode::ClampToEdge,
             label: None,
-            mag_filter: wgpu::FilterMode::Nearest,
-            min_filter: wgpu::FilterMode::Nearest,
-            mipmap_filter: wgpu::FilterMode::Nearest,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::FilterMode::Linear,
+            // mag_filter: wgpu::FilterMode::Nearest,
+            // min_filter: wgpu::FilterMode::Nearest,
+            // mipmap_filter: wgpu::FilterMode::Nearest,
             anisotropy_clamp: 1,
             ..Default::default()
         });
 
-        let gbuffer_bind_group_layout = Self::create_bind_group_layout(device);
+        let gbuffer_bind_group_layout = BindGroupLayoutHelper::create_gbuffer_params(device);
         let gbuffer_bind_group =
             Self::create_bind_group(device, &gbuffer_bind_group_layout, &gbuffer, &sampler);
+        let final_color_bind_group_layout = BindGroupLayoutHelper::create_intermediate(device);
+        let final_color_bind_group = Self::create_final_color_bind_group(
+            device,
+            &final_color_bind_group_layout,
+            final_color.texture(),
+            &sampler,
+        );
 
         Self {
             final_color,
             gbuffer,
-            gbuffer_sampler: sampler,
-            gbuffer_bind_group_layout,
+            sampler,
             gbuffer_bind_group,
+            final_color_bind_group,
         }
     }
 
@@ -101,7 +113,7 @@ impl Framebuffer {
     }
 
     pub fn sampler(&self) -> &wgpu::Sampler {
-        &self.gbuffer_sampler
+        &self.sampler
     }
 
     pub fn final_color_attachments(
@@ -120,84 +132,8 @@ impl Framebuffer {
         &self.gbuffer
     }
 
-    pub fn gbuffer_bind_group_layout(&self) -> &wgpu::BindGroupLayout {
-        &self.gbuffer_bind_group_layout
-    }
-
     pub fn gbuffer_bind_group(&self) -> &wgpu::BindGroup {
         &self.gbuffer_bind_group
-    }
-
-    fn create_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
-        device.create_bind_group_layout(&BindGroupLayoutDescriptor {
-            label: Some("GBufferBindings"),
-            entries: &[
-                BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
-                    count: None,
-                },
-                BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: BindingType::Texture {
-                        sample_type: TextureSampleType::Float { filterable: false },
-                        view_dimension: wgpu::TextureViewDimension::D2Array,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
-                    count: None,
-                },
-                BindGroupLayoutEntry {
-                    binding: 3,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: BindingType::Texture {
-                        sample_type: TextureSampleType::Float { filterable: false },
-                        view_dimension: wgpu::TextureViewDimension::D2Array,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                BindGroupLayoutEntry {
-                    binding: 4,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
-                    count: None,
-                },
-                BindGroupLayoutEntry {
-                    binding: 5,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: BindingType::Texture {
-                        sample_type: TextureSampleType::Float { filterable: false },
-                        view_dimension: wgpu::TextureViewDimension::D2Array,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                BindGroupLayoutEntry {
-                    binding: 6,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
-                    count: None,
-                },
-                BindGroupLayoutEntry {
-                    binding: 7,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: BindingType::Texture {
-                        sample_type: TextureSampleType::Float { filterable: false },
-                        view_dimension: wgpu::TextureViewDimension::D2Array,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-            ],
-        })
     }
 
     fn create_bind_group(
@@ -254,11 +190,33 @@ impl Framebuffer {
         })
     }
 
-    pub fn encode(&self, render_pass: &mut wgpu::RenderPass<'_>) {
-        render_pass.set_bind_group(
-            Constant::BIND_GROUP_ID_TEXTURE_INPUT,
-            &self.gbuffer_bind_group,
-            &[],
-        );
+    fn create_final_color_bind_group(
+        device: &wgpu::Device,
+        bind_group_layout: &wgpu::BindGroupLayout,
+        texture: &XrdsTexture,
+        sampler: &wgpu::Sampler,
+    ) -> wgpu::BindGroup {
+        device.create_bind_group(&BindGroupDescriptor {
+            label: Some("FinalColorBindGroup"),
+            layout: bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::Sampler(&sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(texture.view()),
+                },
+            ],
+        })
+    }
+
+    pub fn encode_final_color(&self, render_pass: &mut wgpu::RenderPass<'_>, index: u32) {
+        render_pass.set_bind_group(index, &self.final_color_bind_group, &[]);
+    }
+
+    pub fn encode_gbuffer_params(&self, render_pass: &mut wgpu::RenderPass<'_>, index: u32) {
+        render_pass.set_bind_group(index, &self.gbuffer_bind_group, &[]);
     }
 }

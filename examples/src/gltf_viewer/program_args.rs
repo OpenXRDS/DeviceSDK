@@ -1,4 +1,4 @@
-#[derive(clap::Args)]
+#[derive(Default, clap::Args)]
 pub struct GltfViewerOptions {
     #[command(subcommand)]
     pub mode: RenderMode,
@@ -8,14 +8,14 @@ pub struct GltfViewerOptions {
     pub window: WindowOptions,
 }
 
-#[derive(clap::Args)]
+#[derive(Default, clap::Args)]
 pub struct XrOptions {
     /// Enable openxr
     #[arg(long, default_value_t = false)]
     pub enable_xr: bool,
 }
 
-#[derive(clap::Args)]
+#[derive(Default, clap::Args)]
 pub struct WindowOptions {
     /// Enable viewer window
     #[arg(long, default_value_t = false)]
@@ -37,7 +37,13 @@ pub enum RenderMode {
     Multi(MultiRenderOptions),
 }
 
-#[derive(clap::Args)]
+impl Default for RenderMode {
+    fn default() -> Self {
+        Self::Single(SingleRenderOptions::default())
+    }
+}
+
+#[derive(Default, clap::Args)]
 pub struct SingleRenderOptions {
     /// Path of .gltf or .glb file
     pub path: String,
@@ -60,16 +66,16 @@ pub struct MultiRenderOptions {
     pub scale_max: f32,
 }
 
-#[derive(clap::Args)]
+#[derive(Default, clap::Args)]
 #[group(required = false, multiple = false)]
 pub struct PositionOption {
     /// gltf origin in worldspace
     #[arg(long, default_value = "(0.0, 0.0, 0.0)")]
-    position: Option<String>,
-    #[arg(long)]
-    pos_x: Option<f32>,
-    #[arg(long)]
-    pos_y: Option<f32>,
-    #[arg(long)]
-    pos_z: Option<f32>,
+    pub position: Option<String>,
+    #[arg(long, default_value_t = 0.0)]
+    pub pos_x: f32,
+    #[arg(long, default_value_t = 0.0)]
+    pub pos_y: f32,
+    #[arg(long, default_value_t = 0.0)]
+    pub pos_z: f32,
 }

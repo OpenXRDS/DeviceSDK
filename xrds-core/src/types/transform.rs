@@ -7,12 +7,27 @@ pub struct Transform {
     rotation: glam::Quat,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ViewDirection {
+    eye: glam::Vec3,
+    direction: glam::Vec3,
+}
+
 impl Default for Transform {
     fn default() -> Self {
         Self {
             translation: glam::Vec3::ZERO,
             scale: glam::Vec3::ONE,
             rotation: glam::Quat::IDENTITY,
+        }
+    }
+}
+
+impl Default for ViewDirection {
+    fn default() -> Self {
+        Self {
+            eye: glam::Vec3::ZERO,
+            direction: glam::Vec3::NEG_Z,
         }
     }
 }
@@ -83,5 +98,33 @@ impl Transform {
 
     pub fn get_scale(&self) -> glam::Vec3 {
         self.scale
+    }
+}
+
+impl ViewDirection {
+    pub fn with_eye(mut self, center: glam::Vec3) -> Self {
+        self.eye = center;
+        self
+    }
+
+    pub fn with_direction(mut self, direction: glam::Vec3) -> Self {
+        self.direction = direction;
+        self
+    }
+
+    pub fn from_matrix(matrix: &glam::Mat4) -> Self {
+        let (_scale, rotation, translation) = matrix.to_scale_rotation_translation();
+        Self {
+            eye: translation,
+            direction: rotation.mul_vec3(glam::Vec3::Z),
+        }
+    }
+
+    pub fn eye(&self) -> glam::Vec3 {
+        self.eye
+    }
+
+    pub fn direction(&self) -> glam::Vec3 {
+        self.direction
     }
 }

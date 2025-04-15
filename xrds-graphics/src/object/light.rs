@@ -1,32 +1,22 @@
 use glam::{vec3, Vec3};
-use wgpu::RenderPass;
-use xrds_core::Transform;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub enum LightType {
-    Directional(DirectionalLightDescription),
+    Directional,
     Point(PointLightDescription),
     Spot(SpotLightDescription),
 }
 
-#[derive(Debug, Clone)]
-pub struct DirectionalLightDescription {
-    pub direction: glam::Vec3,
-}
-
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct PointLightDescription {
-    pub position: glam::Vec3,
     pub range: f32,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct SpotLightDescription {
-    pub position: glam::Vec3,
-    pub direction: glam::Vec3,
+    pub range: f32,
     pub inner_cons_cos: f32,
     pub outer_cons_cos: f32,
-    pub range: f32,
 }
 
 #[derive(Debug, Clone)]
@@ -40,23 +30,20 @@ pub struct LightDescription {
 #[repr(C)]
 #[derive(Debug, Default, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct XrdsLight {
-    view: glam::Mat4,
-    view_proj: glam::Mat4,
-    direction: glam::Vec3,
-    range: f32,
-    light_color: glam::Vec3,
-    intensity: f32,
-    position: glam::Vec3,
-    light_type: u32,
-    inner_cons_cos: f32,
-    outer_cons_cos: f32,
-    cast_shadow: u32,
-    shadow_map_index: u32,
+    pub view: glam::Mat4,
+    pub view_proj: glam::Mat4,
+    pub direction: glam::Vec3,
+    pub range: f32,
+    pub light_color: glam::Vec3,
+    pub intensity: f32,
+    pub position: glam::Vec3,
+    pub light_type: u32,
+    pub inner_cons_cos: f32,
+    pub outer_cons_cos: f32,
+    pub cast_shadow: u32,
+    pub shadow_map_index: u32,
+    _pad: [f32; 16],
 }
-
-const LIGHT_TYPE_DIRECTIONAL: u32 = 0;
-const LIGHT_TYPE_POINT: u32 = 1;
-const LIGHT_TYPE_SPOT: u32 = 2;
 
 pub struct LightColor;
 
@@ -82,36 +69,53 @@ impl LightColor {
     pub const HIGH_PRESSURE_SODIUM: Vec3 = vec3(1.0, 0.7176471, 0.29803923);
 }
 
-impl XrdsLight {
-    pub fn new(light_description: LightDescription) -> Self {
-        let mut light = XrdsLight::default();
-        light.light_color = light_description.color;
-        light.intensity = light_description.intensity;
-        light.cast_shadow = light_description.cast_shadow.then(|| 1).unwrap_or(0);
-        light.shadow_map_index = std::u32::MAX; // initial
-
-        match light_description.ty {
-            LightType::Directional(description) => {
-                light.light_type = LIGHT_TYPE_DIRECTIONAL;
-                light.direction = description.direction;
-            }
-            LightType::Point(description) => {
-                light.light_type = LIGHT_TYPE_POINT;
-                light.position = description.position;
-                light.range = description.range;
-            }
-            LightType::Spot(description) => {
-                light.light_type = LIGHT_TYPE_SPOT;
-                light.position = description.position;
-                light.direction = description.direction;
-                light.inner_cons_cos = description.inner_cons_cos;
-                light.outer_cons_cos = description.outer_cons_cos;
-                light.range = description.range;
-            }
-        };
-
-        light
+impl LightType {
+    pub fn shadowmap_count(&self) -> usize {
+        match *self {
+            LightType::Point(_) => 6,
+            _ => 1,
+        }
     }
 
-    pub fn encode(&self, render_pass: &RenderPass<'_>, transform: &Transform) {}
+    pub fn range(&self) -> f32 {
+        match *self {
+            LightType::Directional => f32::MAX,
+            LightType::Point(description) => description.range,
+            LightType::Spot(description) => description.range,
+        }
+    }
 }
+
+// impl XrdsLight {
+//     pub fn new(light_description: LightDescription) -> Self {
+//         let mut light = XrdsLight::default();
+//         light.light_color = light_description.color;
+//         light.intensity = light_description.intensity;
+//         light.cast_shadow = light_description.cast_shadow.then(|| 1).unwrap_or(0);
+//         light.shadow_map_index = std::u32::MAX; // initial
+
+//         match light_description.ty {
+//             LightType::Directional(description) => {
+//                 light.light_type = LIGHT_TYPE_DIRECTIONAL;
+//                 light.direction = description.direction;
+//             }
+//             LightType::Point(description) => {
+//                 light.light_type = LIGHT_TYPE_POINT;
+//                 light.position = description.position;
+//                 light.range = description.range;
+//             }
+//             LightType::Spot(description) => {
+//                 light.light_type = LIGHT_TYPE_SPOT;
+//                 light.position = description.position;
+//                 light.direction = description.direction;
+//                 light.inner_cons_cos = description.inner_cons_cos;
+//                 light.outer_cons_cos = description.outer_cons_cos;
+//                 light.range = description.range;
+//             }
+//         };
+
+//         light
+//     }
+
+//     pub fn encode(&self, render_pass: &RenderPass<'_>, transform: &Transform) {}
+// }

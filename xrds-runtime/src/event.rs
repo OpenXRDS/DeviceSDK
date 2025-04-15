@@ -1,6 +1,5 @@
 use uuid::Uuid;
-use xrds_core::Transform;
-use xrds_graphics::{Fov, XrdsTexture};
+use xrds_openxr::XrRenderParams;
 
 #[derive(Debug, Clone)]
 pub enum WorldEvent<'a> {
@@ -10,6 +9,5 @@ pub enum WorldEvent<'a> {
 #[derive(Debug, Clone)]
 pub struct WorldOnCameraUpdated<'a> {
     pub camera_id: &'a Uuid,
-    pub camera_update_infos: Vec<(Fov, Transform)>,
-    pub copy_target: Option<XrdsTexture>,
+    pub params: &'a XrRenderParams,
 }

@@ -1,3 +1,4 @@
+use core::f32;
 use std::{
     borrow::Cow,
     collections::HashMap,
@@ -7,7 +8,8 @@ use std::{
     time::Instant,
 };
 
-use glam::Vec4;
+use glam::{Vec3, Vec4};
+use gltf::khr_lights_punctual::Kind;
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use uuid::Uuid;
 use wgpu::SamplerDescriptor;
@@ -16,10 +18,12 @@ use xrds_core::Transform;
 use crate::{
     asset::types::{AssetHandle, AssetId},
     pbr::{self, AlphaMode},
-    AssetServer, BufferAssetInfo, Component, Entity, GltfScene, GraphicsInstance,
-    MaterialAssetInfo, MaterialTextureInfo, MeshComponent, PbrMaterialInfo, TextureAssetInfo,
-    TransformComponent, XrdsBuffer, XrdsBufferType, XrdsIndexBuffer, XrdsMaterialInstance,
-    XrdsMesh, XrdsPrimitive, XrdsTexture, XrdsVertexBuffer,
+    AssetServer, BufferAssetInfo, CameraComponent, CameraInfo, Component, Entity, Fov, GltfScene,
+    GraphicsInstance, LightComponent, LightDescription, LightType, MaterialAssetInfo,
+    MaterialTextureInfo, MeshComponent, PbrMaterialInfo, PointLightDescription, PostRenderAction,
+    ProjectionType, RenderTargetType, SpotLightDescription, TextureAssetInfo, TransformComponent,
+    XrdsBuffer, XrdsBufferType, XrdsIndexBuffer, XrdsMaterialInstance, XrdsMesh, XrdsPrimitive,
+    XrdsTexture, XrdsVertexBuffer,
 };
 
 use super::Gltf;
@@ -275,9 +279,18 @@ impl GltfLoader {
         entity.add_component(Component::Transform(
             TransformComponent::default().with_local_transform(Transform::from_matrix(&transform)),
         ));
+
         if let Some(mesh) = node.mesh() {
             let mesh = self.load_mesh(&mesh, &name, context, asset_server)?;
             entity.add_component(Component::Mesh(MeshComponent::new(mesh)));
+        }
+        if let Some(camera) = node.camera() {
+            let camera_component = self.load_camera(&camera, &name)?;
+            entity.add_component(Component::Camera(camera_component));
+        }
+        if let Some(light) = node.light() {
+            let light_component = self.load_light(&light)?;
+            entity.add_component(Component::Light(light_component));
         }
         if node.children().len() > 0 {
             let instant = Instant::now();
@@ -408,6 +421,81 @@ impl GltfLoader {
     //     }
     // }
 
+    fn load_camera(
+        &self,
+        camera: &gltf::Camera,
+        parent_name: &str,
+    ) -> anyhow::Result<CameraComponent> {
+        log::trace!("    + Load camera #{}", camera.index());
+
+        let _name = Self::name_from_camera(camera, parent_name);
+
+        let info = match camera.projection() {
+            gltf::camera::Projection::Orthographic(o) => CameraInfo {
+                projection_type: ProjectionType::Orthographic,
+                fov: Fov {
+                    up: (o.ymag() * 45.0f32).to_radians(),
+                    down: (o.ymag() * 45.0f32).to_radians(),
+                    left: (o.xmag() * 45.0f32).to_radians(),
+                    right: (o.xmag() * 45.0f32).to_radians(),
+                },
+                far: o.zfar(),
+                near: o.znear(),
+            },
+            gltf::camera::Projection::Perspective(p) => {
+                p.aspect_ratio();
+                p.zfar();
+                p.znear();
+
+                CameraInfo {
+                    projection_type: ProjectionType::Perspective,
+                    fov: Fov {
+                        up: p.yfov() * 0.5,
+                        down: p.yfov() * 0.5,
+                        left: p.yfov() * p.aspect_ratio().unwrap_or(1.0f32) * 0.5,
+                        right: p.yfov() * p.aspect_ratio().unwrap_or(1.0f32) * 0.5,
+                    },
+                    far: p.zfar().unwrap_or(f32::MAX),
+                    near: p.znear(),
+                }
+            }
+        };
+
+        Ok(CameraComponent::default()
+            .with_camera(&[info])
+            .with_render_target_type(RenderTargetType::Texture2D)
+            .with_post_render_action(PostRenderAction::None))
+    }
+
+    fn load_light(
+        &self,
+        light: &gltf::khr_lights_punctual::Light,
+    ) -> anyhow::Result<LightComponent> {
+        let light_type = match light.kind() {
+            Kind::Directional => LightType::Directional,
+            Kind::Point => LightType::Point(PointLightDescription {
+                range: light.range().unwrap_or(f32::MAX),
+            }),
+            Kind::Spot {
+                inner_cone_angle,
+                outer_cone_angle,
+            } => LightType::Spot(SpotLightDescription {
+                inner_cons_cos: inner_cone_angle.cos(),
+                outer_cons_cos: outer_cone_angle.cos(),
+                range: light.range().unwrap_or(f32::MAX),
+            }),
+        };
+        let color = Vec3::from_array(light.color());
+        let intensity = light.intensity();
+
+        Ok(LightComponent::new(&LightDescription {
+            ty: light_type,
+            color,
+            intensity,
+            cast_shadow: true,
+        }))
+    }
+
     fn load_mesh(
         &self,
         mesh: &gltf::Mesh,
@@ -418,14 +506,16 @@ impl GltfLoader {
         let instant = Instant::now();
         log::trace!("      + Load mesh #{}", mesh.index());
 
-        Self::name_from_mesh(mesh, parent_name);
+        let name = Self::name_from_mesh(mesh, parent_name);
 
         let mut primitives = Vec::new();
         for primitive in mesh.primitives() {
             primitives.push(self.load_primitive(&primitive, context, asset_server)?);
         }
 
-        let xrds_mesh = XrdsMesh::default().with_primitives(primitives);
+        let xrds_mesh = XrdsMesh::default()
+            .with_name(&name)
+            .with_primitives(primitives);
 
         log::trace!(
             "      - Load mesh #{} in {} secs",
@@ -443,7 +533,7 @@ impl GltfLoader {
     ) -> anyhow::Result<XrdsPrimitive> {
         let instant = Instant::now();
         log::trace!("        + Load primitive #{}", primitive.index());
-        let (vertex_buffers, options) =
+        let (vertex_buffers, options, position_index) =
             self.load_vertex_buffers_from_primitive(primitive, context, asset_server)?;
         let index_buffer = if let Some(indices) = primitive.indices() {
             let instant = Instant::now();
@@ -501,6 +591,7 @@ impl GltfLoader {
             vertices: vertex_buffers,
             indices: index_buffer,
             material,
+            position_index,
         };
         log::trace!(
             "        + Load primitive #{} in {} secs",
@@ -672,13 +763,22 @@ impl GltfLoader {
         primitive: &gltf::Primitive,
         context: &GltfLoadContext,
         asset_server: &mut AssetServer,
-    ) -> anyhow::Result<(Vec<XrdsVertexBuffer>, pbr::PbrVertexInputOption)> {
+    ) -> anyhow::Result<(
+        Vec<XrdsVertexBuffer>,
+        pbr::PbrVertexInputOption,
+        Option<usize>,
+    )> {
         let mut vertex_input_option = pbr::PbrVertexInputOption::default();
 
         let mut res = Vec::new();
+        let mut position_index = None;
         for (i, (semantic, accessor)) in primitive.attributes().enumerate() {
             let instant = Instant::now();
             Self::update_vertex_input_options(&mut vertex_input_option, &semantic, &accessor);
+
+            if semantic == gltf::mesh::Semantic::Positions {
+                position_index = Some(i);
+            }
 
             let format = vertex_format_from_data_type(accessor.data_type(), accessor.dimensions())?;
             log::trace!(
@@ -723,7 +823,7 @@ impl GltfLoader {
             );
         }
 
-        Ok((res, vertex_input_option))
+        Ok((res, vertex_input_option, position_index))
     }
 
     fn load_buffer_from_view(
@@ -975,6 +1075,14 @@ impl GltfLoader {
             format!("{}.{}", parent_name, name)
         } else {
             format!("{}.mesh.{}", parent_name, mesh.index())
+        }
+    }
+
+    fn name_from_camera(camera: &gltf::Camera, parent_name: &str) -> String {
+        if let Some(name) = camera.name() {
+            format!("{}.{}", parent_name, name)
+        } else {
+            format!("{}.camera.{}", parent_name, camera.index())
         }
     }
 

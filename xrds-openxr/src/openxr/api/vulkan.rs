@@ -3,7 +3,6 @@ use std::{
     ffi::{CStr, CString},
     os::raw::c_void,
     sync::Arc,
-    time::Instant,
 };
 
 use anyhow::Context;
@@ -393,7 +392,9 @@ impl OpenXrContextApi for OpenXrVulkanContext {
                     sample_count,
                     dimension: wgpu::TextureDimension::D2,
                     format: swapchain_format.as_wgpu(),
-                    usage: wgpu_hal::TextureUses::COPY_DST | wgpu_hal::TextureUses::RESOURCE,
+                    usage: wgpu_hal::TextureUses::COLOR_TARGET
+                        | wgpu_hal::TextureUses::COPY_DST
+                        | wgpu_hal::TextureUses::RESOURCE,
                     memory_flags: wgpu_hal::MemoryFlags::empty(),
                     view_formats: vec![swapchain_format.as_wgpu()],
                 },

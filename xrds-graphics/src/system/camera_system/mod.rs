@@ -1,8 +1,8 @@
-mod camera_data;
 mod camera_info;
+mod camera_instance;
 
-pub use camera_data::*;
 pub use camera_info::*;
+pub use camera_instance::*;
 
 use std::{collections::HashMap, num::NonZeroU64};
 
@@ -13,11 +13,11 @@ use wgpu::{
 };
 use xrds_core::Transform;
 
-use crate::{create_deferred_lighting_proc, Framebuffer, GraphicsInstance, TextureFormat};
+use crate::{CopySwapchainProc, Framebuffer, GraphicsInstance, TextureFormat};
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct CameraSystem {
-    cameras: HashMap<Uuid, CameraData>,
+    cameras: HashMap<Uuid, CameraInstance>,
     graphics_instance: GraphicsInstance,
     bind_group_layout: wgpu::BindGroupLayout,
 }
@@ -54,7 +54,7 @@ impl CameraSystem {
         cameras: &[CameraInfo],
         transforms: &[Transform],
         extent: Option<wgpu::Extent3d>,
-        output_format: TextureFormat,
+        output_format: Option<TextureFormat>,
     ) -> anyhow::Result<Uuid> {
         let spawn_id = Uuid::new_v4();
         let extent = extent.unwrap_or(wgpu::Extent3d {
@@ -91,20 +91,30 @@ impl CameraSystem {
 
         // TODO: backbuffering
         let framebuffers = vec![
-            Framebuffer::new(&self.graphics_instance, extent, output_format),
-            Framebuffer::new(&self.graphics_instance, extent, output_format),
+            Framebuffer::new(
+                &self.graphics_instance,
+                extent,
+                TextureFormat::from(wgpu::TextureFormat::Rgba16Float),
+            ),
+            Framebuffer::new(
+                &self.graphics_instance,
+                extent,
+                TextureFormat::from(wgpu::TextureFormat::Rgba16Float),
+            ),
         ];
 
-        let deferred_lighting_proc = create_deferred_lighting_proc(
-            &self.graphics_instance,
-            framebuffers[0].gbuffer_bind_group_layout(),
-            output_format,
-        )?;
-        log::info!("deferred_lighing_proc: {:?}", deferred_lighting_proc);
+        let copy_swapchain_proc = if let Some(output_format) = output_format {
+            Some(CopySwapchainProc::new(
+                &self.graphics_instance,
+                output_format,
+            )?)
+        } else {
+            None
+        };
 
         self.cameras.insert(
             spawn_id.clone(),
-            CameraData {
+            CameraInstance {
                 camera_entity_id: *camera_entity_id,
                 cameras: cameras.to_vec(),
                 transforms: transforms.to_vec(),
@@ -112,31 +122,30 @@ impl CameraSystem {
                 cam_bind_group: bind_group,
                 framebuffers,
                 framebuffer_index: 0,
-                copy_target: None,
-                deferred_lighting: deferred_lighting_proc,
+                copy_swapchain_proc,
             },
         );
         Ok(spawn_id)
     }
 
-    pub fn begin_frame(&mut self) {
+    pub fn on_pre_render(&mut self) {
         for (_, camera) in &mut self.cameras {
             camera.begin_frame();
         }
     }
 
-    pub fn cameras(&self) -> Vec<CameraData> {
+    pub fn cameras(&self) -> Vec<CameraInstance> {
         self.cameras
             .iter()
             .map(|(_, camera_data)| camera_data.clone())
             .collect()
     }
 
-    pub fn camera(&self, camera_id: &Uuid) -> Option<&CameraData> {
+    pub fn camera(&self, camera_id: &Uuid) -> Option<&CameraInstance> {
         self.cameras.get(camera_id)
     }
 
-    pub fn camera_mut(&mut self, camera_id: &Uuid) -> Option<&mut CameraData> {
+    pub fn camera_mut(&mut self, camera_id: &Uuid) -> Option<&mut CameraInstance> {
         self.cameras.get_mut(camera_id)
     }
 }

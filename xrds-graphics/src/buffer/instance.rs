@@ -51,4 +51,8 @@ impl XrdsInstanceBuffer {
         // Instance buffer always bound all
         self.buffer.slice(..)
     }
+
+    pub fn encode(&self, render_pass: &mut wgpu::RenderPass<'_>, slot: u32) {
+        render_pass.set_vertex_buffer(slot, self.slice());
+    }
 }

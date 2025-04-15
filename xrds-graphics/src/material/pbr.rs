@@ -145,6 +145,7 @@ impl PbrShaderBuilder {
     pub fn new() -> anyhow::Result<Self> {
         let mut preprocessor = Preprocessor::default();
 
+        preprocessor.add_include_module("common::utils", include_str!("shader/common/utils.wgsl"));
         preprocessor.add_include_module(
             "common::view_params",
             include_str!("shader/common/view_params.wgsl"),

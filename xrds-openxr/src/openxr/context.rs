@@ -1,6 +1,6 @@
-use std::{collections::HashMap, num::NonZeroU32, sync::Arc, time::Instant};
+use std::{collections::HashMap, num::NonZeroU32, sync::Arc};
 
-use glam::{quat, vec3, Quat};
+use glam::{quat, vec3, Quat, Vec3};
 use log::{debug, info, warn};
 use openxr::{Posef, ViewConfigurationType};
 use xrds_core::Transform;
@@ -49,9 +49,17 @@ pub struct OpenXrContextBuilder {
 }
 
 #[derive(Debug)]
+pub struct XrCameraInfo {
+    pub fov: Fov,
+    /// Relative translation from center
+    pub translation: glam::Vec3,
+}
+
+#[derive(Debug)]
 pub struct XrRenderParams {
     pub swapchain_texture: XrdsTexture,
-    pub xr_camera_infos: Vec<(Fov, Transform)>,
+    pub xr_camera_infos: Vec<XrCameraInfo>,
+    pub hmd_transform: Transform,
 }
 
 pub enum OpenXrOnPreRenderResult {
@@ -146,37 +154,87 @@ impl OpenXrContext {
             &reference_space,
         )?;
 
-        // Change coordinate system from OpenXr to Wgpu
-        let xr_camera_infos = views
-            .iter()
-            .map(|view| {
-                let pos = view.pose.position;
-                let ori = view.pose.orientation;
+        let (transform, xr_camera_infos) = if views.len() > 1 {
+            // Stereo case
+            let (left_pos, orientation) = Self::to_engine_pos_and_orientation(&views[0].pose);
+            let (right_pos, _) = Self::to_engine_pos_and_orientation(&views[1].pose);
 
-                let fov = Fov {
-                    left: view.fov.angle_left,
-                    right: view.fov.angle_right,
-                    up: view.fov.angle_up,
-                    down: view.fov.angle_down,
-                };
-                let position = vec3(-pos.x, pos.y, -pos.z);
-                let orientation =
-                    Quat::from_rotation_x(180.0f32.to_radians()) * quat(ori.w, ori.z, ori.y, ori.x);
+            let center_pos = (left_pos + right_pos) * 0.5;
+            let center_transform = Transform::default()
+                .with_translation(center_pos)
+                .with_rotation(orientation);
 
-                (
-                    fov,
-                    Transform::default()
-                        .with_translation(position)
-                        .with_rotation(orientation),
-                )
-            })
-            .collect();
+            let left_offset = left_pos - center_pos;
+            let right_offset = right_pos - center_pos;
+
+            let relative_left_pos = orientation.inverse() * left_offset;
+            let relative_right_pos = orientation.inverse() * right_offset;
+
+            let left_fov = Fov {
+                left: views[0].fov.angle_left,
+                right: views[0].fov.angle_right,
+                up: views[0].fov.angle_up,
+                down: views[0].fov.angle_down,
+            };
+            let right_fov = Fov {
+                left: views[1].fov.angle_left,
+                right: views[1].fov.angle_right,
+                up: views[1].fov.angle_up,
+                down: views[1].fov.angle_down,
+            };
+
+            let xr_camera_infos = vec![
+                XrCameraInfo {
+                    fov: left_fov,
+                    translation: relative_left_pos,
+                },
+                XrCameraInfo {
+                    fov: right_fov,
+                    translation: relative_right_pos,
+                },
+            ];
+            (center_transform, xr_camera_infos)
+        } else if views.len() == 1 {
+            // Mono case
+            let (pos, orientation) = Self::to_engine_pos_and_orientation(&views[0].pose);
+
+            let center_transform = Transform::default()
+                .with_translation(pos)
+                .with_rotation(orientation);
+
+            let fov = Fov {
+                left: views[0].fov.angle_left,
+                right: views[0].fov.angle_right,
+                up: views[0].fov.angle_up,
+                down: views[0].fov.angle_down,
+            };
+            let xr_camera_infos = vec![XrCameraInfo {
+                fov,
+                translation: Vec3::ZERO,
+            }];
+            (center_transform, xr_camera_infos)
+        } else {
+            (Transform::default(), vec![])
+        };
+
         self.state.views = views;
 
         Ok(OpenXrOnPreRenderResult::DoRender(XrRenderParams {
             swapchain_texture,
             xr_camera_infos,
+            hmd_transform: transform,
         }))
+    }
+
+    fn to_engine_pos_and_orientation(pose: &openxr::Posef) -> (glam::Vec3, glam::Quat) {
+        let pos: openxr::Vector3f = pose.position;
+        let ori = pose.orientation;
+
+        let position = vec3(-pos.x, pos.y, -pos.z);
+        let orientation =
+            Quat::from_rotation_x(180.0f32.to_radians()) * quat(ori.w, ori.z, ori.y, ori.x);
+
+        (position, orientation)
     }
 
     pub fn on_post_render(&mut self) -> anyhow::Result<()> {

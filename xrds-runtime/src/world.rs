@@ -2,20 +2,20 @@ use std::{
     collections::{BTreeMap, HashMap, HashSet},
     ops::Range,
     sync::{Arc, RwLock},
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use uuid::Uuid;
-use xrds_core::Transform;
+use xrds_core::{Transform, ViewDirection};
 use xrds_graphics::{
-    AssetServer, CameraData, CameraFinder, CameraSystem, GraphicsInstance, LightSystem, ObjectData,
-    ObjectInstance, PrimitiveCollector, RenderItem, RenderSystem, State, TextureFormat,
+    AssetServer, CameraFinder, CameraInstance, CameraSystem, GraphicsInstance, LightSystem,
+    ObjectData, ObjectInstance, PrimitiveCollector, RenderItem, RenderSystem, State, TextureFormat,
     TransformSystem, Visitor, XrdsInstance,
 };
 
 use crate::{WorldEvent, WorldOnCameraUpdated};
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct World {
     asset_server: Arc<RwLock<AssetServer>>,
     camera_system: CameraSystem,
@@ -62,7 +62,7 @@ impl World {
         Ok(())
     }
 
-    fn update_instances(&mut self, _camera_data: &CameraData) -> anyhow::Result<()> {
+    fn update_instances(&mut self, _camera_data: &CameraInstance) -> anyhow::Result<()> {
         let spawned_objects = self.spawned_objects.read().unwrap();
         let asset_server = self.asset_server.read().unwrap();
 
@@ -139,13 +139,14 @@ impl World {
     }
 
     pub(crate) fn on_render(&mut self) -> anyhow::Result<()> {
-        self.camera_system.begin_frame();
-
+        self.camera_system.on_pre_render();
+        self.light_system.on_pre_render();
         let mut command_encoder = self.render_system.on_pre_render();
+
         for camera_data in self.camera_system.cameras() {
             self.update_instances(&camera_data)?;
             self.render_system
-                .on_render(&mut command_encoder, &camera_data)?;
+                .on_render(&mut command_encoder, &camera_data, &self.light_system)?;
         }
         self.render_system.on_post_render(command_encoder);
         Ok(())
@@ -174,11 +175,7 @@ impl World {
 
         // Pre-defined camera from source (like gltf)
         // So use fixed size and format for camera rendering
-        self.spawn_camera(
-            entity_id,
-            None,
-            TextureFormat::from(wgpu_types::TextureFormat::Rgba32Float), // this is intermediate texture. So set to rgba32float
-        )?;
+        self.spawn_camera(entity_id, None, None)?;
 
         self.spawned_objects
             .write()
@@ -203,9 +200,6 @@ impl World {
     ///   If `None`, a default size will be used. This parameter determines the resolution of the
     ///   framebuffer associated with the camera.
     ///
-    /// * `final_format`: A `TextureFormat` that specifies the format of the final output texture for the camera.
-    ///   This format is used when creating the framebuffer for the camera.
-    ///
     /// # Returns
     ///
     /// This function returns `Ok(())` if the camera was successfully spawned or if no camera was found.
@@ -223,7 +217,7 @@ impl World {
         &mut self,
         entity_id: &Uuid,
         extent: Option<wgpu_types::Extent3d>,
-        final_format: TextureFormat,
+        output_format: Option<TextureFormat>,
     ) -> anyhow::Result<Vec<Uuid>> {
         let mut finder = CameraFinder::new();
         let mut camera_spawn_ids = Vec::new();
@@ -252,7 +246,7 @@ impl World {
                     &cameras,
                     &transforms,
                     extent,
-                    final_format,
+                    output_format,
                 )?;
 
                 camera_spawn_ids.push(camera_spawn_id);
@@ -262,24 +256,59 @@ impl World {
         Ok(camera_spawn_ids)
     }
 
+    pub fn spawn_light(
+        &mut self,
+        entity_id: &Uuid,
+        view_direction: &ViewDirection,
+    ) -> anyhow::Result<ObjectInstance> {
+        let asset_server = self.asset_server.read().unwrap();
+
+        if let Some(entity) = asset_server.get_entity(entity_id) {
+            if let Some(light_component) = entity.get_light_component() {
+                log::info!("Spawn light = {:?}", entity);
+                Ok(ObjectInstance::new(self.light_system.spawn_light(
+                    entity_id,
+                    view_direction,
+                    light_component,
+                )?))
+            } else {
+                Err(anyhow::anyhow!("Entity found but LightComponent not found"))
+            }
+        } else {
+            Err(anyhow::anyhow!("Entity not found"))
+        }
+    }
+
     pub fn emit_event(&mut self, event: WorldEvent) -> anyhow::Result<()> {
         match event {
-            WorldEvent::OnCameraUpdated(camera_info) => self.on_camera_updated(camera_info)?,
+            WorldEvent::OnCameraUpdated(e) => self.on_camera_updated(e)?,
         }
         Ok(())
     }
 
-    fn on_camera_updated(&mut self, camera_info: WorldOnCameraUpdated) -> anyhow::Result<()> {
-        if let Some(camera) = self.camera_system.camera_mut(camera_info.camera_id) {
-            let (fovs, transforms): (Vec<_>, Vec<_>) =
-                camera_info.camera_update_infos.into_iter().unzip();
+    fn on_camera_updated(&mut self, event: WorldOnCameraUpdated) -> anyhow::Result<()> {
+        if let Some(camera) = self.camera_system.camera_mut(event.camera_id) {
+            let hmd_transform = event.params.hmd_transform;
+
+            let (fovs, transforms): (Vec<_>, Vec<_>) = event
+                .params
+                .xr_camera_infos
+                .iter()
+                .map(|c| {
+                    let mut transform = hmd_transform.clone();
+                    transform.translate(c.translation);
+                    (c.fov, transform)
+                })
+                .unzip();
             camera.set_fovs(&fovs);
             camera.set_transforms(&transforms);
-            camera.set_copy_target(camera_info.copy_target);
+            if let Some(proc) = camera.copy_swapchain_proc_mut() {
+                proc.set_target_view(&event.params.swapchain_texture);
+            }
         } else {
             log::warn!(
                 "Camera update event received, but camera not found {:?}",
-                camera_info.camera_id
+                event.camera_id
             );
         }
         Ok(())

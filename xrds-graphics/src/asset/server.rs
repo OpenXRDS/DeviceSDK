@@ -17,8 +17,8 @@ use wgpu::{
 use crate::{
     buffer::XrdsBufferType,
     pbr::{Options, PbrMaterialInputOption, PbrMaterialParams, PbrShaderBuilder},
-    Entity, GraphicsInstance, TextureFormat, XrdsBuffer, XrdsMaterial, XrdsMaterialInstance,
-    XrdsTexture, XrdsVertexBuffer,
+    Constant, Entity, GraphicsInstance, TextureFormat, XrdsBuffer, XrdsMaterial,
+    XrdsMaterialInstance, XrdsTexture, XrdsVertexBuffer,
 };
 
 use super::types::{AssetHandle, AssetId, AssetStrongHandle};
@@ -339,7 +339,7 @@ impl AssetServer {
             })
         });
 
-        let format = wgpu::TextureFormat::Rgba32Float;
+        let format = Constant::INTERMEDIATE_RENDER_FORMAT;
         let vertex_module = self
             .shader_builder
             .build_vertex_module(&device, info.options)?;

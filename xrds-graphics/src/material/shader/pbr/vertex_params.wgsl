@@ -59,11 +59,9 @@ struct VertexOutput {
 #ifdef VERTEX_INPUT_TANGENT
     @location(6) tangent: vec4<f32>,
 #endif
-    @location(7) model_0: vec4<f32>,
-    @location(8) model_1: vec4<f32>,
-    @location(9) model_2: vec4<f32>,
-    @location(10) model_3: vec4<f32>,
 }
+
+var<push_constant> p_local_model: mat4x4<f32>;
 
 fn get_instance_model(in: VertexInput) -> mat4x4<f32> {
     var model = mat4x4<f32>(
@@ -74,6 +72,11 @@ fn get_instance_model(in: VertexInput) -> mat4x4<f32> {
     );
 
     return model;
+}
+
+
+fn get_local_model() -> mat4x4<f32> {
+    return p_local_model;
 }
 
 #endif  // PBR_VERTEX_PARAMS_WGSL

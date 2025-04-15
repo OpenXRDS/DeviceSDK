@@ -1,12 +1,12 @@
 use uuid::Uuid;
 use xrds_core::Transform;
 
-use crate::{Constant, Framebuffer, GraphicsInstance, Postproc, XrdsTexture};
+use crate::{CopySwapchainProc, Framebuffer, GraphicsInstance};
 
 use super::{CameraInfo, Fov};
 
 #[derive(Debug, Clone)]
-pub struct CameraData {
+pub struct CameraInstance {
     pub(crate) camera_entity_id: Uuid,
     pub(crate) cameras: Vec<CameraInfo>,
     pub(crate) transforms: Vec<Transform>,
@@ -14,11 +14,10 @@ pub struct CameraData {
     pub(crate) cam_bind_group: wgpu::BindGroup,
     pub(crate) framebuffers: Vec<Framebuffer>,
     pub(crate) framebuffer_index: usize,
-    pub(crate) copy_target: Option<XrdsTexture>,
-    pub(crate) deferred_lighting: Postproc,
+    pub(crate) copy_swapchain_proc: Option<CopySwapchainProc>,
 }
 
-impl CameraData {
+impl CameraInstance {
     pub fn cameras(&self) -> &[CameraInfo] {
         &self.cameras
     }
@@ -57,10 +56,6 @@ impl CameraData {
         });
     }
 
-    pub fn set_copy_target(&mut self, copy_target: Option<XrdsTexture>) {
-        self.copy_target = copy_target;
-    }
-
     pub fn bind_group(&self) -> &wgpu::BindGroup {
         &self.cam_bind_group
     }
@@ -95,44 +90,19 @@ impl CameraData {
         );
     }
 
-    pub fn get_copy_from(&self) -> wgpu::TexelCopyTextureInfo {
-        // TODO: error handling
-        wgpu::TexelCopyTextureInfo {
-            texture: self.current_frame().final_color().texture().wgpu_texture(),
-            mip_level: 0,
-            origin: wgpu::Origin3d::ZERO,
-            aspect: wgpu::TextureAspect::All,
-        }
+    pub fn copy_swapchain_proc(&self) -> Option<&CopySwapchainProc> {
+        self.copy_swapchain_proc.as_ref()
     }
 
-    pub fn get_copy_to(&self) -> wgpu::TexelCopyTextureInfo {
-        // TODO: error handling
-        wgpu::TexelCopyTextureInfo {
-            texture: self.copy_target.as_ref().unwrap().wgpu_texture(),
-            mip_level: 0,
-            origin: wgpu::Origin3d::ZERO,
-            aspect: wgpu::TextureAspect::All,
-        }
+    pub fn copy_swapchain_proc_mut(&mut self) -> Option<&mut CopySwapchainProc> {
+        self.copy_swapchain_proc.as_mut()
     }
 
-    pub fn get_copy_size(&self) -> wgpu::Extent3d {
-        // TODO: error handling
-        *self.current_frame().final_color().texture().size()
+    pub fn encode_view_params(&self, render_pass: &mut wgpu::RenderPass<'_>, index: u32) {
+        render_pass.set_bind_group(index, &self.cam_bind_group, &[]);
     }
 
-    pub fn encode_view_params(&self, render_pass: &mut wgpu::RenderPass<'_>) {
-        render_pass.set_bind_group(
-            Constant::BIND_GROUP_ID_VIEW_PARAMS,
-            &self.cam_bind_group,
-            &[],
-        );
-    }
-
-    pub fn encode_framebuffers(&self, render_pass: &mut wgpu::RenderPass<'_>) {
-        render_pass.set_bind_group(
-            Constant::BIND_GROUP_ID_TEXTURE_INPUT,
-            self.current_frame().gbuffer_bind_group(),
-            &[],
-        );
+    pub fn encode_framebuffers(&self, render_pass: &mut wgpu::RenderPass<'_>, index: u32) {
+        render_pass.set_bind_group(index, self.current_frame().gbuffer_bind_group(), &[]);
     }
 }

@@ -1,11 +1,15 @@
 use crate::{Constant, XrdsBuffer};
 
 mod postproc;
+mod shadow_mapping;
 
-pub use postproc::*;
-use wgpu::RenderPass;
 pub mod pbr;
 pub mod preprocessor;
+
+pub use postproc::*;
+pub use shadow_mapping::*;
+
+use wgpu::RenderPass;
 
 /// Material interface object
 #[derive(Debug, Clone)]

@@ -1,10 +1,5 @@
 #include postproc::types
 
-struct SimpleQuadInput {
-    @builtin(vertex_index) vertex_index: u32,
-    @builtin(view_index) view_index: i32,
-}
-
 @vertex
 fn main(in: SimpleQuadInput) -> SimpleQuadOutput {
     var output: SimpleQuadOutput;

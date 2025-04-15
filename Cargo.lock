@@ -3586,6 +3586,7 @@ dependencies = [
  "glam",
  "gltf",
  "image",
+ "lazy_static",
  "log",
  "percent-encoding",
  "rayon",

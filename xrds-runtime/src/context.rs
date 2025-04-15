@@ -5,7 +5,8 @@ use std::{
 
 use uuid::Uuid;
 use xrds_graphics::{
-    loader::GltfLoader, AssetServer, GraphicsInstance, LightSystem, RenderSystem, TransformSystem,
+    loader::GltfLoader, AssetServer, Component, Entity, GraphicsInstance, LightComponent,
+    LightDescription, LightSystem, RenderSystem, TransformSystem,
 };
 
 use crate::World;
@@ -21,9 +22,9 @@ impl Context {
     pub(crate) fn new(graphics_instance: GraphicsInstance) -> anyhow::Result<Self> {
         let asset_server = AssetServer::new(graphics_instance.clone())?;
         let transform_system = TransformSystem::new();
-        let light_system = LightSystem::new();
+        let light_system = LightSystem::new(graphics_instance.clone(), None)?;
         let render_system =
-            RenderSystem::new(graphics_instance.clone(), asset_server.clone(), None);
+            RenderSystem::new(graphics_instance.clone(), asset_server.clone(), None)?;
         let world = World::new(
             asset_server.clone(),
             &graphics_instance,
@@ -53,6 +54,26 @@ impl Context {
             .iter()
             .map(|gltf_scene| gltf_scene.id.clone())
             .collect())
+    }
+
+    pub fn create_light(
+        &self,
+        light_description: &LightDescription,
+        name: Option<&str>,
+    ) -> anyhow::Result<Uuid> {
+        let entity_id = Uuid::new_v4();
+        let mut entity = Entity::new(entity_id.clone(), name.unwrap_or("Unnamed light"));
+
+        let light_component = LightComponent::new(light_description);
+        entity.add_component(Component::Light(light_component));
+        log::info!("Create light = {:?}", entity);
+
+        self.asset_server
+            .write()
+            .unwrap()
+            .register_entities(&[entity]);
+
+        Ok(entity_id)
     }
 
     pub fn get_current_world(&self) -> &World {

@@ -1,5 +1,6 @@
 use std::{collections::HashMap, error::Error, fmt::Display};
 
+use lazy_static::lazy_static;
 use regex::Regex;
 
 #[derive(Debug, Clone)]
@@ -34,32 +35,40 @@ pub enum IfOps {
 #[derive(Debug, Clone)]
 pub struct Preprocessor {
     include_targets: HashMap<String, String>,
-    is_comment: Regex,
-    is_include: Regex,
-    is_define: Regex,
-    is_ifdef: Regex,
-    is_ifndef: Regex,
-    is_else: Regex,
-    is_endif: Regex,
-    is_if: Regex,
-    replace_define: Regex,
+}
+
+lazy_static! {
+    pub static ref IS_COMMENT: Regex = Regex::new(r"^[[:blank:]]*\/\/.*").unwrap();
+    pub static ref IS_INCLUDE: Regex = Regex::new(
+        r"^[[:blank:]]*#include[[:blank:]]+(?<module_name>[a-zA-Z0-9_\/\.\:]+)",
+    ).unwrap();
+    pub static ref IS_DEFINE: Regex = Regex::new(r"^[[:blank:]]*#define[[:blank:]]+(?<key>[[:word:]]+)([[:blank:]]+(?<value>[[:word:]]+))?").unwrap();
+    pub static ref IS_IFDEF: Regex = Regex::new(r"^[[:blank:]]*#ifdef[[:blank:]]+(?<key>[[:word:]]+)").unwrap();
+    pub static ref IS_IFNDEF: Regex = Regex::new(r"^[[:blank:]]*#ifndef[[:blank:]]+(?<key>[[:word:]]+)").unwrap();
+    pub static ref IS_ELSE: Regex = Regex::new(r"^[[:blank:]]*#else").unwrap();
+    pub static ref IS_ENDIF: Regex = Regex::new(r"^[[:blank:]]*#endif").unwrap();
+    pub static ref IS_IF: Regex = Regex::new(r"^[[:blank:]]*#if[[:blank:]]+(?<lhs>[[:word:]]+)([[:blank:]]*(?<ops>[!=><]+){1,2}[[:blank:]]*(?<rhs>[[:word:]]+))?").unwrap();
+    pub static ref REPLACE_DEFINE: Regex = Regex::new(r"(?<define>[#$]\{(?<key>[[:word:]]+)\})").unwrap();
+}
+
+#[derive(Debug)]
+struct ProcessState<'caller, 'processor> {
+    // Inputs
+    defs: &'caller HashMap<String, ShaderValue>,
+    include_targets: &'caller HashMap<String, String>,
+
+    // Mutable state
+    runtime_defs: &'processor mut HashMap<String, ShaderValue>,
+    scope_map: &'processor mut HashMap<u32, bool>,
+    current_scope: &'processor mut u32,
+    include_stack: &'processor mut Vec<String>,
+    line_number: &'processor mut usize,
 }
 
 impl Default for Preprocessor {
     fn default() -> Self {
         Self {
             include_targets: HashMap::default(),
-            is_comment: Regex::new(r"^[[:blank:]]*\/\/.*").unwrap(),
-            is_include: Regex::new(
-                r"^[[:blank:]]*#include[[:blank:]]+(?<module_name>[a-zA-Z0-9_\/\.\:]+)",
-            ).unwrap(),
-            is_define: Regex::new(r"^[[:blank:]]*#define[[:blank:]]+(?<key>[[:word:]]+)([[:blank:]]+(?<value>[[:word:]]+))?").unwrap(),
-            is_ifdef: Regex::new(r"^[[:blank:]]*#ifdef[[:blank:]]+(?<key>[[:word:]]+)").unwrap(),
-            is_ifndef: Regex::new(r"^[[:blank:]]*#ifndef[[:blank:]]+(?<key>[[:word:]]+)").unwrap(),
-            is_else: Regex::new(r"^[[:blank:]]*#else").unwrap(),
-            is_endif: Regex::new(r"^[[:blank:]]*#endif").unwrap(),
-            is_if: Regex::new(r"^[[:blank:]]*#if[[:blank:]]+(?<lhs>[[:word:]]+)([[:blank:]]*(?<ops>[!=><]+){1,2}[[:blank:]]*(?<rhs>[[:word:]]+))?").unwrap(),
-            replace_define: Regex::new(r"(?<define>[#$]\{(?<key>[[:word:]]+)\})").unwrap(),
         }
     }
 }
@@ -77,174 +86,216 @@ impl Preprocessor {
         label: Option<&'a str>,
     ) -> Result<wgpu::ShaderModuleDescriptor<'a>, PreprocessError> {
         let mut include_stack = Vec::new();
-
-        // Merge all includes
-        let included = self.process_include(shader_code, &mut include_stack)?;
-
-        let mut lines = included.lines();
-        let mut output = String::new();
-        let mut scope_map: HashMap<u32, bool> = HashMap::default();
+        let mut scope_map: HashMap<u32, bool> = HashMap::from([(0, true)]);
         let mut current_scope = 0u32;
-        scope_map.insert(0, true); // always write scope level 0
-
-        // Interpret shader codes
         let mut runtime_defs: HashMap<String, ShaderValue> = HashMap::default();
-        while let Some(raw_line) = lines.next() {
-            let replaced_line = self.replace_defines(raw_line, defs, &runtime_defs)?;
-            let line_str: &str = &replaced_line;
+        let mut line_number: usize = 0;
 
-            // Check parent scope is writable
-            let parent_scope_write = if current_scope > 0 {
-                let parent_scope = current_scope - 1;
-                *scope_map.get(&parent_scope).unwrap()
-            } else {
-                // Scope 0 not has parent. Set as true
-                true
-            };
-            let current_scope_write = *scope_map.get(&current_scope).unwrap(); // must be exists
+        let mut state = ProcessState {
+            defs,
+            include_targets: &self.include_targets,
+            runtime_defs: &mut runtime_defs,
+            scope_map: &mut scope_map,
+            current_scope: &mut current_scope,
+            include_stack: &mut include_stack,
+            line_number: &mut line_number,
+        };
+        let final_code = Self::process_chunks(shader_code.lines(), &mut state)?;
 
-            if let Some(cap) = self.is_define.captures(line_str) {
-                // #define {KEY}
-                let key = cap
-                    .name("key")
-                    .ok_or(PreprocessError::DefineKeyNotDefined {
-                        line: line_str.to_owned(),
-                        defs: defs.clone(),
-                        runtime_defs: runtime_defs.clone(),
-                    })?
-                    .as_str();
-                if let Some(value) = cap.name("value") {
-                    runtime_defs.insert(key.to_owned(), Self::parse_shader_value(value.as_str())?);
-                } else {
-                    runtime_defs.insert(key.to_owned(), ShaderValue::Def);
-                }
-            } else if let Some(cap) = self.is_ifdef.captures(line_str) {
-                // #ifdef {KEY}
-                let key = cap
-                    .name("key")
-                    .ok_or(PreprocessError::IfdefKeyNotDefined {
-                        line: line_str.to_owned(),
-                        defs: defs.clone(),
-                        runtime_defs: runtime_defs.clone(),
-                    })?
-                    .as_str();
-                current_scope += 1;
-                scope_map.insert(
-                    current_scope,
-                    current_scope_write
-                        && (defs.contains_key(key) || runtime_defs.contains_key(key)),
-                );
-            } else if let Some(cap) = self.is_ifndef.captures(line_str) {
-                // #ifndef {KEY}
-                let key = cap
-                    .name("key")
-                    .ok_or(PreprocessError::IfndefKeyNotDefined {
-                        line: line_str.to_owned(),
-                        defs: defs.clone(),
-                        runtime_defs: runtime_defs.clone(),
-                    })?
-                    .as_str();
-                current_scope += 1;
-                scope_map.insert(
-                    current_scope,
-                    current_scope_write
-                        && !(defs.contains_key(key) || runtime_defs.contains_key(key)),
-                );
-            } else if let Some(cap) = self.is_if.captures(line_str) {
-                let lhs = cap
-                    .name("lhs")
-                    .ok_or(PreprocessError::IfLhsNotDefined {
-                        line: line_str.to_owned(),
-                    })?
-                    .as_str();
-                let lhs_value = Self::parse_shader_value(lhs)?;
-                let (ops, rhs_value) = if let Some(ops_match) = cap.name("ops") {
-                    let ops = Self::parse_ops(ops_match.as_str())?;
-                    let rhs = cap.name("rhs").ok_or(PreprocessError::IfRhsNotDefined {
-                        line: line_str.to_owned(),
-                    })?;
-                    let rhs_value = Self::parse_shader_value(rhs.as_str())?;
-                    (ops, rhs_value)
-                } else {
-                    // check lhs != 0
-                    (IfOps::Ne, ShaderValue::Uint(0))
-                };
-                current_scope += 1;
-                scope_map.insert(
-                    current_scope,
-                    current_scope_write && ops.check(lhs_value, rhs_value)?,
-                );
-            } else if let Some(_) = self.is_endif.captures(line_str) {
-                if current_scope == 0 {
-                    return Err(PreprocessError::InvalidScope {
-                        line: line_str.to_owned(),
-                    });
-                }
-                scope_map.remove(&current_scope);
-                current_scope -= 1;
-            } else if let Some(_) = self.is_else.captures(line_str) {
-                scope_map.insert(current_scope, !current_scope_write && parent_scope_write);
-            } else if let Some(_) = self.is_comment.captures(line_str) {
-                // Remove all comment lines from source
-            } else if let Some(write) = scope_map.get(&current_scope) {
-                if *write {
-                    output.push_str(line_str);
-                    output.push_str("\n");
-                }
-            }
+        if *state.current_scope != 0 {
+            return Err(PreprocessError::UnterminatedScope {
+                final_scope_level: *state.current_scope,
+            });
         }
 
-        log::trace!("Final code = {}\n", output);
+        log::trace!("Final code = {}\n", final_code);
         log::trace!("Defs = {:?}", defs);
         log::trace!("Runtime defs = {:?}", runtime_defs);
 
         Ok(wgpu::ShaderModuleDescriptor {
             label: label,
-            source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Owned(output)),
+            source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Owned(final_code)),
         })
     }
 
-    fn process_include(
-        &self,
-        shader_code: &str,
-        include_stack: &mut Vec<String>,
-    ) -> Result<String, PreprocessError> {
-        let mut lines = shader_code.lines();
+    fn process_chunks<'a, 'b, 'c, I>(
+        lines: I,
+        state: &mut ProcessState<'a, 'b>,
+    ) -> Result<String, PreprocessError>
+    where
+        I: Iterator<Item = &'c str>,
+    {
         let mut output = String::new();
 
-        while let Some(line) = lines.next() {
-            if let Some(cap) = self.is_include.captures(line) {
-                let module_name = cap
-                    .name("module_name")
-                    .ok_or(PreprocessError::IncludeModulenameNotExists {
-                        line: line.to_owned(),
-                    })?
-                    .as_str()
-                    .to_owned();
+        for raw_line in lines {
+            *state.line_number += 1;
 
-                if include_stack.contains(&module_name) {
-                    // Cycle detected
-                    return Err(PreprocessError::IncludeCycleDetected {
-                        module_name,
-                        stack: include_stack.clone(),
+            let replaced_line = Self::replace_defines(raw_line, state.defs, state.runtime_defs)?;
+            let line_str: &str = &replaced_line;
+
+            // Check parent scope is writable
+            let parent_scope_allow_write = if *state.current_scope > 0 {
+                *state
+                    .scope_map
+                    .get(&(*state.current_scope - 1))
+                    .unwrap_or(&false)
+            } else {
+                true // Scope 0 always has a writable parent context
+            };
+
+            let can_write_contents = parent_scope_allow_write
+                && *state.scope_map.get(state.current_scope).unwrap_or(&false);
+
+            // Handle Directives
+            if let Some(cap) = IS_DEFINE.captures(line_str) {
+                // #define only takes effect if the scope it's in is active
+                if can_write_contents {
+                    let key = cap
+                        .name("key")
+                        .ok_or_else(|| PreprocessError::DirectiveSyntaxError {
+                            directive: "define",
+                            line: line_str.to_owned(),
+                            line_number: *state.line_number,
+                        })?
+                        .as_str();
+                    let value = if let Some(value) = cap.name("value") {
+                        Self::parse_shader_value(value.as_str())?
+                    } else {
+                        ShaderValue::Def
+                    };
+                    state.runtime_defs.insert(key.to_owned(), value);
+                }
+            } else if let Some(cap) = IS_IFDEF.captures(line_str) {
+                let key = cap
+                    .name("key")
+                    .ok_or_else(|| PreprocessError::DirectiveSyntaxError {
+                        directive: "#ifdef",
+                        line: line_str.to_owned(),
+                        line_number: *state.line_number,
+                    })?
+                    .as_str();
+                *state.current_scope += 1;
+                let defined = state.defs.contains_key(key) || state.runtime_defs.contains_key(key);
+                state
+                    .scope_map
+                    .insert(*state.current_scope, parent_scope_allow_write && defined);
+            } else if let Some(cap) = IS_IFNDEF.captures(line_str) {
+                let key = cap
+                    .name("key")
+                    .ok_or_else(|| PreprocessError::DirectiveSyntaxError {
+                        directive: "#ifndef",
+                        line: line_str.to_owned(),
+                        line_number: *state.line_number,
+                    })?
+                    .as_str();
+                *state.current_scope += 1;
+                let defined = state.defs.contains_key(key) || state.runtime_defs.contains_key(key);
+                state
+                    .scope_map
+                    .insert(*state.current_scope, parent_scope_allow_write && !defined);
+            } else if let Some(cap) = IS_IF.captures(line_str) {
+                let lhs_str = cap
+                    .name("lhs")
+                    .ok_or_else(|| PreprocessError::DirectiveSyntaxError {
+                        directive: "#if",
+                        line: line_str.to_owned(),
+                        line_number: *state.line_number,
+                    })?
+                    .as_str();
+                let lhs_value = state
+                    .defs
+                    .get(lhs_str)
+                    .or_else(|| state.runtime_defs.get(lhs_str))
+                    .cloned()
+                    .map(Ok)
+                    .unwrap_or_else(|| Self::parse_shader_value(lhs_str))?;
+
+                let condition_result = if let Some(ops_match) = cap.name("ops") {
+                    let ops = Self::parse_ops(ops_match.as_str())?;
+                    let rhs_str = cap
+                        .name("rhs")
+                        .ok_or_else(|| PreprocessError::DirectiveSyntaxError {
+                            directive: "#if",
+                            line: line_str.to_owned(),
+                            line_number: *state.line_number,
+                        })?
+                        .as_str();
+                    // Resolve RHS similarly to LHS
+                    let rhs_value = state
+                        .defs
+                        .get(rhs_str)
+                        .or_else(|| state.runtime_defs.get(rhs_str))
+                        .cloned()
+                        .map(Ok)
+                        .unwrap_or_else(|| Self::parse_shader_value(rhs_str))?;
+
+                    ops.check(lhs_value, rhs_value)?
+                } else {
+                    IfOps::Ne.check(lhs_value, ShaderValue::Uint(0))?
+                };
+
+                *state.current_scope += 1;
+                state.scope_map.insert(
+                    *state.current_scope,
+                    parent_scope_allow_write && condition_result,
+                );
+            } else if IS_ELSE.is_match(line_str) {
+                if *state.current_scope == 0 {
+                    return Err(PreprocessError::InvalidScope {
+                        line: line_str.to_owned(),
+                        line_number: *state.line_number,
                     });
                 }
-                include_stack.push(module_name.clone());
-
-                let included_source = self
-                    .include_targets
-                    .get(&module_name)
-                    .ok_or(PreprocessError::IncludeTargetNotDefined { module_name })?;
-
-                let included_content = self.process_include(included_source, include_stack)?;
-
-                output.push_str(&included_content);
-                output.push_str("\n");
-
-                include_stack.pop();
+                let current_state = state.scope_map.get(state.current_scope).unwrap_or(&false);
+                state.scope_map.insert(
+                    *state.current_scope,
+                    parent_scope_allow_write && !current_state,
+                );
+            } else if let Some(_) = IS_ENDIF.captures(line_str) {
+                if *state.current_scope == 0 {
+                    return Err(PreprocessError::InvalidScope {
+                        line: line_str.to_owned(),
+                        line_number: *state.line_number,
+                    });
+                }
+                state.scope_map.remove(state.current_scope);
+                *state.current_scope -= 1;
+            } else if let Some(cap) = IS_INCLUDE.captures(line_str) {
+                // Include Handling
+                if can_write_contents {
+                    let module_name = cap
+                        .name("module_name")
+                        .ok_or_else(|| PreprocessError::DirectiveSyntaxError {
+                            directive: "#include",
+                            line: line_str.to_owned(),
+                            line_number: *state.line_number,
+                        })?
+                        .as_str()
+                        .to_owned();
+                    if state.include_stack.contains(&module_name.to_owned()) {
+                        return Err(PreprocessError::IncludeCycleDetected {
+                            module_name: module_name,
+                            stack: state.include_stack.clone(),
+                        });
+                    }
+                    state.include_stack.push(module_name.clone());
+                    let included_source =
+                        state.include_targets.get(&module_name).ok_or_else(|| {
+                            PreprocessError::IncludeTargetNotDefined {
+                                module_name: module_name.to_owned(),
+                            }
+                        })?;
+                    let included_content = Self::process_chunks(included_source.lines(), state)?;
+                    output.push_str(&included_content);
+                    state.include_stack.pop();
+                }
+            } else if let Some(_) = IS_COMMENT.captures(line_str) {
+                // Remove all comment lines from source
             } else {
-                output.push_str(line);
-                output.push('\n');
+                if can_write_contents {
+                    output.push_str(line_str);
+                    output.push_str("\n");
+                }
             }
         }
 
@@ -252,7 +303,6 @@ impl Preprocessor {
     }
 
     fn replace_defines(
-        &self,
         line: &str,
         defs: &HashMap<String, ShaderValue>,
         runtime_defs: &HashMap<String, ShaderValue>,
@@ -260,7 +310,7 @@ impl Preprocessor {
         let mut output = String::new();
         let mut offset = 0usize;
 
-        for cap in self.replace_define.captures_iter(line) {
+        for cap in REPLACE_DEFINE.captures_iter(line) {
             let key_match = cap
                 .name("key")
                 .ok_or(PreprocessError::DefineKeyNotDefined {
@@ -328,10 +378,15 @@ impl Preprocessor {
 
 #[derive(Debug)]
 pub enum PreprocessError {
-    IncludeModulenameNotExists {
+    DirectiveSyntaxError {
+        directive: &'static str,
         line: String,
+        line_number: usize,
     },
-    IncludeFileNotFound(std::io::Error),
+    InvalidScope {
+        line: String,
+        line_number: usize,
+    },
     IncludeCycleDetected {
         module_name: String,
         stack: Vec<String>,
@@ -352,32 +407,16 @@ pub enum PreprocessError {
     InvalidDefineValue {
         value: String,
     },
-    IfdefKeyNotDefined {
-        line: String,
-        defs: HashMap<String, ShaderValue>,
-        runtime_defs: HashMap<String, ShaderValue>,
-    },
-    IfndefKeyNotDefined {
-        line: String,
-        defs: HashMap<String, ShaderValue>,
-        runtime_defs: HashMap<String, ShaderValue>,
-    },
-    IfLhsNotDefined {
-        line: String,
-    },
-    IfRhsNotDefined {
-        line: String,
-    },
     IfInvalidOperation {
         ops: String,
-    },
-    InvalidScope {
-        line: String,
     },
     UnsupportedIfOperation {
         lhs: ShaderValue,
         ops: IfOps,
         rhs: ShaderValue,
+    },
+    UnterminatedScope {
+        final_scope_level: u32,
     },
 }
 
@@ -480,6 +519,18 @@ impl Error for PreprocessError {}
 
 impl Display for PreprocessError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_fmt(format_args!("{:?}", self))
+        match self {
+           PreprocessError::DirectiveSyntaxError { directive, line, line_number } => write!(f, "Syntax error in {} directive: {}:{}", directive, line, line_number),
+           PreprocessError::UnterminatedScope { final_scope_level } => write!(f, "Unterminated conditional scope; ended at level {}", final_scope_level),
+           PreprocessError::IncludeCycleDetected { module_name, stack } => write!(f, "Include cycle detected for '{}'. Stack: {:?}", module_name, stack),
+           PreprocessError::IncludeTargetNotDefined { module_name } => write!(f, "Include target '{}' not defined", module_name),
+           PreprocessError::DefineKeyNotDefined { line, .. } => write!(f, "Define key not found in line: {}", line),
+           PreprocessError::DefineValueNotFound { key, .. } => write!(f, "Define value not found for key '{}'", key),
+           PreprocessError::InvalidDefineValue { value } => write!(f, "Invalid define value: {}", value),
+           PreprocessError::IfInvalidOperation { ops } => write!(f, "#if invalid operation: {}", ops),
+           PreprocessError::InvalidScope { line, line_number } => write!(f, "Invalid scope operation (#else/#endif without matching #if/#ifdef/#ifndef) near line: {}:{}", line, line_number),
+           PreprocessError::UnsupportedIfOperation { lhs, ops, rhs } => write!(f, "Unsupported #if operation between {:?} {:?} {:?}", lhs, ops, rhs),
+
+       }
     }
 }

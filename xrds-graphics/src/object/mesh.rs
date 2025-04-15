@@ -16,9 +16,15 @@ pub struct XrdsPrimitive {
     pub vertices: Vec<XrdsVertexBuffer>,
     pub indices: Option<XrdsIndexBuffer>,
     pub material: AssetHandle<XrdsMaterialInstance>,
+    pub position_index: Option<usize>,
 }
 
 impl XrdsMesh {
+    pub fn with_name(mut self, name: &str) -> Self {
+        self.name = name.to_string();
+        self
+    }
+
     pub fn with_primitives(mut self, primitives: Vec<XrdsPrimitive>) -> Self {
         self.primitives = primitives;
         self
@@ -61,6 +67,10 @@ impl XrdsMesh {
 }
 
 impl XrdsPrimitive {
+    pub fn has_geometry(&self) -> bool {
+        self.position_index.is_some()
+    }
+
     pub fn material_handle(&self) -> &AssetHandle<XrdsMaterialInstance> {
         &self.material
     }
@@ -79,6 +89,10 @@ impl XrdsPrimitive {
         transform: &Transform,
         instances: Range<u32>,
     ) {
+        if self.position_index.is_none() {
+            log::warn!("Primitive has no geometry. Skip encode primitive");
+            return;
+        }
         render_pass.set_push_constants(
             ShaderStages::VERTEX,
             0,
@@ -87,6 +101,37 @@ impl XrdsPrimitive {
         self.vertices.iter().enumerate().for_each(|(i, v)| {
             render_pass.set_vertex_buffer(i as u32 + Constant::VERTEX_ID_BASEMENT, v.slice());
         });
+        if let Some(indices) = self.indices.as_ref() {
+            render_pass.set_index_buffer(indices.as_slice(), indices.format());
+            render_pass.draw_indexed(
+                indices.as_range(),
+                0, /* all vertex buffers has same count */
+                instances,
+            );
+        } else {
+            render_pass.draw(self.vertices[0].as_range(), instances);
+        }
+    }
+
+    pub fn encode_geometry(
+        &self,
+        render_pass: &mut RenderPass<'_>,
+        transform: &Transform,
+        instances: Range<u32>,
+    ) {
+        if self.position_index.is_none() {
+            log::warn!("Primitive has no geometry. Skip encode primitive");
+            return;
+        }
+        render_pass.set_push_constants(
+            ShaderStages::VERTEX,
+            0,
+            bytemuck::cast_slice(&transform.to_model_array()),
+        );
+        render_pass.set_vertex_buffer(
+            Constant::VERTEX_ID_BASEMENT,
+            self.vertices[self.position_index.unwrap() /* must be exists */].slice(),
+        );
         if let Some(indices) = self.indices.as_ref() {
             render_pass.set_index_buffer(indices.as_slice(), indices.format());
             render_pass.draw_indexed(

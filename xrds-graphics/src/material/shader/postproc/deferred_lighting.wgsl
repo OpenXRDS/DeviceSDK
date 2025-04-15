@@ -1,8 +1,7 @@
-#include common::view_params
 #include postproc::types
-
-#define LIGHT_PARAMS_INPUT
+#include common::view_params
 #include common::light_params
+#include pbr::gbuffer_params
 
 struct MaterialInfo {
     roughness: f32,
@@ -21,59 +20,16 @@ struct AngularInfo {
     v_dot_h: f32,
 }
 
-@group(1) @binding(0)
-var position_metallic_sampler: sampler;
-@group(1) @binding(1)
-var position_metallic_texture: texture_2d_array<f32>;
-@group(1) @binding(2)
-var normal_roughness_sampler: sampler;
-@group(1) @binding(3)
-var normal_roughness_texture: texture_2d_array<f32>;
-@group(1) @binding(4)
-var albedo_occlusion_sampler: sampler;
-@group(1) @binding(5)
-var albedo_occlusion_texture: texture_2d_array<f32>;
-@group(1) @binding(6)
-var emissive_sampler: sampler;
-@group(1) @binding(7)
-var emissive_texture: texture_2d_array<f32>;
-
-const CONST_PI = 3.14159265359;
-
-// For test
-const LIGHT_COUNT: u32 = 3;
-
-const LIGHT_POSITIONS = array(
-    vec3<f32>(3.0, 0.0, 0.0),
-    vec3<f32>(0.0, 3.0, 0.0),
-    vec3<f32>(0.0, 0.0, 3.0),
-    vec3<f32>(-3.0, 0.0, 0.0),
-    vec3<f32>(0.0, -3.0, 0.0),
-    vec3<f32>(0.0, 0.0, -3.0),
-);
-
-const LIGHT_COLORS = array(
-    vec4<f32>(1.0, 0.0, 0.0, 4.0),
-    vec4<f32>(0.0, 1.0, 0.0, 4.0),
-    vec4<f32>(0.0, 0.0, 1.0, 4.0),
-    vec4<f32>(1.0, 1.0, 0.0, 4.0),
-    vec4<f32>(1.0, 0.0, 1.0, 4.0),
-    vec4<f32>(0.0, 1.0, 1.0, 4.0),
-);
-
-const DIRECTIONAL_LIGHT_DIRECTION: vec3<f32> = vec3<f32>(1.0, 1.0, 0.0);
-const DIRECTIONAL_LIGHT_COLOR: vec4<f32> = vec4<f32>(1.0, 1.0, 1.0, 3.0);
-
 @fragment
 fn fs_main(in: SimpleQuadOutput) -> @location(0) vec4<f32> {
     // Do deferred lighting
     var view_params = get_view_params(in.view_index);
     var cam_pos = view_params.world_position;
 
-    var albedo_occlusion = get_albedo_occlusion(in);
-    var position_metallic = get_position_metallic(in);
-    var normal_roughness = get_normal_roughness(in);
-    var emissive: vec4<f32> = get_emissive(in);
+    var albedo_occlusion = get_albedo_occlusion(in.uv, in.view_index);
+    var position_metallic = get_position_metallic(in.uv, in.view_index);
+    var normal_roughness = get_normal_roughness(in.uv, in.view_index);
+    var emissive: vec4<f32> = get_emissive(in.uv, in.view_index);
 
     var position: vec3<f32> = position_metallic.rgb;
     var metallic: f32 = position_metallic.a;
@@ -105,37 +61,31 @@ fn fs_main(in: SimpleQuadOutput) -> @location(0) vec4<f32> {
     material_info.reflectance_0 = reflectance_0;
     material_info.reflectance_90 = reflectance_90;
 
-#ifdef DOUBLE_SIDED
-    if dot(normal, view) < 0 {
-        normal = -normal;
-    }
-#endif
 
     var color = vec3<f32>(0.0, 0.0, 0.0);
     var view = normalize(cam_pos - position);
+    
+    var light_direction = vec3<f32>(0.0, 0.0, 0.0);
 
-    {
-        var point_to_light: vec3<f32> = DIRECTIONAL_LIGHT_DIRECTION;
-        var shade: vec3<f32> = get_point_shade(material_info, point_to_light, normal, view);
+    var light_count: u32 = get_light_count();
+    for (var i: u32 = 0; i < light_count; i++) {
+        var light: Light = get_light_ith(i32(i));
+        var light_type: u32 = light.ty;
 
-        color += DIRECTIONAL_LIGHT_COLOR.a * DIRECTIONAL_LIGHT_COLOR.rgb * shade;
-    }
-
-    for (var i: u32 = 0; i < 6; i++) {
-        // var light = u_lights[i];
-        // var shadow_factor: f32 = do_spot_shadow(position, light);
-        // if light.type == 0 {  // directional light
-        //     color += do_directional_light(light, );
-        // } else if light.type == 1 {  // pointlight
-            var point_to_light: vec3<f32> = LIGHT_POSITIONS[i] - position;
+        if light_type == LIGHT_TYPE_DIRECTIONAL {
+            light_direction = light.direction;
+            var shade: vec3<f32> = get_point_shade(material_info, normalize(-light.direction), normal, view);
+            color += light.intensity * light.color * shade;
+        } else if light_type == LIGHT_TYPE_POINT {
+            var point_to_light: vec3<f32> = light.position - position;
             var distance: f32 = length(point_to_light);
-            var attenuation: f32 = get_range_attenuation(5.0, distance);
+            var attenuation: f32 = get_range_attenuation(light.range, distance);
             var shade: vec3<f32> = get_point_shade(material_info, point_to_light, normal, view);
 
-            color += attenuation * LIGHT_COLORS[i].a * LIGHT_COLORS[i].rgb * shade;
-        // } else if light.type == 2 {  // spotlight
-        //     color += do_spot_light(light, );
-        // }
+            color += attenuation * light.intensity * light.color * shade;
+        } else if light_type == LIGHT_TYPE_SPOT {
+            // todo!()
+        }
     }
 
     // occlusion
@@ -143,6 +93,16 @@ fn fs_main(in: SimpleQuadOutput) -> @location(0) vec4<f32> {
 
     // emissive
     color += emissive.rgb;
+
+    color = vec3<f32>(get_shadowmap(0, in.uv), 0.0);
+
+    // color = normal * 0.5 + 0.5;
+
+    // color = light_direction;
+    // color = normalize(vec3<f32>(-1.0, 1.0, 1.0));
+    // color = normal;
+    // color = position;
+    // color = vec3<f32>(metallic, roughness, occlusion);
 
     return vec4<f32>(color, 1.0);
 }
@@ -214,20 +174,4 @@ fn get_microfacet_distribution(material_info: MaterialInfo, angular_info: Angula
     // var f: f32 = (angular_info.n_dot_h * alpha_roughness_sq - angular_info.n_dot_h) * angular_info.n_dot_h * 1.0;
     var f: f32 = (angular_info.n_dot_h * angular_info.n_dot_h * (alpha_roughness_sq - 1.0) + 1.0);
     return alpha_roughness_sq / (CONST_PI * f * f + 0.000001);
-}
-
-fn get_position_metallic(in: SimpleQuadOutput) -> vec4<f32> {
-    return textureSample(position_metallic_texture, position_metallic_sampler, in.uv, in.view_index);
-}
-
-fn get_normal_roughness(in: SimpleQuadOutput) -> vec4<f32> {
-    return textureSample(normal_roughness_texture, normal_roughness_sampler, in.uv, in.view_index);
-}
-
-fn get_albedo_occlusion(in: SimpleQuadOutput) -> vec4<f32> {
-    return textureSample(albedo_occlusion_texture, albedo_occlusion_sampler, in.uv, in.view_index);
-}
-
-fn get_emissive(in: SimpleQuadOutput) -> vec4<f32> {
-    return textureSample(emissive_texture, emissive_sampler, in.uv, in.view_index);
 }

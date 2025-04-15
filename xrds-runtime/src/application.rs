@@ -1,7 +1,4 @@
-use std::{
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::{sync::Arc, time::Duration};
 
 use log::debug;
 use uuid::Uuid;
@@ -88,7 +85,7 @@ where
             let extent = openxr_context.swapchain_extent()?;
             let format = openxr_context.swapchain_format()?;
             let world = xrds_context.get_current_world_mut();
-            let camera_ids = world.spawn_camera(&primary_camera_id, Some(extent), format)?;
+            let camera_ids = world.spawn_camera(&primary_camera_id, Some(extent), Some(format))?;
             self.primary_camera_id = Some(camera_ids[0]); // we spawned one camera for HMD
         }
 
@@ -168,8 +165,7 @@ where
         if let Some(primary_camera_id) = &self.primary_camera_id {
             world.emit_event(WorldEvent::OnCameraUpdated(WorldOnCameraUpdated {
                 camera_id: primary_camera_id,
-                camera_update_infos: xr_render_params.xr_camera_infos,
-                copy_target: Some(xr_render_params.swapchain_texture),
+                params: &xr_render_params,
             }))?;
 
             world.on_pre_render()?;

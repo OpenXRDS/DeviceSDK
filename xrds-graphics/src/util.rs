@@ -5,7 +5,9 @@ pub fn required_wgpu_features() -> wgpu::Features {
         | wgpu::Features::PUSH_CONSTANTS
         | wgpu::Features::PIPELINE_CACHE
         | wgpu::Features::BUFFER_BINDING_ARRAY
+        | wgpu::Features::STORAGE_RESOURCE_BINDING_ARRAY
         | wgpu::Features::TEXTURE_BINDING_ARRAY
+        | wgpu::Features::SAMPLED_TEXTURE_AND_STORAGE_BUFFER_ARRAY_NON_UNIFORM_INDEXING
 }
 
 pub fn required_wgpu_memory_hints() -> wgpu::MemoryHints {
@@ -21,6 +23,7 @@ pub fn required_wgpu_limits() -> wgpu::Limits {
     wgpu::Limits {
         max_push_constant_size: 64,
         max_color_attachment_bytes_per_sample: 64,
+        max_sampled_textures_per_shader_stage: 64,
         ..Default::default()
     }
 }

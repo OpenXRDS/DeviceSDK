@@ -1,6 +1,10 @@
 #ifndef PBR_MATERIAL_PARAMS_WGSL
 #define PBR_MATERIAL_PARAMS_WGSL
 
+#ifndef PBR_MATERIAL_PARAMS_GROUP_INDEX
+#define PBR_MATERIAL_PARAMS_GROUP_INDEX 1
+#endif
+
 struct PbrParams {
     base_color_factor: vec4<f32>,
     emissive_factor: vec4<f32>,
@@ -18,69 +22,69 @@ struct PbrParams {
     texcoord_specular_glossiness: i32,
 }
 
-@group(1) @binding(0)
+@group(${PBR_MATERIAL_PARAMS_GROUP_INDEX}) @binding(0)
 var<uniform> u_pbr_params: PbrParams;
 
 #ifdef MATERIAL_INPUT_BASE_COLOR_TEXTURE
-@group(1) @binding(1)
+@group(${PBR_MATERIAL_PARAMS_GROUP_INDEX}) @binding(1)
 var base_color_texture: texture_2d<f32>;
-@group(1) @binding(2)
+@group(${PBR_MATERIAL_PARAMS_GROUP_INDEX}) @binding(2)
 var base_color_sampler: sampler;
 #endif
 #ifdef MATERIAL_INPUT_METALLIC_ROUGHNESS_TEXTURE
-@group(1) @binding(3)
+@group(${PBR_MATERIAL_PARAMS_GROUP_INDEX}) @binding(3)
 var metallic_roughness_texture: texture_2d<f32>;
-@group(1) @binding(4)
+@group(${PBR_MATERIAL_PARAMS_GROUP_INDEX}) @binding(4)
 var metallic_roughness_sampler: sampler;
 #endif
 #ifdef MATERIAL_INPUT_NORMAL_TEXTURE
-@group(1) @binding(5)
+@group(${PBR_MATERIAL_PARAMS_GROUP_INDEX}) @binding(5)
 var normal_texture: texture_2d<f32>;
-@group(1) @binding(6)
+@group(${PBR_MATERIAL_PARAMS_GROUP_INDEX}) @binding(6)
 var normal_sampler: sampler;
 #endif
 #ifdef MATERIAL_INPUT_EMISSIVE_TEXTURE
-@group(1) @binding(7)
+@group(${PBR_MATERIAL_PARAMS_GROUP_INDEX}) @binding(7)
 var emissive_texture: texture_2d<f32>;
-@group(1) @binding(8)
+@group(${PBR_MATERIAL_PARAMS_GROUP_INDEX}) @binding(8)
 var emissive_sampler: sampler;
 #endif
 #ifdef MATERIAL_INPUT_OCCLUSION_TEXTURE
-@group(1) @binding(9)
+@group(${PBR_MATERIAL_PARAMS_GROUP_INDEX}) @binding(9)
 var occlusion_texture: texture_2d<f32>;
-@group(1) @binding(10)
+@group(${PBR_MATERIAL_PARAMS_GROUP_INDEX}) @binding(10)
 var occlusion_sampler: sampler;
 #endif
 #ifdef MATERIAL_INPUT_DIFFUSE_TEXTURE
-@group(1) @binding(11)
+@group(${PBR_MATERIAL_PARAMS_GROUP_INDEX}) @binding(11)
 var diffuse_texture: texture_2d<f32>;
-@group(1) @binding(12)
+@group(${PBR_MATERIAL_PARAMS_GROUP_INDEX}) @binding(12)
 var diffuse_sampler: sampler;
 #endif
 #ifdef MATERIAL_INPUT_SPECULAR_GLOSSINESS_TEXTURE
-@group(1) @binding(13)
+@group(${PBR_MATERIAL_PARAMS_GROUP_INDEX}) @binding(13)
 var specular_glossiness_texture: texture_2d<f32>;
-@group(1) @binding(14)
+@group(${PBR_MATERIAL_PARAMS_GROUP_INDEX}) @binding(14)
 var specular_glossiness_sampler: sampler;
 #endif
 #ifdef MATERIAL_INPUT_IBL
 #ifdef MATERIAL_INPUT_IBL_DIFFUSE_TEXTURE
-@group(1) @binding(15)
+@group(${PBR_MATERIAL_PARAMS_GROUP_INDEX}) @binding(15)
 var ibl_diffuse_texture: texture_cube<f32>;
-@group(1) @binding(16)
+@group(${PBR_MATERIAL_PARAMS_GROUP_INDEX}) @binding(16)
 var ibl_diffuse_sampler: sampler;
 #endif
 #ifdef MATERIAL_INPUT_IBL_SPECULAR_TEXTURE
-@group(1) @binding(17)
+@group(${PBR_MATERIAL_PARAMS_GROUP_INDEX}) @binding(17)
 var ibl_specular_texture: texture_cube<f32>;
-@group(1) @binding(18)
+@group(${PBR_MATERIAL_PARAMS_GROUP_INDEX}) @binding(18)
 var ibl_specular_sampler: sampler;
 #endif
 #endif
 #ifdef MATERIAL_INPUT_BRDF_TEXTURE
-@group(1) @binding(19)
+@group(${PBR_MATERIAL_PARAMS_GROUP_INDEX}) @binding(19)
 var brdf_texture: texture_2d<f32>;
-@group(1) @binding(20)
+@group(${PBR_MATERIAL_PARAMS_GROUP_INDEX}) @binding(20)
 var brdf_sampler: sampler;
 #endif
 
