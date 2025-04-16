@@ -37,6 +37,11 @@ fn get_light() -> Light {
 
 #else
 
+// VSM parameters
+// const MIN_VSM_VARIANCE = 0.00002;
+const MIN_VSM_VARIANCE = 0.0003;
+const LIGHT_BLEED_REDUCTION_FACTOR = 0.3;
+
 struct LightSystemParams {
     light_count: u32,
 }
@@ -51,7 +56,7 @@ var<uniform> u_light_params: LightSystemParams;
 var shadowmap_sampler: sampler;
 
 @group(${LIGHT_PARAMS_GROUP_INDEX}) @binding(3)
-var shadowmaps: binding_array<texture_2d<f32>, 64>;
+var shadowmaps: binding_array<texture_2d<f32>, 32>;
 
 fn get_light_count() -> u32 {
     return u_light_params.light_count;
@@ -61,8 +66,57 @@ fn get_light_ith(i: i32) -> Light {
     return s_light_data[i];
 }
 
-fn get_shadowmap(i: i32, uv: vec2<f32>) -> vec2<f32> {
-    return textureSample(shadowmaps[i], shadowmap_sampler, uv).rg;
+fn calculate_vsm_shadow(shadowmap_index: i32, uv: vec2<f32>, fragment_depth_from_light: f32, min_variance: f32, light_bleed_reduction: f32) -> f32 {
+    let shadowmap_value = textureSample(shadowmaps[shadowmap_index], shadowmap_sampler, uv).rg;
+    let M1 = shadowmap_value.r; // E[depth]
+    let M2 = shadowmap_value.g; // E[depth^2]
+
+    // Calculate variance, clamping to a minimum value to avoid issues
+    var variance = M2 - M1 * M1;
+    variance = max(variance, min_variance);
+
+    // Calculate the difference in depth between the fragment and the average depth in the shadow map
+    let delta = fragment_depth_from_light - M1;
+
+    // Chebyshev's inequality: P(x >= t) <= variance / (variance + (t - E[x])^2)
+    // This gives an upper bound on the probability that the fragment is occluded.
+    // We use a common VSM formulation which estimates visibility directly.
+    // The max(0.0, delta) term is crucial for reducing light bleeding, preventing
+    // surfaces closer to the light than the average occluder depth from being shadowed.
+    // A more advanced light bleed reduction can be used here if needed.
+    let delta_no_bleed = max(0.0, delta); // Basic light bleed reduction
+    // let visibility = variance / (variance + delta_no_bleed * delta_no_bleed);
+
+    // Alternative light bleed reduction (can be smoother):
+    let amount = delta * light_bleed_reduction; // Adjust falloff
+    let visibility = smoothstep(0.0, 1.0, variance / (variance + delta_no_bleed * delta_no_bleed)); // Apply smoothing
+
+    // The result might slightly exceed 1.0 due to filtering/precision, clamp it.
+    return saturate(visibility);
+}
+
+fn calculate_shadow(light: Light, world_position: vec3<f32>) -> f32 {
+    var shadow_factor = 1.0;
+    if light.cast_shadow == 1u && light.shadow_map_index < 32u {
+        let light_clip_pos = light.view_proj * vec4<f32>(world_position, 1.0);
+
+        if light_clip_pos.w > 0.0 {
+            let light_ndc = light_clip_pos.xyz / light_clip_pos.w;
+            let shadow_uv = light_ndc.xy * vec2(0.5, -0.5) + vec2(0.5, 0.5);
+
+            if shadow_uv.x >= 0.0 && shadow_uv.x <= 1.0 && shadow_uv.y >= 0.0 && shadow_uv.y <= 1.0 &&
+               light_ndc.z >= 0.0 && light_ndc.z <= 1.0 {
+                let fragment_depth_from_light = light_ndc.z;
+                shadow_factor = calculate_vsm_shadow(i32(light.shadow_map_index),
+                                                     shadow_uv,
+                                                     fragment_depth_from_light,
+                                                     MIN_VSM_VARIANCE,
+                                                     LIGHT_BLEED_REDUCTION_FACTOR);
+            }
+        }
+    }
+
+    return shadow_factor;
 }
 
 #endif

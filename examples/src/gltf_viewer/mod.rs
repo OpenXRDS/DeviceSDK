@@ -69,7 +69,7 @@ impl RuntimeHandler for App {
 
         self.directional_light = Some(world.spawn_light(
             &directional_light_entity_id,
-            &ViewDirection::default().with_direction(vec3(0.0, -1.0, 0.5).normalize()),
+            &ViewDirection::default().with_direction(vec3(0.05, -1.0, 0.25).normalize()),
         )?);
         let uniform = rand::distr::Uniform::new(0.0f32, 1.0f32)?;
         // self.point_lights = point_lights

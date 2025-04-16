@@ -1,6 +1,6 @@
 use core::f32;
 
-use glam::{vec3, Mat4, Vec3};
+use glam::{Mat4, Vec3};
 use uuid::Uuid;
 use xrds_core::ViewDirection;
 
@@ -100,31 +100,20 @@ impl LightInstance {
     }
 
     fn view(&self) -> glam::Mat4 {
-        // let eye = self.state.transform().get_translation();
-        let eye = vec3(0.1, 100.0, 0.0);
-        let up = Vec3::Y;
-        // let center = eye
-        //     + self
-        //         .state
-        //         .transform()
-        //         .get_rotation()
-        //         .mul_vec3(Vec3::Z)
-        //         .normalize_or_zero();
-        // Mat4::look_at_rh(eye, center, up)
-        Mat4::look_at_rh(eye, vec3(0.0, 0.0, 0.0), up)
+        self.state.view_direction().to_matrix()
     }
 
     fn projection(&self) -> glam::Mat4 {
         match self.light_type {
             LightType::Directional => {
-                const DIR_LIGHT_EXTENT: f32 = 1000.0; // Example size
+                const DIR_LIGHT_EXTENT: f32 = 10.0; // Example size
                 Mat4::orthographic_rh(
                     -DIR_LIGHT_EXTENT,
                     DIR_LIGHT_EXTENT,
                     -DIR_LIGHT_EXTENT,
                     DIR_LIGHT_EXTENT,
-                    -1000.0,
-                    1000.0,
+                    -100.0,
+                    100.0,
                 )
             }
             LightType::Point(point) => {

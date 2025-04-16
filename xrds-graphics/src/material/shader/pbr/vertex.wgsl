@@ -19,7 +19,7 @@ fn main(in: VertexInput) -> VertexOutput {
     var pos = transform_mat * vec4<f32>(in.position, 1.0);
 #ifdef SHADOW_MAPPING
     var light = get_light();
-    out.position = vec4<f32>(0.0, 0.0, 0.5, 1.0);
+    out.position = light.view_proj * pos;
 #else
     var view_params = get_view_params(in.view_index);
     out.position = view_params.view_projection * pos;

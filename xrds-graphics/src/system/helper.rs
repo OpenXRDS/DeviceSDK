@@ -138,7 +138,7 @@ impl BindGroupLayoutHelper {
                         view_dimension: wgpu::TextureViewDimension::D2,
                         multisampled: false,
                     },
-                    count: NonZeroU32::new(Constant::MAX_SHADOWMAP_COUNT),
+                    count: NonZeroU32::new(Constant::MAX_SHADOWMAP_COUNT as u32),
                 },
             ],
         })

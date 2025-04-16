@@ -13,7 +13,5 @@ fn main(in: VertexOutput) -> ShadowmapOutput {
     var out: ShadowmapOutput;
     out.depth_and_square = vec2<f32>(depth, depth * depth);
 
-    out.depth_and_square = vec2<f32>(1.0, 0.0);
-
     return out;
 }

@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
 use wgpu::{
-    FragmentState, MultisampleState, PipelineCompilationOptions, PipelineLayoutDescriptor,
-    PushConstantRange, RenderPipelineDescriptor, ShaderStages, VertexAttribute, VertexBufferLayout,
-    VertexState, VertexStepMode,
+    DepthStencilState, FragmentState, MultisampleState, PipelineCompilationOptions,
+    PipelineLayoutDescriptor, PushConstantRange, RenderPipelineDescriptor, ShaderStages,
+    VertexAttribute, VertexBufferLayout, VertexState, VertexStepMode,
 };
 
 use crate::GraphicsInstance;
@@ -126,14 +126,13 @@ impl ShadowMapping {
                 })],
                 compilation_options: PipelineCompilationOptions::default(),
             }),
-            // depth_stencil: Some(DepthStencilState {
-            //     format: wgpu::TextureFormat::Depth32Float,
-            //     depth_write_enabled: true,
-            //     depth_compare: wgpu::CompareFunction::Less,
-            //     stencil: Default::default(),
-            //     bias: Default::default(),
-            // }),
-            depth_stencil: None,
+            depth_stencil: Some(DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: true,
+                depth_compare: wgpu::CompareFunction::Less,
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
             layout: Some(&pipeline_layout),
             multisample: MultisampleState::default(),
             primitive: wgpu::PrimitiveState {

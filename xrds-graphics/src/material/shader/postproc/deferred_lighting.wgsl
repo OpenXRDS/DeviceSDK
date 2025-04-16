@@ -44,6 +44,7 @@ fn fs_main(in: SimpleQuadOutput) -> @location(0) vec4<f32> {
 #endif
 
     // Convert to specular glossiness
+    // TODO: make dedicated function
     var f0 = vec3(0.04, 0.04, 0.04);
     var diffuse = albedo * (vec3(1.0, 1.0, 1.0) - f0) * (1.0 - metallic);
     var specular = mix(f0, albedo, metallic);
@@ -61,21 +62,19 @@ fn fs_main(in: SimpleQuadOutput) -> @location(0) vec4<f32> {
     material_info.reflectance_0 = reflectance_0;
     material_info.reflectance_90 = reflectance_90;
 
-
     var color = vec3<f32>(0.0, 0.0, 0.0);
     var view = normalize(cam_pos - position);
     
-    var light_direction = vec3<f32>(0.0, 0.0, 0.0);
-
     var light_count: u32 = get_light_count();
     for (var i: u32 = 0; i < light_count; i++) {
         var light: Light = get_light_ith(i32(i));
         var light_type: u32 = light.ty;
 
         if light_type == LIGHT_TYPE_DIRECTIONAL {
-            light_direction = light.direction;
             var shade: vec3<f32> = get_point_shade(material_info, normalize(-light.direction), normal, view);
-            color += light.intensity * light.color * shade;
+            var shadow_factor = calculate_shadow(light, position);
+
+            color += light.intensity * light.color * shade * shadow_factor;
         } else if light_type == LIGHT_TYPE_POINT {
             var point_to_light: vec3<f32> = light.position - position;
             var distance: f32 = length(point_to_light);
@@ -94,11 +93,8 @@ fn fs_main(in: SimpleQuadOutput) -> @location(0) vec4<f32> {
     // emissive
     color += emissive.rgb;
 
-    color = vec3<f32>(get_shadowmap(0, in.uv), 0.0);
-
     // color = normal * 0.5 + 0.5;
 
-    // color = light_direction;
     // color = normalize(vec3<f32>(-1.0, 1.0, 1.0));
     // color = normal;
     // color = position;

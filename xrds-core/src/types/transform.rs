@@ -127,4 +127,8 @@ impl ViewDirection {
     pub fn direction(&self) -> glam::Vec3 {
         self.direction
     }
+
+    pub fn to_matrix(&self) -> glam::Mat4 {
+        glam::Mat4::look_at_rh(self.eye, self.eye + self.direction, glam::Vec3::Y)
+    }
 }

@@ -11,7 +11,8 @@ impl Constant {
     /// VertexID is started from 1. 0 is reserved for instance buffer
     pub const VERTEX_ID_BASEMENT: u32 = 1;
 
-    pub const MAX_SHADOWMAP_COUNT: u32 = 64;
+    pub const SHADOWMAP_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rg32Float;
+    pub const MAX_SHADOWMAP_COUNT: usize = 32;
 
     pub const INTERMEDIATE_RENDER_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 

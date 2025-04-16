@@ -107,25 +107,24 @@ impl RenderSystem {
     ) -> anyhow::Result<()> {
         for light_uuid in light_system.light_uuids() {
             if let Some(light_instance) = light_system.get_light_instance(light_uuid) {
-                if !light_instance.state().cast_shadow() {
-                    continue;
-                }
-                let mut render_pass =
-                    self.create_shadow_pass(encoder, light_instance, light_system)?;
-                // self.instance_buffer
-                //     .encode(&mut render_pass, Constant::VERTEX_ID_INSTANCES);
+                if light_instance.state().cast_shadow() {
+                    let mut render_pass =
+                        self.create_shadow_pass(encoder, light_instance, light_system)?;
+                    self.instance_buffer
+                        .encode(&mut render_pass, Constant::VERTEX_ID_INSTANCES);
 
-                // light_system.encode_shadow_mapping(light_uuid, &mut render_pass);
-                // for (_, render_items) in &self.material_renderitem_map {
-                //     // Get material from asset_server
-                //     for render_item in render_items {
-                //         render_item.primitive.encode_geometry(
-                //             &mut render_pass,
-                //             &render_item.local_transform,
-                //             render_item.instances.clone(),
-                //         );
-                //     }
-                // }
+                    light_system.encode_shadow_mapping(light_uuid, &mut render_pass);
+                    for (_, render_items) in &self.material_renderitem_map {
+                        // Get material from asset_server
+                        for render_item in render_items {
+                            render_item.primitive.encode_geometry(
+                                &mut render_pass,
+                                &render_item.local_transform,
+                                render_item.instances.clone(),
+                            );
+                        }
+                    }
+                }
             }
         }
         Ok(())
@@ -246,17 +245,17 @@ impl RenderSystem {
         light_instance: &LightInstance,
         light_system: &LightSystem,
     ) -> anyhow::Result<wgpu::RenderPass<'e>> {
-        let attachments = light_system.get_shadowmap_attachments(
-            light_instance
-                .state()
-                .shadow_map_index()
-                .expect("Light instance not attached"),
-        )?;
+        let index = light_instance
+            .state()
+            .shadow_map_index()
+            .expect("Light instance not attached");
+        let color_attachments = light_system.get_shadowmap_attachments(index)?;
+        let depth_attachment = light_system.get_depth_attachment(index)?;
 
         let render_pass = encoder.begin_render_pass(&RenderPassDescriptor {
             label: None,
-            color_attachments: &attachments, // &light.shadowmap_attachments()?
-            depth_stencil_attachment: None,
+            color_attachments: &color_attachments, // &light.shadowmap_attachments()?
+            depth_stencil_attachment: depth_attachment,
             ..Default::default()
         });
 

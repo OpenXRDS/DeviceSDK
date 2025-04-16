@@ -8,9 +8,9 @@ pub use shadowmap_pool::*;
 use uuid::Uuid;
 use wgpu::{
     BindGroupLayoutDescriptor, BufferBinding, BufferDescriptor, BufferUsages,
-    RenderPassColorAttachment,
+    RenderPassColorAttachment, RenderPassDepthStencilAttachment,
 };
-use xrds_core::{Transform, ViewDirection};
+use xrds_core::ViewDirection;
 
 use crate::{GraphicsInstance, LightComponent, LightType, ShadowMapping, XrdsLight};
 
@@ -31,6 +31,7 @@ pub struct LightSystem {
     lighting_bind_group_layout: wgpu::BindGroupLayout,
     shadow_mapping_bind_group: wgpu::BindGroup,
     shadow_mapping: ShadowMapping,
+    light_updated: bool,
 }
 
 #[repr(C)]
@@ -41,7 +42,7 @@ pub struct LightSystemParams {
 
 impl LightSystem {
     const DEFAULT_MAX_LIGHT_COUNT: usize = 1024;
-    const DEFAULT_SHADOW_QUALITY: ShadowQuality = ShadowQuality::Medium;
+    const DEFAULT_SHADOW_QUALITY: ShadowQuality = ShadowQuality::UltraHigh;
 
     pub fn new(
         graphics_instance: GraphicsInstance,
@@ -90,6 +91,7 @@ impl LightSystem {
             lighting_bind_group_layout,
             shadow_mapping_bind_group,
             shadow_mapping,
+            light_updated: true, // initially true for update light buffer in first frame
         })
     }
 
@@ -104,11 +106,23 @@ impl LightSystem {
         let mut light_instance =
             LightInstance::new(entity_id.clone(), *light_component.light_type());
         let cast_shadow = if light_component.cast_shadow() {
-            if let Err(_) = self.shadowmap_pool.assign_index(&mut light_instance) {
+            if let Ok(increased) = self.shadowmap_pool.assign_index(&mut light_instance) {
+                if increased {
+                    let shadowmap_views = self.shadowmap_pool.shadowmap_views();
+                    let lighting_bind_group = Self::create_lighting_bind_group(
+                        self.graphics_instance.device(),
+                        &self.lighting_bind_group_layout,
+                        &self.light_storage_buffer,
+                        &self.light_params_buffer,
+                        self.shadowmap_pool.sampler(),
+                        &shadowmap_views,
+                    );
+                    self.lighting_bind_group = lighting_bind_group;
+                }
+                true
+            } else {
                 log::warn!("Shadowmap pool is full. Currently not support dynamic pool size. Force cast shadow off");
                 false
-            } else {
-                true
             }
         } else {
             false
@@ -131,6 +145,8 @@ impl LightSystem {
         self.spawned_lights
             .insert(spawned_uuid.clone(), new_light_index);
 
+        self.light_updated = true;
+
         Ok(spawned_uuid)
     }
 
@@ -149,13 +165,30 @@ impl LightSystem {
         index: u32,
     ) -> anyhow::Result<Vec<Option<RenderPassColorAttachment>>> {
         Ok(vec![Some(RenderPassColorAttachment {
-            view: self.shadowmap_pool.get(index as usize)?.view(),
+            view: self.shadowmap_pool.get_shadowmap(index as usize)?.view(),
             resolve_target: None,
             ops: wgpu::Operations {
-                load: wgpu::LoadOp::Clear(wgpu::Color::GREEN),
+                load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
                 store: wgpu::StoreOp::Store,
             },
         })])
+    }
+
+    pub fn get_depth_attachment(
+        &self,
+        index: u32,
+    ) -> anyhow::Result<Option<RenderPassDepthStencilAttachment>> {
+        Ok(Some(RenderPassDepthStencilAttachment {
+            view: self
+                .shadowmap_pool
+                .get_shadowmap_depth(index as usize)?
+                .view(),
+            depth_ops: Some(wgpu::Operations {
+                load: wgpu::LoadOp::Clear(1.0),
+                store: wgpu::StoreOp::Store,
+            }),
+            stencil_ops: None,
+        }))
     }
 
     pub fn lighting_bind_group(&self) -> &wgpu::BindGroup {
@@ -166,26 +199,30 @@ impl LightSystem {
         &self.lighting_bind_group_layout
     }
 
-    pub fn on_pre_render(&self) {
-        let light_buffer_data: Vec<XrdsLight> = self
-            .lights
-            .iter()
-            .map(|light_instance| light_instance.into())
-            .collect();
-        let queue = self.graphics_instance.queue();
-        queue.write_buffer(
-            &self.light_storage_buffer,
-            0,
-            bytemuck::cast_slice(&light_buffer_data),
-        );
-        let params = LightSystemParams {
-            light_count: self.lights.len() as u32,
-        };
-        queue.write_buffer(
-            &self.light_params_buffer,
-            0,
-            bytemuck::cast_slice(&[params]),
-        );
+    pub fn on_pre_render(&mut self) {
+        if self.light_updated {
+            let light_buffer_data: Vec<XrdsLight> = self
+                .lights
+                .iter()
+                .map(|light_instance| light_instance.into())
+                .collect();
+            log::info!("Light buffer data={:?}", light_buffer_data);
+            let queue = self.graphics_instance.queue();
+            queue.write_buffer(
+                &self.light_storage_buffer,
+                0,
+                bytemuck::cast_slice(&light_buffer_data),
+            );
+            let params = LightSystemParams {
+                light_count: self.lights.len() as u32,
+            };
+            queue.write_buffer(
+                &self.light_params_buffer,
+                0,
+                bytemuck::cast_slice(&[params]),
+            );
+            self.light_updated = false;
+        }
     }
 
     pub fn encode_shadow_mapping(&self, light_uuid: &Uuid, render_pass: &mut wgpu::RenderPass<'_>) {
