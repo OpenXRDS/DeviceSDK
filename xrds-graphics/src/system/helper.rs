@@ -5,7 +5,7 @@ use wgpu::{
     BufferBindingType, SamplerBindingType, ShaderStages, TextureSampleType, TextureViewDimension,
 };
 
-use super::Constant;
+use crate::Constant;
 
 pub struct BindGroupLayoutHelper {}
 
@@ -86,6 +86,22 @@ impl BindGroupLayoutHelper {
                 },
                 BindGroupLayoutEntry {
                     binding: 7,
+                    visibility: ShaderStages::FRAGMENT,
+                    ty: BindingType::Texture {
+                        sample_type: TextureSampleType::Float { filterable: true },
+                        view_dimension: TextureViewDimension::D2Array,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                BindGroupLayoutEntry {
+                    binding: 8,
+                    visibility: ShaderStages::FRAGMENT,
+                    ty: BindingType::Sampler(SamplerBindingType::Filtering),
+                    count: None,
+                },
+                BindGroupLayoutEntry {
+                    binding: 9,
                     visibility: ShaderStages::FRAGMENT,
                     ty: BindingType::Texture {
                         sample_type: TextureSampleType::Float { filterable: true },

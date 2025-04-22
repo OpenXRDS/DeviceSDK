@@ -29,6 +29,12 @@ var emissive_sampler: sampler;
 @group(${GBUFFER_PARAMS_GROUP_INDEX}) @binding(7)
 var emissive_texture: texture_2d_array<f32>;
 
+@group(${GBUFFER_PARAMS_GROUP_INDEX}) @binding(8)
+var motion_vector_sampler: sampler;
+
+@group(${GBUFFER_PARAMS_GROUP_INDEX}) @binding(9)
+var motion_vector_texture: texture_2d_array<f32>;
+
 fn get_position_metallic(uv: vec2<f32>, view_index: i32) -> vec4<f32> {
     return textureSample(position_metallic_texture, position_metallic_sampler, uv, view_index);
 }
@@ -43,6 +49,10 @@ fn get_albedo_occlusion(uv: vec2<f32>, view_index: i32) -> vec4<f32> {
 
 fn get_emissive(uv: vec2<f32>, view_index: i32) -> vec4<f32> {
     return textureSample(emissive_texture, emissive_sampler, uv, view_index);
+}
+
+fn get_motion_vector(uv: vec2<f32>, view_index: i32) -> vec2<f32> {
+    return textureSample(motion_vector_texture, motion_vector_sampler, uv, view_index).rg;
 }
 
 #endif  // GBUFFER_PARAMS

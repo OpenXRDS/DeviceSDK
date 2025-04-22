@@ -8,9 +8,9 @@ use std::{
 use uuid::Uuid;
 use xrds_core::{Transform, ViewDirection};
 use xrds_graphics::{
-    AssetServer, CameraFinder, CameraInstance, CameraSystem, GraphicsInstance, LightSystem,
-    ObjectData, ObjectInstance, PrimitiveCollector, RenderItem, RenderSystem, State, TextureFormat,
-    TransformSystem, Visitor, XrdsInstance,
+    AssetId, AssetServer, CameraFinder, CameraInstance, CameraSystem, GraphicsInstance,
+    LightSystem, ObjectData, ObjectInstance, PrimitiveCollector, RenderItem, RenderSystem, State,
+    TextureFormat, TransformSystem, Visitor, XrdsInstance,
 };
 
 use crate::{WorldEvent, WorldOnCameraUpdated};
@@ -22,7 +22,6 @@ pub struct World {
     render_system: RenderSystem,
     light_system: LightSystem,
     transform_system: TransformSystem,
-    instance_ranges: BTreeMap<Uuid, Range<u32>>,
     spawned_objects: Arc<RwLock<HashMap<Uuid, ObjectData>>>,
 }
 
@@ -44,7 +43,6 @@ impl World {
             render_system,
             light_system,
             transform_system,
-            instance_ranges: BTreeMap::new(),
         }
     }
 
@@ -59,10 +57,15 @@ impl World {
 
     /// update render specific data
     pub(crate) fn on_pre_render(&mut self) -> anyhow::Result<()> {
+        self.camera_system.on_pre_render();
+        self.light_system.on_pre_render();
         Ok(())
     }
 
-    fn update_instances(&mut self, _camera_data: &CameraInstance) -> anyhow::Result<()> {
+    fn update_instances_data(
+        &self,
+        _camera_instance: &CameraInstance, /* For future usage (e.g. frustum culling) */
+    ) -> anyhow::Result<(Vec<XrdsInstance>, HashMap<AssetId, Vec<RenderItem>>)> {
         let spawned_objects = self.spawned_objects.read().unwrap();
         let asset_server = self.asset_server.read().unwrap();
 
@@ -70,7 +73,7 @@ impl World {
         let visible_objects: Vec<_> = spawned_objects.iter().collect();
         let mut instances_map: HashMap<Uuid, Vec<XrdsInstance>> = HashMap::new();
         for (_spawn_id, obj) in &visible_objects {
-            let instance = XrdsInstance::new(*obj.transform());
+            let instance = XrdsInstance::new(obj.transform());
             if let Some(instances) = instances_map.get_mut(obj.entity_id()) {
                 instances.push(instance);
             } else {
@@ -125,29 +128,42 @@ impl World {
             }
         }
 
-        self.instance_ranges = instance_ranges;
         let instances_data: Vec<XrdsInstance> = instances_map
             .into_iter()
             .map(|(_, instances)| instances)
             .flatten()
             .collect();
 
-        self.render_system
-            .update_instances(&instances_data, material_renderitem_map)?;
-
-        Ok(())
+        Ok((instances_data, material_renderitem_map))
     }
 
     pub(crate) fn on_render(&mut self) -> anyhow::Result<()> {
-        self.camera_system.on_pre_render();
-        self.light_system.on_pre_render();
         let mut command_encoder = self.render_system.on_pre_render();
 
-        for camera_data in self.camera_system.cameras() {
-            self.update_instances(&camera_data)?;
-            self.render_system
-                .on_render(&mut command_encoder, &camera_data, &self.light_system)?;
+        let camera_ids = self.camera_system.camera_ids();
+        let mut camera_framebuffer_map = HashMap::new();
+        for camera_id in camera_ids {
+            if let Some(camera) = self.camera_system.camera(&camera_id) {
+                let (instances_data, material_renderitem_map) =
+                    self.update_instances_data(camera)?;
+                self.render_system
+                    .update_instances(&instances_data, material_renderitem_map)?;
+                let rendered_framebuffer = self.render_system.on_render(
+                    &mut command_encoder,
+                    &camera,
+                    &self.light_system,
+                )?;
+                camera_framebuffer_map.insert(camera_id.clone(), rendered_framebuffer);
+            }
         }
+
+        // Update current framebuffer states
+        for (cam_id, framebuffer) in camera_framebuffer_map {
+            if let Some(camera) = self.camera_system.camera_mut(&cam_id) {
+                camera.update_framebuffer(framebuffer);
+            }
+        }
+
         self.render_system.on_post_render(command_encoder);
         Ok(())
     }

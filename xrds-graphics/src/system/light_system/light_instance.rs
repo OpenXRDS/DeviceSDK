@@ -112,8 +112,8 @@ impl LightInstance {
                     DIR_LIGHT_EXTENT,
                     -DIR_LIGHT_EXTENT,
                     DIR_LIGHT_EXTENT,
-                    -100.0,
-                    100.0,
+                    -DIR_LIGHT_EXTENT,
+                    DIR_LIGHT_EXTENT,
                 )
             }
             LightType::Point(point) => {

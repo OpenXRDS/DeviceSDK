@@ -8,6 +8,7 @@ pub struct GBuffer {
     normal_roughness: RenderTargetTexture,
     albedo_occlusion: RenderTargetTexture,
     emissive: RenderTargetTexture,
+    motion_vector: RenderTargetTexture,
     depth_stencil: RenderTargetTexture,
 }
 
@@ -25,6 +26,13 @@ impl GBuffer {
         let albedo_occlusion =
             Self::create_texture(device, size, format, "GBuffer-albedo-occlusion");
         let emissive = Self::create_texture(device, size, format, "GBuffer-emissive");
+        let motion_vector = Self::create_texture(
+            device,
+            size,
+            // Constant::INTERMEDIATE_MOTION_VECTOR_FORMAT,
+            format,
+            "GBuffer-motion-vector",
+        );
         let depth_stencil = Self::create_texture(
             device,
             size,
@@ -37,6 +45,7 @@ impl GBuffer {
             normal_roughness,
             albedo_occlusion,
             emissive,
+            motion_vector,
             depth_stencil,
         }
     }
@@ -115,6 +124,10 @@ impl GBuffer {
         &self.emissive
     }
 
+    pub fn motion_vector(&self) -> &RenderTargetTexture {
+        &self.motion_vector
+    }
+
     pub fn as_color_attachments(
         &self,
     ) -> anyhow::Result<Vec<Option<wgpu::RenderPassColorAttachment>>> {
@@ -137,6 +150,11 @@ impl GBuffer {
             Some(wgpu::RenderPassColorAttachment {
                 view: self.emissive.texture().view(),
                 ops: self.emissive.as_color_operation()?,
+                resolve_target: None,
+            }),
+            Some(wgpu::RenderPassColorAttachment {
+                view: self.motion_vector.texture().view(),
+                ops: self.motion_vector.as_color_operation()?,
                 resolve_target: None,
             }),
         ];

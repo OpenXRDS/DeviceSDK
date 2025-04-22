@@ -8,12 +8,21 @@ use crate::{
 use super::gbuffer::GBuffer;
 
 #[derive(Debug, Clone)]
+struct RenderBuffer {
+    render_target: RenderTargetTexture,
+    bind_group: wgpu::BindGroup,
+}
+
+#[derive(Debug, Clone)]
 pub struct Framebuffer {
-    final_color: RenderTargetTexture,
+    prev_index: usize,
+    curr_index: usize,
     gbuffer: GBuffer,
     sampler: wgpu::Sampler,
     gbuffer_bind_group: wgpu::BindGroup,
-    final_color_bind_group: wgpu::BindGroup,
+    motion_vector_bind_group: wgpu::BindGroup, // Only for TAA
+    extent: Extent3d,
+    render_buffers: [RenderBuffer; 3],
 }
 
 impl Framebuffer {
@@ -29,34 +38,6 @@ impl Framebuffer {
         );
         let device = graphics_instance.device();
 
-        let final_color_texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: None,
-            size,
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: output_format.as_wgpu(),
-            usage: wgpu::TextureUsages::COPY_SRC
-                | wgpu::TextureUsages::RENDER_ATTACHMENT
-                | wgpu::TextureUsages::TEXTURE_BINDING,
-            view_formats: &[],
-        });
-        let final_color_view = final_color_texture.create_view(&wgpu::TextureViewDescriptor {
-            dimension: if size.depth_or_array_layers > 1 {
-                Some(wgpu::TextureViewDimension::D2Array)
-            } else {
-                Some(wgpu::TextureViewDimension::D2)
-            },
-            ..Default::default()
-        });
-        let final_color = RenderTargetTexture::new(
-            XrdsTexture::new(final_color_texture, output_format, size, final_color_view),
-            RenderTargetOps::ColorAttachment(wgpu::Operations {
-                load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                store: wgpu::StoreOp::Store,
-            }),
-        );
-
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             address_mode_u: wgpu::AddressMode::ClampToEdge,
             address_mode_v: wgpu::AddressMode::ClampToEdge,
@@ -65,30 +46,37 @@ impl Framebuffer {
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
             mipmap_filter: wgpu::FilterMode::Linear,
-            // mag_filter: wgpu::FilterMode::Nearest,
-            // min_filter: wgpu::FilterMode::Nearest,
-            // mipmap_filter: wgpu::FilterMode::Nearest,
             anisotropy_clamp: 1,
             ..Default::default()
         });
+        let bind_group_layout = BindGroupLayoutHelper::create_intermediate(device);
+        let render_buffers = [
+            Self::create_render_buffer(device, size, output_format, &bind_group_layout, &sampler),
+            Self::create_render_buffer(device, size, output_format, &bind_group_layout, &sampler),
+            Self::create_render_buffer(device, size, output_format, &bind_group_layout, &sampler),
+        ];
 
         let gbuffer_bind_group_layout = BindGroupLayoutHelper::create_gbuffer_params(device);
         let gbuffer_bind_group =
-            Self::create_bind_group(device, &gbuffer_bind_group_layout, &gbuffer, &sampler);
-        let final_color_bind_group_layout = BindGroupLayoutHelper::create_intermediate(device);
-        let final_color_bind_group = Self::create_final_color_bind_group(
+            Self::create_gbuffer_bind_group(device, &gbuffer_bind_group_layout, &gbuffer, &sampler);
+
+        let motion_vector_bind_group_layout = BindGroupLayoutHelper::create_intermediate(device);
+        let motion_vector_bind_group = Self::create_motion_vector_bind_group(
             device,
-            &final_color_bind_group_layout,
-            final_color.texture(),
+            &motion_vector_bind_group_layout,
+            &gbuffer,
             &sampler,
         );
 
         Self {
-            final_color,
+            prev_index: 0,
+            curr_index: 1,
             gbuffer,
             sampler,
+            extent: size,
             gbuffer_bind_group,
-            final_color_bind_group,
+            motion_vector_bind_group,
+            render_buffers,
         }
     }
 
@@ -108,24 +96,8 @@ impl Framebuffer {
         self.gbuffer.emissive()
     }
 
-    pub fn final_color(&self) -> &RenderTargetTexture {
-        &self.final_color
-    }
-
     pub fn sampler(&self) -> &wgpu::Sampler {
         &self.sampler
-    }
-
-    pub fn final_color_attachments(
-        &self,
-    ) -> anyhow::Result<Vec<Option<wgpu::RenderPassColorAttachment>>> {
-        let attachments = vec![Some(wgpu::RenderPassColorAttachment {
-            view: self.final_color.texture().view(),
-            ops: self.final_color.as_color_operation()?,
-            resolve_target: None,
-        })];
-
-        Ok(attachments)
     }
 
     pub fn gbuffer(&self) -> &GBuffer {
@@ -136,7 +108,59 @@ impl Framebuffer {
         &self.gbuffer_bind_group
     }
 
-    fn create_bind_group(
+    pub fn extent(&self) -> &wgpu::Extent3d {
+        &self.extent
+    }
+
+    fn create_render_buffer(
+        device: &wgpu::Device,
+        size: Extent3d,
+        output_format: TextureFormat,
+        bind_group_layout: &wgpu::BindGroupLayout,
+        sampler: &wgpu::Sampler,
+    ) -> RenderBuffer {
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: None,
+            size,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: output_format.as_wgpu(),
+            usage: wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor {
+            dimension: if size.depth_or_array_layers > 1 {
+                Some(wgpu::TextureViewDimension::D2Array)
+            } else {
+                Some(wgpu::TextureViewDimension::D2)
+            },
+            ..Default::default()
+        });
+        let render_target = RenderTargetTexture::new(
+            XrdsTexture::new(texture, output_format, size, view),
+            RenderTargetOps::ColorAttachment(wgpu::Operations {
+                load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                store: wgpu::StoreOp::Store,
+            }),
+        );
+
+        let bind_group = Self::create_render_buffer_bind_group(
+            device,
+            bind_group_layout,
+            render_target.texture(),
+            sampler,
+        );
+
+        RenderBuffer {
+            render_target,
+            bind_group,
+        }
+    }
+
+    fn create_gbuffer_bind_group(
         device: &wgpu::Device,
         bind_group_layout: &wgpu::BindGroupLayout,
         gbuffer: &GBuffer,
@@ -186,18 +210,52 @@ impl Framebuffer {
                         gbuffer.emissive().texture().view(),
                     ),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 8,
+                    resource: wgpu::BindingResource::Sampler(&sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 9,
+                    resource: wgpu::BindingResource::TextureView(
+                        gbuffer.motion_vector().texture().view(),
+                    ),
+                },
             ],
         })
     }
 
-    fn create_final_color_bind_group(
+    fn create_motion_vector_bind_group(
+        device: &wgpu::Device,
+        bind_group_layout: &wgpu::BindGroupLayout,
+        gbuffer: &GBuffer,
+        sampler: &wgpu::Sampler,
+    ) -> wgpu::BindGroup {
+        device.create_bind_group(&BindGroupDescriptor {
+            label: Some("MotionVector-BindGroup"),
+            layout: &bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::Sampler(&sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(
+                        gbuffer.motion_vector().texture().view(),
+                    ),
+                },
+            ],
+        })
+    }
+
+    fn create_render_buffer_bind_group(
         device: &wgpu::Device,
         bind_group_layout: &wgpu::BindGroupLayout,
         texture: &XrdsTexture,
         sampler: &wgpu::Sampler,
     ) -> wgpu::BindGroup {
         device.create_bind_group(&BindGroupDescriptor {
-            label: Some("FinalColorBindGroup"),
+            label: Some("RenderBufferBindGroup"),
             layout: bind_group_layout,
             entries: &[
                 wgpu::BindGroupEntry {
@@ -212,8 +270,50 @@ impl Framebuffer {
         })
     }
 
-    pub fn encode_final_color(&self, render_pass: &mut wgpu::RenderPass<'_>, index: u32) {
-        render_pass.set_bind_group(index, &self.final_color_bind_group, &[]);
+    /// Begin frame and initialize internal index
+    pub fn begin_frame(&mut self) {
+        // Self previous frame index to last output index
+        self.prev_index = self.curr_index;
+        // Set current frame index to next from previous frame
+        self.curr_index = (self.curr_index + 1) % self.render_buffers.len();
+    }
+
+    /// Swap input output frame for post processing
+    pub fn swap_frame(&mut self) {
+        self.curr_index = self.get_next_index();
+    }
+
+    fn get_next_index(&self) -> usize {
+        self.render_buffers.len() - self.prev_index - self.curr_index
+    }
+
+    pub fn output_attachments(
+        &self,
+    ) -> anyhow::Result<Vec<Option<wgpu::RenderPassColorAttachment>>> {
+        let output_index = self.get_next_index();
+        let render_target = &self.render_buffers[output_index].render_target;
+
+        let attachments = vec![Some(wgpu::RenderPassColorAttachment {
+            view: render_target.texture().view(),
+            ops: render_target.as_color_operation()?,
+            resolve_target: None,
+        })];
+
+        Ok(attachments)
+    }
+
+    pub fn encode_input(&self, render_pass: &mut wgpu::RenderPass<'_>, index: u32) {
+        let bind_group = &self.render_buffers[self.curr_index].bind_group;
+        render_pass.set_bind_group(index, bind_group, &[]);
+    }
+
+    pub fn encode_previous_final_color(&self, render_pass: &mut wgpu::RenderPass<'_>, index: u32) {
+        let bind_group = &self.render_buffers[self.prev_index].bind_group;
+        render_pass.set_bind_group(index, bind_group, &[]);
+    }
+
+    pub fn encode_motion_vector(&self, render_pass: &mut wgpu::RenderPass<'_>, index: u32) {
+        render_pass.set_bind_group(index, &self.motion_vector_bind_group, &[]);
     }
 
     pub fn encode_gbuffer_params(&self, render_pass: &mut wgpu::RenderPass<'_>, index: u32) {

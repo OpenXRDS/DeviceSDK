@@ -30,6 +30,7 @@ fn fs_main(in: SimpleQuadOutput) -> @location(0) vec4<f32> {
     var position_metallic = get_position_metallic(in.uv, in.view_index);
     var normal_roughness = get_normal_roughness(in.uv, in.view_index);
     var emissive: vec4<f32> = get_emissive(in.uv, in.view_index);
+    var motion_vector: vec2<f32> = get_motion_vector(in.uv, in.view_index);
 
     var position: vec3<f32> = position_metallic.rgb;
     var metallic: f32 = position_metallic.a;
@@ -93,12 +94,8 @@ fn fs_main(in: SimpleQuadOutput) -> @location(0) vec4<f32> {
     // emissive
     color += emissive.rgb;
 
-    // color = normal * 0.5 + 0.5;
-
-    // color = normalize(vec3<f32>(-1.0, 1.0, 1.0));
-    // color = normal;
-    // color = position;
-    // color = vec3<f32>(metallic, roughness, occlusion);
+    // var r = textureSample(shadowmaps[0], shadowmap_sampler, in.uv).r;
+    // color = vec3<f32>(r, r, r);
 
     return vec4<f32>(color, 1.0);
 }

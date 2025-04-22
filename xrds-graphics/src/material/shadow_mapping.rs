@@ -105,6 +105,32 @@ impl ShadowMapping {
                         ],
                     },
                     VertexBufferLayout {
+                        step_mode: VertexStepMode::Instance,
+                        array_stride: std::mem::size_of::<glam::Mat4>() as _,
+                        attributes: &[
+                            VertexAttribute {
+                                format: wgpu::VertexFormat::Float32x4,
+                                offset: 0,
+                                shader_location: 14,
+                            },
+                            VertexAttribute {
+                                format: wgpu::VertexFormat::Float32x4,
+                                offset: std::mem::size_of::<[f32; 4]>() as u64,
+                                shader_location: 15,
+                            },
+                            VertexAttribute {
+                                format: wgpu::VertexFormat::Float32x4,
+                                offset: std::mem::size_of::<[f32; 8]>() as u64,
+                                shader_location: 16,
+                            },
+                            VertexAttribute {
+                                format: wgpu::VertexFormat::Float32x4,
+                                offset: std::mem::size_of::<[f32; 12]>() as u64,
+                                shader_location: 17,
+                            },
+                        ],
+                    },
+                    VertexBufferLayout {
                         step_mode: VertexStepMode::Vertex,
                         array_stride: std::mem::size_of::<glam::Vec3>() as _,
                         attributes: &[VertexAttribute {

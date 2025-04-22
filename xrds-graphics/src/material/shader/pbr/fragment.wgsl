@@ -8,7 +8,11 @@ fn main(in: VertexOutput) -> GBuffer {
     var output: GBuffer;
 
     var uvs = vec4<f32>(
+#ifdef VERTEX_INPUT_TEXCOORD_0
         in.texcoord_0.x, in.texcoord_0.y,
+#else
+        0.0, 0.0,
+#endif
 #ifdef VERTEX_INPUT_TEXCOORD_1
         in.texcoord_1.x, in.texcoord_1.y,
 #else
@@ -40,8 +44,13 @@ fn main(in: VertexOutput) -> GBuffer {
 #else
     var pos_dx: vec3<f32> = dpdx(in.world_position);
     var pos_dy: vec3<f32> = dpdy(in.world_position);
+#ifdef VERTEX_INPUT_TEXCOORD_0
     var tex_dx: vec3<f32> = dpdx(vec3<f32>(in.texcoord_0, 0.0));
     var tex_dy: vec3<f32> = dpdy(vec3<f32>(in.texcoord_0, 0.0));
+#else
+    var tex_dx = pos_dx;
+    var tex_dy = pos_dy;
+#endif
     var t_dpdx = (tex_dy.y * pos_dx - tex_dx.y * pos_dy) / (tex_dx.x * tex_dy.y - tex_dy.x * tex_dx.y);
 
     var t = normalize(t_dpdx - world_normal * dot(world_normal, t_dpdx));
@@ -58,10 +67,24 @@ fn main(in: VertexOutput) -> GBuffer {
     var n_final_normal: vec3<f32> = normalize(tbn[2].xyz);
 #endif
 
+    // Calculate motion vector
+    var curr_ndc = in.curr_position.xy / in.curr_position.w;
+    var prev_ndc = in.prev_position.xy / in.prev_position.w;
+    var motion_ndc = curr_ndc - prev_ndc;
+    var jitter_diff_clip = in.curr_jitter - in.prev_jitter;
+    var final_motion_ndc = motion_ndc - jitter_diff_clip;
+    var motion_uv = vec4<f32>(final_motion_ndc * 0.5, 0.0, 1.0);
+
+    // motion_uv = vec4<f32>(curr_ndc * 0.5 + 0.5, 0.0, 1.0);  // Yellow
+    // motion_uv = vec4<f32>(prev_ndc * 0.5 + 0.5, 0.0, 1.0);  // Red/green gradient left-bottom is 0 right-top is 1
+    // motion_uv = vec4<f32>(motion_ndc * 0.5 + 0.5, 0.0, 1.0);  // Yellow
+    // motion_uv = vec4<f32>(jitter_diff_clip * 10.0 + 0.5, 0.0, 1.0);  // Darker yellow
+
     output.position_metallic = vec4<f32>(in.world_position, pbr_params.occlusion_metallic_roughness.b);
     output.normal_roughness = vec4<f32>(n_final_normal.rgb, pbr_params.occlusion_metallic_roughness.g);
     output.albedo_occlusion = vec4<f32>(pbr_params.base_color.xyz, pbr_params.occlusion_metallic_roughness.r);
     output.emissive = vec4<f32>(pbr_params.emissive.rgb, 1.0);
+    output.motion_vector = motion_uv;
 
     return output;
 }

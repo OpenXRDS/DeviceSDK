@@ -12,9 +12,9 @@ use wgpu::{
 };
 use xrds_core::ViewDirection;
 
-use crate::{GraphicsInstance, LightComponent, LightType, ShadowMapping, XrdsLight};
+use crate::{Constant, GraphicsInstance, LightComponent, LightType, ShadowMapping, XrdsLight};
 
-use super::{BindGroupLayoutHelper, Constant};
+use super::BindGroupLayoutHelper;
 
 type LightIndex = usize;
 
@@ -206,7 +206,6 @@ impl LightSystem {
                 .iter()
                 .map(|light_instance| light_instance.into())
                 .collect();
-            log::info!("Light buffer data={:?}", light_buffer_data);
             let queue = self.graphics_instance.queue();
             queue.write_buffer(
                 &self.light_storage_buffer,

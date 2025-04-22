@@ -17,11 +17,11 @@ use wgpu::{
 };
 
 use crate::{
-    AssetId, AssetServer, CameraInstance, CopySwapchainProc, DeferredLightingProc,
-    GraphicsInstance, XrdsInstance, XrdsInstanceBuffer, XrdsPrimitive,
+    AssetId, AssetServer, CameraInstance, Constant, CopySwapchainProc, DeferredLightingProc,
+    GraphicsInstance, TaaProc, XrdsInstance, XrdsInstanceBuffer, XrdsPrimitive,
 };
 
-use super::{Constant, LightInstance, LightSystem};
+use super::{LightInstance, LightSystem};
 
 #[derive(Debug, Clone)]
 pub struct RenderItem {
@@ -37,6 +37,7 @@ pub struct RenderSystem {
     instance_buffer: XrdsInstanceBuffer,
     material_renderitem_map: HashMap<AssetId, Vec<RenderItem>>,
     deferred_lighting_proc: DeferredLightingProc,
+    taa_proc: TaaProc,
     // query_set: QuerySet,
 }
 
@@ -54,6 +55,7 @@ impl RenderSystem {
         );
 
         let deferred_lighting_proc = DeferredLightingProc::new(&graphics_instance)?;
+        let taa_proc = TaaProc::new(&graphics_instance)?;
 
         Ok(Self {
             graphics_instance,
@@ -61,10 +63,11 @@ impl RenderSystem {
             asset_server,
             material_renderitem_map: HashMap::new(),
             deferred_lighting_proc,
+            taa_proc,
         })
     }
 
-    pub fn on_pre_render(&mut self) -> CommandEncoder {
+    pub fn on_pre_render(&self) -> CommandEncoder {
         // Travel entity tree and make as vector for bulk rendering for each instance
         // let bulk_instances = Vec<Vec<XrdsPrimitive>>
         self.graphics_instance
@@ -76,28 +79,42 @@ impl RenderSystem {
     pub fn on_render(
         &mut self,
         encoder: &mut CommandEncoder,
-        camera_data: &CameraInstance,
+        camera_instance: &CameraInstance,
         light_system: &LightSystem,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<Framebuffer> {
         // Iterate over cameras (that has render target)
-        let framebuffer = camera_data.current_frame();
-        camera_data.update_uniform(&self.graphics_instance);
+        let mut framebuffer = camera_instance.framebuffer().clone();
 
+        // Draw to shadowmap
         self.do_shadow_pass(encoder, light_system)?;
-        self.do_gbuffer_pass(encoder, camera_data, framebuffer)?;
-        self.do_deferred_lighting(encoder, camera_data, light_system, framebuffer)?;
+
+        // Draw to gbuffer
+        self.do_gbuffer_pass(encoder, camera_instance, &framebuffer)?;
+
+        // ==== Post processing ====
+
+        // Draw to framebuffer output
+        self.do_deferred_lighting(encoder, camera_instance, light_system, &framebuffer)?;
+        framebuffer.swap_frame();
 
         {
             // Future work
-            // let upscale_pass =
-            // let taa_pass =
+            // self.do_upscale();
         }
 
-        if let Some(copy_swapchain) = camera_data.copy_swapchain_proc() {
-            self.do_copy_swapchain(encoder, framebuffer, copy_swapchain)?;
+        self.do_taa(encoder, &framebuffer)?;
+        framebuffer.swap_frame();
+
+        {
+            // Future work
+            // self.do_sharpen_filter();
         }
 
-        Ok(())
+        if let Some(copy_swapchain) = camera_instance.copy_swapchain_proc() {
+            self.do_copy_swapchain(encoder, &framebuffer, copy_swapchain)?;
+        }
+
+        Ok(framebuffer)
     }
 
     fn do_shadow_pass(
@@ -167,13 +184,29 @@ impl RenderSystem {
         framebuffer: &Framebuffer,
     ) -> anyhow::Result<()> {
         let mut render_pass =
-            self.create_postproc_pass(encoder, &framebuffer.final_color_attachments()?);
+            self.create_postproc_pass(encoder, &framebuffer.output_attachments()?);
         camera_data.encode_view_params(&mut render_pass, 0);
         framebuffer.encode_gbuffer_params(&mut render_pass, 1);
         light_system.encode_light_params(&mut render_pass, 2);
 
         // draw deferred light with gbuffer, shadowmap and bulk light
         self.deferred_lighting_proc.encode(&mut render_pass);
+
+        Ok(())
+    }
+
+    fn do_taa(
+        &mut self,
+        encoder: &mut CommandEncoder,
+        framebuffer: &Framebuffer,
+    ) -> anyhow::Result<()> {
+        let mut render_pass =
+            self.create_postproc_pass(encoder, &framebuffer.output_attachments()?);
+
+        framebuffer.encode_input(&mut render_pass, 0);
+        framebuffer.encode_previous_final_color(&mut render_pass, 1);
+        framebuffer.encode_motion_vector(&mut render_pass, 2);
+        self.taa_proc.encode(&mut render_pass);
 
         Ok(())
     }
@@ -196,7 +229,7 @@ impl RenderSystem {
                     },
                 })],
             );
-            framebuffer.encode_final_color(&mut render_pass, 0);
+            framebuffer.encode_input(&mut render_pass, 0);
             copy_swapchain_proc.encode(&mut render_pass);
         }
 
@@ -208,8 +241,6 @@ impl RenderSystem {
         // command_encoder.resolve_query_set(&self.query_set, 0..4, &self.query_buffer, 0);
         let command_buffer = command_encoder.finish();
         self.graphics_instance.queue().submit([command_buffer]);
-
-        self.graphics_instance.queue().get_timestamp_period();
     }
 
     pub fn update_instances(

@@ -6,6 +6,7 @@ struct GBuffer {
     @location(1) normal_roughness: vec4<f32>,
     @location(2) albedo_occlusion: vec4<f32>,
     @location(3) emissive: vec4<f32>,
+    @location(4) motion_vector: vec4<f32>,
 }
 
 #endif  // PBR_FRAGMENT_PARAMS_WGSL

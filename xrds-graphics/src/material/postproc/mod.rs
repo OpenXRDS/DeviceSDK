@@ -1,8 +1,10 @@
 mod copy_swapchain;
 mod deferred_lighting;
+mod taa;
 
 pub use copy_swapchain::*;
 pub use deferred_lighting::*;
+pub use taa::*;
 
 use wgpu::RenderPass;
 

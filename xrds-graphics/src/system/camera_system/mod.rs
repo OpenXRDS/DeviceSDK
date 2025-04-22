@@ -90,18 +90,11 @@ impl CameraSystem {
             });
 
         // TODO: backbuffering
-        let framebuffers = vec![
-            Framebuffer::new(
-                &self.graphics_instance,
-                extent,
-                TextureFormat::from(wgpu::TextureFormat::Rgba16Float),
-            ),
-            Framebuffer::new(
-                &self.graphics_instance,
-                extent,
-                TextureFormat::from(wgpu::TextureFormat::Rgba16Float),
-            ),
-        ];
+        let framebuffer = Framebuffer::new(
+            &self.graphics_instance,
+            extent,
+            TextureFormat::from(wgpu::TextureFormat::Rgba16Float),
+        );
 
         let copy_swapchain_proc = if let Some(output_format) = output_format {
             Some(CopySwapchainProc::new(
@@ -115,30 +108,46 @@ impl CameraSystem {
         self.cameras.insert(
             spawn_id.clone(),
             CameraInstance {
+                graphics_instance: self.graphics_instance.clone(),
                 camera_entity_id: *camera_entity_id,
                 cameras: cameras.to_vec(),
+                view_params: Vec::new(),
                 transforms: transforms.to_vec(),
                 cam_uniform_buffer: uniform_buffer,
                 cam_bind_group: bind_group,
-                framebuffers,
-                framebuffer_index: 0,
+                framebuffer,
                 copy_swapchain_proc,
+                frame_index: 0,
             },
         );
+
         Ok(spawn_id)
     }
 
     pub fn on_pre_render(&mut self) {
         for (_, camera) in &mut self.cameras {
             camera.begin_frame();
+            camera.update_view_params();
+            camera.update_uniform();
         }
     }
 
-    pub fn cameras(&self) -> Vec<CameraInstance> {
+    pub fn cameras(&self) -> Vec<&CameraInstance> {
         self.cameras
             .iter()
-            .map(|(_, camera_data)| camera_data.clone())
+            .map(|(_, camera_data)| camera_data)
             .collect()
+    }
+
+    pub fn cameras_mut(&mut self) -> Vec<&mut CameraInstance> {
+        self.cameras
+            .iter_mut()
+            .map(|(_, camera_data)| camera_data)
+            .collect()
+    }
+
+    pub fn camera_ids(&self) -> Vec<Uuid> {
+        self.cameras.keys().cloned().collect()
     }
 
     pub fn camera(&self, camera_id: &Uuid) -> Option<&CameraInstance> {

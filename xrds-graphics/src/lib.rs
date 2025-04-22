@@ -1,5 +1,6 @@
 mod asset;
 mod buffer;
+mod constant;
 mod error;
 mod graphics;
 mod material;
@@ -11,6 +12,7 @@ mod window;
 
 pub use asset::*;
 pub use buffer::*;
+pub use constant::*;
 pub use error::*;
 pub use graphics::*;
 pub use material::*;

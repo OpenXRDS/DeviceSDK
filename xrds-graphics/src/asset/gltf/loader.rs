@@ -980,7 +980,7 @@ impl GltfLoader {
                 gltf::texture::MagFilter::Nearest => wgpu::FilterMode::Nearest,
             }
         } else {
-            wgpu::FilterMode::Nearest
+            wgpu::FilterMode::Linear
         };
         let (min_filter, mipmap_filter) = if let Some(sampler_min) = sampler.min_filter() {
             match sampler_min {
@@ -1017,6 +1017,7 @@ impl GltfLoader {
                     mag_filter,
                     min_filter,
                     mipmap_filter,
+                    anisotropy_clamp: 16,
                     ..Default::default()
                 });
 

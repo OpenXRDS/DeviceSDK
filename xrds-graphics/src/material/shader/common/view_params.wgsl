@@ -6,7 +6,10 @@
 #endif
 
 struct ViewParams {
-    view_projection: mat4x4<f32>,
+    curr_view_projection: mat4x4<f32>,
+    prev_view_projection: mat4x4<f32>,
+    curr_jitter: vec2<f32>,
+    prev_jitter: vec2<f32>,
     inv_view_projection: mat4x4<f32>,
     view: mat4x4<f32>,
     inv_view: mat4x4<f32>,

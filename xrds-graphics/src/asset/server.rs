@@ -304,32 +304,60 @@ impl AssetServer {
 
         // Instance buffer layout.
         // Instance always located in slot 0. But shader location is 10~13
-        let mut vertex_layouts = vec![VertexBufferLayout {
-            array_stride: std::mem::size_of::<[f32; 16]>() as u64,
-            step_mode: wgpu::VertexStepMode::Instance,
-            attributes: &[
-                VertexAttribute {
-                    format: wgpu::VertexFormat::Float32x4,
-                    offset: 0,
-                    shader_location: 10,
-                },
-                VertexAttribute {
-                    format: wgpu::VertexFormat::Float32x4,
-                    offset: std::mem::size_of::<[f32; 4]>() as u64,
-                    shader_location: 11,
-                },
-                VertexAttribute {
-                    format: wgpu::VertexFormat::Float32x4,
-                    offset: std::mem::size_of::<[f32; 8]>() as u64,
-                    shader_location: 12,
-                },
-                VertexAttribute {
-                    format: wgpu::VertexFormat::Float32x4,
-                    offset: std::mem::size_of::<[f32; 12]>() as u64,
-                    shader_location: 13,
-                },
-            ],
-        }];
+        let mut vertex_layouts = vec![
+            VertexBufferLayout {
+                array_stride: std::mem::size_of::<[f32; 16]>() as u64,
+                step_mode: wgpu::VertexStepMode::Instance,
+                attributes: &[
+                    VertexAttribute {
+                        format: wgpu::VertexFormat::Float32x4,
+                        offset: 0,
+                        shader_location: 10,
+                    },
+                    VertexAttribute {
+                        format: wgpu::VertexFormat::Float32x4,
+                        offset: std::mem::size_of::<[f32; 4]>() as u64,
+                        shader_location: 11,
+                    },
+                    VertexAttribute {
+                        format: wgpu::VertexFormat::Float32x4,
+                        offset: std::mem::size_of::<[f32; 8]>() as u64,
+                        shader_location: 12,
+                    },
+                    VertexAttribute {
+                        format: wgpu::VertexFormat::Float32x4,
+                        offset: std::mem::size_of::<[f32; 12]>() as u64,
+                        shader_location: 13,
+                    },
+                ],
+            },
+            VertexBufferLayout {
+                array_stride: std::mem::size_of::<[f32; 16]>() as u64,
+                step_mode: wgpu::VertexStepMode::Instance,
+                attributes: &[
+                    VertexAttribute {
+                        format: wgpu::VertexFormat::Float32x4,
+                        offset: 0,
+                        shader_location: 14,
+                    },
+                    VertexAttribute {
+                        format: wgpu::VertexFormat::Float32x4,
+                        offset: std::mem::size_of::<[f32; 4]>() as u64,
+                        shader_location: 15,
+                    },
+                    VertexAttribute {
+                        format: wgpu::VertexFormat::Float32x4,
+                        offset: std::mem::size_of::<[f32; 8]>() as u64,
+                        shader_location: 16,
+                    },
+                    VertexAttribute {
+                        format: wgpu::VertexFormat::Float32x4,
+                        offset: std::mem::size_of::<[f32; 12]>() as u64,
+                        shader_location: 17,
+                    },
+                ],
+            },
+        ];
 
         info.vertex_buffers.iter().for_each(|vb| {
             vertex_layouts.push(VertexBufferLayout {
@@ -381,6 +409,13 @@ impl AssetServer {
                             }),
                             Some(ColorTargetState {
                                 // emissive
+                                format,
+                                blend: None,
+                                write_mask: ColorWrites::all(),
+                            }),
+                            Some(ColorTargetState {
+                                // motion_vector
+                                // format: Constant::INTERMEDIATE_MOTION_VECTOR_FORMAT,
                                 format,
                                 blend: None,
                                 write_mask: ColorWrites::all(),

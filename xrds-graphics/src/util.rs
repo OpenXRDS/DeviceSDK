@@ -1,5 +1,7 @@
 use ash::vk;
 
+use crate::Constant;
+
 pub fn required_wgpu_features() -> wgpu::Features {
     wgpu::Features::MULTIVIEW
         | wgpu::Features::PUSH_CONSTANTS
@@ -24,6 +26,7 @@ pub fn required_wgpu_limits() -> wgpu::Limits {
         max_push_constant_size: 64,
         max_color_attachment_bytes_per_sample: 64,
         max_sampled_textures_per_shader_stage: 64,
+        max_vertex_attributes: 32,
         ..Default::default()
     }
 }
@@ -58,4 +61,20 @@ pub fn wgpu_format_from_vk_format(format: vk::Format) -> anyhow::Result<wgpu::Te
         vk::Format::R8_UNORM => Ok(wgpu::TextureFormat::R8Unorm),
         _ => anyhow::bail!("Unsupported format"),
     }
+}
+
+/// Halton Sequence Generator
+///
+/// Generates the i-th element of the Halton sequence for a given base.
+/// Index should start from 1 for non-zero results.
+pub fn generate_halton_sequence(index: u64, base: u64) -> f32 {
+    let mut result = 0.0;
+    let mut f = 1.0 / base as f32;
+    let mut i = index;
+    while i > 0 {
+        result += f * (i % base) as f32;
+        i /= base;
+        f /= base as f32;
+    }
+    result
 }

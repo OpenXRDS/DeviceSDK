@@ -34,9 +34,10 @@ impl RuntimeHandler for App {
 
         // Object creation
         let objects = context.load_objects_from_gltf(self.gltf_path.as_str())?;
+        let cube = context.load_objects_from_gltf("assets/gltf/LightCube/LightCube.gltf")?;
         let directional_light_entity_id = context.create_light(
             &LightDescription {
-                color: LightColor::DIRECT_SUNLIGHT,
+                color: LightColor::OVERCAST_SKY,
                 intensity: 10.0,
                 ty: LightType::Directional,
                 cast_shadow: true,
@@ -47,6 +48,11 @@ impl RuntimeHandler for App {
             vec3(1.0, 0.0, 0.0),
             vec3(0.0, 1.0, 0.0),
             vec3(0.0, 0.0, 1.0),
+        ];
+        let positions = [
+            vec3(-4.0, 1.0, 0.0),
+            vec3(0.0, 1.0, 0.0),
+            vec3(4.0, 1.0, 0.0),
         ];
         let point_lights: Vec<_> = colors
             .iter()
@@ -69,21 +75,32 @@ impl RuntimeHandler for App {
 
         self.directional_light = Some(world.spawn_light(
             &directional_light_entity_id,
-            &ViewDirection::default().with_direction(vec3(0.05, -1.0, 0.25).normalize()),
+            &ViewDirection::default().with_direction(vec3(0.2, -1.0, 0.2).normalize()),
         )?);
         let uniform = rand::distr::Uniform::new(0.0f32, 1.0f32)?;
-        // self.point_lights = point_lights
-        //     .iter()
-        //     .map(|point_light_id| {
-        //         let distance = rng().sample(uniform) * 5.0;
-        //         let angle = rng().sample(uniform) * PI * 2.0;
-        //         let tx = distance * angle.cos();
-        //         let tz = distance * angle.sin();
-        //         let ty = rng().sample(uniform) * 4.0;
-        //         let transform = Transform::default().with_translation(glam::vec3(tx, ty, tz));
-        //         world.spawn_light(point_light_id, &transform).unwrap()
-        //     })
-        //     .collect();
+        self.point_lights = point_lights
+            .iter()
+            .enumerate()
+            .map(|(i, point_light_id)| {
+                // let distance = rng().sample(uniform) * 3.0;
+                // let angle = rng().sample(uniform) * PI * 2.0;
+                // let tx = distance * angle.cos();
+                // let tz = distance * angle.sin();
+                // let ty = rng().sample(uniform) * 4.0;
+                world
+                    .spawn(
+                        &cube[i],
+                        &Transform::default().with_translation(positions[i].clone()),
+                    )
+                    .unwrap();
+                world
+                    .spawn_light(
+                        point_light_id,
+                        &ViewDirection::default().with_eye(positions[i].clone()),
+                    )
+                    .unwrap()
+            })
+            .collect();
         match &self.options.mode {
             RenderMode::Multi(options) => {
                 for _ in 0..100 {
@@ -112,7 +129,6 @@ impl RuntimeHandler for App {
                         options.position.pos_y,
                         options.position.pos_z,
                     ))
-                    .with_rotation(Quat::from_rotation_y(-90.0f32.to_radians()))
                     .with_scale(glam::vec3(options.scale, options.scale, options.scale));
                 self.spawned = Some(world.spawn(&objects[0], &transform)?);
             }
