@@ -142,7 +142,8 @@ impl Framebuffer {
         let render_target = RenderTargetTexture::new(
             XrdsTexture::new(texture, output_format, size, view),
             RenderTargetOps::ColorAttachment(wgpu::Operations {
-                load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                // load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                load: wgpu::LoadOp::Load,
                 store: wgpu::StoreOp::Store,
             }),
         );

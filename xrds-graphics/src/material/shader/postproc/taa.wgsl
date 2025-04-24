@@ -13,8 +13,10 @@ var motion_vector_sampler: sampler;
 @group(2) @binding(1)
 var motion_vector: texture_2d_array<f32>;
 
+// TODO: make parameterized
 const RADIUS: i32 = 1;
 const RADIUS_FLOAT: f32 = 1.0;
+const ALPHA_SMOOTHING_FACTOR: f32 = 0.5;
 
 @fragment
 fn fs_main(in: SimpleQuadOutput) -> @location(0) vec4<f32> {
@@ -61,14 +63,24 @@ fn fs_main(in: SimpleQuadOutput) -> @location(0) vec4<f32> {
     let nmin = mean - std_dev * box_size;
     let nmax = mean + std_dev * box_size;
     let prev_uv = in.uv - mv.rg;
-    let hist = textureSample(history_color, history_color_sampler, prev_uv, in.view_index).rgb;
-    let clamped_hist = clamp(hist, nmin, nmax);
+    let hist_sample = textureSample(history_color, history_color_sampler, prev_uv, in.view_index);
+    let hist_rgb = hist_sample.rgb;
+    let hist_alpha = hist_sample.a;
 
-    let color_diff = length(curr.rgb - clamped_hist.rgb);
+    let clamped_hist = clamp(hist_rgb, nmin, nmax);
+
+    // let color_diff = length(curr.rgb - clamped_hist.rgb);
+    let color_diff = length(mean - clamped_hist.rgb);
     let change_factor = saturate(color_diff * 5.0);
-    let dynamic_alpha = mix(0.05, 1.0, change_factor);
+    let raw_dynamic_alpha = mix(0.05, 1.0, change_factor);
+    let smoothed_alpha = mix(hist_alpha, raw_dynamic_alpha, ALPHA_SMOOTHING_FACTOR);
 
-    let final_color = mix(clamped_hist, curr.rgb, dynamic_alpha);
+    let final_color = mix(clamped_hist, curr.rgb, smoothed_alpha);
 
-    return vec4<f32>(final_color.rgb, 1.0);
+    // return vec4<f32>(mv.rg, 0.0, 1.0);
+    if (length(hist_rgb) > 0.0) {
+        return vec4<f32>(final_color.rgb, smoothed_alpha);
+    } else {
+        return vec4<f32>(curr.rgb, 0.05);
+    }
 }

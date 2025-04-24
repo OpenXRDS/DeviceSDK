@@ -73,12 +73,8 @@ fn main(in: VertexOutput) -> GBuffer {
     var motion_ndc = curr_ndc - prev_ndc;
     var jitter_diff_clip = in.curr_jitter - in.prev_jitter;
     var final_motion_ndc = motion_ndc - jitter_diff_clip;
-    var motion_uv = vec4<f32>(final_motion_ndc * 0.5, 0.0, 1.0);
-
-    // motion_uv = vec4<f32>(curr_ndc * 0.5 + 0.5, 0.0, 1.0);  // Yellow
-    // motion_uv = vec4<f32>(prev_ndc * 0.5 + 0.5, 0.0, 1.0);  // Red/green gradient left-bottom is 0 right-top is 1
-    // motion_uv = vec4<f32>(motion_ndc * 0.5 + 0.5, 0.0, 1.0);  // Yellow
-    // motion_uv = vec4<f32>(jitter_diff_clip * 10.0 + 0.5, 0.0, 1.0);  // Darker yellow
+    // var motion_uv = vec4<f32>(final_motion_ndc * 0.5, 0.0, 1.0);
+    var motion_uv = vec4<f32>(final_motion_ndc * vec2<f32>(0.5, -0.5), 0.0, 1.0);
 
     output.position_metallic = vec4<f32>(in.world_position, pbr_params.occlusion_metallic_roughness.b);
     output.normal_roughness = vec4<f32>(n_final_normal.rgb, pbr_params.occlusion_metallic_roughness.g);

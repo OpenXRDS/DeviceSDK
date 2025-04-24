@@ -18,7 +18,7 @@ use wgpu::{
 
 use crate::{
     AssetId, AssetServer, CameraInstance, Constant, CopySwapchainProc, DeferredLightingProc,
-    GraphicsInstance, TaaProc, XrdsInstance, XrdsInstanceBuffer, XrdsPrimitive,
+    GraphicsInstance, SharpenProc, TaaProc, XrdsInstance, XrdsInstanceBuffer, XrdsPrimitive,
 };
 
 use super::{LightInstance, LightSystem};
@@ -38,6 +38,7 @@ pub struct RenderSystem {
     material_renderitem_map: HashMap<AssetId, Vec<RenderItem>>,
     deferred_lighting_proc: DeferredLightingProc,
     taa_proc: TaaProc,
+    sharpen_proc: SharpenProc,
     // query_set: QuerySet,
 }
 
@@ -56,6 +57,7 @@ impl RenderSystem {
 
         let deferred_lighting_proc = DeferredLightingProc::new(&graphics_instance)?;
         let taa_proc = TaaProc::new(&graphics_instance)?;
+        let sharpen_proc = SharpenProc::new(&graphics_instance)?;
 
         Ok(Self {
             graphics_instance,
@@ -64,6 +66,7 @@ impl RenderSystem {
             material_renderitem_map: HashMap::new(),
             deferred_lighting_proc,
             taa_proc,
+            sharpen_proc,
         })
     }
 
@@ -105,10 +108,8 @@ impl RenderSystem {
         self.do_taa(encoder, &framebuffer)?;
         framebuffer.swap_frame();
 
-        {
-            // Future work
-            // self.do_sharpen_filter();
-        }
+        self.do_sharpen(encoder, &framebuffer)?;
+        framebuffer.swap_frame();
 
         if let Some(copy_swapchain) = camera_instance.copy_swapchain_proc() {
             self.do_copy_swapchain(encoder, &framebuffer, copy_swapchain)?;
@@ -207,6 +208,20 @@ impl RenderSystem {
         framebuffer.encode_previous_final_color(&mut render_pass, 1);
         framebuffer.encode_motion_vector(&mut render_pass, 2);
         self.taa_proc.encode(&mut render_pass);
+
+        Ok(())
+    }
+
+    fn do_sharpen(
+        &mut self,
+        encoder: &mut CommandEncoder,
+        framebuffer: &Framebuffer,
+    ) -> anyhow::Result<()> {
+        let mut render_pass =
+            self.create_postproc_pass(encoder, &framebuffer.output_attachments()?);
+
+        framebuffer.encode_input(&mut render_pass, 0);
+        self.sharpen_proc.encode(&mut render_pass);
 
         Ok(())
     }

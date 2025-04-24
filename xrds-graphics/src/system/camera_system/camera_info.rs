@@ -106,8 +106,8 @@ impl CameraInfo {
             jittered_proj_mat = jitter_mat.mul_mat4(&proj_mat);
 
             // // Add jitter to translation component
-            // jittered_proj_mat.col_mut(2)[0] += offset_ndc_x;
-            // jittered_proj_mat.col_mut(2)[1] += offset_ndc_y;
+            // jittered_proj_mat.col_mut(2)[0] += jitter_ndc.x;
+            // jittered_proj_mat.col_mut(2)[1] += jitter_ndc.y;
         }
 
         let curr_view_proj_mat = jittered_proj_mat.mul_mat4(&view_mat);
@@ -116,9 +116,9 @@ impl CameraInfo {
 
         ViewParams {
             curr_view_projection: curr_view_proj_mat,
-            prev_view_projection: Mat4::IDENTITY, // fill with unit matrix
-            curr_jitter: jitter_ndc,
-            prev_jitter: Vec2::ZERO,
+            prev_view_projection: Mat4::IDENTITY, // Placeholder
+            curr_jitter: Vec2::new(jitter_ndc.x, -jitter_ndc.y),
+            prev_jitter: Vec2::ZERO, // Placeholder
             inv_view_projection: inv_view_proj_mat,
             view: view_mat,
             inv_view: inv_view_mat,

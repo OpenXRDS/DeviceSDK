@@ -94,9 +94,6 @@ fn fs_main(in: SimpleQuadOutput) -> @location(0) vec4<f32> {
     // emissive
     color += emissive.rgb;
 
-    // var r = textureSample(shadowmaps[0], shadowmap_sampler, in.uv).r;
-    // color = vec3<f32>(r, r, r);
-
     return vec4<f32>(color, 1.0);
 }
 
