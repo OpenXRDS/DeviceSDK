@@ -87,12 +87,12 @@ impl RuntimeHandler for App {
                 // let tx = distance * angle.cos();
                 // let tz = distance * angle.sin();
                 // let ty = rng().sample(uniform) * 4.0;
-                world
-                    .spawn(
-                        &cube[i],
-                        &Transform::default().with_translation(positions[i].clone()),
-                    )
-                    .unwrap();
+                // world
+                //     .spawn(
+                //         &cube[i],
+                //         &Transform::default().with_translation(positions[i].clone()),
+                //     )
+                //     .unwrap();
                 world
                     .spawn_light(
                         point_light_id,

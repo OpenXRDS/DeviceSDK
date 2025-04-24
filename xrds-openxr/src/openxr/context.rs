@@ -344,6 +344,13 @@ impl OpenXrContext {
             .as_mut()
             .create_swapchain(&selected_view_configuration, &graphics_instance)?;
 
+        log::info!(
+            "OpenXR swapchain texture size={}x{}, format={:?}",
+            swapchain_textures[0].size().width,
+            swapchain_textures[0].size().height,
+            swapchain_textures[0].format()
+        );
+
         let mut space_map = HashMap::new();
         for ty in session.enumerate_reference_spaces()? {
             let space = Arc::new(session.create_reference_space(ty, Posef::IDENTITY)?);

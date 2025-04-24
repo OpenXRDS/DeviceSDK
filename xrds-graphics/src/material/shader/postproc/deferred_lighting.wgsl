@@ -73,7 +73,7 @@ fn fs_main(in: SimpleQuadOutput) -> @location(0) vec4<f32> {
 
         if light_type == LIGHT_TYPE_DIRECTIONAL {
             var shade: vec3<f32> = get_point_shade(material_info, normalize(-light.direction), normal, view);
-            var shadow_factor = calculate_shadow(light, position);
+            var shadow_factor = max(calculate_shadow(light, position), 0.1);
 
             color += light.intensity * light.color * shade * shadow_factor;
         } else if light_type == LIGHT_TYPE_POINT {
