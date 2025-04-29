@@ -102,7 +102,7 @@ impl XrdsPrimitive {
             render_pass.set_vertex_buffer(i as u32 + Constant::VERTEX_ID_BASEMENT, v.slice());
         });
         if let Some(indices) = self.indices.as_ref() {
-            render_pass.set_index_buffer(indices.as_slice(), indices.format());
+            render_pass.set_index_buffer(indices.as_slice(), indices.format_as_wgpu().unwrap());
             render_pass.draw_indexed(
                 indices.as_range(),
                 0, /* all vertex buffers has same count */
@@ -133,7 +133,8 @@ impl XrdsPrimitive {
             self.vertices[self.position_index.unwrap() /* must be exists */].slice(),
         );
         if let Some(indices) = self.indices.as_ref() {
-            render_pass.set_index_buffer(indices.as_slice(), indices.format());
+            log::trace!("Index format: {:?}", indices.format());
+            render_pass.set_index_buffer(indices.as_slice(), indices.format_as_wgpu().unwrap());
             render_pass.draw_indexed(
                 indices.as_range(),
                 0, /* all vertex buffers has same count */

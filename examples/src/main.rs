@@ -19,6 +19,7 @@ struct ProgramArgs {
 fn main() -> anyhow::Result<()> {
     env_logger::Builder::from_default_env()
         .filter(Some("xrds_"), log::LevelFilter::Debug)
+        // .filter(Some("xrds_"), log::LevelFilter::Trace)
         // .filter_level(log::LevelFilter::Trace)
         .init();
     let args = ProgramArgs::try_parse()?;

@@ -182,13 +182,6 @@ impl World {
         let spawned_object = ObjectInstance::new(spawned_id);
         let object_data = ObjectData::new(*entity_id, *transform, State::default());
 
-        // log::debug!(
-        //     "Spawn object: {{spawn_id={}, entity_id={}, world_pos={:?}}}",
-        //     spawned_object.spawn_id(),
-        //     object_data.entity_id(),
-        //     object_data.transform().get_translation()
-        // );
-
         // Pre-defined camera from source (like gltf)
         // So use fixed size and format for camera rendering
         self.spawn_camera(entity_id, None, None)?;

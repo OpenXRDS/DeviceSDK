@@ -218,7 +218,7 @@ impl AssetServer {
             .create_buffer_init(&BufferInitDescriptor {
                 label: Some(&label),
                 contents: info.data,
-                usage: info.ty.into(),
+                usage: info.ty.as_usage(),
             });
 
         let xrds_buffer = XrdsBuffer::new(buffer, info.ty, info.stride);
@@ -447,6 +447,7 @@ impl AssetServer {
                     multisample: MultisampleState::default(),
                     multiview: self.graphics_instance.multiview(),
                 });
+        log::info!("Double sided: {}", info.options.material_input.double_sided);
 
         let xrds_material = XrdsMaterial {
             pipeline,

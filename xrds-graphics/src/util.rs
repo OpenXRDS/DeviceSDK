@@ -1,7 +1,5 @@
 use ash::vk;
 
-use crate::Constant;
-
 pub fn required_wgpu_features() -> wgpu::Features {
     wgpu::Features::MULTIVIEW
         | wgpu::Features::PUSH_CONSTANTS

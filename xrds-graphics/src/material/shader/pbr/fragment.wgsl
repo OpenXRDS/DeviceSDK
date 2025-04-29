@@ -27,11 +27,11 @@ fn main(in: VertexOutput) -> GBuffer {
     }
 #endif
 
+    var pos_dx: vec3<f32> = dpdx(in.world_position);
+    var pos_dy: vec3<f32> = dpdy(in.world_position);
 #ifdef VERTEX_INPUT_NORMAL
     var world_normal: vec3<f32> = normalize(in.normal);
 #else
-    var pos_dx: vec3<f32> = dpdx(in.world_position);
-    var pos_dy: vec3<f32> = dpdy(in.world_position);
     var world_normal: vec3<f32> = cross(pos_dx, pos_dy);
 #endif
 
@@ -42,8 +42,6 @@ fn main(in: VertexOutput) -> GBuffer {
     world_tangent = normalize(cross(world_bitangent, world_normal));
     var tbn = mat3x3<f32>(world_tangent, world_bitangent, world_normal); 
 #else
-    var pos_dx: vec3<f32> = dpdx(in.world_position);
-    var pos_dy: vec3<f32> = dpdy(in.world_position);
 #ifdef VERTEX_INPUT_TEXCOORD_0
     var tex_dx: vec3<f32> = dpdx(vec3<f32>(in.texcoord_0, 0.0));
     var tex_dy: vec3<f32> = dpdy(vec3<f32>(in.texcoord_0, 0.0));

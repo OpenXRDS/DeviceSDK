@@ -67,7 +67,7 @@ pub struct MultiRenderOptions {
 }
 
 #[derive(Default, clap::Args)]
-#[group(required = false, multiple = false)]
+#[group(required = false, multiple = true)]
 pub struct PositionOption {
     /// gltf origin in worldspace
     #[arg(long, default_value = "(0.0, 0.0, 0.0)")]

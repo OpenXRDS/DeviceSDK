@@ -16,6 +16,7 @@ impl XrdsVertexBuffer {
     pub fn slice(&self) -> BufferSlice<'_> {
         let start = self.offset as u64;
         let end = start + (self.count as u64 * self.buffer.stride());
+        log::trace!("Bind vertex buffer {} - {}", start, end);
         self.buffer.slice(start..end)
     }
 

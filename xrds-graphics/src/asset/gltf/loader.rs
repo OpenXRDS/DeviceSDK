@@ -19,7 +19,7 @@ use crate::{
     asset::types::{AssetHandle, AssetId},
     pbr::{self, AlphaMode},
     AssetServer, BufferAssetInfo, CameraComponent, CameraInfo, Component, Entity, Fov, GltfScene,
-    GraphicsInstance, LightComponent, LightDescription, LightType, MaterialAssetInfo,
+    GraphicsInstance, IndexFormat, LightComponent, LightDescription, LightType, MaterialAssetInfo,
     MaterialTextureInfo, MeshComponent, PbrMaterialInfo, PointLightDescription, PostRenderAction,
     ProjectionType, RenderTargetType, SpotLightDescription, TextureAssetInfo, TransformComponent,
     XrdsBuffer, XrdsBufferType, XrdsIndexBuffer, XrdsMaterialInstance, XrdsMesh, XrdsPrimitive,
@@ -276,9 +276,8 @@ impl GltfLoader {
             parent_transform.mul_mat4(&glam::Mat4::from_cols_array_2d(&node.transform().matrix()));
         let entity_id = Uuid::new_v4();
         let mut entity = Entity::default().with_id(&entity_id).with_name(&name);
-        entity.add_component(Component::Transform(
-            TransformComponent::default().with_local_transform(Transform::from_matrix(&transform)),
-        ));
+        let mut transform_component =
+            TransformComponent::default().with_local_transform(Transform::from_matrix(&transform));
 
         if let Some(mesh) = node.mesh() {
             let mesh = self.load_mesh(&mesh, &name, context, asset_server)?;
@@ -304,6 +303,7 @@ impl GltfLoader {
                     node_entity_map,
                     asset_server,
                 )?;
+                transform_component.add_child(child_entity.id());
                 node_entity_map.insert(child.index(), child_entity);
             }
             log::trace!(
@@ -312,6 +312,7 @@ impl GltfLoader {
                 instant.elapsed().as_secs_f32()
             );
         }
+        entity.add_component(Component::Transform(transform_component));
         log::trace!(
             "    - Load node #{} in {} secs",
             node.index(),
@@ -550,19 +551,23 @@ impl GltfLoader {
                     asset_server,
                 )?;
                 let buffer = asset_server.get_buffer(&handle).unwrap();
-
-                log::trace!(
-                    "            + range={:?}, format={:?}",
-                    indices.offset()
-                        ..indices.offset()
-                            + indices.count()
-                                * view.stride().unwrap_or(format.byte_size() as usize),
-                    format
-                );
+                let index_format = if let XrdsBufferType::Index(fmt) = buffer.ty() {
+                    log::trace!(
+                        "            + range={:?}, format={:?}",
+                        indices.offset()
+                            ..indices.offset()
+                                + indices.count()
+                                    * view.stride().unwrap_or(format.byte_size() as usize),
+                        fmt
+                    );
+                    fmt
+                } else {
+                    panic!("Invalid index buffer type")
+                };
 
                 Some(XrdsIndexBuffer {
                     buffer,
-                    index_format: format,
+                    index_format,
                     offset: indices.offset(),
                     count: indices.count(),
                 })
@@ -841,17 +846,39 @@ impl GltfLoader {
                 buffer
             } else {
                 let instant = Instant::now();
-                let raw_buffer = &context.raw_buffers[view.buffer().index()];
+                let raw_buffer: &Vec<u8> = &context.raw_buffers[view.buffer().index()];
                 let offset = view.offset();
                 let length = view.length();
                 log::trace!("            + Load buffer '{}'", name);
 
-                let registerd_buffer = asset_server.register_buffer(&BufferAssetInfo {
-                    id: &AssetId::Key(name.clone()),
-                    data: &raw_buffer[offset..(offset + length)],
-                    ty: buffer_type,
-                    stride: view.stride().map(|v| v as u64),
-                })?;
+                let is_index_and_u8 = match buffer_type {
+                    XrdsBufferType::Index(fmt) => match fmt {
+                        IndexFormat::U8 => true,
+                        _ => false,
+                    },
+                    _ => false,
+                };
+
+                let registerd_buffer = if is_index_and_u8 {
+                    let converted = raw_buffer[offset..(offset + length)]
+                        .iter()
+                        .map(|i| *i as u16)
+                        .collect::<Vec<_>>();
+                    asset_server.register_buffer(&BufferAssetInfo {
+                        id: &AssetId::Key(name.clone()),
+                        data: bytemuck::cast_slice(&converted),
+                        ty: XrdsBufferType::Index(IndexFormat::U16),
+                        stride: view.stride().map(|v| v as u64),
+                    })?
+                } else {
+                    asset_server.register_buffer(&BufferAssetInfo {
+                        id: &AssetId::Key(name.clone()),
+                        data: &raw_buffer[offset..(offset + length)],
+                        ty: buffer_type,
+                        stride: view.stride().map(|v| v as u64),
+                    })?
+                };
+
                 log::trace!(
                     "            - load buffer '{}' in {} secs",
                     name,
@@ -1006,6 +1033,14 @@ impl GltfLoader {
         } else {
             (wgpu::FilterMode::Linear, wgpu::FilterMode::Nearest)
         };
+        let anisotropy_clamp = if mag_filter == wgpu::FilterMode::Linear
+            && min_filter == wgpu::FilterMode::Linear
+            && mipmap_filter == wgpu::FilterMode::Linear
+        {
+            16
+        } else {
+            1
+        };
         let wgpu_sampler =
             self.graphics_instance
                 .device()
@@ -1017,7 +1052,7 @@ impl GltfLoader {
                     mag_filter,
                     min_filter,
                     mipmap_filter,
-                    anisotropy_clamp: 16,
+                    anisotropy_clamp,
                     ..Default::default()
                 });
 
@@ -1254,16 +1289,17 @@ fn vertex_format_from_data_type(
 }
 
 #[inline]
-fn data_type_to_index_format(data_type: gltf::accessor::DataType) -> wgpu::IndexFormat {
+fn data_type_to_index_format(data_type: gltf::accessor::DataType) -> IndexFormat {
     match data_type {
-        gltf::accessor::DataType::U16 => wgpu::IndexFormat::Uint16,
-        gltf::accessor::DataType::U32 => wgpu::IndexFormat::Uint32,
+        gltf::accessor::DataType::U8 => IndexFormat::U8,
+        gltf::accessor::DataType::U16 => IndexFormat::U16,
+        gltf::accessor::DataType::U32 => IndexFormat::U32,
         _ => {
             log::warn!(
                 "Unsupported index format type {:?}. Assume uint16",
                 data_type
             );
-            wgpu::IndexFormat::Uint16
+            IndexFormat::U16
         }
     }
 }

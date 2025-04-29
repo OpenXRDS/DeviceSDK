@@ -108,7 +108,6 @@ impl Preprocessor {
             });
         }
 
-        log::trace!("Final code = {}\n", final_code);
         log::trace!("Defs = {:?}", defs);
         log::trace!("Runtime defs = {:?}", runtime_defs);
 

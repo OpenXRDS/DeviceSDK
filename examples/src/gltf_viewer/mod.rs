@@ -1,4 +1,4 @@
-use std::{f32::consts::PI, option, path::PathBuf, time::Duration};
+use std::{f32::consts::PI, path::PathBuf, time::Duration};
 
 use glam::{vec3, Quat, Vec3};
 use rand::Rng;
@@ -75,7 +75,7 @@ impl RuntimeHandler for App {
 
         self.directional_light = Some(world.spawn_light(
             &directional_light_entity_id,
-            &ViewDirection::default().with_direction(vec3(0.2, -1.0, 0.2).normalize()),
+            &ViewDirection::default().with_direction(vec3(0.2, -1.0, -0.5).normalize()),
         )?);
         let uniform = rand::distr::Uniform::new(0.0f32, 1.0f32)?;
         self.point_lights = point_lights

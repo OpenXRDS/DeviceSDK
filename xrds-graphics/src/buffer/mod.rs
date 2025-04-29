@@ -8,7 +8,7 @@ pub use vertex::*;
 
 use std::{fmt::Debug, ops::RangeBounds};
 
-use wgpu::{BufferAddress, BufferSlice, IndexFormat, VertexFormat};
+use wgpu::{BufferAddress, BufferSlice, VertexFormat};
 
 #[derive(Debug, Clone, Copy)]
 pub enum XrdsBufferType {
@@ -53,9 +53,9 @@ impl XrdsBuffer {
     }
 }
 
-impl From<XrdsBufferType> for wgpu::BufferUsages {
-    fn from(value: XrdsBufferType) -> Self {
-        match value {
+impl XrdsBufferType {
+    pub fn as_usage(&self) -> wgpu::BufferUsages {
+        match self {
             XrdsBufferType::Index(_) => wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
             XrdsBufferType::Vertex(_) => wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             XrdsBufferType::Uniform => wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
