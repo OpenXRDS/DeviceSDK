@@ -149,9 +149,7 @@ impl ShadowmapPool {
             self.dummy_shadowmap.view();
             Constant::MAX_SHADOWMAP_COUNT - self.shadowmaps.len()
         ];
-        let views = [shadowmap_views, dummy_views].concat();
-
-        views
+        [shadowmap_views, dummy_views].concat()
     }
 
     pub fn sampler(&self) -> &wgpu::Sampler {

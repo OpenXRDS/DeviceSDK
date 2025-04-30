@@ -1,6 +1,6 @@
 use std::{f32::consts::PI, path::PathBuf, time::Duration};
 
-use glam::{vec3, Quat, Vec3};
+use glam::vec3;
 use rand::Rng;
 use xrds::{
     core::{
@@ -96,7 +96,7 @@ impl RuntimeHandler for App {
                 world
                     .spawn_light(
                         point_light_id,
-                        &ViewDirection::default().with_eye(positions[i].clone()),
+                        &ViewDirection::default().with_eye(positions[i]),
                     )
                     .unwrap()
             })

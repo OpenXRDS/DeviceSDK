@@ -137,9 +137,9 @@ impl From<&LightInstance> for XrdsLight {
         let mut light = XrdsLight::default();
         light.view = light_instance.view();
         light.view_proj = light_instance.view_proj();
-        light.cast_shadow = state.cast_shadow().then(|| 1).unwrap_or(0);
+        light.cast_shadow = state.cast_shadow().then_some(1).unwrap_or(0);
         light.shadow_map_index = state.shadow_map_index().unwrap_or(0);
-        light.light_color = state.color().clone();
+        light.light_color = *state.color();
         light.intensity = state.intensity();
         light.direction = state.view_direction().direction();
         light.position = state.view_direction().eye();

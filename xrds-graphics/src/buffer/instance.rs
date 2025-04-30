@@ -38,12 +38,11 @@ impl XrdsInstanceBuffer {
                 usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             });
-            let xrds_buffer = XrdsBuffer::new(
+            XrdsBuffer::new(
                 buffer,
                 XrdsBufferType::Vertex(VertexFormat::Float32x4),
                 Some(VertexFormat::Float32x4.size() * 8),
-            );
-            xrds_buffer
+            )
         };
         let buffers = [buffer_creation(), buffer_creation()];
 
@@ -53,7 +52,7 @@ impl XrdsInstanceBuffer {
     pub fn write(&mut self, queue: &wgpu::Queue, instances: &[XrdsInstance]) {
         self.index = 1 - self.index;
         queue.write_buffer(
-            &self.buffers[self.index].buffer(),
+            self.buffers[self.index].buffer(),
             0,
             bytemuck::cast_slice(instances),
         );

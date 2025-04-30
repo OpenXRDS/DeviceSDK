@@ -8,12 +8,14 @@ use crate::{AssetId, AssetServer, Entity, XrdsPrimitive};
 use super::Visitor;
 
 /// Contains primitive and it's root entity's id for instancing
+#[derive(Debug)]
 pub struct MappedPrimitive {
     pub primitive: XrdsPrimitive,
     pub local_transform: Transform,
     pub root_entity_id: Uuid,
 }
 
+#[derive(Debug, Default)]
 pub struct PrimitiveCollector {
     primitive_map: HashMap<AssetId, Vec<MappedPrimitive>>,
 }

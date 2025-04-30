@@ -1,4 +1,4 @@
-use std::{collections::HashMap, num::NonZeroU32, sync::Arc};
+use std::{cmp, collections::HashMap, num::NonZeroU32, sync::Arc};
 
 use glam::{quat, vec3, Quat, Vec3};
 use log::{debug, info, warn};
@@ -154,67 +154,69 @@ impl OpenXrContext {
             &reference_space,
         )?;
 
-        let (transform, xr_camera_infos) = if views.len() > 1 {
-            // Stereo case
-            let (left_pos, orientation) = Self::to_engine_pos_and_orientation(&views[0].pose);
-            let (right_pos, _) = Self::to_engine_pos_and_orientation(&views[1].pose);
+        let (transform, xr_camera_infos) = match views.len().cmp(&1) {
+            cmp::Ordering::Greater => {
+                // Stereo case
+                let (left_pos, orientation) = Self::to_engine_pos_and_orientation(&views[0].pose);
+                let (right_pos, _) = Self::to_engine_pos_and_orientation(&views[1].pose);
 
-            let center_pos = (left_pos + right_pos) * 0.5;
-            let center_transform = Transform::default()
-                .with_translation(center_pos)
-                .with_rotation(orientation);
+                let center_pos = (left_pos + right_pos) * 0.5;
+                let center_transform = Transform::default()
+                    .with_translation(center_pos)
+                    .with_rotation(orientation);
 
-            let left_offset = left_pos - center_pos;
-            let right_offset = right_pos - center_pos;
+                let left_offset = left_pos - center_pos;
+                let right_offset = right_pos - center_pos;
 
-            let relative_left_pos = orientation.inverse() * left_offset;
-            let relative_right_pos = orientation.inverse() * right_offset;
+                let relative_left_pos = orientation.inverse() * left_offset;
+                let relative_right_pos = orientation.inverse() * right_offset;
 
-            let left_fov = Fov {
-                left: views[0].fov.angle_left,
-                right: views[0].fov.angle_right,
-                up: views[0].fov.angle_up,
-                down: views[0].fov.angle_down,
-            };
-            let right_fov = Fov {
-                left: views[1].fov.angle_left,
-                right: views[1].fov.angle_right,
-                up: views[1].fov.angle_up,
-                down: views[1].fov.angle_down,
-            };
+                let left_fov = Fov {
+                    left: views[0].fov.angle_left,
+                    right: views[0].fov.angle_right,
+                    up: views[0].fov.angle_up,
+                    down: views[0].fov.angle_down,
+                };
+                let right_fov = Fov {
+                    left: views[1].fov.angle_left,
+                    right: views[1].fov.angle_right,
+                    up: views[1].fov.angle_up,
+                    down: views[1].fov.angle_down,
+                };
 
-            let xr_camera_infos = vec![
-                XrCameraInfo {
-                    fov: left_fov,
-                    translation: relative_left_pos,
-                },
-                XrCameraInfo {
-                    fov: right_fov,
-                    translation: relative_right_pos,
-                },
-            ];
-            (center_transform, xr_camera_infos)
-        } else if views.len() == 1 {
-            // Mono case
-            let (pos, orientation) = Self::to_engine_pos_and_orientation(&views[0].pose);
+                let xr_camera_infos = vec![
+                    XrCameraInfo {
+                        fov: left_fov,
+                        translation: relative_left_pos,
+                    },
+                    XrCameraInfo {
+                        fov: right_fov,
+                        translation: relative_right_pos,
+                    },
+                ];
+                (center_transform, xr_camera_infos)
+            }
+            cmp::Ordering::Equal => {
+                // Mono case
+                let (pos, orientation) = Self::to_engine_pos_and_orientation(&views[0].pose);
 
-            let center_transform = Transform::default()
-                .with_translation(pos)
-                .with_rotation(orientation);
+                let center_transform = Transform::default()
+                    .with_translation(pos)
+                    .with_rotation(orientation);
 
-            let fov = Fov {
-                left: views[0].fov.angle_left,
-                right: views[0].fov.angle_right,
-                up: views[0].fov.angle_up,
-                down: views[0].fov.angle_down,
-            };
-            let xr_camera_infos = vec![XrCameraInfo {
-                fov,
-                translation: Vec3::ZERO,
-            }];
-            (center_transform, xr_camera_infos)
-        } else {
-            (Transform::default(), vec![])
+                let fov = Fov {
+                    left: views[0].fov.angle_left,
+                    right: views[0].fov.angle_right,
+                    up: views[0].fov.angle_up,
+                    down: views[0].fov.angle_down,
+                };
+                let xr_camera_infos = vec![XrCameraInfo {
+                    fov,
+                    translation: Vec3::ZERO,
+                }];
+                (center_transform, xr_camera_infos)
+            }
+            cmp::Ordering::Less => (Transform::default(), vec![]),
         };
 
         self.state.views = views;

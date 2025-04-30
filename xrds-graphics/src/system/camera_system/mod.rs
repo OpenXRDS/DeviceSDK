@@ -106,7 +106,7 @@ impl CameraSystem {
         };
 
         self.cameras.insert(
-            spawn_id.clone(),
+            spawn_id,
             CameraInstance {
                 graphics_instance: self.graphics_instance.clone(),
                 camera_entity_id: *camera_entity_id,
@@ -125,7 +125,7 @@ impl CameraSystem {
     }
 
     pub fn on_pre_render(&mut self) {
-        for (_, camera) in &mut self.cameras {
+        for camera in &mut self.cameras.values_mut() {
             camera.begin_frame();
             camera.update_view_params();
             camera.update_uniform();
@@ -133,10 +133,7 @@ impl CameraSystem {
     }
 
     pub fn cameras(&self) -> Vec<&CameraInstance> {
-        self.cameras
-            .iter()
-            .map(|(_, camera_data)| camera_data)
-            .collect()
+        self.cameras.values().collect()
     }
 
     pub fn cameras_mut(&mut self) -> Vec<&mut CameraInstance> {

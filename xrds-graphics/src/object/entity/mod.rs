@@ -44,7 +44,7 @@ impl Entity {
     }
 
     pub fn with_id(mut self, id: &Uuid) -> Self {
-        self.id = id.clone();
+        self.id = *id;
         self
     }
 

@@ -49,11 +49,7 @@ impl Context {
         let mut asset_server = self.asset_server.write().unwrap();
         let gltf = futures::executor::block_on(loader.load_from_file(path, &mut asset_server))?;
 
-        Ok(gltf
-            .scenes
-            .iter()
-            .map(|gltf_scene| gltf_scene.id.clone())
-            .collect())
+        Ok(gltf.scenes.iter().map(|gltf_scene| gltf_scene.id).collect())
     }
 
     pub fn create_light(
@@ -62,7 +58,7 @@ impl Context {
         name: Option<&str>,
     ) -> anyhow::Result<Uuid> {
         let entity_id = Uuid::new_v4();
-        let mut entity = Entity::new(entity_id.clone(), name.unwrap_or("Unnamed light"));
+        let mut entity = Entity::new(entity_id, name.unwrap_or("Unnamed light"));
 
         let light_component = LightComponent::new(light_description);
         entity.add_component(Component::Light(light_component));

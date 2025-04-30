@@ -17,8 +17,9 @@ use wgpu::{
 };
 
 use crate::{
-    AssetId, AssetServer, CameraInstance, Constant, CopySwapchainProc, DeferredLightingProc,
-    GraphicsInstance, SharpenProc, TaaProc, XrdsInstance, XrdsInstanceBuffer, XrdsPrimitive,
+    AssetId, AssetServer, BloomProc, CameraInstance, Constant, CopySwapchainProc,
+    DeferredLightingProc, GraphicsInstance, SharpenProc, TaaProc, XrdsInstance, XrdsInstanceBuffer,
+    XrdsPrimitive,
 };
 
 use super::{LightInstance, LightSystem};
@@ -39,6 +40,7 @@ pub struct RenderSystem {
     deferred_lighting_proc: DeferredLightingProc,
     taa_proc: TaaProc,
     sharpen_proc: SharpenProc,
+    bloom_proc: BloomProc,
     // query_set: QuerySet,
 }
 
@@ -58,6 +60,7 @@ impl RenderSystem {
         let deferred_lighting_proc = DeferredLightingProc::new(&graphics_instance)?;
         let taa_proc = TaaProc::new(&graphics_instance)?;
         let sharpen_proc = SharpenProc::new(&graphics_instance)?;
+        let bloom_proc = BloomProc::new(&graphics_instance)?;
 
         Ok(Self {
             graphics_instance,
@@ -67,6 +70,7 @@ impl RenderSystem {
             deferred_lighting_proc,
             taa_proc,
             sharpen_proc,
+            bloom_proc,
         })
     }
 
@@ -100,10 +104,8 @@ impl RenderSystem {
         self.do_deferred_lighting(encoder, camera_instance, light_system, &framebuffer)?;
         framebuffer.swap_frame();
 
-        {
-            // Future work
-            // self.do_upscale();
-        }
+        self.do_bloom(encoder, &framebuffer)?;
+        framebuffer.swap_frame();
 
         self.do_taa(encoder, &framebuffer)?;
         framebuffer.swap_frame();
@@ -132,7 +134,7 @@ impl RenderSystem {
                         .encode(&mut render_pass, Constant::VERTEX_ID_INSTANCES);
 
                     light_system.encode_shadow_mapping(light_uuid, &mut render_pass);
-                    for (_, render_items) in &self.material_renderitem_map {
+                    for render_items in self.material_renderitem_map.values() {
                         // Get material from asset_server
                         for render_item in render_items {
                             render_item.primitive.encode_geometry(
@@ -192,6 +194,16 @@ impl RenderSystem {
 
         // draw deferred light with gbuffer, shadowmap and bulk light
         self.deferred_lighting_proc.encode(&mut render_pass);
+
+        Ok(())
+    }
+
+    fn do_bloom(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        framebuffer: &Framebuffer,
+    ) -> anyhow::Result<()> {
+        self.bloom_proc.encode_bloom(encoder, framebuffer);
 
         Ok(())
     }

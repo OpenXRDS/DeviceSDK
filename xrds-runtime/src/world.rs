@@ -25,6 +25,8 @@ pub struct World {
     spawned_objects: Arc<RwLock<HashMap<Uuid, ObjectData>>>,
 }
 
+type UpdateInstancesResult = (Vec<XrdsInstance>, HashMap<AssetId, Vec<RenderItem>>);
+
 impl World {
     pub(crate) fn new(
         asset_server: Arc<RwLock<AssetServer>>,
@@ -65,7 +67,7 @@ impl World {
     fn update_instances_data(
         &self,
         _camera_instance: &CameraInstance, /* For future usage (e.g. frustum culling) */
-    ) -> anyhow::Result<(Vec<XrdsInstance>, HashMap<AssetId, Vec<RenderItem>>)> {
+    ) -> anyhow::Result<UpdateInstancesResult> {
         let spawned_objects = self.spawned_objects.read().unwrap();
         let asset_server = self.asset_server.read().unwrap();
 
@@ -129,9 +131,8 @@ impl World {
         }
 
         let instances_data: Vec<XrdsInstance> = instances_map
-            .into_iter()
-            .map(|(_, instances)| instances)
-            .flatten()
+            .into_values()
+            .flat_map(|instances| instances)
             .collect();
 
         Ok((instances_data, material_renderitem_map))
@@ -144,16 +145,14 @@ impl World {
         let mut camera_framebuffer_map = HashMap::new();
         for camera_id in camera_ids {
             if let Some(camera) = self.camera_system.camera(&camera_id) {
-                let (instances_data, material_renderitem_map) =
-                    self.update_instances_data(camera)?;
-                self.render_system
-                    .update_instances(&instances_data, material_renderitem_map)?;
+                let result = self.update_instances_data(camera)?;
+                self.render_system.update_instances(&result.0, result.1)?;
                 let rendered_framebuffer = self.render_system.on_render(
                     &mut command_encoder,
-                    &camera,
+                    camera,
                     &self.light_system,
                 )?;
-                camera_framebuffer_map.insert(camera_id.clone(), rendered_framebuffer);
+                camera_framebuffer_map.insert(camera_id, rendered_framebuffer);
             }
         }
 
@@ -252,7 +251,7 @@ impl World {
 
                 let camera_spawn_id = self.camera_system.add_camera(
                     camera_entity_id,
-                    &cameras,
+                    cameras,
                     &transforms,
                     extent,
                     output_format,
@@ -304,7 +303,7 @@ impl World {
                 .xr_camera_infos
                 .iter()
                 .map(|c| {
-                    let mut transform = hmd_transform.clone();
+                    let mut transform = hmd_transform;
                     transform.translate(c.translation);
                     (c.fov, transform)
                 })

@@ -25,7 +25,7 @@ impl ShadowMapping {
 
         let pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
             label: Some("ShadowMapping"),
-            bind_group_layouts: &[&bind_group_layout],
+            bind_group_layouts: &[bind_group_layout],
             push_constant_ranges: &[PushConstantRange {
                 range: 0..std::mem::size_of::<glam::Mat4>() as _,
                 stages: ShaderStages::VERTEX,

@@ -21,7 +21,7 @@ impl TransformComponent {
     }
 
     pub fn with_parent(mut self, parent: &Uuid) -> Self {
-        self.parent = Some(parent.clone());
+        self.parent = Some(*parent);
         self
     }
 
@@ -31,7 +31,7 @@ impl TransformComponent {
     }
 
     pub fn set_parent(&mut self, parent: &Uuid) {
-        self.parent = Some(parent.clone());
+        self.parent = Some(*parent);
     }
 
     pub fn set_childs(&mut self, childs: &[Uuid]) {
@@ -39,7 +39,7 @@ impl TransformComponent {
     }
 
     pub fn add_child(&mut self, child: &Uuid) {
-        self.childs.push(child.clone());
+        self.childs.push(*child);
     }
 
     pub fn local_transform(&self) -> &Transform {

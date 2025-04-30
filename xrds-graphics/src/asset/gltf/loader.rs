@@ -181,7 +181,7 @@ impl GltfLoader {
                 asset_server.register_entities(&scene_entities);
                 scenes.push(GltfScene {
                     name: scene.name().map(|n| n.to_string()),
-                    id: scene_entities[0].id().clone(),
+                    id: *scene_entities[0].id(),
                 });
             }
             let mut res = Gltf::default().with_scenes(scenes);
@@ -243,10 +243,7 @@ impl GltfLoader {
         }
         scene_entity.add_component(Component::Transform(scene_transform_component));
 
-        let mut entities: Vec<_> = node_entity_map
-            .into_iter()
-            .map(|(_, entity)| entity)
-            .collect();
+        let mut entities: Vec<_> = node_entity_map.into_values().map(|entity| entity).collect();
         entities.insert(0, scene_entity);
 
         log::trace!(
@@ -851,13 +848,7 @@ impl GltfLoader {
                 let length = view.length();
                 log::trace!("            + Load buffer '{}'", name);
 
-                let is_index_and_u8 = match buffer_type {
-                    XrdsBufferType::Index(fmt) => match fmt {
-                        IndexFormat::U8 => true,
-                        _ => false,
-                    },
-                    _ => false,
-                };
+                let is_index_and_u8 = matches!(buffer_type, XrdsBufferType::Index(IndexFormat::U8));
 
                 let registerd_buffer = if is_index_and_u8 {
                     let converted = raw_buffer[offset..(offset + length)]

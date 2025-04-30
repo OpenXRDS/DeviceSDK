@@ -32,7 +32,7 @@ pub enum IfOps {
 /// - `#if` for conditional compilation with comparison.
 /// - Define replacement. (using `${}` or `#{}`)
 /// - Cycle detection for includes.
-#[derive(Debug, Clone)]
+#[derive(Debug, Default, Clone)]
 pub struct Preprocessor {
     include_targets: HashMap<String, String>,
 }
@@ -63,14 +63,6 @@ struct ProcessState<'caller, 'processor> {
     current_scope: &'processor mut u32,
     include_stack: &'processor mut Vec<String>,
     line_number: &'processor mut usize,
-}
-
-impl Default for Preprocessor {
-    fn default() -> Self {
-        Self {
-            include_targets: HashMap::default(),
-        }
-    }
 }
 
 impl Preprocessor {
@@ -112,7 +104,7 @@ impl Preprocessor {
         log::trace!("Runtime defs = {:?}", runtime_defs);
 
         Ok(wgpu::ShaderModuleDescriptor {
-            label: label,
+            label,
             source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Owned(final_code)),
         })
     }
@@ -250,7 +242,7 @@ impl Preprocessor {
                     *state.current_scope,
                     parent_scope_allow_write && !current_state,
                 );
-            } else if let Some(_) = IS_ENDIF.captures(line_str) {
+            } else if IS_ENDIF.captures(line_str).is_some() {
                 if *state.current_scope == 0 {
                     return Err(PreprocessError::InvalidScope {
                         line: line_str.to_owned(),
@@ -273,7 +265,7 @@ impl Preprocessor {
                         .to_owned();
                     if state.include_stack.contains(&module_name.to_owned()) {
                         return Err(PreprocessError::IncludeCycleDetected {
-                            module_name: module_name,
+                            module_name,
                             stack: state.include_stack.clone(),
                         });
                     }
@@ -288,13 +280,11 @@ impl Preprocessor {
                     output.push_str(&included_content);
                     state.include_stack.pop();
                 }
-            } else if let Some(_) = IS_COMMENT.captures(line_str) {
+            } else if IS_COMMENT.captures(line_str).is_some() {
                 // Remove all comment lines from source
-            } else {
-                if can_write_contents {
-                    output.push_str(line_str);
-                    output.push_str("\n");
-                }
+            } else if can_write_contents {
+                output.push_str(line_str);
+                output.push('\n');
             }
         }
 
@@ -419,15 +409,16 @@ pub enum PreprocessError {
     },
 }
 
-impl ShaderValue {
-    fn to_string(&self) -> String {
-        match self {
+impl Display for ShaderValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let str = match *self {
             ShaderValue::Uint(v) => v.to_string(),
             ShaderValue::Int(v) => v.to_string(),
             ShaderValue::Float(v) => v.to_string(),
             ShaderValue::Bool(v) => v.to_string(),
             ShaderValue::Def => "true".to_owned(),
-        }
+        };
+        f.write_str(&str)
     }
 }
 

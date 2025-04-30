@@ -120,7 +120,7 @@ impl AssetServer {
     }
 
     pub fn register_entities(&mut self, entities: &[Entity]) {
-        entities.into_iter().for_each(|entity| {
+        entities.iter().for_each(|entity| {
             self.resource_buffer
                 .entities
                 .insert(*entity.id(), entity.clone());
@@ -670,7 +670,7 @@ impl AssetServer {
             } else {
                 Some(wgpu::TextureViewDimension::D2)
             },
-            array_layer_count: is_array.then(|| size.depth_or_array_layers),
+            array_layer_count: is_array.then_some(size.depth_or_array_layers),
             ..Default::default()
         });
 
@@ -798,7 +798,7 @@ impl AssetServer {
     }
 
     pub fn get_entity(&self, uuid: &Uuid) -> Option<&Entity> {
-        self.resource_buffer.entities.get(&*uuid)
+        self.resource_buffer.entities.get(uuid)
     }
 
     pub fn generate_id(&self) -> AssetId {

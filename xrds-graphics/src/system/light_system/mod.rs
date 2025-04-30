@@ -103,8 +103,7 @@ impl LightSystem {
     ) -> anyhow::Result<Uuid> {
         let spawned_uuid = Uuid::new_v4();
 
-        let mut light_instance =
-            LightInstance::new(entity_id.clone(), *light_component.light_type());
+        let mut light_instance = LightInstance::new(*entity_id, *light_component.light_type());
         let cast_shadow = if light_component.cast_shadow() {
             if let Ok(increased) = self.shadowmap_pool.assign_index(&mut light_instance) {
                 if increased {
@@ -129,8 +128,8 @@ impl LightSystem {
         };
 
         let light_state = light_instance.state_mut();
-        light_state.set_transform(view_direction.clone());
-        light_state.set_color(light_component.color().clone());
+        light_state.set_transform(*view_direction);
+        light_state.set_color(*light_component.color());
         light_state.set_intensity(light_component.intensity());
         let range = match light_component.light_type() {
             LightType::Directional => f32::MAX,
@@ -142,8 +141,7 @@ impl LightSystem {
 
         let new_light_index = self.lights.len();
         self.lights.push(light_instance);
-        self.spawned_lights
-            .insert(spawned_uuid.clone(), new_light_index);
+        self.spawned_lights.insert(spawned_uuid, new_light_index);
 
         self.light_updated = true;
 
@@ -231,7 +229,7 @@ impl LightSystem {
             .expect("Unexpected light uuid");
         let light_offset = light_index * std::mem::size_of::<XrdsLight>();
 
-        render_pass.set_pipeline(&self.shadow_mapping.pipeline());
+        render_pass.set_pipeline(self.shadow_mapping.pipeline());
         render_pass.set_bind_group(
             Constant::BIND_GROUP_ID_SHADOWMAP_LIGHT,
             &self.shadow_mapping_bind_group,

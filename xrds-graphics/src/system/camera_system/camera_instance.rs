@@ -47,14 +47,14 @@ impl CameraInstance {
     pub fn set_fovs(&mut self, fovs: &[Fov]) {
         // TODO: error handling
         fovs.iter().enumerate().for_each(|(idx, fov)| {
-            self.cameras[idx].fov = fov.clone();
+            self.cameras[idx].fov = *fov;
         });
     }
 
     pub fn set_transforms(&mut self, transforms: &[Transform]) {
         // TODO: error handling
         transforms.iter().enumerate().for_each(|(idx, transform)| {
-            self.transforms[idx] = transform.clone();
+            self.transforms[idx] = *transform;
         });
     }
 

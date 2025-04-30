@@ -20,12 +20,19 @@ pub struct Framebuffer {
     gbuffer: GBuffer,
     sampler: wgpu::Sampler,
     gbuffer_bind_group: wgpu::BindGroup,
-    motion_vector_bind_group: wgpu::BindGroup, // Only for TAA
     extent: Extent3d,
     render_buffers: [RenderBuffer; 3],
+
+    motion_vector_bind_group: wgpu::BindGroup, // Only for TAA
+    // Maybe optional in future implementation: depends on global graphics option like enable bloom
+    bloom_downsample_buffers: Vec<RenderBuffer>,
+    bloom_blur_buffers: Vec<RenderBuffer>,
 }
 
 impl Framebuffer {
+    const MIN_BLOOM_DIM: u32 = 128;
+    const MAX_BLOOM_LEVEL: usize = 3;
+
     pub fn new(
         graphics_instance: &GraphicsInstance,
         size: Extent3d,
@@ -51,9 +58,30 @@ impl Framebuffer {
         });
         let bind_group_layout = BindGroupLayoutHelper::create_intermediate(device);
         let render_buffers = [
-            Self::create_render_buffer(device, size, output_format, &bind_group_layout, &sampler),
-            Self::create_render_buffer(device, size, output_format, &bind_group_layout, &sampler),
-            Self::create_render_buffer(device, size, output_format, &bind_group_layout, &sampler),
+            Self::create_render_buffer(
+                device,
+                size,
+                output_format,
+                &bind_group_layout,
+                &sampler,
+                Some("framebuffer0"),
+            ),
+            Self::create_render_buffer(
+                device,
+                size,
+                output_format,
+                &bind_group_layout,
+                &sampler,
+                Some("framebuffer1"),
+            ),
+            Self::create_render_buffer(
+                device,
+                size,
+                output_format,
+                &bind_group_layout,
+                &sampler,
+                Some("framebuffer2"),
+            ),
         ];
 
         let gbuffer_bind_group_layout = BindGroupLayoutHelper::create_gbuffer_params(device);
@@ -68,6 +96,39 @@ impl Framebuffer {
             &sampler,
         );
 
+        let bloom_levels = Self::calculate_bloom_levels(size.width, size.height);
+        let mut curr_width = size.width;
+        let mut curr_height = size.height;
+        let mut downsample_buffers = Vec::new();
+        let mut blur_buffers = Vec::new();
+        for _i in 0..bloom_levels {
+            curr_width = (curr_width / 2).max(1);
+            curr_height = (curr_height / 2).max(1);
+            let level_size = Extent3d {
+                width: curr_width,
+                height: curr_height,
+                depth_or_array_layers: size.depth_or_array_layers,
+            };
+            let downsample = Self::create_render_buffer(
+                device,
+                level_size,
+                output_format,
+                &bind_group_layout,
+                &sampler,
+                Some(format!("bloom_downsample_{}", _i).as_str()),
+            );
+            let blur = Self::create_render_buffer(
+                device,
+                level_size,
+                output_format,
+                &bind_group_layout,
+                &sampler,
+                Some(format!("bloom_blur_{}", _i).as_str()),
+            );
+            downsample_buffers.push(downsample);
+            blur_buffers.push(blur);
+        }
+
         Self {
             prev_index: 0,
             curr_index: 1,
@@ -77,7 +138,23 @@ impl Framebuffer {
             gbuffer_bind_group,
             motion_vector_bind_group,
             render_buffers,
+            bloom_downsample_buffers: downsample_buffers,
+            bloom_blur_buffers: blur_buffers,
         }
+    }
+
+    fn calculate_bloom_levels(width: u32, height: u32) -> usize {
+        let min_dim = width.min(height);
+        let mut levels = 0;
+        let mut current_dim = min_dim;
+        while current_dim / 2 >= Self::MIN_BLOOM_DIM && levels <= Self::MAX_BLOOM_LEVEL
+        /* Make dynamic for device spec */
+        {
+            current_dim /= 2;
+            levels += 1;
+        }
+
+        levels.max(1)
     }
 
     pub fn position_metallic(&self) -> &RenderTargetTexture {
@@ -112,15 +189,28 @@ impl Framebuffer {
         &self.extent
     }
 
+    pub fn bloom_downsample_target(&self, index: usize) -> &RenderTargetTexture {
+        &self.bloom_downsample_buffers[index].render_target
+    }
+
+    pub fn bloom_blur_target(&self, index: usize) -> &RenderTargetTexture {
+        &self.bloom_blur_buffers[index].render_target
+    }
+
+    pub fn downsample_level(&self) -> usize {
+        self.bloom_downsample_buffers.len()
+    }
+
     fn create_render_buffer(
         device: &wgpu::Device,
         size: Extent3d,
         output_format: TextureFormat,
         bind_group_layout: &wgpu::BindGroupLayout,
         sampler: &wgpu::Sampler,
+        label: Option<&str>,
     ) -> RenderBuffer {
         let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: None,
+            label,
             size,
             mip_level_count: 1,
             sample_count: 1,
@@ -169,11 +259,11 @@ impl Framebuffer {
     ) -> wgpu::BindGroup {
         device.create_bind_group(&BindGroupDescriptor {
             label: Some("Position-Metallic-BindGroup"),
-            layout: &bind_group_layout,
+            layout: bind_group_layout,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: wgpu::BindingResource::Sampler(&sampler),
+                    resource: wgpu::BindingResource::Sampler(sampler),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
@@ -183,7 +273,7 @@ impl Framebuffer {
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: wgpu::BindingResource::Sampler(&sampler),
+                    resource: wgpu::BindingResource::Sampler(sampler),
                 },
                 wgpu::BindGroupEntry {
                     binding: 3,
@@ -193,7 +283,7 @@ impl Framebuffer {
                 },
                 wgpu::BindGroupEntry {
                     binding: 4,
-                    resource: wgpu::BindingResource::Sampler(&sampler),
+                    resource: wgpu::BindingResource::Sampler(sampler),
                 },
                 wgpu::BindGroupEntry {
                     binding: 5,
@@ -203,7 +293,7 @@ impl Framebuffer {
                 },
                 wgpu::BindGroupEntry {
                     binding: 6,
-                    resource: wgpu::BindingResource::Sampler(&sampler),
+                    resource: wgpu::BindingResource::Sampler(sampler),
                 },
                 wgpu::BindGroupEntry {
                     binding: 7,
@@ -213,7 +303,7 @@ impl Framebuffer {
                 },
                 wgpu::BindGroupEntry {
                     binding: 8,
-                    resource: wgpu::BindingResource::Sampler(&sampler),
+                    resource: wgpu::BindingResource::Sampler(sampler),
                 },
                 wgpu::BindGroupEntry {
                     binding: 9,
@@ -233,11 +323,11 @@ impl Framebuffer {
     ) -> wgpu::BindGroup {
         device.create_bind_group(&BindGroupDescriptor {
             label: Some("MotionVector-BindGroup"),
-            layout: &bind_group_layout,
+            layout: bind_group_layout,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: wgpu::BindingResource::Sampler(&sampler),
+                    resource: wgpu::BindingResource::Sampler(sampler),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
@@ -261,7 +351,7 @@ impl Framebuffer {
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: wgpu::BindingResource::Sampler(&sampler),
+                    resource: wgpu::BindingResource::Sampler(sampler),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
@@ -288,6 +378,7 @@ impl Framebuffer {
         self.render_buffers.len() - self.prev_index - self.curr_index
     }
 
+    /// pre-defined color attachment. use ```output_target()``` for customizing attachment ops
     pub fn output_attachments(
         &self,
     ) -> anyhow::Result<Vec<Option<wgpu::RenderPassColorAttachment>>> {
@@ -301,6 +392,11 @@ impl Framebuffer {
         })];
 
         Ok(attachments)
+    }
+
+    pub fn output_target(&self) -> &RenderTargetTexture {
+        let output_index = self.get_next_index();
+        &self.render_buffers[output_index].render_target
     }
 
     pub fn encode_input(&self, render_pass: &mut wgpu::RenderPass<'_>, index: u32) {
@@ -319,5 +415,31 @@ impl Framebuffer {
 
     pub fn encode_gbuffer_params(&self, render_pass: &mut wgpu::RenderPass<'_>, index: u32) {
         render_pass.set_bind_group(index, &self.gbuffer_bind_group, &[]);
+    }
+
+    pub fn encode_bloom_downsample(
+        &self,
+        render_pass: &mut wgpu::RenderPass<'_>,
+        buffer_index: usize,
+        index: u32,
+    ) {
+        render_pass.set_bind_group(
+            index,
+            &self.bloom_downsample_buffers[buffer_index].bind_group,
+            &[],
+        );
+    }
+
+    pub fn encode_bloom_blur(
+        &self,
+        render_pass: &mut wgpu::RenderPass<'_>,
+        buffer_index: usize,
+        index: u32,
+    ) {
+        render_pass.set_bind_group(
+            index,
+            &self.bloom_blur_buffers[buffer_index].bind_group,
+            &[],
+        );
     }
 }

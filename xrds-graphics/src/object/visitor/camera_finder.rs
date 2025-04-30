@@ -6,7 +6,7 @@ use crate::{AssetServer, Entity, RenderTargetType};
 
 use super::Visitor;
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct CameraFinder {
     camera_entity_ids: Vec<Uuid>,
 }

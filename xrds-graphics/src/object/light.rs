@@ -62,7 +62,7 @@ impl LightColor {
     pub const COOL_WHITE_FLUORESCENT: Vec3 = vec3(0.83137256, 0.92156863, 1.0);
     pub const FULL_SPECTRUM_FLUORESCENT: Vec3 = vec3(1.0, 0.95686275, 0.9490196);
     pub const GROW_LIGHT_FLUORESCENT: Vec3 = vec3(1.0, 0.9372549, 0.96862745);
-    pub const BLACK_LIGHT_FLUORESCENT: Vec3 = vec3(0.65490197, 0.0, 1.0);
+    pub const BLACK_LIGHT_FLUORESCENT: Vec3 = vec3(0.654902, 0.0, 1.0);
     pub const MERCURY_VAPOR: Vec3 = vec3(0.84705883, 0.96862745, 1.0);
     pub const SODIUM_VAPOR: Vec3 = vec3(1.0, 0.81960785, 0.69803923);
     pub const METAL_HALIDE: Vec3 = vec3(0.9490196, 0.9882353, 1.0);
