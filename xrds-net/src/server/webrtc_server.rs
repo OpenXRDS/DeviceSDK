@@ -26,6 +26,12 @@ use tokio_tungstenite::tungstenite::error::Error;
 use tokio_tungstenite::accept_async;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::WebSocketStream as WsStream;
+use webrtc::api::media_engine::MediaEngine;
+use webrtc::api::APIBuilder;
+use webrtc::interceptor::registry::Registry;
+use webrtc::api::interceptor_registry::register_default_interceptors;
+use webrtc::peer_connection::configuration::RTCConfiguration;
+use webrtc::ice_transport::ice_server::RTCIceServer;
 
 use crate::common::data_structure::ICE_CANDIDATE_ACK;
 use crate::common::data_structure::{WebRTCMessage, WELCOME};
@@ -101,31 +107,31 @@ impl WebRTCServer {
         server
     }
 
-    // fn setup_webrtc(&mut self) -> Result<(), String> {
-    //     let mut m = MediaEngine::default();
-    //     let _ = m.register_default_codecs();
+    fn setup_webrtc(&mut self) -> Result<(), String> {
+        let mut m = MediaEngine::default();
+        let _ = m.register_default_codecs();
 
-    //     let mut registry = Registry::new();
-    //     registry = register_default_interceptors(registry, &mut m).map_err(|e| e.to_string())?;
+        let mut registry = Registry::new();
+        registry = register_default_interceptors(registry, &mut m).map_err(|e| e.to_string())?;
 
-    //     let api = APIBuilder::new()
-    //         .with_media_engine(m)
-    //         .with_interceptor_registry(registry)
-    //         .build();
+        let api = APIBuilder::new()
+            .with_media_engine(m)
+            .with_interceptor_registry(registry)
+            .build();
 
-    //     let rtc_config = RTCConfiguration {
-    //         ice_servers: vec![RTCIceServer {
-    //             urls: vec!["stun:stun.l.google.com:19302".to_owned()],
-    //             ..Default::default()
-    //         }],
-    //         ..Default::default()
-    //     };
+        let rtc_config = RTCConfiguration {
+            ice_servers: vec![RTCIceServer {
+                urls: vec!["stun:stun.l.google.com:19302".to_owned()],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
 
-    //     // self.api = Some(api);
-    //     // self.rtc_config = Some(rtc_config.clone());
+        // self.api = Some(api);
+        // self.rtc_config = Some(rtc_config.clone());
 
-    //     Ok(())
-    // }
+        Ok(())
+    }
 
     async fn add_client(&self, client_id: &String, peer_addr: &String, ws_stream: WsStream<TcpStream>) {
         println!("wait for client lock");  // temporal log

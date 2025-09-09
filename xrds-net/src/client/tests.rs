@@ -376,7 +376,7 @@ mod tests {
             .set_password("password")
             .build();
 
-        let response = client.set_url("test.rebex.net:21")
+        let client = client.set_url("test.rebex.net:21")
             .connect().unwrap();
 
         let ftp_payload = FtpPayload {
@@ -384,9 +384,11 @@ mod tests {
             payload_name: "readme.txt".to_string(),
             payload: None,
         };
-        let response = response.run_ftp_command(ftp_payload);
+        let response = client.run_ftp_command(ftp_payload);
         
         assert_eq!(response.error.is_none(), true);
+        let payload_str = String::from_utf8(response.payload.clone().unwrap()).unwrap();
+        println!("payload: {}", payload_str);
         assert!(response.payload.is_some());
     }
 
@@ -407,11 +409,11 @@ mod tests {
         let client = client_builder.set_protocol(PROTOCOLS::MQTT)
             .build();
 
-        let response = client.set_url("test.mosquitto.org:1883")
+        let client = client.set_url("test.mosquitto.org:1883")
             .connect().unwrap();
 
-        let response = response.mqtt_subscribe("hello/rumqtt");
-        assert_eq!(response.is_ok(), true);
+        let result = client.mqtt_subscribe("hello/rumqtt");
+        assert_eq!(result.is_ok(), true);
     }
 
     #[test]
@@ -609,7 +611,7 @@ mod tests {
         subscriber.connect(addr_str.as_str()).await.expect("Failed to connect");
 
         let (msg, subscriber) = wait_for_message(subscriber, WELCOME, 2).await;
-        let client_id = msg.client_id;
+        let _client_id = msg.client_id;
         // println!("Test: client_id received: {}", client_id);
         
         let subscriber = subscriber.join_session(&session_id).await.expect("Failed to join session");
@@ -642,7 +644,8 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn test_client_webrtc_send_video_file() {
-        CryptoProvider::install_default(ring::default_provider()).unwrap();
+        let crypto_result = CryptoProvider::install_default(ring::default_provider());
+        assert!(crypto_result.is_ok(), "Failed to install crypto provider: {:?}", crypto_result);
 
         let port = line!() + 8000;
         let server_handle = run_server(PROTOCOLS::WEBRTC, port);
@@ -653,7 +656,7 @@ mod tests {
         let mut publisher = WebRTCClient::new();
         publisher.connect(addr_str.as_str()).await.expect("Failed to connect");
 
-        let (msg, publisher) = wait_for_message(publisher, WELCOME, 2).await;
+        let (_msg, publisher) = wait_for_message(publisher, WELCOME, 2).await;
         
         let publisher = publisher.create_session().await.expect("Failed to create session");
         let (msg, publisher) = wait_for_message(publisher, CREATE_SESSION, 5).await;
@@ -663,7 +666,7 @@ mod tests {
         
         let mut publisher = publisher;
         publisher.publish(&session_id).await.expect("Failed to publish");
-        let (publish_result, publisher) = wait_for_message(publisher, OFFER, 5).await;
+        let (_publish_result, publisher) = wait_for_message(publisher, OFFER, 5).await;
         // println!("Test: publish_result received: {:?}", publish_result.sdp); // sdp is supposed to be None for this test
 
         // subscriber joins the session
@@ -671,7 +674,7 @@ mod tests {
         subscriber.connect(addr_str.as_str()).await.expect("Failed to connect");
 
         let (msg, subscriber) = wait_for_message(subscriber, WELCOME, 2).await;
-        let client_id = msg.client_id;
+        let _client_id = msg.client_id;
         // println!("Test: client_id received: {}", client_id);
         
         let subscriber = subscriber.join_session(&session_id).await.expect("Failed to join session");
@@ -681,7 +684,7 @@ mod tests {
         let mut subscriber = subscriber;
         subscriber.handle_offer(join_result.sdp.unwrap()).await.expect("Failed to handle offer");
 
-        let (answer_result, subscriber) = wait_for_message(subscriber, ANSWER, 5).await;
+        let (_answer_result, subscriber) = wait_for_message(subscriber, ANSWER, 5).await;
         // println!("Test: answer_result received: {:?}", answer_result.sdp); // sdp is supposed to be None for this test
 
         let (offer_result, mut publisher) = wait_for_message(publisher, ANSWER, 5).await;
