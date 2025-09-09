@@ -56,8 +56,8 @@ use crate::common::data_structure::{
 pub struct WebRTCServer {
     clients: Arc<AsyncMutex<HashMap<String, WebRTCClient>>>, // simple client_id, WebRTCClient
     sessions: Arc<AsyncMutex<HashMap<String, Session>>>,  // <session_id, Session>
-    // api: Option<webrtc::api::API>,   // in case of SFU
-    // rtc_config: Option<RTCConfiguration>,
+    api: Option<webrtc::api::API>,   // in case of SFU
+    rtc_config: Option<RTCConfiguration>,
 }
 
 /**
@@ -97,13 +97,13 @@ impl WebRTCClient {
 
 impl WebRTCServer {
     pub fn new() -> Self {
-        let server = WebRTCServer {
+        let mut server = WebRTCServer {
             clients: Arc::new(AsyncMutex::new(HashMap::new())),
             sessions: Arc::new(AsyncMutex::new(HashMap::new())),
-            // api: None,
-            // rtc_config: None,
+            api: None,
+            rtc_config: None,
         };
-        // server.setup_webrtc().unwrap();  // setup webrtc
+        server.setup_webrtc().unwrap();  // setup webrtc
         server
     }
 
@@ -124,11 +124,12 @@ impl WebRTCServer {
                 urls: vec!["stun:stun.l.google.com:19302".to_owned()],
                 ..Default::default()
             }],
+            ice_candidate_pool_size: 10,
             ..Default::default()
         };
 
-        // self.api = Some(api);
-        // self.rtc_config = Some(rtc_config.clone());
+        self.api = Some(api);
+        self.rtc_config = Some(rtc_config.clone());
 
         Ok(())
     }
@@ -537,7 +538,7 @@ impl WebRTCServer {
         let ice_candidates_json = message.ice_candidates.clone().unwrap_or_default();
         let ice_candidates: Vec<String> = serde_json::from_str(&ice_candidates_json).unwrap_or_default();
         // println!("ICE candidates: {:?}", ice_candidates);  // temporal log
-        // session.publisher_ice_candidates = Some(ice_candidates.clone());
+        session.publisher_ice_candidates = Some(ice_candidates.clone());
 
         // collect client ids from the session
         let participants = session.participants.clone();

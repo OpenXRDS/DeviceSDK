@@ -20,6 +20,7 @@ use std::io::Cursor;
 use std::sync::{Arc, Mutex};
 use std::{thread, vec};
 use std::time::Duration;
+use tokio::time::Instant;
 
 use mio::net::UdpSocket;
 use mio::{Events, Poll};
@@ -1130,7 +1131,9 @@ impl Client {
      *  - https://datatracker.ietf.org/doc/html/rfc9114#section-4.3.1
      */
     fn request_http3(&self) -> NetResponse {
-        // base response
+        let start_time = Instant::now();
+        let max_duration = Duration::from_secs(30);
+        
         let mut response = NetResponse {
             protocol: PROTOCOLS::HTTP3,
             status_code: 0,
@@ -1138,9 +1141,6 @@ impl Client {
             body: Vec::new(),
             error: None,
         };
-
-        // prepare a buffer for response body
-        let mut buf = [0; 65535];
 
         // meta data preparation
         let url = self.clone().url.unwrap();
@@ -1181,19 +1181,64 @@ impl Client {
         let mut events = mio::Events::with_capacity(1024);
         let mut is_exit = false;
 
+        let connection_timeout = Duration::from_secs(10);
+        let response_timeout = Duration::from_secs(15);
+        let connection_start = Instant::now();
+        let mut connection_established = false;
+        let mut request_sent_time: Option<Instant> = None;
+        let mut buf = [0; 65535];
+
         loop {  // looping is inevitable
+            // Overall timeout check
+            if start_time.elapsed() > max_duration {
+                response.error = Some("Request timed out after 30 seconds".to_string());
+                break;
+            }
+
             if is_exit {
                 break;
             }
-            poll.poll(&mut events, conn.timeout()).unwrap();
 
-            Self::receive_packets(&mut socket, &mut conn, &mut buf, local_addr, &mut http3_conn, &h3_config);
+            // Connection timeout check
+            if !connection_established && connection_start.elapsed() > connection_timeout {
+                response.error = Some("Connection establishment timeout".to_string());
+                break;
+            }
+
+            // Short poll timeout to prevent blocking
+            let poll_result = poll.poll(&mut events, Some(Duration::from_millis(50)));
+            if poll_result.is_err() {
+                response.error = Some("Polling error".to_string());
+                break;
+            }
+
+            if let Err(e) = Self::receive_packets(&mut socket, &mut conn, &mut buf, local_addr, &mut http3_conn, &h3_config) {
+                response.error = Some(e);
+                break;
+            }
 
             if let Some(h3) = http3_conn.as_mut() {
-                if !req_sent {
-                    let _ = Self::send_http3_request(h3, &mut conn, req_headers.as_slice());
-                    req_sent = true;
+                if !connection_established {
+                    connection_established = true;
                 }
+
+                if !req_sent {
+                    if let Err(e) = Self::send_http3_request(h3, &mut conn, req_headers.as_slice()) {
+                        response.error = Some(e);
+                        break;
+                    }
+                    req_sent = true;
+                    request_sent_time = Some(Instant::now());
+                }
+
+                // Response timeout check
+                if let Some(sent_time) = request_sent_time {
+                    if sent_time.elapsed() > response_timeout {
+                        response.error = Some("Response timeout".to_string());
+                        break;
+                    }
+                }
+
                 is_exit = match Self::handle_http3_events(h3, &mut conn, &mut buf, &mut response) {
                     Ok(exit) => exit,
                     Err(err) => {
@@ -1202,15 +1247,18 @@ impl Client {
                     }
                 };
             }
-            let _ = Self::send_packet(&mut socket, &mut conn, &mut out);
+
+            if let Err(e) = Self::send_packet(&mut socket, &mut conn, &mut out) {
+                response.error = Some(e);
+                break;
+            }
 
             if conn.is_closed() {
                 break;
             }
         }
 
-        return response;
-        
+        response
     }
 
     fn send_packet(
@@ -1231,13 +1279,17 @@ impl Client {
         local_addr: std::net::SocketAddr,
         http3_conn: &mut Option<quiche::h3::Connection>,
         h3_config: &quiche::h3::Config,
-    ) {
+    ) -> Result<(), String> {
         while let Ok((len, from)) = socket.recv_from(buf) {
             let recv_info = quiche::RecvInfo { to: local_addr, from };
-            if conn.recv(&mut buf[..len], recv_info).is_ok() && conn.is_established() && http3_conn.is_none() {
-                *http3_conn = Some(quiche::h3::Connection::with_transport(conn, h3_config).unwrap());
+            if let Err(e) = conn.recv(&mut buf[..len], recv_info) {
+                return Err(format!("QUIC recv failed: {:?}", e));
+            }
+            if conn.is_established() && http3_conn.is_none() {
+                *http3_conn = Some(quiche::h3::Connection::with_transport(conn, h3_config).map_err(|e| format!("HTTP3 connection failed: {:?}", e))?);
             }
         }
+        Ok(())
     }
     
     fn send_http3_request(

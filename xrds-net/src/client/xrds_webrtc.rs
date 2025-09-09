@@ -422,11 +422,16 @@ impl WebRTCClient {
     async fn stream_from_file(&mut self, sample_file: &str) -> Result<(), String> {
         // wait for the ice_state to be connected
         let pc = self.pc.as_ref().ok_or("PeerConnection is not set")?.clone();
-        let ice_state = pc.ice_connection_state();
+        // let ice_state = pc.ice_connection_state();
 
-        while ice_state != RTCIceConnectionState::Connected {
+        loop {
+            let ice_state = pc.ice_connection_state(); // Get fresh state each time
+            if ice_state == RTCIceConnectionState::Connected {
+                println!("ICE connection established!");
+                break;
+            }
             println!("Waiting for ICE connection state to be connected: {:?}", ice_state);
-            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
         }
 
         let file = File::open(sample_file).map_err(|e| e.to_string())?;
@@ -797,11 +802,11 @@ impl WebRTCClient {
                     println!("Ctrl+C the remote client to stop the demo");
                 } else if connection_state == RTCIceConnectionState::Closed 
                 || connection_state == RTCIceConnectionState::Disconnected {
-                    println!("Connection closed");
+                    println!("subscriber.Connection closed");
                     notify_tx_clone.notify_waiters();
                 } else if connection_state == RTCIceConnectionState::Failed {
-                    println!("Connection failed");
-                } 
+                    println!("subscriber.Connection failed");
+                }
                 Box::pin(async {})
             },
         ));

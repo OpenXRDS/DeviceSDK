@@ -37,7 +37,7 @@ mod tests {
                         return msg;
                     }
                 }
-                sleep(Duration::from_millis(100)).await;
+                sleep(Duration::from_millis(1000)).await;
             }
         })
         .await
@@ -65,7 +65,7 @@ mod tests {
         let ws = client.set_url(addr.as_str()).connect();
         if ws.is_err() {
             println!("{}", ws.err().unwrap());
-            panic!("Connection failed");
+            panic!("ws.Connection failed");
         } else {
             ws.unwrap()
         }
@@ -83,7 +83,7 @@ mod tests {
         let ftp = client.set_url(addr.as_str()).connect();
         if ftp.is_err() {
             println!("{}", ftp.err().unwrap());
-            panic!("Connection failed");
+            panic!("ftp.Connection failed");
         } else {
             ftp.unwrap()
         }
@@ -134,7 +134,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_server_ftp_connection() {
-        let current_line = line!();
+        let current_line = line!() + 8000;
         let server_handle = run_ftp_server(current_line);
         sleep(Duration::from_secs(2)).await;
 
@@ -150,7 +150,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_server_ftp_list() {
-        let current_line = line!(); // To avoid duplicate port number for each test
+        let current_line = line!() + 8000; // To avoid duplicate port number for each test
         let server_handle = run_ftp_server(current_line);
         sleep(Duration::from_secs(2)).await;
         
@@ -182,7 +182,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_server_ftp_noop() {
-        let current_line = line!(); // To avoid duplicate port number for each test
+        let current_line = line!() + 8000; // To avoid duplicate port number for each test
         let server_handle = run_ftp_server(current_line);
         sleep(Duration::from_secs(2)).await;
         
@@ -591,7 +591,7 @@ mod tests {
         let mut client = WebRTCClient::new();
         client.connect(addr_str.as_str()).await.expect("Failed to connect");
 
-        let (msg, client) = wait_for_message(client, "WELCOME", 2).await;
+        let (msg, client) = wait_for_message(client, WELCOME, 2).await;
         let client_id = msg.client_id;
         println!("Test: client_id received: {}", client_id);
 
