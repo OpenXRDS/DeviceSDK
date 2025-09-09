@@ -10,8 +10,11 @@ mod tests {
     use tokio::time::timeout;
     use crate::client::WebRTCClient;
     use rustls::crypto::{CryptoProvider, ring};
+    use ring::default_provider;
+    use once_cell::sync::OnceCell;
 
     static HTTP_ECHO_SERVER_URL: &str = "https://echo.free.beeceptor.com";
+    static CRYPTO_INIT: OnceCell<()> = OnceCell::new();
 
     async fn wait_for_message(mut client: WebRTCClient, msg_type: &str, timeout_secs: u64) -> (WebRTCMessage, WebRTCClient) {
         let msg = timeout(Duration::from_secs(timeout_secs), async {
@@ -27,6 +30,13 @@ mod tests {
         .await
         .expect(&format!("Timed out waiting for {}", msg_type));
         (msg, client)
+    }
+
+    fn init_crypto() {
+        CRYPTO_INIT.get_or_init(|| {
+        let result = CryptoProvider::install_default(default_provider());
+        assert!(result.is_ok(), "Failed to initialize crypto: {:?}", result);
+    });
     }
 
     fn run_server(protocol: PROTOCOLS, port: u32) -> tokio::task::JoinHandle<()> {
@@ -508,7 +518,7 @@ mod tests {
         let client = client_builder.set_protocol(PROTOCOLS::HTTP3)
             .build();
 
-        let result = client.set_url("https://quic.nginx.org:443").request();
+        let result = client.set_url("https://turn.keti.xrds.kr").request();
         let res_body = String::from_utf8(result.body).unwrap();
         println!("response body length: {}", res_body.len());
         println!("status code: {}", result.status_code);
@@ -582,7 +592,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_client_exchange_ice_candidate() {
-        CryptoProvider::install_default(ring::default_provider()).unwrap();
+        init_crypto();
 
         let port = line!() + 8000;
         let server_handle = run_server(PROTOCOLS::WEBRTC, port);
@@ -644,8 +654,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn test_client_webrtc_send_video_file() {
-        let crypto_result = CryptoProvider::install_default(ring::default_provider());
-        assert!(crypto_result.is_ok(), "Failed to install crypto provider: {:?}", crypto_result);
+        init_crypto();
 
         let port = line!() + 8000;
         let server_handle = run_server(PROTOCOLS::WEBRTC, port);
@@ -667,7 +676,7 @@ mod tests {
         let mut publisher = publisher;
         publisher.publish(&session_id).await.expect("Failed to publish");
         let (_publish_result, publisher) = wait_for_message(publisher, OFFER, 5).await;
-        // println!("Test: publish_result received: {:?}", publish_result.sdp); // sdp is supposed to be None for this test
+        println!("Test: publish_result received: {:?}", _publish_result.sdp); // sdp is supposed to be None for this test
 
         // subscriber joins the session
         let mut subscriber = WebRTCClient::new();
@@ -709,7 +718,7 @@ mod tests {
         publisher.start_streaming(Some(sample_file_path)).await.expect("Failed to start streaming");
 
         // wait till the video file is sent
-        sleep(Duration::from_secs(300)).await;
+        sleep(Duration::from_secs(120)).await;
 
         server_handle.abort();
         assert!(true);
