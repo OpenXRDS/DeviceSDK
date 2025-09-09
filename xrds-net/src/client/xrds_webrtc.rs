@@ -154,7 +154,7 @@ impl WebRTCClient {
     }
 
     /**
-     * These messages are from both signaling server and webrtc peer connection.
+     * These messages are from peer connection via Signaling server.
      */
     async fn handle_incoming_message(&mut self) {
         if let Some(ref mut rx) = self.incoming_rx {

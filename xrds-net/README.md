@@ -40,8 +40,8 @@ XRDS network library
 
 #### coap
 
-- coap: 0.19.1
-- [https://docs.rs/coap/latest/coap/](https://docs.rs/coap/latest/coap/)
+- coap: 0.19.1 [[https://docs.rs/coap/latest/coap/](https://docs.rs/coap/latest/coap/)]
+- coap-lite: 0.11.3 [https://docs.rs/coap-lite/0.3.1/coap_lite/]
 
 #### WebRTC
 
