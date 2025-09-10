@@ -1187,17 +1187,21 @@ impl Client {
         let mut events = mio::Events::with_capacity(1024);
         let mut is_exit = false;
 
-        let connection_timeout = Duration::from_secs(10);
-        let response_timeout = Duration::from_secs(15);
+        let handshake_timeout = Duration::from_secs(20);    // New: QUIC handshake timeout
+        let connection_timeout = Duration::from_secs(25);   // HTTP/3 connection timeout
+        let response_timeout = Duration::from_secs(30);     // Response timeout (increased)
+        
+        let handshake_start = Instant::now();
         let connection_start = Instant::now();
+        let mut handshake_completed = false;
         let mut connection_established = false;
         let mut request_sent_time: Option<Instant> = None;
         let mut buf = [0; 65535];
 
-        loop {  // looping is inevitable
+        loop {
             // Overall timeout check
             if start_time.elapsed() > max_duration {
-                response.error = Some("Request timed out after 30 seconds".to_string());
+                response.error = Some(format!("Request timed out after {} seconds", max_duration.as_secs()));
                 break;
             }
 
@@ -1205,42 +1209,79 @@ impl Client {
                 break;
             }
 
-            // Connection timeout check
-            if !connection_established && connection_start.elapsed() > connection_timeout {
-                response.error = Some("Connection establishment timeout".to_string());
+            // Handshake timeout check
+            if !handshake_completed && handshake_start.elapsed() > handshake_timeout {
+                response.error = Some("QUIC handshake timeout - check server availability".to_string());
                 break;
             }
 
-            // Short poll timeout to prevent blocking
-            let poll_result = poll.poll(&mut events, Some(Duration::from_millis(50)));
-            if poll_result.is_err() {
+            // Connection timeout check
+            if handshake_completed && !connection_established && connection_start.elapsed() > connection_timeout {
+                response.error = Some("HTTP/3 connection establishment timeout".to_string());
+                break;
+            }
+
+            // Adaptive polling based on connection state
+            let poll_timeout = if !handshake_completed {
+                Some(Duration::from_millis(100)) // More frequent during handshake
+            } else if !connection_established {
+                Some(Duration::from_millis(50))  // Frequent during HTTP/3 setup
+            } else if request_sent_time.is_none() {
+                Some(Duration::from_millis(50))  // Frequent until request sent
+            } else {
+                // After request sent, use longer timeouts to avoid missing data
+                Some(Duration::from_millis(500)) // Less frequent during response wait
+            };
+
+            if poll.poll(&mut events, poll_timeout).is_err() {
                 response.error = Some("Polling error".to_string());
                 break;
             }
 
+            // Check QUIC handshake completion
+            if !handshake_completed && conn.is_established() {
+                handshake_completed = true;
+                println!("QUIC handshake completed in {:?}", handshake_start.elapsed());
+            }
+
+            // Handle packet reception with better error handling
             if let Err(e) = Self::receive_packets(&mut socket, &mut conn, &mut buf, local_addr, &mut http3_conn, &h3_config) {
-                response.error = Some(e);
-                break;
+                // Don't fail on recoverable errors
+                if !e.contains("would block") && !e.contains("Done") {
+                    response.error = Some(e);
+                    break;
+                }
             }
 
             if let Some(h3) = http3_conn.as_mut() {
                 if !connection_established {
                     connection_established = true;
+                    println!("HTTP/3 connection established in {:?}", connection_start.elapsed());
                 }
 
                 if !req_sent {
-                    if let Err(e) = Self::send_http3_request(h3, &mut conn, req_headers.as_slice()) {
-                        response.error = Some(e);
-                        break;
+                    match Self::send_http3_request(h3, &mut conn, req_headers.as_slice()) {
+                        Ok(_) => {
+                            req_sent = true;
+                            request_sent_time = Some(Instant::now());
+                            println!("HTTP/3 request sent successfully");
+                        }
+                        Err(e) => {
+                            // Retry on certain errors
+                            if e.contains("stream limit") || e.contains("would block") {
+                                continue; // Retry on next iteration
+                            } else {
+                                response.error = Some(e);
+                                break;
+                            }
+                        }
                     }
-                    req_sent = true;
-                    request_sent_time = Some(Instant::now());
                 }
 
-                // Response timeout check
+                // Response timeout check (only after request sent)
                 if let Some(sent_time) = request_sent_time {
                     if sent_time.elapsed() > response_timeout {
-                        response.error = Some("Response timeout".to_string());
+                        response.error = Some(format!("Response timeout after {} seconds", response_timeout.as_secs()));
                         break;
                     }
                 }
@@ -1254,13 +1295,29 @@ impl Client {
                 };
             }
 
+            // Send packets with better error handling
             if let Err(e) = Self::send_packet(&mut socket, &mut conn, &mut out) {
-                response.error = Some(e);
-                break;
+                if !e.contains("Done") && !e.contains("would block") {
+                    response.error = Some(e);
+                    break;
+                }
             }
 
             if conn.is_closed() {
+                if response.status_code == 0 && response.body.is_empty() {
+                    response.error = Some("Connection closed without receiving response".to_string());
+                } else {
+                    println!("Connection closed after receiving partial response");
+                }
                 break;
+            }
+
+            if conn.is_draining() {
+                println!("Connection is draining");
+                if response.status_code > 0 {
+                    println!("Received response before connection drain");
+                    break;
+                }
             }
         }
 
@@ -1303,8 +1360,13 @@ impl Client {
         conn: &mut quiche::Connection,
         req: &[quiche::h3::Header],
     ) -> Result<(), String> {
-        h3.send_request(conn, req, true).map_err(|e| e.to_string())?;
-        Ok(())
+        let result = h3.send_request(conn, req, true).map_err(|e| e.to_string());
+        if result.is_err() {
+            return Err(result.err().unwrap());
+        } else {
+            return Ok(());
+        }
+        
     }
 
     fn handle_http3_events(
@@ -1313,50 +1375,101 @@ impl Client {
         buf: &mut [u8],
         response: &mut NetResponse
     ) -> Result<bool, String> {
-        while let Ok(event) = h3.poll(conn) {
-            match event {
-                // print event name
-                (_stream_id, quiche::h3::Event::Headers { list, .. }) => {
-                    for header in list {
-                        let header_name = String::from_utf8_lossy(header.name()).to_string();
-                        let header_value = String::from_utf8_lossy(header.value()).to_string();
-                        println!("{}: {}", header_name.clone(), header_value.clone());
-                        response.headers.push((header_name, header_value));
-                    }
-
-                    // put the status code
-                    for (k, v) in response.headers.iter() {
-                        if k == ":status" {
-                            let status_code = v.parse::<u16>().unwrap();
-                            response.status_code = status_code as u32;
+        let mut events_processed = 0;
+        let max_events_per_iteration = 100;
+        
+        while events_processed < max_events_per_iteration {
+            match h3.poll(conn) {
+                Ok((stream_id, event)) => {
+                    events_processed += 1;
+                    println!("HTTP/3 event on stream {}: {:?}", stream_id, event);
+                    
+                    match event {
+                        quiche::h3::Event::Headers { list, more_frames } => {
+                            println!("Received headers (count: {}, more_frames: {})", list.len(), more_frames);
+                            for header in list {
+                                let name = String::from_utf8_lossy(header.name());
+                                let value = String::from_utf8_lossy(header.value());
+                                println!("  {}: {}", name, value);
+                                
+                                if name == ":status" {
+                                    if let Ok(status_code) = value.parse::<u16>() {
+                                        response.status_code = status_code as u32;
+                                        println!("Status code set to: {}", status_code);
+                                    }
+                                }
+                                
+                                response.headers.push((name.to_string(), value.to_string()));
+                            }
+                            
+                            // If there's no body and no more frames, we might be done
+                            if !more_frames && response.status_code > 0 {
+                                println!("Response complete (headers only)");
+                                return Ok(true);
+                            }
+                        }
+                        quiche::h3::Event::Data => {
+                            let mut total_read = 0;
+                            loop {
+                                match h3.recv_body(conn, stream_id, buf) {
+                                    Ok(read) => {
+                                        if read > 0 {
+                                            response.body.extend_from_slice(&buf[..read]);
+                                            total_read += read;
+                                            println!("Received {} bytes of data (total this event: {})", read, total_read);
+                                        } else {
+                                            break;
+                                        }
+                                    }
+                                    Err(quiche::h3::Error::Done) => break,
+                                    Err(e) => {
+                                        println!("Error reading body: {:?}", e);
+                                        break;
+                                    }
+                                }
+                            }
+                            
+                            if total_read > 0 {
+                                println!("Total response body size: {} bytes", response.body.len());
+                            }
+                        }
+                        quiche::h3::Event::Finished => {
+                            println!("Stream {} finished. Final response - Status: {}, Body size: {}", 
+                                stream_id, response.status_code, response.body.len());
+                            return Ok(true);
+                        }
+                        quiche::h3::Event::Reset(error_code) => {
+                            println!("Stream {} reset with error: {}", stream_id, error_code);
+                            return Err(format!("Stream reset with error: {}", error_code));
+                        }
+                        quiche::h3::Event::GoAway => {
+                            println!("Received GoAway");
+                            if response.status_code > 0 {
+                                return Ok(true);
+                            }
+                            return Err("Server sent GoAway".to_string());
+                        }
+                        _ => {
+                            println!("Other HTTP/3 event: {:?}", event);
                         }
                     }
                 }
-                (stream_id, quiche::h3::Event::Data) => {
-                    if let Ok(read) = h3.recv_body(conn, stream_id, buf) {
-                        response.body.extend_from_slice(&buf[..read]);
-                    }
+                Err(quiche::h3::Error::Done) => {
+                    break; // No more events
                 }
-                (_, quiche::h3::Event::Finished) => {
-                    println!("Finished");
-                    conn.close(true, 0x100, b"kthxbye").map_err(|e| e.to_string())?;
-                    return Ok(true);
-                }
-                (_, quiche::h3::Event::Reset(_e)) => {
-                    conn.close(true, 0x100, b"kthxbye").map_err(|e| e.to_string())?;
-                    return Ok(true);
-                }
-                (_goaway_id, quiche::h3::Event::GoAway) => {},
-                _ => {
+                Err(e) => {
+                    println!("HTTP/3 poll error: {:?}", e);
+                    return Err(format!("HTTP/3 poll failed: {:?}", e));
                 }
             }
         }
+        
         Ok(false)
     }
 
     /********************************** */
     /*************** WebRTC *************/
-    /********************************** */
+/********************************** */
     
 
 
