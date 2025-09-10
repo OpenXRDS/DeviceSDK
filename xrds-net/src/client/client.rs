@@ -627,7 +627,13 @@ impl Client {
         headers.push(("Message ID".to_string(), coap_res_header.message_id.to_string()));
         headers.push(("Version".to_string(), coap_res_header.get_version().to_string()));
 
-        let body = String::from_utf8(coap_res_payload).unwrap();
+        let body_result = String::from_utf8(coap_res_payload);
+        let body: String;
+        if body_result.is_err() {
+            body = "".to_string();
+        } else {
+            body = body_result.unwrap();
+        }
 
         return NetResponse {
             protocol: self.protocol,
@@ -992,7 +998,7 @@ impl Client {
         config.verify_peer(false);
 
         config.set_application_protos(quiche::h3::APPLICATION_PROTOCOL).unwrap();
-        config.set_max_idle_timeout(5000);
+        config.set_max_idle_timeout(30_000);
         config.set_max_recv_udp_payload_size(MAX_DATAGRAM_SIZE);
         config.set_max_send_udp_payload_size(MAX_DATAGRAM_SIZE);
         config.set_initial_max_data(10_000_000);
@@ -1001,7 +1007,7 @@ impl Client {
         config.set_initial_max_stream_data_uni(1_000_000);
         config.set_initial_max_streams_bidi(100);
         config.set_initial_max_streams_uni(100);
-        config.set_disable_active_migration(true);
+        config.verify_peer(true);
 
         config
     }

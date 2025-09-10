@@ -32,6 +32,7 @@ use webrtc::interceptor::registry::Registry;
 use webrtc::api::interceptor_registry::register_default_interceptors;
 use webrtc::peer_connection::configuration::RTCConfiguration;
 use webrtc::ice_transport::ice_server::RTCIceServer;
+use webrtc::peer_connection::policy::ice_transport_policy::RTCIceTransportPolicy;
 
 use crate::common::data_structure::ICE_CANDIDATE_ACK;
 use crate::common::data_structure::{WebRTCMessage, WELCOME};
@@ -120,11 +121,31 @@ impl WebRTCServer {
             .build();
 
         let rtc_config = RTCConfiguration {
-            ice_servers: vec![RTCIceServer {
-                urls: vec!["stun:stun.l.google.com:19302".to_owned()],
-                ..Default::default()
-            }],
-            ice_candidate_pool_size: 10,
+            ice_servers: vec![
+                // STUN servers for NAT discovery
+                RTCIceServer {
+                    urls: vec![
+                        // "stun:stun.l.google.com:19302".to_owned(),
+                        // "stun:stun1.l.google.com:19302".to_owned(),
+                        "stun:stun.keti.xrds.kr:13478".to_owned(),
+                        "stun:stun.keti.xrds.kr:13479".to_owned(),
+                    ],
+                    ..Default::default()
+                },
+                // TURN server for relay when direct connection fails
+                RTCIceServer {
+                    urls: vec![
+                        "turn:turn.keti.xrds.kr:13478".to_owned(),
+                        "turn:turn.keti.xrds.kr:13479".to_owned(),
+                        "turn:turn.keti.xrds.kr:13478?transport=tcp".to_owned(),
+                        "turn:turn.keti.xrds.kr:13479?transport=tcp".to_owned(),
+                    ],
+                    username: "gganjang".to_owned(),
+                    credential: "keti007".to_owned(),
+                    ..Default::default()
+                },
+            ],
+            ice_transport_policy: RTCIceTransportPolicy::All,
             ..Default::default()
         };
 
