@@ -12,9 +12,25 @@ mod tests {
     use rustls::crypto::{CryptoProvider, ring};
     use ring::default_provider;
     use once_cell::sync::OnceCell;
+    use serial_test::serial;
 
     static HTTP_ECHO_SERVER_URL: &str = "https://echo.free.beeceptor.com";
     static CRYPTO_INIT: OnceCell<()> = OnceCell::new();
+
+    fn is_valid_h264(data: &[u8]) -> bool {
+        // Check for H264 NAL unit start codes
+        for window in data.windows(4) {
+            if window == [0x00, 0x00, 0x00, 0x01] {
+                return true;
+            }
+        }
+        for window in data.windows(3) {
+            if window == [0x00, 0x00, 0x01] {
+                return true;
+            }
+        }
+        false
+    }
 
     async fn wait_for_message(mut client: WebRTCClient, msg_type: &str, timeout_secs: u64) -> (WebRTCMessage, WebRTCClient) {
         let msg = timeout(Duration::from_secs(timeout_secs), async {
@@ -513,6 +529,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_http3_request1() {
         let client_builder = ClientBuilder::new();
         let client = client_builder.set_protocol(PROTOCOLS::HTTP3)
@@ -527,6 +544,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_http3_request2() {
         let client_builder = ClientBuilder::new();
         let client = client_builder.set_protocol(PROTOCOLS::HTTP3)
@@ -541,6 +559,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_http3_request_custom_header() {
         let client_builder = ClientBuilder::new();
         let client = client_builder.set_protocol(PROTOCOLS::HTTP3)
@@ -568,6 +587,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_http3_request_without_agent() {
         let client_builder = ClientBuilder::new();
         let client = client_builder.set_protocol(PROTOCOLS::HTTP3)
@@ -674,12 +694,13 @@ mod tests {
         println!("Test: session_id created: {}", session_id);
         
         let mut publisher = publisher;
-        publisher.publish(&session_id).await.expect("Failed to publish");
+        publisher.publish(&session_id).await.expect("Failed to publish");   // includes creating offer
         let (_publish_result, publisher) = wait_for_message(publisher, OFFER, 5).await;
         println!("Test: publish_result received: {:?}", _publish_result.sdp); // sdp is supposed to be None for this test
 
         // subscriber joins the session
         let mut subscriber = WebRTCClient::new();
+        subscriber.set_debug_file_path("test_output").await.expect("Failed to set debug file path");
         subscriber.connect(addr_str.as_str()).await.expect("Failed to connect");
 
         let (msg, subscriber) = wait_for_message(subscriber, WELCOME, 2).await;
@@ -701,27 +722,38 @@ mod tests {
 
         publisher.send_ice_candidates(false).await.expect("Failed to send ICE candidates");
 
-        let (msg, mut subscriber) = wait_for_message(subscriber, ICE_CANDIDATE, 5).await;
+        let (msg, mut subscriber) = wait_for_message(subscriber, ICE_CANDIDATE, 10).await;
         println!("Test: ICE candidate received: {:?}", msg.ice_candidates);
         subscriber.handle_ice_candidate(msg).await.expect("Failed to handle ICE candidate");
 
         subscriber.send_ice_candidates(true).await.expect("Failed to send ICE candidates");
         
-        let (msg, mut publisher) = wait_for_message(publisher, ICE_CANDIDATE_ACK, 5).await;
+        let (msg, mut publisher) = wait_for_message(publisher, ICE_CANDIDATE_ACK, 10).await;
         println!("Test: ICE candidate ACK received: {:?}", msg.ice_candidates);
         publisher.handle_ice_candidate(msg).await.expect("Failed to handle ICE candidate ACK");
 
         // let sample_file_path = "samples/tsm_1080p.mp4";
         let sample_file_path = "samples/sample_video.h264";
         // try open the file
-        std::fs::File::open(sample_file_path).expect("Failed to open file");
-        publisher.start_streaming(Some(sample_file_path)).await.expect("Failed to start streaming");
+        let file = std::fs::read(sample_file_path).expect("Failed to open sample video file");
+        let _ = publisher.start_streaming(Some(sample_file_path)).await.expect("Failed to start streaming");
 
         // wait till the video file is sent
         sleep(Duration::from_secs(120)).await;
 
+        let received_file = std::fs::read("test_output/received.h264").expect("Failed to open received file");
         server_handle.abort();
+
+        assert!(is_valid_h264(&file), "Sent file is not a valid H264 file");
+        assert!(is_valid_h264(&received_file), "Received file is not a valid H264 file");
+
+        let size_ratio = (file.len() as f64) / (received_file.len() as f64);
+        assert!(size_ratio > 0.9 && size_ratio < 1.1, "Sent file size {} is different from received file size {}", file.len(), received_file.len());
+
         assert!(true);
+        // assert!(file_size == received_file_size, "Sent file size {} is different from received file size {}", file_size, received_file_size);
+    
+        // The result is (), so no assertion is needed here
     }
  }
 

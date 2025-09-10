@@ -1,4 +1,5 @@
 use std::io::BufReader;
+use std::path::Path;
 use anyhow::Result as AnyResult;
 use std::time::Duration;
 use tokio::sync::Mutex;
@@ -10,6 +11,7 @@ use webrtc::ice_transport::ice_candidate::RTCIceCandidate;
 use webrtc::ice_transport::ice_server::RTCIceServer;
 use webrtc::ice_transport::ice_connection_state::RTCIceConnectionState;
 use webrtc::api::media_engine::{MediaEngine, MIME_TYPE_H264, MIME_TYPE_OPUS};
+use webrtc::peer_connection::policy::ice_transport_policy::RTCIceTransportPolicy;
 use tokio::sync::mpsc::{Sender, Receiver};
 use webrtc::rtp::packet::Packet;
 use webrtc::api::interceptor_registry::register_default_interceptors;
@@ -56,9 +58,10 @@ pub struct WebRTCClient {
     // audio_track: Option<Arc<TrackLocalStaticSample>>,
 
     ice_candidates: Option<Arc<Mutex<Vec<RTCIceCandidate>>>>,
-    rtp_sernder: Option<Arc<RTCRtpSender>>,
+    rtp_sender: Option<Arc<RTCRtpSender>>,
 
     read_flag: bool,
+    debug_file_path: Option<String>,
 }
 
 #[allow(dead_code)]
@@ -81,9 +84,10 @@ impl WebRTCClient {
             // audio_track: None,
 
             ice_candidates: None,
-            rtp_sernder: None,
+            rtp_sender: None,
 
             read_flag: false,
+            debug_file_path: None,
         }
     }
     
@@ -402,17 +406,50 @@ impl WebRTCClient {
         }
 
         if sample_file.is_none() {
-            // stream from camera
+            // stream from media stream (sequence of images or video device)
+            return self.stream_from_media_stream().await.map_err(|e| e.to_string());
         } else {
             // stream from file
-            self.stream_from_file(sample_file.unwrap()).await.map_err(|e| e.to_string())?;
+            return self.stream_from_file(sample_file.unwrap()).await.map_err(|e| e.to_string());
         }
+    }
 
+    pub async fn set_debug_file_path(&mut self, _file: &str) -> Result<(), String> {
+        self.debug_file_path = Some(_file.to_string());
+        // check if file path is valid
+        if let Some(ref path) = self.debug_file_path {
+            if !Path::new(path).exists() {
+                // create the directory
+                let result = std::fs::create_dir_all(path).map_err(|e| e.to_string())?;
+                if result != () {
+                    return Err("Failed to create directory".to_string());
+                }
+            }
+        }
         Ok(())
     }
 
-    async fn stream_from_camera(&mut self) -> Result<(), String> {
-        Ok(())
+    async fn wait_for_ice_connection(&self, pc: Arc<RTCPeerConnection>) -> Result<(), String> {
+        loop {
+            let ice_state = pc.ice_connection_state();
+            
+            match ice_state {
+                RTCIceConnectionState::Connected => return Ok(()),
+                RTCIceConnectionState::Failed => return Err("ICE connection failed".to_string()),
+                RTCIceConnectionState::Disconnected => return Err("ICE connection disconnected".to_string()),
+                RTCIceConnectionState::Closed => return Err("ICE connection closed".to_string()),
+                _ => {
+                    println!("Waiting for ICE connection state to be connected: {:?}", ice_state);
+                    tokio::time::sleep(Duration::from_secs(2)).await;
+                }
+            }
+        }
+    }
+
+    async fn stream_from_media_stream(&mut self) -> Result<(), String> {
+        Err("stream_from_media_stream is not implemented yet".to_string())
+
+        //TODO: To be implemented. not easy
     }
 
     /**
@@ -422,16 +459,17 @@ impl WebRTCClient {
     async fn stream_from_file(&mut self, sample_file: &str) -> Result<(), String> {
         // wait for the ice_state to be connected
         let pc = self.pc.as_ref().ok_or("PeerConnection is not set")?.clone();
-        // let ice_state = pc.ice_connection_state();
-
-        loop {
-            let ice_state = pc.ice_connection_state(); // Get fresh state each time
-            if ice_state == RTCIceConnectionState::Connected {
-                println!("ICE connection established!");
-                break;
-            }
-            println!("Waiting for ICE connection state to be connected: {:?}", ice_state);
-            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        
+        // Wait for ICE connection with timeout
+        let ice_connection_result = tokio::time::timeout(
+            Duration::from_secs(10),
+            self.wait_for_ice_connection(pc.clone())
+        ).await;
+    
+        match ice_connection_result {
+            Ok(Ok(_)) => println!("ICE connection established!"),
+            Ok(Err(e)) => return Err(e),
+            Err(_) => return Err("ICE connection timeout after 10 seconds".to_string()),
         }
 
         let file = File::open(sample_file).map_err(|e| e.to_string())?;
@@ -534,10 +572,33 @@ impl WebRTCClient {
             .build();
 
         let rtc_config = RTCConfiguration {
-            ice_servers: vec![RTCIceServer {
-                urls: vec!["stun:stun.l.google.com:19302".to_owned()],
-                ..Default::default()
-            }],
+            ice_servers: vec![
+                // STUN servers for NAT discovery
+                RTCIceServer {
+                    urls: vec![
+                        // "stun:stun.l.google.com:19302".to_owned(),
+                        // "stun:stun1.l.google.com:19302".to_owned(),
+                        "stun:stun.keti.xrds.kr:13478".to_owned(),
+                        "stun:stun.keti.xrds.kr:13478?transport=tcp".to_owned(),
+                        "stun:stun.keti.xrds.kr:13479".to_owned(),
+                        "stun:stun.keti.xrds.kr:13479?transport=tcp".to_owned(),
+                    ],
+                    ..Default::default()
+                },
+                // TURN server for relay when direct connection fails
+                RTCIceServer {
+                    urls: vec![
+                        "turn:turn.keti.xrds.kr:13478".to_owned(),
+                        "turn:turn.keti.xrds.kr:13478?transport=tcp".to_owned(),
+                        "turn:turn.keti.xrds.kr:13479".to_owned(),
+                        "turn:turn.keti.xrds.kr:13479?transport=tcp".to_owned(),
+                    ],
+                    username: "gganjang".to_owned(),
+                    credential: "keti007".to_owned(),
+                    ..Default::default()
+                },
+            ],
+            ice_transport_policy: RTCIceTransportPolicy::All, // Use this for testing
             ..Default::default()
         };
 
@@ -545,6 +606,13 @@ impl WebRTCClient {
         self.rtc_config = Some(rtc_config.clone());
         let pc = self.api.as_ref().unwrap().new_peer_connection(rtc_config)
             .await.map_err(|e| e.to_string())?;
+
+        // Add ICE gathering state monitoring
+        pc.on_ice_gathering_state_change(Box::new(move |state| {
+            println!("ICE Gathering State changed to: {:?}", state);
+            Box::pin(async {})
+        }));
+
         self.pc = Some(Arc::new(pc));
 
         Ok(())
@@ -609,8 +677,6 @@ impl WebRTCClient {
         // Connection to the server from the publisher
         let pc = api.new_peer_connection(rtc_config).await.map_err(|e| e.to_string())?;
 
-
-
         let video_track = Arc::new(TrackLocalStaticSample::new(
             RTCRtpCodecCapability {
                 mime_type: MIME_TYPE_H264.to_owned(),
@@ -625,46 +691,23 @@ impl WebRTCClient {
             "webrtc-rs".to_owned(),
         ));
 
-        self.ice_candidates = Some(Arc::new(Mutex::new(Vec::new())));
-        let candidates_vec = Arc::clone(&self.ice_candidates.as_ref().unwrap());
-        // for the given candidate, accumulate it to the vector, then send them all to the server when completed
-        pc.on_ice_candidate(Box::new({
-            let candidates = Arc::clone(&candidates_vec);
-            move |candidate| {
-                let candidates = Arc::clone(&candidates);
-                Box::pin(async move {
-                    if let Some(cand) = candidate {
-                        println!("ICE candidate: {:?}", cand);
-                        // accumulate the candidate to the vector
-                        candidates.lock().await.push(cand.clone());
-                    } else {
-                        // store the candidates to the client
-                        println!("ICE gathering completed: {}", candidates.lock().await.len());
-                    }
-                })
-            }
-        }));
-
-        pc.on_ice_connection_state_change(Box::new(|state| {
-            Box::pin(async move {
-                println!("publisher.ICE Connection State: {:?}", state);
-            })
-        }));
-
         // Add this newly created track to the PeerConnection
         let rtp_sender = pc.add_track(Arc::clone(&video_track) as Arc<dyn TrackLocal + Send + Sync>).await.map_err(|e| e.to_string())?;
-
-        self.rtp_sernder = Some(rtp_sender);
+        self.pc = Some(Arc::new(pc));
+        self.rtp_sender = Some(rtp_sender);
         self.video_track = Some(video_track);
 
-        let offer = pc.create_offer(None).await
-            .map_err(|e| e.to_string())?;
-        pc.set_local_description(offer.clone()).await.map_err(|e| e.to_string())?;
+        let offer = self.pc.as_ref().unwrap().create_offer(None).await.map_err(|e| e.to_string())?;
+        self.pc.as_ref().unwrap().set_local_description(offer.clone()).await.map_err(|e| e.to_string())?;
 
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-        // println!("Created offer: {:?}", self.pc.as_ref().unwrap().local_description().await.unwrap());
+        println!("Waiting for ICE candidate collection...");
+        let candidates = self.collect_ice_candidates(15).await?; // 15 second timeout
+        println!("Collected {} ICE candidates during offer", candidates.len());
+
+        self.ice_candidates = Some(Arc::new(Mutex::new(candidates)));
+        // for the given candidate, accumulate it to the vector, then send them all to the server when completed
         self.offer = Some(offer.clone());
-        self.pc = Some(Arc::new(pc));
+
         Ok(())
     }
 
@@ -820,10 +863,19 @@ impl WebRTCClient {
         
         let notify_rx2 = Arc::clone(&notify_rx);
         let pc_clone = self.pc.clone().unwrap();
-        let video_file = "test_output/received.h264";
+        let video_file = match &self.debug_file_path {
+            Some(path) => format!("{}/received.h264", path),
+            None => {
+                // Create a dedicated output directory in project root
+                let output_dir = "test_output";
+                std::fs::create_dir_all(output_dir).map_err(|e| e.to_string())?;
+                format!("{}/received.h264", output_dir)
+            }
+        };
+        println!("Saving received video to {}", video_file);
 
         let h264_writer: Arc<Mutex<dyn webrtc::media::io::Writer + Send + Sync>> =
-            Arc::new(Mutex::new(H264Writer::new(File::create(video_file).map_err(|e| e.to_string())?)));
+            Arc::new(Mutex::new(H264Writer::new(File::create(&video_file).map_err(|e| e.to_string())?)));
         let h264_writer2 = Arc::clone(&h264_writer);
 
         // set handlers for processing video/audio tracks
@@ -859,8 +911,6 @@ impl WebRTCClient {
                     tokio::spawn(async move {
                         let track = track.clone();
                         let notify = notify_rx2.clone();
-                        // let file = TokioFile::create("test_output/received.h264").await.unwrap();
-                        // save_to_disk_direct(file, track, notify).await.unwrap();
 
                         let writer = Arc::clone(&h264_writer2);
                         save_to_disk_by_writer2(writer, track, notify).await.unwrap();
@@ -871,6 +921,70 @@ impl WebRTCClient {
         }));
 
         Ok(())
+    }
+
+    pub async fn collect_ice_candidates(&mut self, timeout_secs: u64) -> Result<Vec<RTCIceCandidate>, String> {
+        let pc = self.pc.as_ref().ok_or("PeerConnection not set")?;
+    
+        let (ice_complete_tx, mut ice_complete_rx) = tokio::sync::oneshot::channel();
+        let (candidate_tx, mut candidate_rx) = tokio::sync::mpsc::channel(100);
+        
+        let ice_complete_tx = Arc::new(Mutex::new(Some(ice_complete_tx)));
+        let mut candidates = Vec::new();
+        
+        // Set up ICE candidate collection
+        pc.on_ice_candidate(Box::new({
+            let candidate_tx = candidate_tx.clone();
+            let ice_complete_tx = Arc::clone(&ice_complete_tx);
+            move |candidate| {
+                let candidate_tx = candidate_tx.clone();
+                let ice_complete_tx = Arc::clone(&ice_complete_tx);
+                Box::pin(async move {
+                    if let Some(cand) = candidate {
+                        println!("ICE candidate collected: {} (type: {})", cand.address, cand.typ);
+                        let _ = candidate_tx.send(cand).await;
+                    } else {
+                        println!("ICE gathering completed");
+                        if let Some(tx) = ice_complete_tx.lock().await.take() {
+                            let _ = tx.send(());
+                        }
+                    }
+                })
+            }
+        }));
+        
+        // Wait for completion or timeout
+        let collection_result = tokio::time::timeout(Duration::from_secs(timeout_secs), async {
+            loop {
+                tokio::select! {
+                    Some(candidate) = candidate_rx.recv() => {
+                        candidates.push(candidate);
+                    }
+                    _ = &mut ice_complete_rx => {
+                        println!("ICE gathering completed with {} candidates", candidates.len());
+                        break;
+                    }
+                }
+            }
+        }).await;
+        
+        match collection_result {
+            Ok(_) => {
+                if candidates.is_empty() {
+                    Err("No ICE candidates collected".to_string())
+                } else {
+                    Ok(candidates)
+                }
+            }
+            Err(_) => {
+                if candidates.is_empty() {
+                    Err(format!("ICE candidate collection timeout after {} seconds with no candidates", timeout_secs))
+                } else {
+                    println!("ICE candidate collection timeout but got {} candidates", candidates.len());
+                    Ok(candidates)
+                }
+            }
+        }
     }
 }
 
