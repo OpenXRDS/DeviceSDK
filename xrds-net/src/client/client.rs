@@ -14,7 +14,7 @@
  limitations under the License.
  */
 
-use std::fmt;
+use std::{fmt, result};
 use std::clone::Clone;
 use std::io::Cursor;
 use std::sync::{Arc, Mutex};
@@ -54,7 +54,6 @@ use quiche::h3::NameValue;
 
 
 const MAX_DATAGRAM_SIZE: usize = 1350;
-
 
 
 /**
@@ -345,11 +344,27 @@ impl Client {
         }
 
         let publish_result = self.mqtt_client.as_ref().unwrap()
-            .publish(topic.unwrap(), QoS::AtLeastOnce, false, message);
+            .publish(topic.unwrap(), QoS::AtLeastOnce, true, message);
         if publish_result.is_err() {
             return Err(publish_result.err().unwrap().to_string());
         } else {
-            return Ok(self);
+            // wait for puback confirmation in timeout
+            let start_time = Instant::now();
+            loop {
+                if start_time.elapsed() > Duration::from_secs(5) {
+                    return Err("Publish confirmation timed out.".to_string());
+                }
+
+                let message = self.rcv_mqtt();
+                if message.is_err() {
+                    return Err(message.err().unwrap().to_string());
+                } else {
+                    let message = message.unwrap();
+                    if message == b"PUBACK_CONFIRMED".to_vec() {
+                        return Ok(self); // Publish confirmed
+                    }
+                }
+            }
         }
     }
 
@@ -361,16 +376,50 @@ impl Client {
         let mqtt_connection = self.mqtt_connection.as_ref().unwrap();
         let notification = mqtt_connection.lock().unwrap().recv();
         match notification {
-            Ok(notification) => {
-                let mut result_vec: Vec<u8> = Vec::new();
-                if let Event::Incoming(Incoming::Publish(message)) = notification.unwrap() {
-                    result_vec = Vec::from(message.payload);
-                }
-                return Ok(result_vec);
-            },
-            Err(err) => {
-                let err_msg = format!("Error occurred while receiving the message: {:?}", err);
+            Err(recv_err) => {
+                let err_msg = format!("Error occurred while receiving the message: {:?}", recv_err);
                 return Err(err_msg);
+            }
+            Ok(inner_result) => {
+                match inner_result {
+                    Ok(event) => {
+                        match event {
+                            Event::Incoming(incoming) => {
+                                match incoming {
+                                    Incoming::Publish(message) => {
+                                        let result_vec = Vec::from(message.payload);
+                                        println!("Received MQTT Publish message: {:?}", result_vec);
+                                        return Ok(result_vec);
+                                    }
+                                    Incoming::Subscribe(message) => {
+                                        println!("Subscription success: {:?}", message);
+                                        Ok(Vec::new())
+                                    }
+                                    Incoming::SubAck(message) => {
+                                        println!("SubAck received: {:?}", message.return_codes);
+                                        // Return a special marker for SUBACK instead of empty Vec
+                                        Ok(b"SUBACK_CONFIRMED".to_vec())
+                                    }
+                                    Incoming::PubAck(message) => {
+                                        println!("PubAck received: {:?}", message);
+                                        Ok(b"PUBACK_CONFIRMED".to_vec())
+                                    }
+                                    _ => {
+                                        println!("Received other MQTT event: {:?}", incoming);
+                                        Ok(Vec::new()) // Still return empty for other events
+                                    }
+                                }
+                            }
+                            Event::Outgoing(_outgoing) => {
+                                Ok(Vec::new())
+                            }
+                        }
+                    }
+                    Err(conn_err) => {
+                        let err_msg = format!("Error occurred while receiving the message: {:?}", conn_err);
+                        return Err(err_msg);
+                    }
+                }
             }
         }
     }
@@ -389,7 +438,25 @@ impl Client {
         if subscription_result.is_err() {
             return Err(subscription_result.err().unwrap().to_string());
         } else {
-            return Ok(self);
+            // wait til subscription is confirmed with SUBACK in timeout
+            let start_time = Instant::now();
+            loop {
+                if start_time.elapsed() > Duration::from_secs(5) {
+                    return Err("Subscription confirmation timed out.".to_string());
+                }
+
+                let message = self.rcv_mqtt();
+                if message.is_err() {
+                    return Err(message.err().unwrap().to_string());
+                } else {
+                    let message = message.unwrap();
+                    if message == b"SUBACK_CONFIRMED".to_vec() {
+                        let mst_str = String::from_utf8(message.clone());
+                        println!("Subscription message string: {:?}", mst_str);
+                        return Ok(self); // Subscription confirmed
+                    }
+                }
+            }
         }
     }
 

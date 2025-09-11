@@ -8,7 +8,7 @@ mod tests {
     use crate::server::XRNetServer;
     use tokio::time::{sleep, Duration};
     use tokio::time::timeout;
-    use crate::client::WebRTCClient;
+    use crate::client::{WebRTCClient, StreamSource};
     use rustls::crypto::{CryptoProvider, ring};
     use ring::default_provider;
     use once_cell::sync::OnceCell;
@@ -465,7 +465,7 @@ mod tests {
     }
 
     #[test]
-    fn test_mqtt_connect() {
+    fn test_client_mqtt_connect() {
         let client_builder = ClientBuilder::new();
         let client = client_builder.set_protocol(PROTOCOLS::MQTT)
             .build();
@@ -476,20 +476,20 @@ mod tests {
     }
 
     #[test]
-    fn test_mqtt_subscribe() {
+    fn test_client_mqtt_subscribe() {
         let client_builder = ClientBuilder::new();
-        let client = client_builder.set_protocol(PROTOCOLS::MQTT)
+        let subscriber = client_builder.set_protocol(PROTOCOLS::MQTT)
             .build();
 
-        let client = client.set_url("test.mosquitto.org:1883")
+        let subscriber = subscriber.set_url("test.mosquitto.org:1883")
             .connect().unwrap();
 
-        let result = client.mqtt_subscribe("hello/rumqtt");
-        assert_eq!(result.is_ok(), true);
+        let subscriber = subscriber.mqtt_subscribe("hello/keti");
+        assert_eq!(subscriber.is_ok(), true);
     }
 
     #[test]
-    fn test_mqtt_publish() {
+    fn test_client_mqtt_publish() {
         let client_builder = ClientBuilder::new();
         let client = client_builder.set_protocol(PROTOCOLS::MQTT)
             .build();
@@ -498,49 +498,63 @@ mod tests {
             .connect().unwrap();
 
         let data: Vec<u8> = Vec::from("Hello, MQTT".as_bytes());
-        let response = response.send(data, Some("hello/rumqtt"));
+        let response = response.send(data, Some("hello/keti"));
         assert_eq!(response.is_ok(), true);
     }
 
     #[test]
-    fn test_mqtt_sub_pub_rcv() {
-        let client_builder = ClientBuilder::new();
-        let client = client_builder.set_protocol(PROTOCOLS::MQTT)
+    fn test_client_mqtt_sub_pub_rcv() {
+        let publisher_builder = ClientBuilder::new();
+        let publisher = publisher_builder.set_protocol(PROTOCOLS::MQTT)
             .build();
 
-        let client = client.set_url("test.mosquitto.org:1883")
+        let subscriber_builder = ClientBuilder::new();
+        let subscriber = subscriber_builder.set_protocol(PROTOCOLS::MQTT)
+            .build();
+
+        let publisher = publisher.set_url("test.mosquitto.org:1883")
             .connect().unwrap();
 
-        let response = client.mqtt_subscribe("hello/rumqtt");
-        assert_eq!(response.is_ok(), true);
+        let subscriber = subscriber.set_url("test.mosquitto.org:1883")
+            .connect().unwrap();
+
+        let subscriber = subscriber.mqtt_subscribe("hello/keti");
+        assert_eq!(subscriber.is_ok(), true);
 
         let data: Vec<u8> = Vec::from("Hello, MQTT".as_bytes());
-        let response = response.unwrap().send(data, Some("hello/rumqtt"));
-        assert_eq!(response.is_ok(), true);
+        // publishes data to topic "hello/rumqtt"
+        let publisher = publisher.send(data, Some("hello/keti"));
+        assert_eq!(publisher.is_ok(), true);
+        
 
         let mut count = 0;
+        let recv_str;
         loop {
             count += 1;
-            let rcv_result = response.clone().unwrap().rcv();
+            let rcv_result = subscriber.clone().unwrap().rcv();
             if rcv_result.is_ok() {
                 let rcv_data = rcv_result.unwrap();
-                let rcv_str = String::from_utf8(rcv_data).unwrap();
-                
-                if !rcv_str.is_empty() {
-                    println!("rcv: {}", rcv_str);
-                    assert_eq!(rcv_str.as_str(), "Hello, MQTT");
+                let rcv_str = String::from_utf8(rcv_data);
+                if rcv_str.is_ok() {
+                    let rcv_str_unwrapped = rcv_str.unwrap();
+                    println!("Received data (attempt {}): {}", count, rcv_str_unwrapped);
+                    recv_str = rcv_str_unwrapped.as_str();
+                    println!("Received data: {}", recv_str);
+                    assert_eq!(recv_str, "Hello, MQTT");
                     break;
+                } else {
+                    println!("Failed to convert received data to string");
                 }
             } else {
-                if count > 10 {
-                    break;
-                }
+                println!("No message received yet, attempt {}", count);
+                continue;
             }
         }
+
     }
 
     #[test]
-    fn test_quic_connect() {
+    fn test_client_quic_connect() {
         let client_builder = ClientBuilder::new();
         let client = client_builder.set_protocol(PROTOCOLS::QUIC)
             .build();
@@ -553,7 +567,7 @@ mod tests {
     }
 
     #[test]
-    fn test_quic_send() {
+    fn test_client_quic_send() {
         let client_builder = ClientBuilder::new();
         let client: crate::client::Client = client_builder.set_protocol(PROTOCOLS::QUIC)
             .build();
@@ -576,7 +590,7 @@ mod tests {
 
     #[test]
     #[serial]
-    fn test_http3_request() {
+    fn test_client_http3_request() {
         ensure_http3_test_spacing();
         
         // let (status_code, res_body, error) = run_http3_test_with_retry("https://www.litespeedtech.com/products/litespeed-web-server", 3);
@@ -592,7 +606,7 @@ mod tests {
 
     #[test]
     #[serial]
-    fn test_http3_request_custom_header() {
+    fn test_client_http3_request_custom_header() {
         ensure_http3_test_spacing();
 
         let client_builder = ClientBuilder::new();
@@ -772,7 +786,8 @@ mod tests {
         let sample_file_path = "samples/sample_video.h264";
         // try open the file
         let file = std::fs::read(sample_file_path).expect("Failed to open sample video file");
-        let _ = publisher.start_streaming(Some(sample_file_path)).await.expect("Failed to start streaming");
+        let stream_source = StreamSource::File(sample_file_path.to_string());
+        let _ = publisher.start_streaming(Some(stream_source)).await.expect("Failed to start streaming");
 
         // wait till the video file is sent
         sleep(Duration::from_secs(120)).await;
@@ -790,4 +805,3 @@ mod tests {
         // Size difference is normal due to network overhead and possible keyframe differences
     }
  }
-

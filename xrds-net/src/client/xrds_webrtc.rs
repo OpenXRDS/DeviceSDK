@@ -1,3 +1,4 @@
+use std::io::{Read, BufRead};
 use std::io::BufReader;
 use std::path::Path;
 use anyhow::Result as AnyResult;
@@ -36,9 +37,116 @@ use futures_util::stream::SplitSink;
 use std::error::Error;
 use tokio::sync::{mpsc, Notify};
 
+// WebcamReader
+use std::process::{Command, Stdio};
+
 use crate::common::data_structure::WebRTCMessage;
 use crate::common::data_structure::{CREATE_SESSION, LIST_SESSIONS, JOIN_SESSION, 
         LEAVE_SESSION, CLOSE_SESSION, LIST_PARTICIPANTS, OFFER, ANSWER, WELCOME, ICE_CANDIDATE, ICE_CANDIDATE_ACK};
+
+pub struct WebcamReader {
+    process: std::process::Child,
+    reader: BufReader<std::process::ChildStdout>,
+}
+
+impl WebcamReader {
+    pub async fn new(device_id: u32) -> Result<Self, String> {
+        let mut process = Command::new("ffmpeg")
+            .args(&[
+                "-f", "v4l2",
+                "-i", &format!("/dev/video{}", device_id),
+                "-c:v", "libx264",
+                "-preset", "ultrafast",
+                "-tune", "zerolatency",
+                "-f", "h264",
+                "-"
+            ])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|e| format!("Failed to start webcam capture: {}", e))?;
+
+        let stdout = process.stdout.take()
+            .ok_or("Failed to get stdout from webcam process")?;
+
+        Ok(WebcamReader {
+            process,
+            reader: BufReader::new(stdout),
+        })
+    }
+}
+
+impl Read for WebcamReader {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.reader.read(buf)
+    }
+}
+
+impl Drop for WebcamReader {
+    fn drop(&mut self) {
+        let _ = self.process.kill();
+    }
+}
+
+pub struct NetworkStreamReader {
+    reader: tokio::io::BufReader<TcpStream>,
+}
+
+// Implement std::io::Read for NetworkStreamReader using blocking read
+impl std::io::Read for NetworkStreamReader {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        use tokio::io::AsyncReadExt;
+        // Use block_in_place to allow blocking in async context
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(self.reader.read(buf))
+        })
+    }
+}
+
+impl NetworkStreamReader {
+    pub async fn new(url: &str) -> Result<Self, String> {
+        // Parse URL and connect to stream
+        let stream = TcpStream::connect(url)
+            .await
+            .map_err(|e| format!("Failed to connect to stream: {}", e))?;
+        
+        Ok(NetworkStreamReader {
+            reader: tokio::io::BufReader::new(stream),
+        })
+    }
+
+    pub async fn read(&mut self, buf: &mut [u8]) -> tokio::io::Result<usize> {
+        use tokio::io::AsyncReadExt;
+        self.reader.read(buf).await
+    }
+}
+
+pub enum StreamSource {
+    File(String),
+    Webcam(u32), // device ID
+    MediaStream(Box<dyn Read + Send>),
+    RawH264(Vec<u8>),
+}
+
+// For creating different types of readers
+pub struct StreamReaderFactory;
+
+impl StreamReaderFactory {
+    pub fn from_file(path: &str) -> Result<impl Read, std::io::Error> {
+        File::open(path)
+    }
+    
+    pub fn from_bytes(data: Vec<u8>) -> impl Read {
+        std::io::Cursor::new(data)
+    }
+    
+    pub async fn from_webcam(device_id: u32) -> Result<impl Read + Send, String> {
+        WebcamReader::new(device_id).await
+    }
+    pub async fn from_network_stream(url: &str) -> Result<impl Read + Send, String> {
+        NetworkStreamReader::new(url).await
+    }
+}
 
 pub struct WebRTCClient {
     client_id: Option<String>,
@@ -400,105 +508,71 @@ impl WebRTCClient {
     /* ****************************************** */
     /* WebRTC specific methods */
     /* ****************************************** */
-    pub async fn start_streaming(&mut self, sample_file: Option<&str>) -> Result<(), String> {
+    pub async fn start_streaming(&mut self, source: Option<StreamSource>) -> Result<(), String> {
         if self.client_id.is_none() {
             return Err("Client ID is not set".to_string());
         }
 
-        if sample_file.is_none() {
-            // stream from media stream (sequence of images or video device)
-            return self.stream_from_media_stream().await.map_err(|e| e.to_string());
-        } else {
-            // stream from file
-            return self.stream_from_file(sample_file.unwrap()).await.map_err(|e| e.to_string());
-        }
-    }
+        let video_track = self.video_track.as_ref()
+            .ok_or("Video track not set")?
+            .clone();
 
-    pub async fn set_debug_file_path(&mut self, _file: &str) -> Result<(), String> {
-        self.debug_file_path = Some(_file.to_string());
-        // check if file path is valid
-        if let Some(ref path) = self.debug_file_path {
-            if !Path::new(path).exists() {
-                // create the directory
-                let result = std::fs::create_dir_all(path).map_err(|e| e.to_string())?;
-                if result != () {
-                    return Err("Failed to create directory".to_string());
-                }
-            }
-        }
-        Ok(())
-    }
-
-    async fn wait_for_ice_connection(&self, pc: Arc<RTCPeerConnection>) -> Result<(), String> {
-        loop {
-            let ice_state = pc.ice_connection_state();
-            
-            match ice_state {
-                RTCIceConnectionState::Connected => return Ok(()),
-                RTCIceConnectionState::Failed => return Err("ICE connection failed".to_string()),
-                RTCIceConnectionState::Disconnected => return Err("ICE connection disconnected".to_string()),
-                RTCIceConnectionState::Closed => return Err("ICE connection closed".to_string()),
-                _ => {
-                    println!("Waiting for ICE connection state to be connected: {:?}", ice_state);
-                    tokio::time::sleep(Duration::from_secs(2)).await;
-                }
-            }
-        }
-    }
-
-    async fn stream_from_media_stream(&mut self) -> Result<(), String> {
-        Err("stream_from_media_stream is not implemented yet".to_string())
-
-        //TODO: To be implemented. not easy
-    }
-
-    /**
-     * Currently only supports H264
-     * TODO: add support for other codecs by using ffmpeg
-     */
-    async fn stream_from_file(&mut self, sample_file: &str) -> Result<(), String> {
-        // wait for the ice_state to be connected
+        // Wait for ICE connection
         let pc = self.pc.as_ref().ok_or("PeerConnection is not set")?.clone();
-        
-        // Wait for ICE connection with timeout
         let ice_connection_result = tokio::time::timeout(
             Duration::from_secs(10),
             self.wait_for_ice_connection(pc.clone())
         ).await;
-    
+
         match ice_connection_result {
             Ok(Ok(_)) => println!("ICE connection established!"),
             Ok(Err(e)) => return Err(e),
             Err(_) => return Err("ICE connection timeout after 10 seconds".to_string()),
         }
 
-        let file = File::open(sample_file).map_err(|e| e.to_string())?;
-        let reader = BufReader::new(file);
+        match source {
+            Some(StreamSource::File(path)) => {
+                let file = File::open(&path).map_err(|e| e.to_string())?;
+                self.stream_from_buf_read(BufReader::new(file), video_track).await
+            }
+            Some(StreamSource::Webcam(device_id)) => {
+                let webcam_reader = WebcamReader::new(device_id).await?;
+                self.stream_from_buf_read(BufReader::new(webcam_reader), video_track).await
+            }
+            Some(StreamSource::MediaStream(stream_reader)) => {
+                self.stream_from_buf_read(BufReader::new(stream_reader), video_track).await
+            }
+            Some(StreamSource::RawH264(data)) => {
+                let cursor = std::io::Cursor::new(data);
+                self.stream_from_buf_read(BufReader::new(cursor), video_track).await
+            }
+            None => {
+                // self.stream_from_media_stream().await.map_err(|e| e.to_string())
+                Err("No stream source provided".to_string())
+            }
+        }
+    }
 
-        //TODO: read a file with ffmpeg to divide tracks
-
+    async fn stream_from_buf_read<R: BufRead + Send + 'static>(
+        &self,
+        reader: R,
+        video_track: Arc<TrackLocalStaticSample>
+    ) -> Result<(), String> {
         let mut h264_reader = H264Reader::new(reader, 1_048_576);
-
         let mut ticker = tokio::time::interval(Duration::from_millis(42));
-        let video_track = self.video_track.as_ref().ok_or("Video track not set")?.clone();
-        
-        let video_track = video_track.clone();
         let mut total_nal_size = 0;
-
         let mut nal_count = 0;
+        let mut sent_metadata = false;
+
         tokio::spawn(async move {
-            // start time
             let start_time = std::time::Instant::now();
-            let mut sent_metadata = false;
+            
             while let Ok(nal) = h264_reader.next_nal() {
                 nal_count += 1;
                 total_nal_size += nal.data.len();
                 let nalu_type = nal.data[0] & 0x1F;
-                // println!("Sending NAL type: {}, size: {}", nalu_type, nal.data.len());
                 
                 if !sent_metadata && (nalu_type == 7 || nalu_type == 8) {
-                    
-                    // println!("Sending metadata: SPS/PPS, type: {}, size: {}", nalu_type, nal.data.len());
                     let _ = video_track.write_sample(&Sample {
                         data: nal.data.freeze(),
                         duration: Duration::from_millis(42),
@@ -516,14 +590,17 @@ impl WebRTCClient {
                 }
                 ticker.tick().await;
             }
-            let _ = pc.close().await;
-            println!("End of streaming, elapsed time: {:?}", start_time.elapsed());
-            println!("NAL count: {}, Total NAL size: {}", nal_count, total_nal_size);
+            
+            println!("Stream ended - elapsed: {:?}, NAL count: {}, Total size: {}", 
+                start_time.elapsed(), nal_count, total_nal_size);
         });
 
         Ok(())
     }
 
+    /**
+     * START OF CONNECTION SETUP METHODS 
+     */
     /**
      * Create an offer and sent it to the server.
      */
@@ -985,6 +1062,43 @@ impl WebRTCClient {
                 }
             }
         }
+    }
+    
+    async fn wait_for_ice_connection(&self, pc: Arc<RTCPeerConnection>) -> Result<(), String> {
+        loop {
+            let ice_state = pc.ice_connection_state();
+            
+            match ice_state {
+                RTCIceConnectionState::Connected => return Ok(()),
+                RTCIceConnectionState::Failed => return Err("ICE connection failed".to_string()),
+                RTCIceConnectionState::Disconnected => return Err("ICE connection disconnected".to_string()),
+                RTCIceConnectionState::Closed => return Err("ICE connection closed".to_string()),
+                _ => {
+                    println!("Waiting for ICE connection state to be connected: {:?}", ice_state);
+                    tokio::time::sleep(Duration::from_secs(2)).await;
+                }
+            }
+        }
+    }
+    
+    /**
+     * END OF CONNECTION SETUP METHODS
+     * **********************************************************************************************************
+     */
+
+    pub async fn set_debug_file_path(&mut self, _file: &str) -> Result<(), String> {
+        self.debug_file_path = Some(_file.to_string());
+        // check if file path is valid
+        if let Some(ref path) = self.debug_file_path {
+            if !Path::new(path).exists() {
+                // create the directory
+                let result = std::fs::create_dir_all(path).map_err(|e| e.to_string())?;
+                if result != () {
+                    return Err("Failed to create directory".to_string());
+                }
+            }
+        }
+        Ok(())
     }
 }
 
