@@ -1,6 +1,7 @@
 use std::io::{Read, BufRead};
 use std::io::BufReader;
 use std::path::Path;
+use std::ptr;
 use anyhow::Result as AnyResult;
 use std::time::Duration;
 use tokio::sync::Mutex;
@@ -39,52 +40,202 @@ use tokio::sync::{mpsc, Notify};
 
 // WebcamReader
 use std::process::{Command, Stdio};
+use nokhwa::pixel_format::RgbFormat;
+use nokhwa::utils::{RequestedFormat, RequestedFormatType, CameraIndex, Resolution, FrameFormat};
+use nokhwa::{Camera, CallbackCamera};
 
 use crate::common::data_structure::WebRTCMessage;
 use crate::common::data_structure::{CREATE_SESSION, LIST_SESSIONS, JOIN_SESSION, 
         LEAVE_SESSION, CLOSE_SESSION, LIST_PARTICIPANTS, OFFER, ANSWER, WELCOME, ICE_CANDIDATE, ICE_CANDIDATE_ACK};
 
 pub struct WebcamReader {
-    process: std::process::Child,
-    reader: BufReader<std::process::ChildStdout>,
+    receiver: mpsc::Receiver<Vec<u8>>,
+    _handle: tokio::task::JoinHandle<()>, // Use tokio JoinHandle instead of std thread
+    buffer: Option<Vec<u8>>, // Add this field to store data
 }
 
 impl WebcamReader {
     pub async fn new(device_id: u32) -> Result<Self, String> {
-        let mut process = Command::new("ffmpeg")
-            .args(&[
-                "-f", "v4l2",
-                "-i", &format!("/dev/video{}", device_id),
-                "-c:v", "libx264",
-                "-preset", "ultrafast",
-                "-tune", "zerolatency",
-                "-f", "h264",
-                "-"
-            ])
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-            .map_err(|e| format!("Failed to start webcam capture: {}", e))?;
-
-        let stdout = process.stdout.take()
-            .ok_or("Failed to get stdout from webcam process")?;
+        let (sender, receiver) = mpsc::channel(1000);
+        
+        let handle = tokio::task::spawn_blocking(move || {
+            if let Err(e) = Self::capture_webcam(device_id, sender) {
+                eprintln!("Webcam capture error: {}", e);
+            }
+        });
 
         Ok(WebcamReader {
-            process,
-            reader: BufReader::new(stdout),
+            receiver,
+            _handle: handle,
+            buffer: None, // Initialize buffer
         })
+    }
+
+    fn capture_webcam(device_id: u32, sender: mpsc::Sender<Vec<u8>>) -> Result<(), String> {
+        println!("Opening webcam device: {} with nokhwa", device_id);
+        
+        // Create camera with nokhwa
+        let requested = RequestedFormat::new::<RgbFormat>(RequestedFormatType::AbsoluteHighestFrameRate);
+        let mut camera = Camera::new(
+            CameraIndex::Index(device_id),
+            requested,
+        ).map_err(|e| format!("Failed to create camera: {}", e))?;
+        
+        // Open the camera
+        camera.open_stream().map_err(|e| format!("Failed to open camera stream: {}", e))?;
+        
+        println!("Camera {} opened successfully", device_id);
+        
+        let mut frame_count = 0;
+        let start_time = std::time::Instant::now();
+        
+        loop {
+            // Capture frame
+            let frame = camera.frame().map_err(|e| format!("Failed to capture frame: {}", e))?;
+            
+            // Convert frame to bytes
+            let image_buffer = frame.buffer().to_vec();
+            
+            // Create a simple frame format with header
+            let mut frame_data = Vec::new();
+            frame_data.extend_from_slice(b"FRAME"); // 5-byte header
+            frame_data.extend_from_slice(&(frame.resolution().width() as u32).to_le_bytes());
+            frame_data.extend_from_slice(&(frame.resolution().height() as u32).to_le_bytes());
+            frame_data.extend_from_slice(&image_buffer);
+            
+            // Send frame data through channel
+            if sender.blocking_send(frame_data).is_err() {
+                println!("Receiver dropped, stopping capture");
+                break;
+            }
+            
+            frame_count += 1;
+            
+            // Performance logging every 5 seconds (assuming ~30fps)
+            if frame_count % 150 == 0 {
+                let elapsed = start_time.elapsed();
+                let fps = frame_count as f64 / elapsed.as_secs_f64();
+                println!("Captured {} frames, FPS: {:.2}", frame_count, fps);
+            }
+            
+            // Small delay to control frame rate
+            std::thread::sleep(std::time::Duration::from_millis(33)); // ~30fps
+        }
+        
+        println!("Webcam capture ended. Total frames: {}", frame_count);
+        Ok(())
+    }
+
+    pub async fn wait_for_data(&mut self, timeout_secs: u64) -> Result<(), String> {
+        println!("Waiting for webcam data (timeout: {}s)...", timeout_secs);
+        
+        let timeout = std::time::Duration::from_secs(timeout_secs);
+        
+        match tokio::time::timeout(timeout, self.receiver.recv()).await {
+            Ok(Some(data)) => {
+                println!("✅ Webcam data detected: {} bytes", data.len());
+                
+                // Check for our custom frame header
+                if Self::is_valid_frame(&data) {
+                    println!("✅ Webcam output contains valid frame data");
+                    
+                    // Extract frame dimensions from header
+                    if data.len() >= 13 {
+                        let width = u32::from_le_bytes([data[5], data[6], data[7], data[8]]);
+                        let height = u32::from_le_bytes([data[9], data[10], data[11], data[12]]);
+                        println!("📊 Frame dimensions: {}x{}", width, height);
+                    }
+                } else {
+                    println!("⚠️ Webcam output may not be valid frame data");
+                    
+                    // Print data preview for debugging
+                    let preview: Vec<String> = data[..std::cmp::min(16, data.len())]
+                        .iter().map(|b| format!("{:02x}", b)).collect();
+                    println!("Data preview: {}", preview.join(" "));
+                }
+                
+                // Store data in buffer for Read implementation
+                self.buffer = Some(data);
+                Ok(())
+            }
+            Ok(None) => {
+                Err("Webcam capture channel closed".to_string())
+            }
+            Err(_) => {
+                Err(format!("No data received from webcam after {}s timeout", timeout_secs))
+            }
+        }
+    }
+
+    fn is_valid_frame(data: &[u8]) -> bool {
+        // Check for our custom frame header
+        data.len() >= 13 && &data[0..5] == b"FRAME"
+    }
+
+    pub async fn list_available_devices() -> Result<Vec<String>, String> {
+        println!("Enumerating available webcam devices with nokhwa...");
+        
+        let devices = nokhwa::query(nokhwa::utils::ApiBackend::Auto)
+            .map_err(|e| format!("Failed to query devices: {}", e))?;
+        
+        let device_list: Vec<String> = devices
+            .into_iter()
+            .enumerate()
+            .map(|(i, info)| format!("{}: {}", i, info.human_name()))
+            .collect();
+        
+        if device_list.is_empty() {
+            Err("No webcam devices found".to_string())
+        } else {
+            println!("Found {} webcam devices: {:?}", device_list.len(), device_list);
+            Ok(device_list)
+        }
     }
 }
 
-impl Read for WebcamReader {
+impl std::io::Read for WebcamReader {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        self.reader.read(buf)
+        // First check if we have buffered data from wait_for_data
+        if let Some(buffered_data) = self.buffer.take() {
+            let len = std::cmp::min(buf.len(), buffered_data.len());
+            buf[..len].copy_from_slice(&buffered_data[..len]);
+            
+            // If there's remaining data, put it back in buffer
+            if buffered_data.len() > len {
+                self.buffer = Some(buffered_data[len..].to_vec());
+            }
+            
+            return Ok(len);
+        }
+        
+        // Then try to get new data from receiver
+        match self.receiver.try_recv() {
+            Ok(data) => {
+                let len = std::cmp::min(buf.len(), data.len());
+                buf[..len].copy_from_slice(&data[..len]);
+                
+                // If there's remaining data, store it in buffer
+                if data.len() > len {
+                    self.buffer = Some(data[len..].to_vec());
+                }
+                
+                Ok(len)
+            }
+            Err(mpsc::error::TryRecvError::Empty) => {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::WouldBlock,
+                    "No data available"
+                ))
+            }
+            Err(mpsc::error::TryRecvError::Disconnected) => Ok(0), // EOF
+        }
     }
 }
 
 impl Drop for WebcamReader {
     fn drop(&mut self) {
-        let _ = self.process.kill();
+        self._handle.abort();
+        println!("WebcamReader dropped");
     }
 }
 
@@ -143,6 +294,28 @@ impl StreamReaderFactory {
     pub async fn from_webcam(device_id: u32) -> Result<impl Read + Send, String> {
         WebcamReader::new(device_id).await
     }
+
+    pub async fn from_webcam_auto() -> Result<impl Read + Send, String> {
+        let devices = WebcamReader::list_available_devices().await?;
+        if devices.is_empty() {
+            return Err("No webcam devices found".to_string());
+        }
+        
+        println!("Available devices on {}: {:?}", Self::get_platform_info(), devices);
+        WebcamReader::new(0).await  // Use first available device
+    }
+    
+    pub fn get_platform_info() -> String {
+        #[cfg(target_os = "linux")]
+        return "Linux (V4L2)".to_string();
+        
+        #[cfg(target_os = "windows")]
+        return "Windows (DirectShow)".to_string();
+        
+        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+        return "Unsupported Platform".to_string();
+    }
+
     pub async fn from_network_stream(url: &str) -> Result<impl Read + Send, String> {
         NetworkStreamReader::new(url).await
     }
@@ -1086,8 +1259,8 @@ impl WebRTCClient {
      * **********************************************************************************************************
      */
 
-    pub async fn set_debug_file_path(&mut self, _file: &str) -> Result<(), String> {
-        self.debug_file_path = Some(_file.to_string());
+    pub async fn set_debug_file_path(&mut self, path: &str, file: Option<&str>) -> Result<(), String> {
+        self.debug_file_path = Some(path.to_string());
         // check if file path is valid
         if let Some(ref path) = self.debug_file_path {
             if !Path::new(path).exists() {
@@ -1097,6 +1270,14 @@ impl WebRTCClient {
                     return Err("Failed to create directory".to_string());
                 }
             }
+
+            // create the file under the directory
+            let file_path = match file {
+                Some(f) => format!("{}/{}", path, f),
+                None => format!("{}/received.h264", path),
+            };
+            let _file = File::create(&file_path).map_err(|e| e.to_string())?;
+            println!("Debug file created at {}", file_path);
         }
         Ok(())
     }
