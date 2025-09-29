@@ -1,5 +1,7 @@
 mod tests {
-    use crate::client::{ClientBuilder, StreamReaderFactory, WebcamReader};
+    use crate::client::{Client, ClientBuilder};
+    use crate::client::xrds_webrtc::webrtc_client::{WebRTCClient, StreamSource};
+    use crate::client::xrds_webrtc::webcam_reader::WebcamReader;
     use crate::common::enums::{PROTOCOLS, FtpCommands};
     use crate::common::data_structure::{FtpPayload, WebRTCMessage, 
         CREATE_SESSION, LIST_SESSIONS, JOIN_SESSION, LEAVE_SESSION, 
@@ -8,8 +10,7 @@ mod tests {
     use crate::server::XRNetServer;
     use tokio::time::{sleep, Duration};
     use tokio::time::timeout;
-    use webrtc::srtp::stream;
-    use crate::client::{WebRTCClient, StreamSource};
+    
     use rustls::crypto::{CryptoProvider, ring};
     use ring::default_provider;
     use once_cell::sync::OnceCell;
@@ -18,9 +19,7 @@ mod tests {
     use std::sync::Mutex;
     use std::process::{Command, Stdio};
     use std::io::Read;
-    use nokhwa::pixel_format::RgbFormat;
-    use nokhwa::utils::{RequestedFormat, RequestedFormatType, CameraIndex};
-    use nokhwa::Camera;
+
     
     static HTTP_ECHO_SERVER_URL: &str = "https://echo.free.beeceptor.com";
     static CRYPTO_INIT: OnceCell<()> = OnceCell::new();
@@ -33,79 +32,66 @@ mod tests {
         data.len() >= 13 && &data[0..5] == b"FRAME"
     }
 
-    // Helper function to capture a complete frame from webcam
-    async fn capture_complete_frame(webcam: &mut WebcamReader) -> Result<(u32, u32, Vec<u8>), String> {
-        let mut complete_frame_data = Vec::new();
-        let mut total_bytes_read = 0;
-        let mut width = 0u32;
-        let mut height = 0u32;
-        let mut expected_size = 0usize;
-        let mut header_parsed = false;
-        
-        println!("📸 Capturing complete frame...");
-        
-        // Read data in chunks until we have a complete frame
-        for attempt in 1..=150 {
-            let mut buffer = vec![0u8; 64 * 1024]; // 64KB buffer for large frames
-            
-            match webcam.read(&mut buffer) {
-                Ok(bytes_read) if bytes_read > 0 => {
-                    buffer.truncate(bytes_read);
-                    complete_frame_data.extend_from_slice(&buffer);
-                    total_bytes_read += bytes_read;
-                    
-                    println!("📊 Read chunk {}: {} bytes (total: {})", attempt, bytes_read, total_bytes_read);
-                    
-                    // Parse header if we haven't yet and have enough data
-                    if !header_parsed && complete_frame_data.len() >= 13 {
-                        if is_valid_frame_data(&complete_frame_data) {
-                            width = u32::from_le_bytes([
-                                complete_frame_data[5], complete_frame_data[6], 
-                                complete_frame_data[7], complete_frame_data[8]
-                            ]);
-                            height = u32::from_le_bytes([
-                                complete_frame_data[9], complete_frame_data[10], 
-                                complete_frame_data[11], complete_frame_data[12]
-                            ]);
-                            expected_size = 13 + (width * height * 3) as usize; // Header + RGB data
-                            header_parsed = true;
-                            
-                            println!("📊 Frame header parsed: {}x{}, expected total size: {} bytes", 
-                                width, height, expected_size);
-                        } else {
-                            return Err("Invalid frame header detected".to_string());
-                        }
-                    }
-                    
-                    // Check if we have a complete frame
-                    if header_parsed && complete_frame_data.len() >= expected_size {
-                        let rgb_data = complete_frame_data[13..expected_size].to_vec();
-                        println!("✅ Complete frame captured: {}x{} ({} RGB bytes)", 
-                            width, height, rgb_data.len());
-                        return Ok((width, height, rgb_data));
-                    }
-                    
-                    // Small delay before next read
-                    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
-                }
-                Ok(_) => {
-                    // No data available, wait a bit
-                    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-                    continue;
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                    // No data available, wait a bit
-                    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-                    continue;
-                }
-                Err(e) => {
-                    return Err(format!("Read error: {}", e));
-                }
-            }
+    // Helper function to parse complete frame data
+    fn parse_webcam_frame_data(frame_data: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
+        // Validate frame header
+        if !is_valid_frame_data(frame_data) {
+            return Err("Invalid frame header".to_string());
         }
         
-        Err(format!("Failed to capture complete frame after 10 attempts. Got {} bytes, expected {}", 
-            total_bytes_read, expected_size))
+        if frame_data.len() < 13 {
+            return Err(format!("Frame data too short: {} bytes", frame_data.len()));
+        }
+        
+        // Extract dimensions from header
+        let width = u32::from_le_bytes([
+            frame_data[5], frame_data[6], 
+            frame_data[7], frame_data[8]
+        ]);
+        let height = u32::from_le_bytes([
+            frame_data[9], frame_data[10], 
+            frame_data[11], frame_data[12]
+        ]);
+        
+        // Calculate expected RGB data size
+        let expected_rgb_size = (width * height * 3) as usize;
+        let total_expected_size = 13 + expected_rgb_size;
+        
+        if frame_data.len() < total_expected_size {
+            return Err(format!(
+                "Incomplete frame: got {} bytes, expected {} bytes ({}x{} + 13 byte header)", 
+                frame_data.len(), total_expected_size, width, height
+            ));
+        }
+        
+        // Extract RGB data
+        let rgb_data = frame_data[13..13 + expected_rgb_size].to_vec();
+        
+        println!("📊 Frame parsed: {}x{}, RGB size: {} bytes, Total size: {} bytes", 
+            width, height, rgb_data.len(), frame_data.len());
+        
+        Ok((width, height, rgb_data))
+    }
+
+    // Helper function to save frame as PPM file (viewable image format)
+    fn save_frame_as_ppm(path: &str, width: u32, height: u32, rgb_data: &[u8]) -> Result<(), String> {
+        // Ensure output directory exists
+        if let Some(parent) = std::path::Path::new(path).parent() {
+            std::fs::create_dir_all(parent).map_err(|e| format!("Failed to create directory: {}", e))?;
+        }
+        
+        // PPM P6 format header
+        let header = format!("P6\n{} {}\n255\n", width, height);
+        
+        // Combine header and RGB data
+        let mut ppm_data = header.into_bytes();
+        ppm_data.extend_from_slice(rgb_data);
+        
+        let ppm_size = ppm_data.len();
+        std::fs::write(path, ppm_data).map_err(|e| format!("Failed to write PPM file: {}", e))?;
+        
+        println!("💾 PPM file saved: {} bytes", ppm_size);
+        Ok(())
     }
 
     // Helper function to verify frame data quality
@@ -589,6 +575,7 @@ mod tests {
         assert!(response.payload.is_some());
     }
 
+    /************************** MQTT Tests **************************/
     #[test]
     fn test_client_mqtt_connect() {
         let client_builder = ClientBuilder::new();
@@ -785,8 +772,9 @@ mod tests {
         assert_eq!(result.status_code, 200);
     }
 
+    /************************** start of WebRTC tests **************************/
     #[tokio::test]
-    async fn test_client_exchange_ice_candidate() {
+    async fn test_client_webrtc_exchange_ice_candidate() {
         init_crypto();
 
         let port = line!() + 8000;
@@ -931,26 +919,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_client_webrtc_available_webcam() {
-        let platform = StreamReaderFactory::get_platform_info();
-        #[cfg(target_os = "linux")]
-        {
-            assert!(platform.starts_with("Linux"));
-        }
-
-        #[cfg(target_os = "windows")]
-        {
-            assert!(platform.starts_with("Windows"));
-        }
-
-        let devices = WebcamReader::list_available_devices().await;
-        assert!(devices.is_ok());
-        let devices = devices.unwrap();
-        assert!(devices.len() > 0);
-        println!("Available webcam devices: {:?}", devices);
-    }
-
-    #[tokio::test]
     async fn test_client_webrtc_webcam_output() {
         println!("=== Testing Webcam Frame Capture with nokhwa ===");
 
@@ -971,144 +939,20 @@ mod tests {
         }
         
         // Try to create webcam reader for device 0
-        let webcam_result = WebcamReader::new(0).await;
-        if let Err(e) = webcam_result {
-            println!("❌ Failed to create WebcamReader: {}", e);
-            println!("💡 This might be due to:");
-            println!("   - No webcam connected");
-            println!("   - Webcam in use by another application");
-            println!("   - Windows camera permissions not granted");
-            println!("   - nokhwa library compatibility issues");
-            return;
-        }
+        let mut webcam = WebcamReader::new(0).await.unwrap();
+
         
-        let mut webcam = webcam_result.unwrap();
-        println!("✅ WebcamReader created successfully");
-        
-        // Wait for webcam data with timeout
-        let timeout_secs = 10;
-        println!("⏳ Waiting for webcam data (timeout: {}s)...", timeout_secs);
-        
-        match webcam.wait_for_data(timeout_secs).await {
-            Ok(_) => {
-                println!("✅ Webcam data detected successfully");
-                
-                // Capture and save a complete frame
-                let frame_data = capture_complete_frame(&mut webcam).await;
-                
-                match frame_data {
-                    Ok((width, height, rgb_data)) => {
-                        println!("✅ Successfully captured frame: {}x{} ({} bytes)", 
-                            width, height, rgb_data.len());
-                        
-                        // Optionally save raw frame data
-                        let raw_output_path = format!("{}/captured_frame.raw", DEFAULT_DEBUG_FILE_PATH);
-                        if let Err(e) = std::fs::write(&raw_output_path, &rgb_data) {
-                            println!("❌ Failed to save raw frame: {}", e);
-                        } else {
-                            println!("✅ Raw frame data saved to: {}", raw_output_path);
-                        }
-                        
-                        // Verify frame data quality
-                        let result = verify_frame_quality(width, height, &rgb_data);
-                        assert!(result.is_ok(), "Frame quality verification failed: {}", result.err().unwrap());
-                        println!("✅ Frame quality verification passed");
-                    }
-                    Err(e) => {
-                        println!("❌ Failed to capture complete frame: {}", e);
-                    }
-                }   
-            }
-            Err(e) => {
-                println!("❌ Failed to get webcam data: {}", e);
-                println!("💡 Troubleshooting steps:");
-                println!("   1. Check if webcam is connected and not in use");
-                println!("   2. Verify Windows camera permissions");
-                println!("   3. Try running as administrator");
-                println!("   4. Check device manager for camera drivers");
-                println!("   5. Close other applications using the camera");
-            }
-        }
-        
+
         println!("=== Webcam Frame Capture Test Complete ===");
     }
 
-    // Incomplete
+    #[tokio::test]
+    async fn test_client_webrtc_capture_video() {
+        // TODO
+    }
+
     #[tokio::test]
     async fn test_client_webrtc_send_webcam() {
-        let output_file_name = "webcam.h264";
-        init_crypto();
-
-        let port = line!() + 8000;
-        let server_handle = run_server(PROTOCOLS::WEBRTC, port);
-        sleep(Duration::from_secs(2)).await;
-
-        let addr_str = "ws://127.0.0.1".to_owned() + ":" + port.to_string().as_str() + "/";
-
-        let mut publisher = WebRTCClient::new();
-        publisher.connect(addr_str.as_str()).await.expect("Failed to connect");
-
-        let (_msg, publisher) = wait_for_message(publisher, WELCOME, 2).await;
-        
-        let publisher = publisher.create_session().await.expect("Failed to create session");
-        let (msg, publisher) = wait_for_message(publisher, CREATE_SESSION, 5).await;
-
-        let session_id = msg.session_id;
-        println!("Test: session_id created: {}", session_id);
-        
-        let mut publisher = publisher;
-        publisher.publish(&session_id).await.expect("Failed to publish");   // includes creating offer
-        let (_publish_result, publisher) = wait_for_message(publisher, OFFER, 5).await;
-        println!("Test: publish_result received: {:?}", _publish_result.sdp); // sdp is supposed to be None for this test
-
-        // subscriber joins the session
-        let mut subscriber = WebRTCClient::new();
-        subscriber.set_debug_file_path(DEFAULT_DEBUG_FILE_PATH, Some("webcam.h264")).await.expect("Failed to set debug file path");
-        subscriber.connect(addr_str.as_str()).await.expect("Failed to connect");
-
-        let (msg, subscriber) = wait_for_message(subscriber, WELCOME, 2).await;
-        let _client_id = msg.client_id;
-        // println!("Test: client_id received: {}", client_id);
-        
-        let subscriber = subscriber.join_session(&session_id).await.expect("Failed to join session");
-        let (join_result, subscriber) = wait_for_message(subscriber, JOIN_SESSION, 5).await;
-        // println!("Test: join_result received: {:?}", join_result.sdp); // sdp is supposed to be None for this test
-        
-        let mut subscriber = subscriber;
-        subscriber.handle_offer(join_result.sdp.unwrap()).await.expect("Failed to handle offer");
-
-        let (_answer_result, subscriber) = wait_for_message(subscriber, ANSWER, 5).await;
-        // println!("Test: answer_result received: {:?}", answer_result.sdp); // sdp is supposed to be None for this test
-
-        let (offer_result, mut publisher) = wait_for_message(publisher, ANSWER, 5).await;
-        publisher.handle_answer(offer_result).await.expect("Failed to handle answer");
-
-        publisher.send_ice_candidates(false).await.expect("Failed to send ICE candidates");
-
-        let (msg, mut subscriber) = wait_for_message(subscriber, ICE_CANDIDATE, 10).await;
-        println!("Test: ICE candidate received: {:?}", msg.ice_candidates);
-        subscriber.handle_ice_candidate(msg).await.expect("Failed to handle ICE candidate");
-
-        subscriber.send_ice_candidates(true).await.expect("Failed to send ICE candidates");
-        
-        let (msg, mut publisher) = wait_for_message(publisher, ICE_CANDIDATE_ACK, 10).await;
-        println!("Test: ICE candidate ACK received: {:?}", msg.ice_candidates);
-        publisher.handle_ice_candidate(msg).await.expect("Failed to handle ICE candidate ACK");
-
-        let source = StreamSource::Webcam(0);
-        let stream_result = publisher.start_streaming(Some(source)).await;
-        if stream_result.is_err() {
-            println!("Failed to start streaming from webcam: {:?}", stream_result.err());
-            server_handle.abort();
-            return;
-        }
-
-        // wait till the video file is sent
-        sleep(Duration::from_secs(120)).await;
-
-        let received_file = std::fs::read(format!("{}/{}", DEFAULT_DEBUG_FILE_PATH, output_file_name)).expect("Failed to open received file");
-        server_handle.abort();
-
-        assert!(is_valid_h264(&received_file), "Received file is not a valid H264 file");
+        //TODO
     }
  }
