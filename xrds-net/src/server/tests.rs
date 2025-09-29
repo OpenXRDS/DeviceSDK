@@ -22,7 +22,8 @@
 mod tests {
     use tokio::time::{sleep, Duration};
     use crate::server::XRNetServer;
-    use crate::client::{ClientBuilder, Client, WebRTCClient};
+    use crate::client::{ClientBuilder, Client};
+    use crate::client::webrtc_client::WebRTCClient;
     use crate::common::enums::{PROTOCOLS, FtpCommands};
     use crate::common::data_structure::{FtpPayload, WebRTCMessage, 
         CREATE_SESSION, LIST_SESSIONS, JOIN_SESSION, LEAVE_SESSION, CLOSE_SESSION, LIST_PARTICIPANTS, OFFER, ANSWER, WELCOME};

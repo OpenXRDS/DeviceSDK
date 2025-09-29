@@ -20,6 +20,9 @@ async-trait="0.1.86"
 futures="0.3.31"
 futures-util = "0.3"
 anyhow="1.0.97"
+bytes = "1"
+log="0.4.28"
+pretty_env_logger="0.5.0"
 
 curl="0.4.47"                                           # http / https
 coap="0.19.1"                                           # coap
