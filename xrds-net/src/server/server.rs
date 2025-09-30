@@ -169,7 +169,7 @@ impl XRNetServer {
     }
 
     async fn run_quic_server(&self, port: u32) {
-        println!("QUIC server started");
+        println!("QUIC server started {:?}" , port);
 
         // quic server starts from udp socket
         // server requires certificate and private key

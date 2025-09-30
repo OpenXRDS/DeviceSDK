@@ -1,9 +1,13 @@
-use nokhwa::pixel_format::RgbFormat;
-use nokhwa::utils::{RequestedFormat, RequestedFormatType, CameraIndex, Resolution};
+use bytes::BufMut;
+use image::{GenericImageView, RgbImage};
+use nokhwa::pixel_format::{RgbAFormat, RgbFormat, YuyvFormat};
+use nokhwa::utils::{CameraFormat, CameraIndex, FrameFormat, RequestedFormat, RequestedFormatType, Resolution};
 use nokhwa::{Camera};
 use tokio::sync::mpsc;
 use std::sync::{Arc, Mutex};
-use std::io::Read;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::io::{Read, Write};
+use std::path::Path;
 
 extern crate pretty_env_logger;
 extern crate log;
@@ -12,19 +16,21 @@ pub struct WebcamReader {
     receiver: mpsc::Receiver<Vec<u8>>,
     _handle: tokio::task::JoinHandle<()>, // Use tokio JoinHandle instead of std thread
     buffer: Option<Vec<u8>>, // Add this field to store data
-    buffer_offset: usize, // Track current offset in buffer
+    shutdown_flag: Arc<AtomicBool>, // Flag to signal shutdown
 }
 
 impl WebcamReader {
+    /**
+     * Start webcam capture in a separate blocking thread.
+     * Returns a WebcamReader instance with a channel to receive frame data.
+     */
     pub async fn new(device_id: u32) -> Result<Self, String> {
         let (sender, receiver) = mpsc::channel(1000);
-
-        // Keep camera alive for the entire session
-        let camera = Arc::new(Mutex::new(None));
-        let camera_clone = camera.clone();
+        let shutdown_flag = Arc::new(AtomicBool::new(false));
+        let shutdown_flag_clone = shutdown_flag.clone();
 
         let handle = tokio::task::spawn_blocking(move || {
-            if let Err(e) = Self::capture_webcam(device_id, sender, camera_clone) {
+            if let Err(e) = Self::capture_webcam(device_id, sender, shutdown_flag_clone) {
                 eprintln!("Webcam capture error: {}", e);
             }
         });
@@ -32,21 +38,38 @@ impl WebcamReader {
         Ok(WebcamReader {
             receiver,
             _handle: handle,
-            buffer: None, // Initialize buffer
-            buffer_offset: 0, // Initialize buffer offset
+            buffer: None,
+            shutdown_flag,
         })
     }
 
-    pub async fn stop_webcam(&self) {
-        // Dropping the sender will close the channel and stop the capture loop
+    pub async fn stop_webcam(&mut self) {
         println!("Stopping webcam capture...");
-        self._handle.abort();
+        self.shutdown_flag.store(true, Ordering::Relaxed);
+        
+        // Wait for clean shutdown
+        if let Err(_) = tokio::time::timeout(
+            std::time::Duration::from_secs(5), 
+            &mut self._handle
+        ).await {
+            println!("⚠️ Force aborting webcam capture");
+            self._handle.abort();
+        }
+        
+        println!("✅ Webcam capture stopped");
     }
 
+    /*
+        1. Open the webcam device using nokhwa.
+        2. Continuously capture frames in a loop.
+        3. Send each captured frame via the provided mpsc sender.
+        4. Check the shutdown_flag to exit the loop and stop capturing.
+        5. On shutdown, close the camera stream cleanly.
+     */
     fn capture_webcam(
         device_id: u32,
         sender: mpsc::Sender<Vec<u8>>,
-        camera_arc: Arc<Mutex<Option<Camera>>>
+        shutdown_flag: Arc<AtomicBool>
     ) -> Result<(), String> {
         println!("Opening webcam device: {} with nokhwa", device_id);
 
@@ -95,108 +118,39 @@ impl WebcamReader {
             }
         }
 
-        let camera_instance = camera.ok_or(format!("Failed to open camera at any resolution. Last error: {}", last_error))?;
+        let mut camera = camera.ok_or(format!("Failed to open camera at any resolution. Last error: {}", last_error))?;
 
-        // Store camera in Arc Mutex to keep it alive for the entire session
-        *camera_arc.lock().unwrap() = Some(camera_instance);
-        
-        // Get a clone of the Arc to work with
-        let camera_arc_clone = camera_arc.clone();        
-
-        let mut frame_count = 0;
-        let start_time = std::time::Instant::now();
-        let mut accumulated_rgb_data = Vec::new();
-        let mut expected_rgb_size: Option<usize> = None;
-        let mut frame_width: Option<u32> = None;
-        let mut frame_height: Option<u32> = None;
-
-        loop {  // Main pumping loop - one iteration per complete frame
-            // Get camera from Arc Mutex
-            let mut camera_guard = camera_arc_clone.lock().unwrap();
-            let camera = camera_guard.as_mut().unwrap();
-
-            loop {  // Data accumulation loop - accumulate until we have a complete frame
-                // Capture frame - may be partial
-                let frame = match camera.frame() {
-                    Ok(f) => f,
-                    Err(e) => {
-                        println!("❌ (camera.frame)Failed to capture frame: {}", e);
-                        // Try to reopen stream on error
-                        if let Err(reopen_err) = camera.open_stream() {
-                            println!("❌ Failed to reopen stream: {}", reopen_err);
-                            return Err("Camera stream failed".to_string());
-                        }
-                        continue;
-                    }
-                };
-
-                // Set frame dimensions from first successful frame
-                if frame_width.is_none() {
-                    frame_width = Some(frame.resolution().width());
-                    frame_height = Some(frame.resolution().height());
-                    expected_rgb_size = Some((frame_width.unwrap() * frame_height.unwrap() * 3) as usize);
-                    println!("📊 Target frame size: {}x{} = {} RGB bytes", 
-                        frame_width.unwrap(), frame_height.unwrap(), expected_rgb_size.unwrap());
-                }
-
-                let image_buffer = frame.buffer().to_vec();
-                accumulated_rgb_data.extend_from_slice(&image_buffer);
-
-                // println!("📥 Accumulated {} bytes (total: {}/{})", 
-                //     image_buffer.len(), accumulated_rgb_data.len(), 
-                //     expected_rgb_size.unwrap_or(0));
-
-                // Check if we have enough data for a complete frame
-                if accumulated_rgb_data.len() >= expected_rgb_size.unwrap_or(0) {
-                    // We have a complete frame! Extract it
-                    let complete_rgb_data = accumulated_rgb_data[..expected_rgb_size.unwrap()].to_vec();
-                    
-                    // Create frame with header
-                    let mut frame_data = Vec::new();
-                    frame_data.extend_from_slice(b"FRAME"); // 5-byte header
-                    frame_data.extend_from_slice(&(frame_width.unwrap() as u32).to_le_bytes());
-                    frame_data.extend_from_slice(&(frame_height.unwrap() as u32).to_le_bytes());
-                    frame_data.extend_from_slice(&complete_rgb_data);
-
-                    log::info!("📊 Frame {}: header {} + RGB {} = total {} bytes",
-                        frame_count + 1, 13, complete_rgb_data.len(), frame_data.len());
-                    
-                    // Send complete frame via channel
-                    if let Err(e) = sender.blocking_send(frame_data) {
-                        log::error!("❌ Failed to send frame via channel: {}", e);
-                        return Err("Channel send failed".to_string());
-                    }
-                    
-                    frame_count += 1;
-                    
-                    // Keep any remaining data for the next frame
-                    accumulated_rgb_data = accumulated_rgb_data[expected_rgb_size.unwrap()..].to_vec();
-                    
-                    // Performance logging every 30 frames
-                    if frame_count % 30 == 0 {
-                        let elapsed = start_time.elapsed();
-                        let fps = frame_count as f64 / elapsed.as_secs_f64();
-                        println!("📊 Sent {} complete frames, FPS: {:.2}", frame_count, fps);
-                    }
-                    
-                    // Break out of accumulation loop to send next frame
-                    break;
-                } else {
-                    // Not enough data yet, continue accumulating
-                    let progress = (accumulated_rgb_data.len() as f64 / expected_rgb_size.unwrap_or(1) as f64) * 100.0;
-                    // println!("📊 Accumulating: {}/{} bytes ({:.1}%)", 
-                    //     accumulated_rgb_data.len(), expected_rgb_size.unwrap_or(0), progress);
-                }
+        loop {  // Capture loop - one iteration per complete frame
+            if shutdown_flag.load(Ordering::Relaxed) {
+                println!("🛑 Shutdown signal received, stopping capture...");
+                break;
             }
 
-            // Small delay to control frame rate
-            std::thread::sleep(std::time::Duration::from_millis(33)); // ~30fps
-        }
-    }
+            match camera.frame() {
+                Ok(frame) => {
+                    let image_buffer = frame.buffer().to_vec();
 
-    fn is_valid_frame(data: &[u8]) -> bool {
-        // Check for our custom frame header
-        data.len() >= 13 && &data[0..5] == b"FRAME"
+                    // send frame data via channel. frame is in jpg format
+                    if let Err(e) = sender.blocking_send(image_buffer) {
+                        println!("❌ Failed to send frame data: {}", e);
+                        break;  // Exit on send failure
+                    }
+
+                    // Small delay to control frame rate (~30 FPS)
+                    std::thread::sleep(std::time::Duration::from_millis(33));
+                }
+                Err(e) => {
+                    println!("❌ Error capturing frame: {}", e);
+                    // On error, wait briefly before retrying
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                }
+            }
+        }
+
+        // Clean shutdown
+        let _ = camera.stop_stream();
+        println!("📷 Camera stream closed");
+        Ok(())
     }
 
     pub async fn list_available_devices() -> Result<Vec<String>, String> {
@@ -223,65 +177,36 @@ impl WebcamReader {
     pub async fn read_single_frame(&mut self, timeout_secs: u64) -> Result<Vec<u8>, String> {
         println!("📸 Capturing single frame...");
         
+        // CLEAR BUFFER at start to ensure we start fresh for each frame capture
+        self.buffer = None;
+        
         let start_time = std::time::Instant::now();
         let timeout = std::time::Duration::from_secs(timeout_secs);
         let mut frame_data = Vec::new();
-        let mut header_parsed = false;
-        let mut expected_frame_size: Option<usize> = None;
         
-        while start_time.elapsed() < timeout {
-            // Use a small buffer for reading chunks
-            let mut chunk_buffer = vec![0u8; 64 * 1024 * 1024]; // 64MB chunks
-            
+        // Use a small buffer for reading chunks
+        let mut chunk_buffer = vec![0u8; 8 * 1024 * 1024]; // 6MB chunks
+        
+        loop {  // Wait for complete frame or timeout
+            if start_time.elapsed() > timeout {
+                return Err("Timeout waiting for frame".to_string());
+            }
             // Use the Read trait implementation on self
             match self.read(&mut chunk_buffer) {
                 Ok(bytes_read) if bytes_read > 0 => {
                     chunk_buffer.truncate(bytes_read);
                     frame_data.extend_from_slice(&chunk_buffer);
                     
-                    println!("📥 Read chunk: {} bytes (total: {})", bytes_read, frame_data.len());
-                    
-                    // Parse header if we haven't yet and have enough data
-                    if !header_parsed && frame_data.len() >= 13 {
-                        if Self::is_valid_frame(&frame_data) {
-                            let width = u32::from_le_bytes([
-                                frame_data[5], frame_data[6], frame_data[7], frame_data[8]
-                            ]);
-                            let height = u32::from_le_bytes([
-                                frame_data[9], frame_data[10], frame_data[11], frame_data[12]
-                            ]);
-                            
-                            expected_frame_size = Some(13 + (width * height * 3) as usize);
-                            header_parsed = true;
-                            
-                            println!("📊 Frame header parsed: {}x{}, expected total size: {} bytes", 
-                                width, height, expected_frame_size.unwrap());
-                        } else {
-                            println!("⚠️ Invalid frame header, clearing buffer");
-                            frame_data.clear();
-                            header_parsed = false;
-                            continue;
+                    log::debug!("📥 Read chunk: {} bytes (total: {})", bytes_read, frame_data.len());
+
+                    // Check if we have a complete JPEG frame (look for JPEG SOI and EOI markers)
+                    if frame_data.len() > 8 &&
+                            frame_data[0] == 0xFF && frame_data[1] == 0xD8 && // SOI
+                            frame_data[frame_data.len() - 2] == 0xFF && frame_data[frame_data.len() - 1] == 0xD9 // EOI
+                        {
+                            println!("✅ Complete JPEG frame captured, size: {} bytes", frame_data.len());
+                            return Ok(frame_data);
                         }
-                    }
-                    
-                    // Check if we have a complete frame
-                    if let Some(expected_size) = expected_frame_size {
-                        if frame_data.len() >= expected_size {
-                            // We have a complete frame!
-                            let complete_frame = frame_data[..expected_size].to_vec();
-                            
-                            let elapsed = start_time.elapsed();
-                            println!("✅ Complete frame captured in {:.2?}: {} bytes", 
-                                elapsed, complete_frame.len());
-                            
-                            return Ok(complete_frame);
-                        } else {
-                            // Progress update
-                            let progress = (frame_data.len() as f64 / expected_size as f64) * 100.0;
-                            println!("📊 Frame accumulation: {}/{} bytes ({:.1}%)", 
-                                frame_data.len(), expected_size, progress);
-                        }
-                    }
                 }
                 Ok(_) => {
                     // No data available, wait briefly
@@ -296,39 +221,41 @@ impl WebcamReader {
                 }
             }
         }
-        
-        Err(format!("Timeout after {} seconds while capturing frame. Got {} bytes", 
-            timeout_secs, frame_data.len()))
-
-        // stop webcam capture
     }
 }
 
 /* Read buffer via channels */
 impl std::io::Read for WebcamReader {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        // Try to get new data via sender
-        match self.receiver.try_recv() {
-            Ok(data) => {
-                let len = std::cmp::min(buf.len(), data.len());
-                buf[..len].copy_from_slice(&data[..len]);
-
-                println!("Read {} bytes from webcam buffer", len);
-                // If there's remaining data, store it in buffer with offset
-                if data.len() > len {
-                    self.buffer = Some(data);
-                    self.buffer_offset = len; // Set offset to where we left off
+        // read data from receiver
+        if let Some(mut data) = self.buffer.take() {
+            let len = std::cmp::min(buf.len(), data.len());
+            buf[..len].copy_from_slice(&data[..len]);
+            if len < data.len() {
+                // If there's remaining data, store it back in buffer
+                self.buffer = Some(data[len..].to_vec());
+            }
+            Ok(len)
+        } else {
+            match self.receiver.try_recv() {
+                Ok(data) => {
+                    let len = std::cmp::min(buf.len(), data.len());
+                    buf[..len].copy_from_slice(&data[..len]);
+                    if len < data.len() {
+                        // If there's remaining data, store it in buffer
+                        self.buffer = Some(data[len..].to_vec());
+                    }
+                    Ok(len)
                 }
-
-                Ok(len)
+                Err(mpsc::error::TryRecvError::Empty) => {
+                    // No data available right now
+                    Err(std::io::Error::new(std::io::ErrorKind::WouldBlock, "No data available"))
+                }
+                Err(mpsc::error::TryRecvError::Disconnected) => {
+                    // Channel closed, no more data will come
+                    Err(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "Channel disconnected"))
+                }
             }
-            Err(mpsc::error::TryRecvError::Empty) => {
-                Err(std::io::Error::new(
-                    std::io::ErrorKind::WouldBlock,
-                    "No data available"
-                ))
-            }
-            Err(mpsc::error::TryRecvError::Disconnected) => Ok(0), // EOF
         }
     }
 }
@@ -367,46 +294,60 @@ async fn test_client_webrtc_available_webcam() {
 }
 
 #[tokio::test]
+#[cfg(not(target_arch="wasm32"))]
 async fn test_nokhwa() {
     // first camera in system
-    let index = CameraIndex::Index(0); 
-    // request the absolute highest resolution CameraFormat that can be decoded to RGB.
-    let requested = RequestedFormat::new::<RgbFormat>(RequestedFormatType::AbsoluteHighestFrameRate);
-    // make the camera
+
+    use nokhwa::pixel_format::YuyvFormat;
+    let index = CameraIndex::Index(0);
+    // request MJPEG format
+    // let frame_format = FrameFormat::MJPEG;
+    // let camera_format = CameraFormat::new_from(1920, 1080, frame_format, 30);
+    let requested = RequestedFormat::new::<YuyvFormat>(RequestedFormatType::AbsoluteHighestResolution);
     let mut camera = Camera::new(index, requested).unwrap();
 
     // get a frame
     let frame = camera.frame().unwrap();
     println!("Captured Single Frame of {}", frame.buffer().len());
-    // decode into an ImageBuffer
-    let decoded = frame.decode_image::<RgbFormat>().unwrap();
-    println!("Decoded Frame of {}", decoded.len());
+
+    let frame_format = frame.source_frame_format();
+    println!("Frame format: {:?}", frame_format);
+
+    // write frame as it is
+    std::fs::create_dir_all("./test_output").unwrap();
+    std::fs::write("./test_output/nokhwa_test.png", frame.buffer()).unwrap();
 }
 
 #[tokio::test]
 async fn test_client_webrtc_capture_frame() {
-    pretty_env_logger::init_custom_env("RUST_LOG=info");
+    pretty_env_logger::init();
+    let mut reader = WebcamReader::new(0).await.expect("Failed to create WebcamReader");
+    let timeout_secs = 3;
+
+    let jpeg_frame = reader.read_single_frame(timeout_secs).await.expect("test.Failed to capture frame");
+
+    // write to file for manual inspection
+    std::fs::write("test_output/test_frame.jpg", &jpeg_frame).expect("Failed to write frame to file");
+
+    println!("✅ Frame written to test_frame.jpg for inspection");
+    reader.stop_webcam().await;
+}
+
+#[tokio::test]
+async fn test_client_webrtc_capture_multiple_frame() {
+    pretty_env_logger::init();
     let mut reader = WebcamReader::new(0).await.expect("Failed to create WebcamReader");
     let timeout_secs = 10;
 
-    let raw_frame = reader.read_single_frame(timeout_secs).await.expect("test.Failed to capture frame");
+    for i in 0..5 {
+        let jpg_frame = reader.read_single_frame(timeout_secs).await.expect("test.Failed to capture frame");
 
-    // convert raw_frame to image
-    assert!(raw_frame.len() > 13, "Frame data too small");
+        // write to file for manual inspection
+        std::fs::write(format!("test_output/test_frame_{}.jpg", i), &jpg_frame).expect("Failed to write frame to file");
 
-    let width = u32::from_le_bytes([raw_frame[5], raw_frame[6], raw_frame[7], raw_frame[8]]);
-    let height = u32::from_le_bytes([raw_frame[9], raw_frame[10], raw_frame[11], raw_frame[12]]);
-    let expected_size = 13 + (width * height * 3) as usize;
-    assert_eq!(raw_frame.len(), expected_size, "Frame size mismatch");
+        println!("✅ Frame written to test_frame_{}.jpg for inspection", i);
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
 
-    println!("✅ Captured frame: {}x{}, size: {} bytes", width, height, raw_frame.len());
-
-    // Get rid of header for image saving
-    let rgb_data = &raw_frame[13..];
-
-    // write to file for manual inspection
-    std::fs::write("test_output/test_frame.raw", &rgb_data).expect("Failed to write frame to file");
-    
-    println!("✅ Frame written to test_frame.raw for inspection");
     reader.stop_webcam().await;
 }
