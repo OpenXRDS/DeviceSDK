@@ -1,5 +1,4 @@
-use bytes::BufMut;
-use image::{GenericImageView, RgbImage};
+use ffmpeg_next::Dictionary;
 use nokhwa::pixel_format::{RgbAFormat, RgbFormat, YuyvFormat};
 use nokhwa::utils::{CameraFormat, CameraIndex, FrameFormat, RequestedFormat, RequestedFormatType, Resolution};
 use nokhwa::{Camera};
@@ -7,7 +6,7 @@ use tokio::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::io::{Read, Write};
-use std::path::Path;
+use crate::client::xrds_webrtc::img2vid_encoder::ImageToVideoEncoder;
 
 extern crate pretty_env_logger;
 extern crate log;
@@ -23,14 +22,18 @@ impl WebcamReader {
     /**
      * Start webcam capture in a separate blocking thread.
      * Returns a WebcamReader instance with a channel to receive frame data.
+     * Webcam has fixed capture rate: 30 FPS
      */
     pub async fn new(device_id: u32) -> Result<Self, String> {
         let (sender, receiver) = mpsc::channel(1000);
         let shutdown_flag = Arc::new(AtomicBool::new(false));
         let shutdown_flag_clone = shutdown_flag.clone();
 
+        // Set capture rate 30 FPS if not specified
+        let mut _capture_rate: u32 = 30;
+
         let handle = tokio::task::spawn_blocking(move || {
-            if let Err(e) = Self::capture_webcam(device_id, sender, shutdown_flag_clone) {
+            if let Err(e) = Self::capture_webcam(device_id, sender, shutdown_flag_clone, _capture_rate) {
                 eprintln!("Webcam capture error: {}", e);
             }
         });
@@ -69,7 +72,8 @@ impl WebcamReader {
     fn capture_webcam(
         device_id: u32,
         sender: mpsc::Sender<Vec<u8>>,
-        shutdown_flag: Arc<AtomicBool>
+        shutdown_flag: Arc<AtomicBool>,
+        _capture_rate: u32,
     ) -> Result<(), String> {
         println!("Opening webcam device: {} with nokhwa", device_id);
 
@@ -88,11 +92,11 @@ impl WebcamReader {
         for resolution in &resolutions_to_try {
             println!("Trying resolution: {}x{}", resolution.width(), resolution.height());
 
-            let requested = RequestedFormat::new::<RgbFormat>(
+            let requested = RequestedFormat::new::<YuyvFormat>(
                 RequestedFormatType::AbsoluteHighestResolution,
             );
 
-            match Camera::new(CameraIndex::Index(device_id), requested) {
+            match Camera::new(CameraIndex::Index(device_id), requested) { 
                 Ok(mut cam) => {
                     match cam.open_stream() {
                         Ok(_) => {
@@ -102,10 +106,8 @@ impl WebcamReader {
                             break;
                         }
                         Err(e) => {
-                            last_error = format!("Resolution {}x{}: {}",
-                                resolution.width(), resolution.height(), e);
-                            println!("❌ Failed to open stream at {}x{}: {}",
-                                resolution.width(), resolution.height(), e);
+                            last_error = format!("Resolution {}x{}: {}", resolution.width(), resolution.height(), e);
+                            println!("❌ Failed to open stream at {}x{}: {}", resolution.width(), resolution.height(), e);
                         }
                     }
                 }
@@ -120,41 +122,55 @@ impl WebcamReader {
 
         let mut camera = camera.ok_or(format!("Failed to open camera at any resolution. Last error: {}", last_error))?;
 
+        let target_fps = _capture_rate as f64;
+        let frame_duration = std::time::Duration::from_secs_f64(1.0 / target_fps);
+        let mut last_frame_time = std::time::Instant::now();
+
         loop {  // Capture loop - one iteration per complete frame
             if shutdown_flag.load(Ordering::Relaxed) {
-                println!("🛑 Shutdown signal received, stopping capture...");
+                log::info!("🛑 Shutdown signal received, stopping capture...");
                 break;
             }
 
-            match camera.frame() {
-                Ok(frame) => {
-                    let image_buffer = frame.buffer().to_vec();
+            let now = std::time::Instant::now();
+            let elapsed = now.duration_since(last_frame_time);
 
-                    // send frame data via channel. frame is in jpg format
-                    if let Err(e) = sender.blocking_send(image_buffer) {
-                        println!("❌ Failed to send frame data: {}", e);
-                        break;  // Exit on send failure
+            // Only capture if enough time has passed for target FPS
+            if elapsed >= frame_duration {
+                match camera.frame() {
+                    Ok(frame) => {
+                        let image_buffer = frame.buffer().to_vec();
+
+                        if let Err(e) = sender.blocking_send(image_buffer) {
+                            log::error!("❌ Failed to send frame data: {}", e);
+                            break;
+                        }
+
+                        last_frame_time = now;
+                        log::debug!("📸 Frame captured, actual interval: {:.1}ms", elapsed.as_secs_f64() * 1000.0);
                     }
-
-                    // Small delay to control frame rate (~30 FPS)
-                    std::thread::sleep(std::time::Duration::from_millis(33));
+                    Err(e) => {
+                        log::error!("❌ Error capturing frame: {}", e);
+                        std::thread::sleep(std::time::Duration::from_millis(100));
+                    }
                 }
-                Err(e) => {
-                    println!("❌ Error capturing frame: {}", e);
-                    // On error, wait briefly before retrying
-                    std::thread::sleep(std::time::Duration::from_millis(100));
+            } else {
+                // Wait for the remaining time
+                let remaining = frame_duration - elapsed;
+                if remaining > std::time::Duration::from_millis(1) {
+                    std::thread::sleep(remaining);
                 }
             }
         }
 
         // Clean shutdown
         let _ = camera.stop_stream();
-        println!("📷 Camera stream closed");
+        log::info!("📷 Camera stream closed");
         Ok(())
     }
 
     pub async fn list_available_devices() -> Result<Vec<String>, String> {
-        println!("Enumerating available webcam devices with nokhwa...");
+        log::info!("Enumerating available webcam devices with nokhwa...");
 
         let devices = nokhwa::query(nokhwa::utils::ApiBackend::Auto)
             .map_err(|e| format!("Failed to query devices: {}", e))?;
@@ -173,7 +189,26 @@ impl WebcamReader {
         }
     }
 
-    /** For TESTING */
+    /*
+        Capture video for a specified duration in seconds.
+        Collects multiple JPEG frames, encodes them into MP4, and returns the MP4 data.
+     */
+    pub async fn read_video(&mut self, time_secs: u64, path: &str) -> Result<Vec<u8>, String> {
+        println!("📸 Capturing video for {} seconds...", time_secs);
+        
+        // let mut frames = Vec::new();
+        let start_time = std::time::Instant::now();
+        let timeout = std::time::Duration::from_secs(time_secs);
+        
+        return Err("Not implemented".to_string());
+        
+    }
+
+    /*
+        Read a single complete JPEG frame from the webcam stream.
+        Waits up to timeout_secs for a complete frame.
+        Returns the JPEG byte data of the frame.
+     */
     pub async fn read_single_frame(&mut self, timeout_secs: u64) -> Result<Vec<u8>, String> {
         println!("📸 Capturing single frame...");
         
@@ -204,7 +239,7 @@ impl WebcamReader {
                             frame_data[0] == 0xFF && frame_data[1] == 0xD8 && // SOI
                             frame_data[frame_data.len() - 2] == 0xFF && frame_data[frame_data.len() - 1] == 0xD9 // EOI
                         {
-                            println!("✅ Complete JPEG frame captured, size: {} bytes", frame_data.len());
+                            log::debug!("✅ Complete JPEG frame captured, size: {} bytes", frame_data.len());
                             return Ok(frame_data);
                         }
                 }
@@ -297,13 +332,14 @@ async fn test_client_webrtc_available_webcam() {
 #[cfg(not(target_arch="wasm32"))]
 async fn test_nokhwa() {
     // first camera in system
-
     use nokhwa::pixel_format::YuyvFormat;
     let index = CameraIndex::Index(0);
-    // request MJPEG format
-    // let frame_format = FrameFormat::MJPEG;
+    // request yuv format
+    // let frame_format = FrameFormat::YUYV;
     // let camera_format = CameraFormat::new_from(1920, 1080, frame_format, 30);
-    let requested = RequestedFormat::new::<YuyvFormat>(RequestedFormatType::AbsoluteHighestResolution);
+    let requested = RequestedFormat::new::<YuyvFormat>(
+        RequestedFormatType::AbsoluteHighestResolution,
+    );
     let mut camera = Camera::new(index, requested).unwrap();
 
     // get a frame
@@ -315,11 +351,32 @@ async fn test_nokhwa() {
 
     // write frame as it is
     std::fs::create_dir_all("./test_output").unwrap();
-    std::fs::write("./test_output/nokhwa_test.png", frame.buffer()).unwrap();
+    std::fs::write("./test_output/nokhwa_test.jpg", frame.buffer()).unwrap();
+}
+
+/**
+ * Figure out what formats are supported by the camera
+ */
+#[tokio::test]
+async fn test_nokhwa_camera_sup_formats() {
+    // first camera in system
+    let index = CameraIndex::Index(0);
+    let requested = RequestedFormat::new::<YuyvFormat>(
+        RequestedFormatType::AbsoluteHighestResolution,
+    );
+    let mut camera = Camera::new(index, requested).unwrap();
+
+    let formats = camera.compatible_camera_formats().unwrap();
+    println!("Supported formats for camera 0:");
+    for format in formats {
+        if format.width() >= 1920 && format.height() >= 1080 {
+            println!(" - {:?} (selected)", format);
+        }
+    }
 }
 
 #[tokio::test]
-async fn test_client_webrtc_capture_frame() {
+async fn test_client_webcam_capture_frame() {
     pretty_env_logger::init();
     let mut reader = WebcamReader::new(0).await.expect("Failed to create WebcamReader");
     let timeout_secs = 3;
@@ -334,20 +391,58 @@ async fn test_client_webrtc_capture_frame() {
 }
 
 #[tokio::test]
-async fn test_client_webrtc_capture_multiple_frame() {
+async fn test_client_webcam_capture_multiple_frame() {
     pretty_env_logger::init();
     let mut reader = WebcamReader::new(0).await.expect("Failed to create WebcamReader");
     let timeout_secs = 10;
 
-    for i in 0..5 {
+    for i in 0..240 {
         let jpg_frame = reader.read_single_frame(timeout_secs).await.expect("test.Failed to capture frame");
 
         // write to file for manual inspection
-        std::fs::write(format!("test_output/test_frame_{}.jpg", i), &jpg_frame).expect("Failed to write frame to file");
+        std::fs::write(format!("test_output/input_images2/test_frame_{:03}.jpg", i), &jpg_frame).expect("Failed to write frame to file");
 
-        println!("✅ Frame written to test_frame_{}.jpg for inspection", i);
+        println!("✅ Frame written to test_frame_{:03}.jpg for inspection", i);
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
 
     reader.stop_webcam().await;
+}
+
+#[tokio::test]
+async fn test_client_convert_jpeg_to_mp4() {
+    use ffmpeg::ffi::*;
+    unsafe {
+        av_log_set_level(AV_LOG_ERROR);
+    }
+
+    let input_pattern = "./test_output/input_images2";
+    let output_path = "test_output/output_video.mp4";
+    let fps: i32 = 30;
+
+    use ffmpeg_next as ffmpeg;
+    use ffmpeg_next::Rational;
+
+    ffmpeg::init().unwrap();
+
+    let mut octx = ffmpeg::format::output(&output_path).unwrap();
+
+    // let x264_opt_str = "rate_control=quality,quality=18,colorprim=bt709,transfer=bt709,colormatrix=bt709";
+    // High quality (equivalent to crf=16)
+    // let x264_opt_str = "rate_control=quality,quality=16,hw_encoding=1";
+    let x264_opt_str = "bitrate=10000000"; // 10 Mbps
+    
+    let fps_rational = Rational::new(fps as i32, 1);
+    let mut encoder = ImageToVideoEncoder::new(
+        1920, 1080, fps_rational, &mut octx, x264_opt_str
+    ).unwrap();
+
+    // Don't panic immediately, provide better error info
+    match encoder.encode_video(input_pattern, &output_path, &mut octx) {
+        Ok(_) => println!("✅ JPEG to MP4 conversion successful"),
+        Err(e) => {
+            eprintln!("❌ JPEG to MP4 conversion failed: {}", e);
+            panic!("Failed to convert JPEG to MP4: {}", e);
+        }
+    }
 }
