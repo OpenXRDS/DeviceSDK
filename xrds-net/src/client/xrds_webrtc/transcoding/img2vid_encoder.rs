@@ -2,8 +2,11 @@ use ffmpeg_next as ffmpeg;
 use std::time::Instant;
 
 use ffmpeg::{
-    codec, encoder, format, frame, log, media, Dictionary, Packet, Rational, color,
+    codec, encoder, format, frame, media, Dictionary, Packet, Rational, color,
 };
+
+extern crate pretty_env_logger;
+extern crate log;
 
 const DEFAULT_X264_OPTS: &str = "preset=medium";
 
@@ -40,8 +43,8 @@ impl ImageToVideoEncoder {
         encoder.set_time_base(time_base);
 
         // Better quality settings
-        encoder.set_bit_rate(8_000_000); // 8 Mbps for 1080p
-        encoder.set_max_bit_rate(12_000_000); // 12 Mbps max
+        encoder.set_bit_rate(10_000_000); // 10 Mbps for 1080p
+        encoder.set_max_bit_rate(20_000_000); // 20 Mbps max
         encoder.set_qmin(10);  // Minimum quantizer
         encoder.set_qmax(51);  // Maximum quantizer
         encoder.set_gop(fps.numerator() as u32); // GOP size = 1 second
@@ -107,12 +110,11 @@ impl ImageToVideoEncoder {
         
         // Process each JPEG file
         for (i, jpeg_file) in jpeg_files.iter().enumerate() {
-            eprintln!("Processing frame {}/{}: {}", i + 1, jpeg_files.len(), jpeg_file);
-            
+            log::debug!("Processing frame {}/{}: {}", i + 1, jpeg_files.len(), jpeg_file);
             let decoded_frame = match load_jpeg_as_frame(jpeg_file) {
                 Ok(frame) => frame,
                 Err(e) => {
-                    eprintln!("Warning: Failed to load image {}: {:?}", jpeg_file, e);
+                    log::warn!("Warning: Failed to load image {}: {:?}", jpeg_file, e);
                     continue;  // Skip this frame and continue
                 }
             };
@@ -132,8 +134,11 @@ impl ImageToVideoEncoder {
 
         self.flush(octx, encoder_time_base);
         octx.write_trailer().unwrap();
-        
-        eprintln!("Encoding complete. Total frames processed: {}", self.frame_count);
+
+        log::info!("Encoding complete. Total frames processed: {}", self.frame_count);
+        // average encoding speed
+        let elapsed = self.starting_time.elapsed().as_secs_f64();
+        log::info!("Total time: {:.2} seconds, Average FPS: {:.2}", elapsed, self.frame_count as f64 / elapsed);
         Ok(())
     }
 
@@ -142,7 +147,7 @@ impl ImageToVideoEncoder {
         let pts = self.frame_count as i64;
         frame.set_pts(Some(pts));
         
-        println!("Frame {}: PTS = {}, time_base = {:?}", self.frame_count, pts, encoder_time_base);
+        // println!("Frame {}: PTS = {}, time_base = {:?}", self.frame_count, pts, encoder_time_base);
         
         self.encoder.send_frame(frame).unwrap();
         self.receive_and_process_encoded_packets(octx, encoder_time_base);
@@ -227,7 +232,7 @@ fn load_jpeg_as_frame(jpeg_path: &str) -> Result<frame::Video, ffmpeg::Error> {
 fn convert_frame_format(src_frame: &frame::Video, target_format: format::Pixel, target_width: u32, target_height: u32) -> Result<frame::Video, ffmpeg::Error> {
     use ffmpeg::software::scaling::{context::Context, flag::Flags};
     
-    eprintln!("Converting: {}x{} {:?} -> {}x{} {:?}", 
+    log::debug!("Converting: {}x{} {:?} -> {}x{} {:?}", 
              src_frame.width(), src_frame.height(), src_frame.format(),
              target_width, target_height, target_format);
 
@@ -252,7 +257,7 @@ fn convert_frame_format(src_frame: &frame::Video, target_format: format::Pixel, 
     converted_frame.set_color_range(color::Range::MPEG);
     converted_frame.set_color_space(color::Space::BT709);
     
-    eprintln!("✅ Conversion successful: {}x{} {:?}", 
+    log::debug!("✅ Conversion successful: {}x{} {:?}", 
              converted_frame.width(), converted_frame.height(), converted_frame.format());
     
     Ok(converted_frame)
