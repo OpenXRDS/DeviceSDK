@@ -1,4 +1,3 @@
-use ffmpeg_next::Dictionary;
 use nokhwa::pixel_format::{RgbAFormat, RgbFormat, YuyvFormat};
 use nokhwa::utils::{CameraFormat, CameraIndex, FrameFormat, RequestedFormat, RequestedFormatType, Resolution};
 use nokhwa::{Camera};
@@ -6,10 +5,27 @@ use tokio::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::io::{Read, Write};
-use crate::client::xrds_webrtc::img2vid_encoder::ImageToVideoEncoder;
+use crate::client::xrds_webrtc::transcoding::img2vid_encoder::ImageToVideoEncoder;
+
+use ffmpeg_next::{self as ffmpeg, Rational};
+use ffmpeg::{codec, format, media, util::error::Error, decoder, encoder};
 
 extern crate pretty_env_logger;
 extern crate log;
+
+/*************************************************************************************
+ * WebcamReader
+ * Currently uses nokhwa to read webcam frames. This gives better cross-platform support
+ * than opencv, which has issues on some Linux systems.
+ * However, it automatically converts to RGB format, which is less efficient for transcoding.
+ * 
+ * The resolution(1920x1080) can only be met by using NV12, but nokhwa does not support NV12.
+ * So, nokhwa automatically converts to RGB, which is less efficient.
+ * It is INEVITABLE to convert RGB to YUV for h264 encoding.
+ * 
+ * In case of using YUYV format directly, it results in lower resolution (800x448) with Logitech C920.
+ * Refer to test_nokhwa_camera_sup_formats() test case.
+ */
 
 pub struct WebcamReader {
     receiver: mpsc::Receiver<Vec<u8>>,
@@ -20,7 +36,7 @@ pub struct WebcamReader {
 
 impl WebcamReader {
     /**
-     * Start webcam capture in a separate blocking thread.
+     * Starts webcam capture in a separate blocking thread.
      * Returns a WebcamReader instance with a channel to receive frame data.
      * Webcam has fixed capture rate: 30 FPS
      */
@@ -34,7 +50,7 @@ impl WebcamReader {
 
         let handle = tokio::task::spawn_blocking(move || {
             if let Err(e) = Self::capture_webcam(device_id, sender, shutdown_flag_clone, _capture_rate) {
-                eprintln!("Webcam capture error: {}", e);
+                log::error!("Webcam capture error: {}", e);
             }
         });
 
@@ -75,7 +91,7 @@ impl WebcamReader {
         shutdown_flag: Arc<AtomicBool>,
         _capture_rate: u32,
     ) -> Result<(), String> {
-        println!("Opening webcam device: {} with nokhwa", device_id);
+        log::info!("Opening webcam device: {} with nokhwa", device_id);
 
         // Try different resolutions to avoid hardware conflicts
         let resolutions_to_try = vec![
@@ -92,6 +108,7 @@ impl WebcamReader {
         for resolution in &resolutions_to_try {
             println!("Trying resolution: {}x{}", resolution.width(), resolution.height());
 
+            // even though we request YuyvFormat, it returns RgbFormat frames due to the camera support. 
             let requested = RequestedFormat::new::<YuyvFormat>(
                 RequestedFormatType::AbsoluteHighestResolution,
             );
@@ -101,7 +118,7 @@ impl WebcamReader {
                     match cam.open_stream() {
                         Ok(_) => {
                             camera = Some(cam);
-                            println!("✅ Camera {} opened successfully at {}x{}",
+                            log::info!("✅ Camera {} opened successfully at {}x{}", 
                                 device_id, resolution.width(), resolution.height());
                             break;
                         }
@@ -187,21 +204,6 @@ impl WebcamReader {
             println!("Found {} webcam devices: {:?}", device_list.len(), device_list);
             Ok(device_list)
         }
-    }
-
-    /*
-        Capture video for a specified duration in seconds.
-        Collects multiple JPEG frames, encodes them into MP4, and returns the MP4 data.
-     */
-    pub async fn read_video(&mut self, time_secs: u64, path: &str) -> Result<Vec<u8>, String> {
-        println!("📸 Capturing video for {} seconds...", time_secs);
-        
-        // let mut frames = Vec::new();
-        let start_time = std::time::Instant::now();
-        let timeout = std::time::Duration::from_secs(time_secs);
-        
-        return Err("Not implemented".to_string());
-        
     }
 
     /*
@@ -334,9 +336,8 @@ async fn test_nokhwa() {
     // first camera in system
     use nokhwa::pixel_format::YuyvFormat;
     let index = CameraIndex::Index(0);
+    
     // request yuv format
-    // let frame_format = FrameFormat::YUYV;
-    // let camera_format = CameraFormat::new_from(1920, 1080, frame_format, 30);
     let requested = RequestedFormat::new::<YuyvFormat>(
         RequestedFormatType::AbsoluteHighestResolution,
     );
@@ -369,7 +370,7 @@ async fn test_nokhwa_camera_sup_formats() {
     let formats = camera.compatible_camera_formats().unwrap();
     println!("Supported formats for camera 0:");
     for format in formats {
-        if format.width() >= 1920 && format.height() >= 1080 {
+        if format.frame_rate() >= 30 {
             println!(" - {:?} (selected)", format);
         }
     }
@@ -411,6 +412,7 @@ async fn test_client_webcam_capture_multiple_frame() {
 
 #[tokio::test]
 async fn test_client_convert_jpeg_to_mp4() {
+    pretty_env_logger::init();
     use ffmpeg::ffi::*;
     unsafe {
         av_log_set_level(AV_LOG_ERROR);
