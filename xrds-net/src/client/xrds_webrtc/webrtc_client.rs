@@ -2,6 +2,7 @@ use std::io::{Read, BufRead};
 use std::io::BufReader;
 use std::path::Path;
 use anyhow::Result as AnyResult;
+use webrtc::data_channel::RTCDataChannel;
 use std::time::Duration;
 use tokio::sync::Mutex;
 use webrtc::media::io::h264_reader::H264Reader;
@@ -39,6 +40,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::task::JoinHandle;
 use bytes::Bytes;
 use tokio::sync::mpsc::UnboundedSender;
+use webrtc::data_channel::data_channel_init::RTCDataChannelInit;
 
 use crate::common::data_structure::WebRTCMessage;
 use crate::common::data_structure::{CREATE_SESSION, LIST_SESSIONS, JOIN_SESSION, 
@@ -154,6 +156,8 @@ pub struct WebRTCClient {
     stream_shutdown: Option<std::sync::Arc<AtomicBool>>,
     stream_handles: Vec<JoinHandle<()>>,
     stream_frame_tx: Option<UnboundedSender<Vec<u8>>>,
+
+    pub data_channel: Option<std::sync::Arc<RTCDataChannel>>,
 }
 
 #[allow(dead_code)]
@@ -184,6 +188,8 @@ impl WebRTCClient {
             stream_shutdown: None,
             stream_handles: Vec::new(),
             stream_frame_tx: None,
+
+            data_channel: None,
         }
     }
     
@@ -909,7 +915,15 @@ impl WebRTCClient {
 
         // Add this newly created track to the PeerConnection
         let rtp_sender = pc.add_track(Arc::clone(&video_track) as Arc<dyn TrackLocal + Send + Sync>).await.map_err(|e| e.to_string())?;
-        self.pc = Some(Arc::new(pc));
+        
+        // Create a data channel for messaging
+        let pc_arc = Arc::new(pc);
+        let dc_open_result = self.create_data_channel(Arc::clone(&pc_arc), "msg").await;
+        if let Err(e) = dc_open_result {
+            eprintln!("Data channel creation error: {}", e);
+        }
+
+        self.pc = Some(pc_arc);
         self.rtp_sender = Some(rtp_sender);
         self.video_track = Some(video_track);
 
@@ -1028,6 +1042,35 @@ impl WebRTCClient {
         
         // p2p connection to the publisher
         let pc = api.new_peer_connection(rtc_config).await.map_err(|e| e.to_string())?;
+
+        pc.on_data_channel(Box::new({
+            let client_dc_ref = std::sync::Arc::new(std::sync::Mutex::new(None::<std::sync::Arc<RTCDataChannel>>));
+            move |data_channel| {
+                let client_dc_ref = client_dc_ref.clone();
+                Box::pin(async move {
+                    let label = data_channel.label();
+                    println!("Remote created data channel: {}", label);
+
+                    // set message handler for remote channel
+                    let dc_clone = data_channel.clone();
+                    data_channel.on_message(Box::new(move |msg| {
+                        let dc_inner = dc_clone.clone();
+                        Box::pin(async move {
+                            if msg.is_string {
+                                if let Ok(s) = std::str::from_utf8(&msg.data) {
+                                    println!("Remote DC '{}' message: {}", dc_inner.label(), s);
+                                }
+                            } else {
+                                println!("Remote DC '{}' binary {} bytes", dc_inner.label(), msg.data.len());
+                            }
+                        })
+                    }));
+
+                    // Optionally store it somewhere accessible (not shown here)
+                    // *client_dc_ref.lock().await = Some(std::sync::Arc::new(data_channel.clone()));
+                })
+            }
+        }));
 
         // collect ICE candidates of the subscriber
         self.ice_candidates = Some(Arc::new(Mutex::new(Vec::new())));
@@ -1219,11 +1262,66 @@ impl WebRTCClient {
             }
         }
     }
-    
+    async fn create_data_channel(&mut self, peer_connection: Arc<RTCPeerConnection>, label: &str) -> Result<(), String> {
+        let pc = peer_connection;
+
+        let init = RTCDataChannelInit {
+            ordered: Some(true),
+            max_retransmits: None,
+            max_packet_life_time: None,
+            negotiated: None,
+            protocol: None,
+        };
+
+        let create_data_channel_result = pc.create_data_channel(label, Some(init)).await;
+        if let Err(e) = create_data_channel_result {
+            return Err(format!("Failed to create data channel: {}", e));
+        } else {
+            println!("Data channel '{}' created", label);
+        }
+         let data_channel = create_data_channel_result.unwrap();
+
+        let data_channel_clone = data_channel.clone();
+        data_channel.on_open(Box::new(move || {
+            let dc = data_channel_clone.clone();
+            Box::pin(async move {
+                println!("Data channel '{}' is open", dc.label());
+            })
+        }));
+        
+        let data_channel_clone2 = data_channel.clone();
+        data_channel.on_message(Box::new(move |msg| {
+            let dc = data_channel_clone2.clone();
+            Box::pin(async move {   // message handling
+                if msg.is_string {
+                    if let Ok(s) = std::str::from_utf8(&msg.data) {
+                        println!("Data channel '{}' received message: {}", dc.label(), s);
+                    } else {
+                        println!("Data channel '{}' received invalid UTF-8 message", dc.label());
+                    }
+                } else {
+                    let data = msg.data;
+                    println!("Data channel '{}' received binary message: {} bytes", dc.label(), data.len());
+                }
+            })
+        }));
+
+        self.data_channel = Some(data_channel);
+        Ok(())
+    }
     /**
      * END OF CONNECTION SETUP METHODS
      * **********************************************************************************************************
      */
+
+    pub async fn send_data_channel_message(&self, message: &str) -> Result<(), String> {
+        if let Some(dc) = &self.data_channel {
+            dc.send_text(message.to_string()).await.map_err(|e| e.to_string())?;
+            Ok(())
+        } else {
+            Err("Data channel not initialized".to_string())
+        }
+    }
 
     pub async fn set_debug_file_path(&mut self, path: &str, file: Option<&str>) 
         -> Result<(), String> {

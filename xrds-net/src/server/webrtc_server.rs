@@ -249,7 +249,7 @@ impl WebRTCServer {
                         log_error_connection(e);
                         let mut sender = sender.lock().await;
                         if let Err(close_err) = sender.send(Message::Close(None)).await {
-                            println!("Failed to send close frame: {}", close_err);
+                            println!("[Server]Failed to send close frame: {}", close_err);
                         }
                         break;
                     }
@@ -258,7 +258,7 @@ impl WebRTCServer {
                 if msg.is_close() {
                     self.remove_client(&client_id);
                     // TODO: remove the session if the client is the creator
-                    println!("Connection closed by client");
+                    println!("[Server]Connection closed by client");
                     break;
                 }
 

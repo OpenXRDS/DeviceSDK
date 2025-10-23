@@ -116,7 +116,7 @@ impl WebSocketServer {
                     Self::log_error_connection(e);
 
                     if let Err(close_err) = sender.send(Message::Close(None)).await {
-                        println!("Failed to send close frame: {}", close_err);
+                        println!("[Server]Failed to send close frame: {}", close_err);
                     }
                     break;
                 }
