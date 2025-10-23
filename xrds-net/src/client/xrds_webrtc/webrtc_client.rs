@@ -35,6 +35,10 @@ use futures_util::{StreamExt, SinkExt};
 use futures_util::stream::SplitSink;
 use std::error::Error;
 use tokio::sync::{mpsc, Notify};
+use std::sync::atomic::{AtomicBool, Ordering};
+use tokio::task::JoinHandle;
+use bytes::Bytes;
+use tokio::sync::mpsc::UnboundedSender;
 
 use crate::common::data_structure::WebRTCMessage;
 use crate::common::data_structure::{CREATE_SESSION, LIST_SESSIONS, JOIN_SESSION, 
@@ -145,6 +149,11 @@ pub struct WebRTCClient {
 
     read_flag: bool,
     debug_file_path: Option<String>,
+
+    // fields for sending video stream from webcam
+    stream_shutdown: Option<std::sync::Arc<AtomicBool>>,
+    stream_handles: Vec<JoinHandle<()>>,
+    stream_frame_tx: Option<UnboundedSender<Vec<u8>>>,
 }
 
 #[allow(dead_code)]
@@ -171,6 +180,10 @@ impl WebRTCClient {
 
             read_flag: false,
             debug_file_path: None,
+
+            stream_shutdown: None,
+            stream_handles: Vec::new(),
+            stream_frame_tx: None,
         }
     }
     
@@ -528,14 +541,149 @@ impl WebRTCClient {
         }
     }
 
+    /**
+     * Sned video stream from webcam device to the peer connection via video track.
+     */
     async fn stream_from_webcam(
-        &self,
-        mut webcam_reader: WebcamReader,
+        &mut self,
+        webcam_reader: WebcamReader,
         video_track: Arc<TrackLocalStaticSample>
     ) -> Result<(), String> {
         
-        // TODO
+        use crate::client::xrds_webrtc::media::transcoding::jpeg2h264::{Jpeg2H264Transcoder, H264Packet};
+        use std::sync::Arc;
+        use tokio::sync::mpsc;
 
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let (frame_tx, mut frame_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+        let (packet_tx, mut packet_rx) = mpsc::unbounded_channel::<Vec<H264Packet>>();
+
+        // store control handles on self
+        self.stream_shutdown = Some(Arc::clone(&shutdown));
+        self.stream_frame_tx = Some(frame_tx.clone());
+
+        let mut handles: Vec<JoinHandle<()>> = Vec::new();
+
+        // capture task: read_single_frame() -> send JPEG frames
+        {
+            let capture_shutdown = Arc::clone(&shutdown);
+            let capture_tx = frame_tx.clone();
+            let mut reader = webcam_reader;
+            let capture_handle: JoinHandle<()> = tokio::spawn(async move {
+                let mut interval = tokio::time::interval(std::time::Duration::from_millis(33));
+                while !capture_shutdown.load(Ordering::Relaxed) {
+                    interval.tick().await;
+                    match reader.read_single_frame(1).await {
+                        Ok(frame_bytes) => {
+                            let _ = capture_tx.send(frame_bytes);
+                        }
+                        Err(e) => {
+                            eprintln!("webcam read error: {:?}", e);
+                            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                        }
+                    }
+                }
+                let _ = reader.stop_webcam().await;
+            });
+            handles.push(capture_handle);
+        }   // end of capture task
+
+        // transcode task: jpeg -> H.264 packets
+        {
+            let trans_shutdown = Arc::clone(&shutdown);
+            let tx = packet_tx.clone();
+            let trans_handle: JoinHandle<()> = tokio::spawn(async move {
+                let mut transcoder = match Jpeg2H264Transcoder::new(1920, 1080, 30) {
+                    Ok(t) => t,
+                    Err(e) => {
+                        eprintln!("failed to create transcoder: {:?}", e);
+                        return;
+                    }
+                };
+
+                while let Some(jpeg_frame) = frame_rx.recv().await {
+                    if trans_shutdown.load(Ordering::Relaxed) { break; }
+                    match transcoder.transcode_jpeg_to_h264_packet(&jpeg_frame) {
+                        Ok(pkts) => {
+                            if !pkts.is_empty() {
+                                let _ = tx.send(pkts);
+                            }
+                        }
+                        Err(e) => eprintln!("transcode error: {:?}", e),
+                    }
+                }
+
+                // flush remaining packets on end
+                match transcoder.flush_to_packets() {
+                    Ok(final_pkts) => {
+                        if !final_pkts.is_empty() {
+                            let _ = tx.send(final_pkts);
+                        }
+                    }
+                    Err(e) => eprintln!("flush error: {:?}", e),
+                }
+            });
+            handles.push(trans_handle);
+        }   // end of transcode task
+
+        // writer task: take H.264 packets and write NALs to video_track
+        {
+            let write_shutdown = Arc::clone(&shutdown);
+            let vt = video_track.clone();
+            let write_handle: JoinHandle<()> = tokio::spawn(async move {
+                // send SPS/PPS before frames if available
+                while let Some(pkts) = packet_rx.recv().await {
+                    if write_shutdown.load(Ordering::Relaxed) { break; }
+
+                    for pkt in pkts {
+                        if pkt.data.is_empty() { continue; }
+                        // NAL type: lowest 5 bits of first byte (assuming annex-b payload)
+                        let nalu_type = pkt.data[0] & 0x1F;
+                        // duration: best-effort 33ms per frame
+                        let sample = Sample {
+                            data: Bytes::from(pkt.data),
+                            duration: std::time::Duration::from_millis(33),
+                            ..Default::default()
+                        };
+
+                        // write sample; ignore failures but log
+                        if let Err(e) = vt.write_sample(&sample).await {
+                            eprintln!("video_track.write_sample error: {:?}", e);
+                        }
+
+                        // optional: log SPS/PPS or keyframes
+                        if nalu_type == 7 || nalu_type == 8 {
+                            // sps / pps
+                        }
+                    }
+                }
+            });
+            handles.push(write_handle);
+        }   // end of writer task
+
+        self.stream_handles = handles;
+        Ok(())
+    }
+
+    pub async fn stop_stream(&mut self) -> Result<(), String> {
+        if let Some(flag) = &self.stream_shutdown {
+            flag.store(true, Ordering::Relaxed);
+        } else {
+            return Ok(());
+        }
+
+        // await/abort handles
+        while let Some(handle) = self.stream_handles.pop() {
+            // try waiting a short time, then abort if hung
+            let res = tokio::time::timeout(std::time::Duration::from_secs(5), handle).await;
+            if res.is_err() {
+                // task didn't finish in time; the handle is already consumed by timeout
+                // no need to abort as timeout already handles it
+            }
+        }
+
+        self.stream_shutdown = None;
+        self.stream_frame_tx = None;
         Ok(())
     }
 
@@ -932,7 +1080,7 @@ impl WebRTCClient {
         let notify_rx2 = Arc::clone(&notify_rx);
         let pc_clone = self.pc.clone().unwrap();
         let video_file = match &self.debug_file_path {
-            Some(path) => format!("{}/received.h264", path),
+            Some(_) => self.debug_file_path.clone().unwrap(),
             None => {
                 // Create a dedicated output directory in project root
                 let output_dir = "test_output";
@@ -1077,80 +1225,177 @@ impl WebRTCClient {
      * **********************************************************************************************************
      */
 
-    pub async fn set_debug_file_path(&mut self, path: &str, file: Option<&str>) -> Result<(), String> {
-        self.debug_file_path = Some(path.to_string());
-        // check if file path is valid
-        if let Some(ref path) = self.debug_file_path {
-            if !Path::new(path).exists() {
-                // create the directory
-                let result = std::fs::create_dir_all(path).map_err(|e| e.to_string())?;
-                if result != () {
-                    return Err("Failed to create directory".to_string());
-                }
+    pub async fn set_debug_file_path(&mut self, path: &str, file: Option<&str>) 
+        -> Result<(), String> {
+        // check if path is valid
+        if !Path::new(path).exists() {
+            // create the directory
+            let result = std::fs::create_dir_all(path).map_err(|e| e.to_string())?;
+            if result != () {
+                return Err("Failed to create directory".to_string());
             }
-
-            // create the file under the directory
-            let file_path = match file {
-                Some(f) => format!("{}/{}", path, f),
-                None => format!("{}/received.h264", path),
-            };
-            let _file = File::create(&file_path).map_err(|e| e.to_string())?;
-            println!("Debug file created at {}", file_path);
         }
+        
+        // concat path and file name
+        self.debug_file_path = match file {
+            Some(f) => Some(format!("{}/{}", path, f)),
+            None => Some(format!("{}/webrtc_client_debug", path)),
+        };
+
+        // create the file if not exists
+        let debug_file_full_path = self.debug_file_path.clone().unwrap();
+        let _ = File::create(&debug_file_full_path).map_err(|e| e.to_string())?;
+
         Ok(())
     }
 
-    fn is_valid_webcam_frame(data: &[u8]) -> bool {
-        data.len() >= 13 && &data[0..5] == b"FRAME"
-    }
+    /**
+     * Record webcam video to MP4 file for a specified duration.
+     */
+    pub async fn realtime_webcam_to_mp4 (
+        device_id: u32,
+        output_path: &str,
+        duration_seconds: u32,
+    ) -> Result<(), Box<dyn std::error::Error>> {
 
-    fn parse_webcam_frame(data: &[u8]) -> Result<(u32, u32, &[u8]), String> {
-        if data.len() < 13 {
-            return Err("Frame data too short".to_string());
-        }
-        
-        let width = u32::from_le_bytes([data[5], data[6], data[7], data[8]]);
-        let height = u32::from_le_bytes([data[9], data[10], data[11], data[12]]);
-        let rgb_data = &data[13..];
-        
-        println!("Extracted frame - Width: {}, Height: {}, RGB data size: {}", width, height, rgb_data.len());
-        let expected_size = (width * height * 3) as usize; // RGB = 3 bytes per pixel
-        if rgb_data.len() != expected_size {
-            return Err(format!("RGB data size mismatch: expected {}, got {}", 
-                expected_size, rgb_data.len()));
-        }
-        
-        Ok((width, height, rgb_data))
-    }
+        use crate::client::xrds_webrtc::webcam_reader::WebcamReader;
+        use crate::client::xrds_webrtc::media::transcoding::jpeg2h264::{Jpeg2H264Transcoder, H264Packet};
+        use crate::client::xrds_webrtc::media::streaming_mp4_writer::StreamingMP4Writer;
+        use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+        use tokio::sync::mpsc;
 
-    // Placeholder for RGB to H.264 encoding
-    // You'll need to implement this with a proper encoder like x264 or hardware encoder
-    fn encode_rgb_to_h264(width: u32, height: u32, rgb_data: &[u8]) -> Result<Vec<u8>, String> {
-        // PLACEHOLDER: This is where you'd implement actual H.264 encoding
-        // For now, create a dummy H.264 frame with proper NAL unit structure
+        println!("🎥 Starting real-time webcam to MP4: {} seconds", duration_seconds);
+
+            // Setup webcam reader
+        let mut webcam_reader = WebcamReader::new(device_id).await?;
         
-        let mut h264_frame = Vec::new();
+        // Setup transcoder and MP4 writer
+        let mut transcoder = Jpeg2H264Transcoder::new(1920, 1080, 30)?;
+        let mut mp4_writer = StreamingMP4Writer::new(output_path, 1920, 1080, 30)?;
         
-        // Add SPS (Sequence Parameter Set) NAL unit for first frame
-        // This is a minimal SPS for baseline profile
-        h264_frame.extend_from_slice(&[0x00, 0x00, 0x00, 0x01]); // Start code
-        h264_frame.extend_from_slice(&[0x67, 0x42, 0x00, 0x1f]); // SPS NAL header + profile
+        // Setup channels for communication
+        let (frame_sender, mut frame_receiver) = mpsc::unbounded_channel::<Vec<u8>>();
+        let (packet_sender, mut packet_receiver) = mpsc::unbounded_channel::<Vec<H264Packet>>();
+
+        let shutdown_flag = Arc::new(AtomicBool::new(false));
+
+        // Task 1: Frame capture (30fps)
+        let capture_shutdown = Arc::clone(&shutdown_flag);
+        let capture_task = tokio::spawn(async move {
+            let mut frame_count = 0;
+            let frame_interval = tokio::time::Duration::from_millis(33); // ~30fps
+            let mut interval = tokio::time::interval(frame_interval);
+            
+            while !capture_shutdown.load(Ordering::Relaxed) {
+                interval.tick().await;
+                
+                match webcam_reader.read_single_frame(1).await {
+                    Ok(jpeg_frame) => {
+                        if let Err(_) = frame_sender.send(jpeg_frame) {
+                            println!("Frame channel closed");
+                            break;
+                        }
+                        frame_count += 1;
+                        
+                        if frame_count % 90 == 0 { // Every 3 seconds
+                            println!("📸 Captured {} frames", frame_count);
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Frame capture error: {:?}", e);
+                        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                    }
+                }
+            }
+            
+            // Stop webcam before ending task
+            webcam_reader.stop_webcam().await;
+            println!("🔚 Frame capture ended: {} frames", frame_count);
+        }); // end of capture task
+
+        // Task 2: JPEG to H.264 transcoding
+        let transcode_shutdown = Arc::clone(&shutdown_flag);
+        let transcode_task = tokio::spawn(async move {
+        let mut processed_frames = 0;
+            
+            while let Some(jpeg_frame) = frame_receiver.recv().await {
+                if transcode_shutdown.load(Ordering::Relaxed) {
+                    break;
+                }
+                
+                match transcoder.transcode_jpeg_to_h264_packet(&jpeg_frame) {
+                    Ok(h264_packets) => {
+                        processed_frames += 1;
+                        
+                        if !h264_packets.is_empty() {
+                            if let Err(_) = packet_sender.send(h264_packets) {
+                                println!("Packet channel closed");
+                                break;
+                            }
+                        }
+                        
+                        if processed_frames % 90 == 0 {
+                            println!("🔄 Processed {} frames", processed_frames);
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Transcoding error: {:?}", e);
+                    }
+                }
+            }
+            
+            // Flush remaining packets
+            match transcoder.flush_to_packets() {
+                Ok(final_packets) => {
+                    if !final_packets.is_empty() {
+                        println!("🔄 Flushed {} final packets", final_packets.len());
+                        let _ = packet_sender.send(final_packets);
+                    }
+                }
+                Err(e) => eprintln!("Flush error: {:?}", e),
+            }
+            
+            println!("🔚 Transcoding ended: {} frames processed", processed_frames);
+        }); // end of transcoding task
+
+        // Task 3: H.264 packets to MP4 writing
+        let write_task = tokio::spawn(async move {
+            let mut total_packets = 0;
+            
+            while let Some(h264_packets) = packet_receiver.recv().await {
+                match mp4_writer.write_packets(&h264_packets) {
+                    Ok(_) => {
+                        total_packets += h264_packets.len();
+                    }
+                    Err(e) => {
+                        eprintln!("MP4 write error: {:?}", e);
+                        break;
+                    }
+                }
+            }
+            
+            // Finalize MP4
+            match mp4_writer.finalize() {
+                Ok(_) => println!("✅ MP4 finalized with {} packets", total_packets),
+                Err(e) => eprintln!("MP4 finalization error: {:?}", e),
+            }
+        }); // end of writing task
+
+        // Run for specified duration
+        tokio::time::sleep(tokio::time::Duration::from_secs(duration_seconds as u64)).await;
+    
+        // Signal shutdown
+        shutdown_flag.store(true, Ordering::Relaxed);
+        // Wait for tasks to complete (webcam is stopped in capture task)
+        let _ = tokio::join!(capture_task, transcode_task, write_task);
         
-        // Add PPS (Picture Parameter Set) NAL unit
-        h264_frame.extend_from_slice(&[0x00, 0x00, 0x00, 0x01]); // Start code
-        h264_frame.extend_from_slice(&[0x68, 0xce, 0x3c, 0x80]); // PPS NAL
-        
-        // Add IDR frame NAL unit (placeholder)
-        h264_frame.extend_from_slice(&[0x00, 0x00, 0x00, 0x01]); // Start code
-        h264_frame.extend_from_slice(&[0x65]); // IDR NAL header
-        
-        // Add dummy frame data (you need real encoding here)
-        h264_frame.resize(h264_frame.len() + 1000, 0x00); // Dummy data
-        
-        println!("🔄 Encoded {}x{} RGB frame to {} bytes H.264", width, height, h264_frame.len());
-        
-        Ok(h264_frame)
+        println!("✅ Real-time recording completed: {}", output_path);
+
+        Ok(())
     }
+    
+    
+
 }
 
 impl Drop for WebRTCClient {
@@ -1206,69 +1451,17 @@ async fn save_to_disk_by_writer2(
     Ok(())
 }
 
-async fn save_to_disk_by_writer(
-    writer: Arc<Mutex<dyn webrtc::media::io::Writer + Send + Sync>>,
-    track: Arc<TrackRemote>,
-    notify: Arc<Notify>,
-) -> AnyResult<()> {
-    let mut total_rtp_packet_payload_size = 0;
-    let mut received_count = 0;
-    
-    let (first_packet, _) = track.read_rtp().await?;
-    let first_nalu_type = first_packet.payload[0] & 0x1F;
-    println!(
-        "First packet received - NAL type: {}, size: {}, seq: {}",
-        first_nalu_type,
-        first_packet.payload.len(),
-        first_packet.header.sequence_number
-    );
-    {
-        let mut w = writer.lock().await;
-        w.write_rtp(&first_packet)?;
-        received_count += 1;
-    }
-    total_rtp_packet_payload_size += first_packet.payload.len();
-    let mut last_seq = Some(first_packet.header.sequence_number as u32);
+#[tokio::test]
+async fn test_realtime_webcam_to_mp4() {
+    std::env::set_var("RUST_LOG", "info");
+    pretty_env_logger::init();
 
-    loop {
-        tokio::select! {
-            result = track.read_rtp() => {
-                received_count += 1;
-                if let Ok((rtp_packet, _)) = result {
-                    total_rtp_packet_payload_size += rtp_packet.payload.len();
+    let device_id = 0; // Adjust based on your system
+    let output_path = "test_output/realtime_webcam.mp4";
+    let duration_seconds = 10; // Record for 10 seconds
 
-                    if let Some(last) = last_seq {
-                        let current = rtp_packet.header.sequence_number as u32;
-                        let expected = (last + 1) % 65536;
-                        if current != expected {
-                            println!("Packet loss detected: {} -> {} (missed: {})", last, current, (current.wrapping_sub(expected)) % 65536);
-                        }
-                    }
-                    last_seq = Some(rtp_packet.header.sequence_number as u32);
-
-                    let mut w = writer.lock().await;
-                    w.write_rtp(&rtp_packet)?;
-                    
-                } else{
-                    println!("file closing begin after read_rtp error");
-                    let mut w = writer.lock().await;
-                    if let Err(err) = w.close() {
-                        println!("file close err: {err}");
-                    }
-                    println!("file closing end after read_rtp error");
-                    return Ok(());
-                }
-            }
-            _ = notify.notified() => {
-                println!("file closing begin after notified");
-                let mut w = writer.lock().await;
-                if let Err(err) = w.close() {
-                    println!("file close err: {err}");
-                }
-                println!("file closing end after notified");
-                println!("Total received payload size: {}, received packets: {}", total_rtp_packet_payload_size, received_count);
-                return Ok(());
-            }
-        }
+    match WebRTCClient::realtime_webcam_to_mp4(device_id, output_path, duration_seconds).await {
+        Ok(_) => println!("Test completed successfully."),
+        Err(e) => eprintln!("Test failed: {:?}", e),
     }
 }

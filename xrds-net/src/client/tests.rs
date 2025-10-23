@@ -1,12 +1,10 @@
 mod tests {
-    use crate::client::{Client, ClientBuilder};
+    use crate::client::{ClientBuilder};
     use crate::client::xrds_webrtc::webrtc_client::{WebRTCClient, StreamSource};
-    use crate::client::xrds_webrtc::webcam_reader::WebcamReader;
     use crate::common::enums::{PROTOCOLS, FtpCommands};
     use crate::common::data_structure::{FtpPayload, WebRTCMessage, 
-        CREATE_SESSION, LIST_SESSIONS, JOIN_SESSION, LEAVE_SESSION, 
-        CLOSE_SESSION, LIST_PARTICIPANTS, OFFER, ANSWER, WELCOME, ICE_CANDIDATE, ICE_CANDIDATE_ACK};
-    use crate::common::{append_to_path, payload_str_to_vector_str};
+        CREATE_SESSION, JOIN_SESSION, OFFER, ANSWER, WELCOME, ICE_CANDIDATE, ICE_CANDIDATE_ACK};
+    use crate::common::{append_to_path};
     use crate::server::XRNetServer;
     use tokio::time::{sleep, Duration};
     use tokio::time::timeout;
@@ -17,8 +15,6 @@ mod tests {
     use serial_test::serial;
     use std::time::Instant;
     use std::sync::Mutex;
-    use std::process::{Command, Stdio};
-    use std::io::Read;
 
     
     static HTTP_ECHO_SERVER_URL: &str = "https://echo.free.beeceptor.com";
@@ -813,5 +809,76 @@ mod tests {
         // Size difference is normal due to network overhead and possible keyframe differences
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_client_webrtc_webcam_stream() {
+        std::env::set_var("RUST_LOG", "info");
+        pretty_env_logger::init();
+        init_crypto();
+
+        let port = line!() + 8000;
+        let server_handle = run_server(PROTOCOLS::WEBRTC, port);
+        sleep(Duration::from_secs(2)).await;
+
+        let addr_str = "ws://127.0.0.1".to_owned() + ":" + port.to_string().as_str() + "/";
+
+        let mut publisher = WebRTCClient::new();
+        publisher.connect(addr_str.as_str()).await.expect("Failed to connect");
+
+        let (_msg, publisher) = wait_for_message(publisher, WELCOME, 2).await;
+        
+        let publisher = publisher.create_session().await.expect("Failed to create session");
+        let (msg, publisher) = wait_for_message(publisher, CREATE_SESSION, 5).await;
+
+        let session_id = msg.session_id;
+        println!("Test: session_id created: {}", session_id);
+        
+        let mut publisher = publisher;
+        publisher.publish(&session_id).await.expect("Failed to publish");   // includes creating offer
+        let (_publish_result, publisher) = wait_for_message(publisher, OFFER, 5).await;
+        println!("Test: publish_result received: {:?}", _publish_result.sdp); // sdp is supposed to be None for this test
+
+        // subscriber joins the session
+        let mut subscriber = WebRTCClient::new();
+        subscriber.set_debug_file_path(DEFAULT_DEBUG_FILE_PATH, Some("webcamstream.h264")).await.expect("Failed to set debug file path");
+        subscriber.connect(addr_str.as_str()).await.expect("Failed to connect");
+
+        let (msg, subscriber) = wait_for_message(subscriber, WELCOME, 2).await;
+        let _client_id = msg.client_id;
+        // println!("Test: client_id received: {}", client_id);
+        
+        let subscriber = subscriber.join_session(&session_id).await.expect("Failed to join session");
+        let (join_result, subscriber) = wait_for_message(subscriber, JOIN_SESSION, 5).await;
+        // println!("Test: join_result received: {:?}", join_result.sdp); // sdp is supposed to be None for this test
+        
+        let mut subscriber = subscriber;
+        subscriber.handle_offer(join_result.sdp.unwrap()).await.expect("Failed to handle offer");
+
+        let (_answer_result, subscriber) = wait_for_message(subscriber, ANSWER, 5).await;
+        // println!("Test: answer_result received: {:?}", answer_result.sdp); // sdp is supposed to be None for this test
+
+        let (offer_result, mut publisher) = wait_for_message(publisher, ANSWER, 5).await;
+        publisher.handle_answer(offer_result).await.expect("Failed to handle answer");
+
+        publisher.send_ice_candidates(false).await.expect("Failed to send ICE candidates");
+
+        let (msg, mut subscriber) = wait_for_message(subscriber, ICE_CANDIDATE, 10).await;
+        println!("Test: ICE candidate received: {:?}", msg.ice_candidates);
+        subscriber.handle_ice_candidate(msg).await.expect("Failed to handle ICE candidate");
+
+        subscriber.send_ice_candidates(true).await.expect("Failed to send ICE candidates");
+        
+        let (msg, mut publisher) = wait_for_message(publisher, ICE_CANDIDATE_ACK, 10).await;
+        println!("Test: ICE candidate ACK received: {:?}", msg.ice_candidates);
+        publisher.handle_ice_candidate(msg).await.expect("Failed to handle ICE candidate ACK");
+
+
+        let stream_source = StreamSource::Webcam(0);
+        let _ = publisher.start_streaming(Some(stream_source)).await.expect("Failed to start streaming");
+
+        // wait till the video file is sent
+        sleep(Duration::from_secs(10)).await;
+        publisher.stop_stream().await.expect("Failed to stop streaming");
+        server_handle.abort();
+    }
     
  }

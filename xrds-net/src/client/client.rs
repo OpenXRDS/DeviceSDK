@@ -14,7 +14,7 @@
  limitations under the License.
  */
 
-use std::{fmt, result};
+use std::{fmt};
 use std::clone::Clone;
 use std::io::Cursor;
 use std::sync::{Arc, Mutex};
@@ -1534,14 +1534,4 @@ impl Client {
         Ok(false)
     }
 
-    /********************************** */
-    /*************** WebRTC *************/
-/********************************** */
-    
-
-
  }
-
- /********************************** */
-/*************** WebRTC *************/
-/********************************** */

@@ -1,14 +1,10 @@
-use nokhwa::pixel_format::{RgbAFormat, RgbFormat, YuyvFormat};
-use nokhwa::utils::{CameraFormat, CameraIndex, FrameFormat, RequestedFormat, RequestedFormatType, Resolution};
+use nokhwa::pixel_format::{YuyvFormat};
+use nokhwa::utils::{CameraIndex, RequestedFormat, RequestedFormatType, Resolution};
 use nokhwa::{Camera};
 use tokio::sync::mpsc;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::io::{Read, Write};
-use crate::client::xrds_webrtc::transcoding::img2vid_encoder::ImageToVideoEncoder;
-
-use ffmpeg_next::{self as ffmpeg, Rational};
-use ffmpeg::{codec, format, media, util::error::Error, decoder, encoder};
+use std::io::{Read};
 
 extern crate pretty_env_logger;
 extern crate log;
@@ -17,11 +13,9 @@ extern crate log;
  * WebcamReader
  * Currently uses nokhwa to read webcam frames. This gives better cross-platform support
  * than opencv, which has issues on some Linux systems.
- * However, it automatically converts to RGB format, which is less efficient for transcoding.
+ * However, it automatically converts to MJPEG format internally.
  * 
- * The resolution(1920x1080) can only be met by using NV12, but nokhwa does not support NV12.
- * So, nokhwa automatically converts to RGB, which is less efficient.
- * It is INEVITABLE to convert RGB to YUV for h264 encoding.
+ * It is INEVITABLE to convert MJPEG to YUV for h264 encoding.
  * 
  * In case of using YUYV format directly, it results in lower resolution (800x448) with Logitech C920.
  * Refer to test_nokhwa_camera_sup_formats() test case.
@@ -157,6 +151,7 @@ impl WebcamReader {
                 match camera.frame() {
                     Ok(frame) => {
                         let image_buffer = frame.buffer().to_vec();
+                        // println!("FrameFormat: {:?}", frame.source_frame_format());
 
                         if let Err(e) = sender.blocking_send(image_buffer) {
                             log::error!("❌ Failed to send frame data: {}", e);
@@ -265,7 +260,7 @@ impl WebcamReader {
 impl std::io::Read for WebcamReader {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         // read data from receiver
-        if let Some(mut data) = self.buffer.take() {
+        if let Some(data) = self.buffer.take() {
             let len = std::cmp::min(buf.len(), data.len());
             buf[..len].copy_from_slice(&data[..len]);
             if len < data.len() {
@@ -401,7 +396,7 @@ async fn test_client_webcam_capture_multiple_frame() {
         let jpg_frame = reader.read_single_frame(timeout_secs).await.expect("test.Failed to capture frame");
 
         // write to file for manual inspection
-        std::fs::write(format!("test_output/input_images2/test_frame_{:03}.jpg", i), &jpg_frame).expect("Failed to write frame to file");
+        std::fs::write(format!("test_output/input_images3/test_frame_{:03}.jpg", i), &jpg_frame).expect("Failed to write frame to file");
 
         println!("✅ Frame written to test_frame_{:03}.jpg for inspection", i);
         std::thread::sleep(std::time::Duration::from_millis(100));
@@ -410,8 +405,12 @@ async fn test_client_webcam_capture_multiple_frame() {
     reader.stop_webcam().await;
 }
 
+/**
+ * ImageToVideoEncoder is just to verify the encoding process from jpeg to mp4.
+ */
 #[tokio::test]
 async fn test_client_convert_jpeg_to_mp4() {
+    use crate::client::xrds_webrtc::media::transcoding::img2vid_encoder::ImageToVideoEncoder;
     pretty_env_logger::init();
     use ffmpeg::ffi::*;
     unsafe {
