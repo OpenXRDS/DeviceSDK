@@ -8,8 +8,15 @@ use ffmpeg::{
 extern crate pretty_env_logger;
 extern crate log;
 
+#[allow(dead_code)]
 const DEFAULT_X264_OPTS: &str = "preset=medium";
 
+
+/**
+ * This class is to encode a series of JPEG images into a video file using H.264 codec.
+ * JUST FOR TESTING PURPOSES.
+ */
+#[allow(dead_code)]
 pub struct ImageToVideoEncoder {
     encoder: encoder::Video,
     frame_count: usize,
@@ -17,6 +24,7 @@ pub struct ImageToVideoEncoder {
     fps: Rational,
 }
 
+#[allow(dead_code)]
 impl ImageToVideoEncoder {
     pub fn new(
         width: u32,

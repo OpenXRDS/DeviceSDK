@@ -1,11 +1,8 @@
 use ffmpeg_next::{self as ffmpeg, Rational};
-use ffmpeg::{codec, format, media, util::error::Error, decoder, encoder, color, Dictionary, frame, Packet};
+use ffmpeg::{codec, format, util::error::Error, decoder, encoder, color, Dictionary, frame, Packet};
 use ffmpeg::encoder::find;
-use codec::capabilities::Capabilities;
 extern crate pretty_env_logger;
 extern crate log;
-
-const DEFAULT_X264_OPTS: &str = "preset=medium";
 
 pub struct H264Packet {
     pub data: Vec<u8>,
@@ -17,11 +14,11 @@ pub struct H264Packet {
 pub struct Jpeg2H264Transcoder {
     width: u32,
     height: u32,
-    fps: u32,
     encoder: codec::encoder::video::Encoder,
     frame_count: u32,
 }
 
+#[allow(dead_code)]
 impl Jpeg2H264Transcoder {
     pub fn new(width: u32, height: u32, fps: u32) -> Result<Self, Error> {
         ffmpeg::init().unwrap();
@@ -64,13 +61,13 @@ impl Jpeg2H264Transcoder {
         Ok(Jpeg2H264Transcoder {
             width,
             height,
-            fps,
             encoder: opened_encoder,
             frame_count: 0,
         })
     }
 
     /// Decode JPEG bytes using fresh decoder - with better error reporting
+    #[allow(dead_code)]
     fn decode_jpeg_bytes(&self, jpeg_bytes: &[u8]) -> Result<frame::Video, Error> {
         if jpeg_bytes.len() < 10 {
             log::error!("JPEG data too small: {} bytes", jpeg_bytes.len());
@@ -113,7 +110,13 @@ impl Jpeg2H264Transcoder {
         }
     }
 
-    /// Transcode JPEG bytes to H.264 NAL units
+    /*
+    ** This is the main function to transcode a single JPEG image to H.264 packets.
+    ** input: Single JPEG image bytes
+    ** output: Vector of H264Packet structs (can be empty if encoder is buffering)
+    ** Handles encoder delay and multiple output packets.
+    ** It can produce 0, 1, or multiple packets per input frame.
+    */
     pub fn transcode_jpeg_to_h264_packet(&mut self, jpeg_bytes: &[u8]) -> Result<Vec<H264Packet>, Error> {
         let decoded_frame = self.decode_jpeg_bytes(jpeg_bytes)?;
         let mut yuv420_frame = self.convert_frame_format_strict(&decoded_frame)?;
@@ -148,7 +151,10 @@ impl Jpeg2H264Transcoder {
         Ok(packets)
     }
 
-    /// Strict frame format conversion - ALWAYS output exact target dimensions
+    /**
+     * Used by write_h264_packets_to_mp4 and flush_to_packets
+     * From YUVJ422P (JPEG decoded) to YUV420P (H.264 encoder)
+     */
     fn convert_frame_format_strict(&self, src_frame: &frame::Video) -> Result<frame::Video, Error> {
         use ffmpeg::software::scaling::{context::Context, flag::Flags};
 
@@ -215,7 +221,7 @@ impl Jpeg2H264Transcoder {
         Ok(converted)
     }
 
-
+    #[allow(dead_code)]
     fn convert_frame_format(&self, src_frame: &frame::Video) -> Result<frame::Video, Error> {
         use ffmpeg::software::scaling::{context::Context, flag::Flags};
 
@@ -254,23 +260,12 @@ impl Jpeg2H264Transcoder {
         Ok(converted)
     }
 
-    /// Flush encoder
-    pub fn flush(&mut self) -> Result<Vec<u8>, Error> {
-        self.encoder.send_eof()?;
-
-        let mut h264_data = Vec::new();
-        let mut packet = Packet::empty();
-
-        while self.encoder.receive_packet(&mut packet).is_ok() {
-            if let Some(data) = packet.data() {
-                h264_data.extend_from_slice(data);
-            }
-        }
-
-        Ok(h264_data)
-    }
-
-    /// Write H.264 packets with proper timing to MP4
+    /**
+     * This function is to verify if h264 packets are valid by writing them to an MP4 file.
+     * It takes a slice of H264Packet structs and writes them to the specified output path.
+     * The width, height, and fps parameters are used to set up the MP4 container
+     * and stream correctly.
+     */
     pub fn write_h264_packets_to_mp4 (
         h264_packets: &[H264Packet], 
         output_path: &str, 
@@ -358,7 +353,11 @@ impl Jpeg2H264Transcoder {
         Ok(())
     }
 
-    /// Get all remaining packets from encoder
+    /**
+     * This function is also to verify if h264 packets are valid by writing them to an MP4 file.
+     * It flushes the encoder and collects all remaining packets.
+     * Returns a vector of H264Packet structs.
+     */
     pub fn flush_to_packets(&mut self) -> Result<Vec<H264Packet>, Error> {
         self.encoder.send_eof()?;
 
@@ -384,22 +383,6 @@ impl Jpeg2H264Transcoder {
 
         Ok(packets)
     }
-}
-
-fn parse_opts(s: String) -> Option<Dictionary<'static>> {
-    if s.is_empty() {
-        return Some(Dictionary::new());
-    }
-    
-    let mut dict = Dictionary::new();
-    for keyval in s.split_terminator(',') {
-        let tokens: Vec<&str> = keyval.split('=').collect();
-        match tokens[..] {
-            [key, val] => dict.set(key, val),
-            _ => return None,
-        }
-    }
-    Some(dict)
 }
 
 #[allow(dead_code)]
@@ -469,14 +452,14 @@ fn get_jpeg_files(input_spec: &str) -> Result<Vec<String>, Box<dyn std::error::E
 
 #[tokio::test]
 async fn test_client_jpeg_to_h264() {
-    std::env::set_var("RUST_LOG", "debug");
+    std::env::set_var("RUST_LOG", "trace");
     pretty_env_logger::init();
 
     unsafe {
         ffmpeg::ffi::av_log_set_level(ffmpeg::ffi::AV_LOG_ERROR);
     }
 
-    let jpeg_files = get_jpeg_files("test_output/input_images2/test_frame_%03d.jpg")
+    let jpeg_files = get_jpeg_files("test_output/input_images3/test_frame_%03d.jpg")
         .expect("Failed to get JPEG files");
     
     if jpeg_files.is_empty() {
