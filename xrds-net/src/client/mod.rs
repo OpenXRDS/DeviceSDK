@@ -8,6 +8,7 @@ mod xrds_webrtc {
         pub mod transcoding {
             pub mod img2vid_encoder;
             pub mod jpeg2h264;
+            pub mod pcm2opus;
         }
         pub mod streaming_mp4_writer;
     }

@@ -1,7 +1,8 @@
-use std::io::{Read, BufRead};
+use std::io::{Read, BufRead, Write};
 use std::io::BufReader;
 use std::path::Path;
 use anyhow::Result as AnyResult;
+use cpal::traits::StreamTrait;
 use webrtc::data_channel::RTCDataChannel;
 use std::time::Duration;
 use tokio::sync::Mutex;
@@ -41,6 +42,8 @@ use tokio::task::JoinHandle;
 use bytes::Bytes;
 use tokio::sync::mpsc::UnboundedSender;
 use webrtc::data_channel::data_channel_init::RTCDataChannelInit;
+use cpal::Stream;
+use ogg::writing::{PacketWriter, PacketWriteEndInfo};
 
 use crate::common::data_structure::WebRTCMessage;
 use crate::common::data_structure::{CREATE_SESSION, LIST_SESSIONS, JOIN_SESSION, 
@@ -158,6 +161,16 @@ pub struct WebRTCClient {
     stream_frame_tx: Option<UnboundedSender<Vec<u8>>>,
 
     pub data_channel: Option<std::sync::Arc<RTCDataChannel>>,
+
+    audio_track: Option<Arc<TrackLocalStaticSample>>,
+    audio_input_stream: Option<Stream>,
+    
+    // For file testing
+    audio_output_file: Option<Arc<std::sync::Mutex<File>>>,
+    audio_sample_rate: u32,
+    audio_channels: u16,
+
+    audio_capture_running: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
 
 #[allow(dead_code)]
@@ -190,6 +203,13 @@ impl WebRTCClient {
             stream_frame_tx: None,
 
             data_channel: None,
+            audio_track: None,
+            audio_input_stream: None,
+
+            audio_output_file: None,
+            audio_sample_rate: 48000,
+            audio_channels: 2,
+            audio_capture_running: None,
         }
     }
     
@@ -913,19 +933,32 @@ impl WebRTCClient {
             "webrtc-rs".to_owned(),
         ));
 
+        let audio_track = Arc::new(TrackLocalStaticSample::new(
+            RTCRtpCodecCapability {
+                mime_type: MIME_TYPE_OPUS.to_owned(),
+                clock_rate: 48000,
+                channels: 2,
+                ..Default::default()
+            },
+            "audio".to_owned(),
+            "webrtc-rs".to_owned(),
+        ));
+
         // Add this newly created track to the PeerConnection
         let rtp_sender = pc.add_track(Arc::clone(&video_track) as Arc<dyn TrackLocal + Send + Sync>).await.map_err(|e| e.to_string())?;
-        
+        let _audio_sender = pc.add_track(Arc::clone(&audio_track) as Arc<dyn TrackLocal + Send + Sync>).await.map_err(|e| e.to_string())?;
+
         // Create a data channel for messaging
         let pc_arc = Arc::new(pc);
         let dc_open_result = self.create_data_channel(Arc::clone(&pc_arc), "msg").await;
         if let Err(e) = dc_open_result {
             eprintln!("Data channel creation error: {}", e);
         }
-
+        
         self.pc = Some(pc_arc);
         self.rtp_sender = Some(rtp_sender);
         self.video_track = Some(video_track);
+        self.audio_track = Some(audio_track);
 
         let offer = self.pc.as_ref().unwrap().create_offer(None).await.map_err(|e| e.to_string())?;
         self.pc.as_ref().unwrap().set_local_description(offer.clone()).await.map_err(|e| e.to_string())?;
@@ -1348,6 +1381,321 @@ impl WebRTCClient {
     }
 
     /**
+     * FOR TESTING PURPOSES ONLY
+     * To verify audio capture and encoding, capture audio from default input device,
+     * encode it to Opus format, and save to the specified output file path.
+     */
+    pub fn capture_audio_encode_to_file(&mut self, output_path: &str) -> Result<(), String> {
+        use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+        use cpal::SampleFormat;
+        use std::fs::File;
+        use ogg::writing::{PacketWriter, PacketWriteEndInfo};
+        use rand::Rng;
+        use crate::client::xrds_webrtc::media::transcoding::pcm2opus::encode_pcm_to_opus;
+
+        // choose host & device
+        let host = cpal::default_host();
+        let device = host.default_input_device().ok_or("No input device")?;
+        let supported = device.default_input_config().map_err(|e| e.to_string())?;
+        println!("Supported config: {:?}", supported);
+
+        // ensure output dir exists
+        if let Some(parent) = std::path::Path::new(output_path).parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+
+        // Opus parameters (we target 48k / stereo)
+        let device_sample_rate = supported.sample_rate().0;
+        let device_channels = supported.channels();
+
+        let opus_sample_rate = 48000;
+        let opus_channels = 2;
+        let frame_ms = 20;
+        let opus_frame_samples_per_channel = (opus_sample_rate / 1000 * frame_ms) as i32; // 960
+        let device_frame_samples_per_channel = (device_sample_rate / 1000 * frame_ms) as i32; // 320 for 16kHz
+        let device_frame_total_samples = (device_frame_samples_per_channel * device_channels as i32) as usize;
+
+        let pre_skip = 312u16;
+
+        // channel to move PCM into encoder thread
+        let (tx, rx) = std::sync::mpsc::sync_channel::<Vec<i16>>(10);
+
+        // build input stream with correct sample format handling
+        let tx_cb = tx.clone();
+        let stream = match supported.sample_format() {
+            SampleFormat::F32 => {
+                device.build_input_stream(
+                    &supported.into(),
+                    move |data: &[f32], _: &cpal::InputCallbackInfo| {
+                        let mut buf = Vec::with_capacity(data.len());
+                        for &s in data {
+                            let v = (s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
+                            buf.push(v);
+                        }
+                        let _ = tx_cb.send(buf);
+                    },
+                    move |e| eprintln!("cpal input stream error: {:?}", e),
+                ).map_err(|e| e.to_string())?
+            }
+            SampleFormat::I16 => {
+                device.build_input_stream(
+                    &supported.into(),
+                    move |data: &[i16], _: &cpal::InputCallbackInfo| {
+                        let _ = tx_cb.send(data.to_vec());
+                    },
+                    move |e| eprintln!("cpal input stream error: {:?}", e),
+                ).map_err(|e| e.to_string())?
+            }
+            SampleFormat::U16 => {
+                device.build_input_stream(
+                    &supported.into(),
+                    move |data: &[u16], _: &cpal::InputCallbackInfo| {
+                        let mut tmp = Vec::with_capacity(data.len());
+                        for &u in data {
+                            tmp.push((u as i32 - 0x8000) as i16);
+                        }
+                        let _ = tx_cb.send(tmp);
+                    },
+                    move |e| eprintln!("cpal input stream error: {:?}", e),
+                ).map_err(|e| e.to_string())?
+            }
+        };
+        
+        // start and keep stream alive
+        stream.play().map_err(|e| e.to_string())?;
+        println!("Started audio capture and encoding to Ogg/Opus file: {}", output_path);
+        self.audio_input_stream = Some(stream);
+
+        // spawn encoder + ogg muxer thread
+        let out_path = output_path.to_string();
+        
+        let thread_running = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let thread_running_clone = thread_running.clone();
+        self.audio_capture_running = Some(thread_running.clone());
+        
+        let _handle = std::thread::spawn(move || {
+            println!("Encoder thread started");
+            
+            // create opus encoder inside thread
+            let mut encoder = match opus::Encoder::new(opus_sample_rate, opus::Channels::Stereo, opus::Application::Audio) {
+                Ok(e) => e,
+                Err(err) => {
+                    eprintln!("Failed to create Opus encoder: {:?}", err);
+                    return;
+                }
+            };
+
+            // open file and packet writer
+            let file = match File::create(&out_path) {
+                Ok(f) => f,
+                Err(e) => {
+                    eprintln!("Failed to create output file {}: {:?}", out_path, e);
+                    return;
+                }
+            };
+            let mut pw = PacketWriter::new(file);
+            let stream_serial: u32 = rand::thread_rng().gen();
+
+            // OpusHead with CORRECT pre-skip
+            let mut opus_head = Vec::new();
+            opus_head.extend_from_slice(b"OpusHead"); // 8
+            opus_head.push(1); // version
+            opus_head.push(opus_channels as u8);    // output channels
+            opus_head.extend_from_slice(&pre_skip.to_le_bytes()); // FIXED: use pre_skip variable
+            opus_head.extend_from_slice(&opus_sample_rate.to_le_bytes()); // output sample rate
+            opus_head.extend_from_slice(&0u16.to_le_bytes()); // output gain
+            opus_head.push(0); // channel mapping family
+
+            println!("OpusHead size: {} bytes", opus_head.len());
+
+            if let Err(e) = pw.write_packet(opus_head.into_boxed_slice(), stream_serial, PacketWriteEndInfo::EndPage, 0) {
+                eprintln!("Failed to write OpusHead: {:?}", e);
+                return;
+            }
+
+            // OpusTags (minimal)
+            let vendor = b"webrtc-rs";
+            let mut opus_tags = Vec::new();
+            opus_tags.extend_from_slice(b"OpusTags"); // 8
+            opus_tags.extend_from_slice(&(vendor.len() as u32).to_le_bytes());
+            opus_tags.extend_from_slice(vendor);
+            opus_tags.extend_from_slice(&0u32.to_le_bytes()); // user comment list length
+
+            if let Err(e) = pw.write_packet(opus_tags.into_boxed_slice(), stream_serial, PacketWriteEndInfo::EndPage, 0) {
+                eprintln!("Failed to write OpusTags: {:?}", e);
+                return;
+            }
+
+            // encode loop with CORRECTED granule position
+            let mut acc: Vec<i16> = Vec::new();
+            let mut granule_pos: u64 = pre_skip as u64; // START with pre_skip
+            let mut packet_count = 0;
+            
+            println!("Starting encode loop...");
+
+            loop {
+                if !thread_running_clone.load(std::sync::atomic::Ordering::Relaxed) {
+                    println!("Thread stopping signal received");
+                    break;
+                }
+
+                match rx.recv_timeout(std::time::Duration::from_millis(500)) {
+                    Ok(pcm_chunk) => {
+                        acc.extend_from_slice(&pcm_chunk);
+                        while acc.len() >= device_frame_total_samples {
+                            let device_frame: Vec<i16> = acc.drain(..device_frame_total_samples).collect();
+
+                            let resampled_frame = resample_and_convert(&device_frame, device_sample_rate, device_channels, opus_sample_rate, opus_channels as u16);
+                            match encode_pcm_to_opus(&mut encoder, &resampled_frame, opus_frame_samples_per_channel) {
+                                Ok(encoded) => {
+                                    packet_count += 1;
+                                    // granule position increases by samples per channel
+                                    granule_pos += opus_frame_samples_per_channel as u64;
+
+                                    if let Err(e) = pw.write_packet(encoded.into_boxed_slice(), stream_serial, PacketWriteEndInfo::NormalPacket, granule_pos) {
+                                        eprintln!("Failed to write Ogg packet: {:?}", e);
+                                    }
+
+                                    // Debug output every second
+                                    if packet_count % 50 == 0 { // 50 packets = 1 second
+                                        println!("Encoded packet #{}, granule_pos: {}, time: {:.2}s", 
+                                            packet_count, granule_pos, (granule_pos - pre_skip as u64) as f64 / opus_sample_rate as f64);
+                                    }
+                                }
+                                Err(err) => {
+                                    eprintln!("Opus encode error: {}", err);
+                                }
+                            }
+                        }
+                    }
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                        // 타임아웃은 정상 - 계속 진행
+                        continue;
+                    }
+                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                        println!("Audio input disconnected");
+                        break;
+                    }
+                }
+            }
+
+            // EOS packet with final granule position
+            println!("Writing EOS packet with final granule_pos: {}", granule_pos);
+            if let Err(e) = pw.write_packet(Vec::<u8>::new().into_boxed_slice(), stream_serial, PacketWriteEndInfo::EndStream, granule_pos) {
+                eprintln!("Failed to write EOS packet: {:?}", e);
+            }
+
+            println!("Audio encoding completed. Total packets: {}, Duration: {:.2}s", 
+                packet_count, (granule_pos - pre_skip as u64) as f64 / opus_sample_rate as f64);
+        });
+
+        Ok(())
+    }
+
+    pub fn stop_audio_capture(&mut self) {
+        // 스레드 중지 신호
+        if let Some(running_flag) = &self.audio_capture_running {
+            running_flag.store(false, std::sync::atomic::Ordering::Relaxed);
+        }
+        
+        // 스트림 중지
+        if let Some(stream) = self.audio_input_stream.take() {
+            let _ = stream.pause();
+            println!("Audio stream stopped");
+        }
+        
+        // 스레드가 정리될 시간을 줌
+        std::thread::sleep(std::time::Duration::from_millis(1000));
+        
+        // 플래그 정리
+        self.audio_capture_running = None;
+    }
+
+    /**
+     * Start audio capture from microphone and send to the audio track.
+     * TODO : TESTING
+     */
+    pub fn start_audio_capture(&mut self) -> Result<(), String> {
+        use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+        use opus::{Encoder as OpusEncoder, Application, Channels};
+        use std::sync::mpsc::sync_channel;
+        use bytes::Bytes;
+
+        let audio_track = match &self.audio_track {
+            Some(t) => t.clone(),
+            None => return Err("audio_track not initialized".into()),
+        };
+
+        // choose host & device
+        let host = cpal::default_host();
+        let device = host.default_input_device().ok_or("No input device")?;
+        let config = device.default_input_config().map_err(|e| e.to_string())?;
+
+        let sample_rate = 48000u32;
+        let channels: Channels = Channels::Stereo;
+        let frame_samples = (sample_rate / 1000 * 20) as usize;
+
+        // create opus encoder
+        let mut opus_enc = OpusEncoder::new(sample_rate as u32, channels, Application::Audio)
+            .map_err(|e| e.to_string())?;
+
+        // channel to move PCM slices into spawned task
+        let (tx, rx) = sync_channel::<Vec<i16>>(10);
+
+        // input stream callback: collect samples and send to encoder task
+        let tx_cb = tx.clone();
+        let stream = device.build_input_stream(
+            &config.into(),
+            move |data: &[f32], _: &cpal::InputCallbackInfo| {
+                // convert f32 -> i16 per channel
+                let mut buf: Vec<i16> = Vec::with_capacity(data.len());
+                for s in data.iter() {
+                    let v = (s * i16::MAX as f32) as i16;
+                    buf.push(v);
+                }
+                let _ = tx_cb.send(buf);
+            },
+            move |e| eprintln!("cpal input stream error: {:?}", e),
+        ).map_err(|e| e.to_string())?;
+
+        stream.play().map_err(|e| e.to_string())?;
+
+        // spawn encoder + send task
+        tokio::spawn(async move {
+            // buffer accumulator for frame_samples * channels
+            let mut acc: Vec<i16> = Vec::new();
+            while let Ok(mut pcm) = rx.recv() {
+                acc.append(&mut pcm);
+                // encode while we have enough samples for a 20ms frame
+                let stride = frame_samples * channels as usize;
+                while acc.len() >= stride {
+                    let frame = acc.drain(..stride).collect::<Vec<i16>>();
+                    // encode to opus
+                    let mut opus_output = vec![0u8; 4000]; // Buffer for encoded data
+                    match opus_enc.encode(&frame, &mut opus_output) {
+                        Ok(encoded_len) => {
+                            opus_output.truncate(encoded_len); // Resize to actual encoded length
+                            // write to audio_track
+                            let sample = Sample {
+                                data: Bytes::from(opus_output),
+                                duration: std::time::Duration::from_millis(20),
+                                ..Default::default()
+                            };
+                            if let Err(e) = audio_track.write_sample(&sample).await {
+                                eprintln!("audio_track write_sample error: {:?}", e);
+                                // continue trying; do not break
+                            }
+                        }
+                        Err(e) => eprintln!("Opus encode error: {:?}", e),
+                    }
+                }
+            }
+        });
+
+        Ok(())
+    }
+
+    /**
      * Record webcam video to MP4 file for a specified duration.
      */
     pub async fn realtime_webcam_to_mp4 (
@@ -1549,6 +1897,37 @@ async fn save_to_disk_by_writer2(
     Ok(())
 }
 
+fn resample_and_convert(input: &[i16], input_rate:u32, input_channels: u16, output_rate: u32, output_channels: u16) -> Vec<i16> {
+    // 16kHz stereo -> 48kHz stereo: 3배 업샘플링
+    let ratio = output_rate as f32 / input_rate as f32; // 3.0
+    let output_len = ((input.len() as f32 * ratio) as usize / output_channels as usize) * output_channels as usize;
+    let mut output = Vec::with_capacity(output_len);
+
+    if input_channels == output_channels {
+        // 채널 수가 같으면 단순 업샘플링
+        for i in 0..output_len {
+            let input_idx = ((i as f32 / ratio) as usize).min(input.len() - 1);
+            output.push(input[input_idx]);
+        }
+    } else if input_channels == 2 && output_channels == 2 {
+        // 스테레오 -> 스테레오 리샘플링
+        let frames_out = output_len / 2;
+        for frame in 0..frames_out {
+            let input_frame = ((frame as f32 / ratio) as usize).min(input.len() / 2 - 1);
+            output.push(input[input_frame * 2]);     // left
+            output.push(input[input_frame * 2 + 1]); // right
+        }
+    } else {
+        // 다른 채널 조합은 일단 단순 복사/확장
+        for i in 0..output_len {
+            let input_idx = ((i as f32 / ratio) as usize).min(input.len() - 1);
+            output.push(input[input_idx]);
+        }
+    }
+    
+    output
+}
+
 #[tokio::test]
 async fn test_realtime_webcam_to_mp4() {
     std::env::set_var("RUST_LOG", "info");
@@ -1562,4 +1941,26 @@ async fn test_realtime_webcam_to_mp4() {
         Ok(_) => println!("Test completed successfully."),
         Err(e) => eprintln!("Test failed: {:?}", e),
     }
+}
+
+#[tokio::test]
+async fn test_realtime_mic_to_opus() {
+    std::env::set_var("RUST_LOG", "debug");
+    pretty_env_logger::init();
+
+    let mut client = WebRTCClient::new();
+    let output_path = "test_output/realtime_mic.opus";
+
+    match client.capture_audio_encode_to_file(output_path) {
+        Ok(_) => println!("Audio capture started successfully"),
+        Err(e) => {
+            eprintln!("Failed to start audio capture: {}", e);
+            return;
+        }
+    }
+
+    // Capture audio for 15 seconds
+    tokio::time::sleep(tokio::time::Duration::from_secs(15)).await;
+    client.stop_audio_capture();
+    println!("Audio capture test completed.");
 }
