@@ -207,8 +207,7 @@ impl WebcamReader {
         Returns the JPEG byte data of the frame.
      */
     pub async fn read_single_frame(&mut self, timeout_secs: u64) -> Result<Vec<u8>, String> {
-        println!("📸 Capturing single frame...");
-        
+        log::trace!("Waiting to read a single JPEG frame from webcam...");
         // CLEAR BUFFER at start to ensure we start fresh for each frame capture
         self.buffer = None;
         

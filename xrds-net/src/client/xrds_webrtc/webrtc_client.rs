@@ -531,6 +531,8 @@ impl WebRTCClient {
             .ok_or("Video track not set")?
             .clone();
 
+        let audio_track = self.audio_track.as_ref().ok_or("Audio track not set")?.clone();
+
         // Wait for ICE connection
         let pc = self.pc.as_ref().ok_or("PeerConnection is not set")?.clone();
         let ice_connection_result = tokio::time::timeout(
@@ -551,7 +553,7 @@ impl WebRTCClient {
             }
             Some(StreamSource::Webcam(device_id)) => {
                 let webcam_reader = WebcamReader::new(device_id).await?;
-                self.stream_from_webcam(webcam_reader, video_track).await
+                self.stream_from_webcam(webcam_reader, video_track, audio_track).await
             }
             Some(StreamSource::MediaStream(stream_reader)) => {
                 self.stream_from_buf_read(BufReader::new(stream_reader), video_track).await
@@ -573,9 +575,12 @@ impl WebRTCClient {
     async fn stream_from_webcam(
         &mut self,
         webcam_reader: WebcamReader,
-        video_track: Arc<TrackLocalStaticSample>
+        video_track: Arc<TrackLocalStaticSample>,
+        audio_track: Arc<TrackLocalStaticSample>,
     ) -> Result<(), String> {
-        
+        unsafe {
+
+        }
         use crate::client::xrds_webrtc::media::transcoding::jpeg2h264::{Jpeg2H264Transcoder, H264Packet};
         use std::sync::Arc;
         use tokio::sync::mpsc;
@@ -687,6 +692,10 @@ impl WebRTCClient {
             handles.push(write_handle);
         }   // end of writer task
 
+        // audio capture and send task
+        {
+
+        }
         self.stream_handles = handles;
         Ok(())
     }
@@ -1005,30 +1014,8 @@ impl WebRTCClient {
             return Err("Client ID is not set".to_string());
         }
         self.setup_webrtc().await.map_err(|e| e.to_string())?;
-
-        self.create_answer(offer).await.map_err(|e| e.to_string())?;
-
-        let sdp = Some(self.answer.as_ref().unwrap().sdp.clone());
-        let msg = WebRTCMessage {
-            client_id: self.client_id.clone().unwrap(),
-            session_id: self.session_id.clone().unwrap(),
-            message_type: ANSWER.to_string(),
-            ice_candidates: None,
-            sdp,
-            error: None,
-        };
-
-        // serialize msg into json
-        let msg = serde_json::to_string(&msg).map_err(|e| e.to_string())?;
-        // println!("Sending message: {}", msg);
-        
-        // send the answer to the server, so that it can be delivered to the publisher
-        if let Some(write) = &self.write {
-            let mut write_guard = write.lock().await;
-            let _ = write_guard.send(Message::Text(msg.into())).await;
-        } else {
-            return Err("WebSocket write stream not initialized".into());
-        }
+        self.create_answer_for_offer(offer).await?;
+        self.send_answer_to_server().await?;
 
         Ok(())
     }
@@ -1061,6 +1048,293 @@ impl WebRTCClient {
         Ok(())
     }
 
+    async fn create_answer_for_offer(&mut self, offer: RTCSessionDescription) -> Result<(), String> {
+        let api = self.api.as_ref().ok_or("API is not set")?;
+        let rtc_config = self.rtc_config.as_ref().ok_or("RTC config is not set")?.clone();
+
+        let pc = Arc::new(api.new_peer_connection(rtc_config).await.map_err(|e| e.to_string())?);
+
+        self.setup_subscriber_event_handlers(Arc::clone(&pc)).await?;
+
+        // Set remote description and create answer
+        pc.set_remote_description(offer).await.map_err(|e| e.to_string())?;
+        let answer = pc.create_answer(None).await.map_err(|e| e.to_string())?;
+        pc.set_local_description(answer.clone()).await.map_err(|e| e.to_string())?;
+        
+        self.pc = Some(pc);
+        self.answer = Some(answer);
+
+        Ok(())
+    }
+
+    async fn setup_subscriber_event_handlers(&mut self, pc: Arc<RTCPeerConnection>) -> Result<(), String> {
+        self.setup_subscriber_data_channel_handler(Arc::clone(&pc))?;
+
+        self.setup_subscriber_ice_handling(Arc::clone(&pc))?;
+
+        self.setup_subscriber_connection_monitoring(Arc::clone(&pc))?;
+
+        self.setup_subscriber_media_handlers(Arc::clone(&pc)).await?;
+
+        Ok(())
+    }
+
+    fn setup_subscriber_data_channel_handler(&mut self, pc: Arc<RTCPeerConnection>) -> Result<(), String> {
+        let data_channel_ref = std::sync::Arc::new(std::sync::Mutex::new(None::<std::sync::Arc<RTCDataChannel>>));
+        let dc_ref_clone = data_channel_ref.clone();
+
+        pc.on_data_channel(Box::new(move |data_channel| {
+            let dc_ref = dc_ref_clone.clone();
+            Box::pin(async move {
+                let label = data_channel.label();
+                log::info!("Remote created data channel: {}", label);
+
+                *dc_ref.lock().unwrap() = Some(data_channel.clone());
+
+                let dc_clone = data_channel.clone();
+                data_channel.on_message(Box::new(move |msg| {
+                    let dc_inner = dc_clone.clone();
+                    Box::pin(async move {
+                        Self::handle_data_channel_message(dc_inner, msg).await;
+                    })
+                }));
+
+                let dc_clone2 = data_channel.clone();
+                data_channel.on_open(Box::new(move || {
+                    let dc = dc_clone2.clone();
+                    Box::pin(async move {
+                        log::info!("Remote data channel opened: {}", dc.label());
+                    })
+                }));
+            })
+        }));
+
+        Ok(())
+    }
+
+    async fn handle_data_channel_message(dc: Arc<RTCDataChannel>, msg: webrtc::data_channel::data_channel_message::DataChannelMessage) {
+        if msg.is_string {
+            if let Ok(s) = std::str::from_utf8(&msg.data) {
+                println!("📩 Data channel '{}' message: {}", dc.label(), s);
+                
+                // Echo back for testing
+                if let Err(e) = dc.send_text(format!("Echo: {}", s)).await {
+                    eprintln!("Failed to echo message: {:?}", e);
+                }
+            } else {
+                println!("📩 Data channel '{}' received invalid UTF-8", dc.label());
+            }
+        } else {
+            println!("📩 Data channel '{}' binary message: {} bytes", dc.label(), msg.data.len());
+        }
+    }
+
+    fn setup_subscriber_ice_handling(&mut self, pc: Arc<RTCPeerConnection>) -> Result<(), String> {
+        self.ice_candidates = Some(Arc::new(Mutex::new(Vec::new())));
+        let candidates_vec = Arc::clone(&self.ice_candidates.as_ref().unwrap());
+
+        pc.on_ice_candidate(Box::new({
+            let candidates = Arc::clone(&candidates_vec);
+            move |candidate| {
+                let candidates = Arc::clone(&candidates);
+                Box::pin(async move {
+                    if let Some(cand) = candidate {
+                        log::trace!("subscriber.ICE candidate: {:?}", cand);
+                        // accumulate the candidate to the vector
+                        candidates.lock().await.push(cand.clone());
+                    } else {
+                        let count = candidates.lock().await.len();
+                        log::info!("subscriber.ICE gathering completed: {}", count);
+                    }
+                })
+            }
+             
+        }));
+
+        Ok(())
+    }
+
+    fn setup_subscriber_connection_monitoring(&mut self, pc: Arc<RTCPeerConnection>) -> Result<(), String> {
+        pc.on_ice_connection_state_change(Box::new(
+            move |connection_state: RTCIceConnectionState| {
+                match connection_state {
+                    RTCIceConnectionState::Connected => {
+                        log::info!("✅ Subscriber ICE connected successfully");
+                    }
+                    RTCIceConnectionState::Completed => {
+                        log::info!("✅ Subscriber ICE completed");
+                    }
+                    RTCIceConnectionState::Checking => {
+                        log::info!("🔍 Subscriber ICE checking...");
+                    }
+                    RTCIceConnectionState::Closed | RTCIceConnectionState::Disconnected => {
+                        log::warn!("❌ Subscriber ICE disconnected/closed");
+                    }
+                    RTCIceConnectionState::Failed => {
+                        log::error!("💥 Subscriber ICE connection failed");
+                    }
+                    _ => {
+                        log::info!("Subscriber ICE connection state changed: {:?}", connection_state);
+                }
+                }
+                Box::pin(async {})
+                },
+        ));
+
+        pc.on_peer_connection_state_change(Box::new(move |state| {
+            log::info!("Subscriber Peer Connection State has changed: {:?}", state);
+            Box::pin(async {})
+        }));
+
+        Ok(())
+    }
+
+    /**
+     * Temporarily save received media to a file for debugging
+     */
+    async fn setup_subscriber_media_handlers(&mut self, pc: Arc<RTCPeerConnection>) -> Result<(), String> {
+        let mut debug_file_path = self.get_subscriber_output_path()?;
+        debug_file_path = debug_file_path.trim_end_matches('/').to_string();
+        let file_name_by_time = chrono::Local::now().format("%Y%m%d_%H%M%S").to_string();
+
+        // generate video file name by time
+        let video_file_name = format!(
+            "{}/{}.h264",
+            debug_file_path.clone(),
+            file_name_by_time
+        );
+        let audio_file_name = format!(
+            "{}/{}.opus",
+            debug_file_path.clone(),
+            file_name_by_time
+        );
+
+        log::info!("Saving received video to {}", video_file_name);
+        log::info!("Saving received audio to {}", audio_file_name);
+
+        let h264_writer: Arc<Mutex<dyn webrtc::media::io::Writer + Send + Sync>> =
+            Arc::new(Mutex::new(H264Writer::new(File::create(&video_file_name).map_err(|e| e.to_string())?)));
+
+        let pc_clone = Arc::clone(&pc);
+        let h264_writer_clone = Arc::clone(&h264_writer);
+
+        pc.on_track(Box::new(move |track, _, _| {
+            let media_ssrc = track.ssrc();
+            let pc_for_rtcp = Arc::clone(&pc_clone);
+            let writer = Arc::clone(&h264_writer_clone);
+
+            // Setup RTCP feedback for video quality
+            Self::setup_rtcp_feedback(pc_for_rtcp, media_ssrc);
+
+            // Handle different track types
+            let audio_file_name_clone = audio_file_name.clone();
+            Box::pin(async move {
+                let codec = track.codec();
+                let mime_type = codec.capability.mime_type.to_lowercase();
+    
+                match mime_type.as_str() {
+                    "video/h264" | MIME_TYPE_H264 => {
+                        println!("📹 Received H.264 video track (SSRC: {})", media_ssrc);
+                        tokio::spawn(Self::handle_subscriber_video_track(track, writer));
+                    }
+                    MIME_TYPE_OPUS => {
+                        println!("🔊 Received Opus audio track (SSRC: {})", media_ssrc);
+    
+                        tokio::spawn(Self::handle_subscriber_audio_track(audio_file_name_clone, track));
+                    }
+                    _ => {
+                        println!("❓ Received unknown track type: {} (SSRC: {})", mime_type, media_ssrc);
+                    }
+                }
+            })
+        }));
+
+        Ok(())
+    }
+
+    fn setup_rtcp_feedback(pc: Arc<RTCPeerConnection>, media_ssrc: u32) {
+        tokio::spawn(async move {
+            let mut result = AnyResult::<usize>::Ok(0);
+            let mut rtcp_count = 0;
+            
+            while result.is_ok() {
+                tokio::time::sleep(Duration::from_secs(3)).await;
+                rtcp_count += 1;
+                
+                result = pc.write_rtcp(&[Box::new(PictureLossIndication {
+                    sender_ssrc: 0,
+                    media_ssrc,
+                })]).await.map_err(Into::into);
+                
+                if rtcp_count % 10 == 0 {
+                    println!("📡 Sent {} RTCP PLI packets for SSRC {}", rtcp_count, media_ssrc);
+                }
+            }
+            
+            if let Err(e) = result {
+                println!("⚠️ RTCP feedback ended: {:?}", e);
+            }
+        });
+    }
+
+    /**
+     * Temporarily save received audio to a file for debugging
+     */
+    async fn handle_subscriber_video_track(
+        track: Arc<TrackRemote>,
+        writer: Arc<Mutex<dyn webrtc::media::io::Writer + Send + Sync>>
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        log::debug!("Starting video track processing...");
+    
+        let notify = Arc::new(Notify::new());
+        save_to_disk_by_writer2(writer, track, notify).await?;
+        
+        Ok(())
+    }
+
+    async fn handle_subscriber_audio_track(output_path: String, track: Arc<TrackRemote>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        log::debug!("Starting audio track processing...");
+
+        save_audio_to_disk(track, output_path).await?;
+        Ok(())
+    }
+
+    fn get_subscriber_output_path(&self) -> Result<String, String> {
+        match &self.debug_file_path {
+            Some(path) => Ok(path.clone()),
+            None => {
+                let output_dir = "test_output";
+                std::fs::create_dir_all(output_dir).map_err(|e| e.to_string())?;
+                Ok(output_dir.to_string())
+            }
+        }
+    }
+
+    async fn send_answer_to_server(&mut self) -> Result<(), String> {
+        let sdp = Some(self.answer.as_ref().unwrap().sdp.clone());
+        let msg = WebRTCMessage {
+            client_id: self.client_id.clone().unwrap(),
+            session_id: self.session_id.clone().unwrap(),
+            message_type: ANSWER.to_string(),
+            ice_candidates: None,
+            sdp,
+            error: None,
+        };
+
+        let msg = serde_json::to_string(&msg).map_err(|e| e.to_string())?;
+        
+        if let Some(write) = &self.write {
+            let mut write_guard = write.lock().await;
+            write_guard.send(Message::Text(msg.into())).await.map_err(|e| e.to_string())?;
+            println!("📤 Answer sent to server");
+        } else {
+            return Err("WebSocket write stream not initialized".into());
+        }
+
+        Ok(())
+    }
+
+    #[deprecated]
     async fn create_answer(&mut self, offer: RTCSessionDescription) -> Result<(), String> {
         println!("Creating answer");
         let api = match &self.api {
@@ -1098,9 +1372,6 @@ impl WebRTCClient {
                             }
                         })
                     }));
-
-                    // Optionally store it somewhere accessible (not shown here)
-                    // *client_dc_ref.lock().await = Some(std::sync::Arc::new(data_channel.clone()));
                 })
             }
         }));
@@ -1207,7 +1478,6 @@ impl WebRTCClient {
                         let writer = Arc::clone(&h264_writer2);
                         save_to_disk_by_writer2(writer, track, notify).await.unwrap();
                     });
-
                 }
             })
         }));
@@ -1356,7 +1626,7 @@ impl WebRTCClient {
         }
     }
 
-    pub async fn set_debug_file_path(&mut self, path: &str, file: Option<&str>) 
+    pub async fn set_debug_file_path(&mut self, path: &str) 
         -> Result<(), String> {
         // check if path is valid
         if !Path::new(path).exists() {
@@ -1366,16 +1636,7 @@ impl WebRTCClient {
                 return Err("Failed to create directory".to_string());
             }
         }
-        
-        // concat path and file name
-        self.debug_file_path = match file {
-            Some(f) => Some(format!("{}/{}", path, f)),
-            None => Some(format!("{}/webrtc_client_debug", path)),
-        };
-
-        // create the file if not exists
-        let debug_file_full_path = self.debug_file_path.clone().unwrap();
-        let _ = File::create(&debug_file_full_path).map_err(|e| e.to_string())?;
+        self.debug_file_path = Some(path.to_string());
 
         Ok(())
     }
@@ -1617,9 +1878,9 @@ impl WebRTCClient {
      */
     pub fn start_audio_capture(&mut self) -> Result<(), String> {
         use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-        use opus::{Encoder as OpusEncoder, Application, Channels};
-        use std::sync::mpsc::sync_channel;
+        use cpal::SampleFormat;
         use bytes::Bytes;
+        use crate::client::xrds_webrtc::media::transcoding::pcm2opus::encode_pcm_to_opus;
 
         let audio_track = match &self.audio_track {
             Some(t) => t.clone(),
@@ -1629,67 +1890,149 @@ impl WebRTCClient {
         // choose host & device
         let host = cpal::default_host();
         let device = host.default_input_device().ok_or("No input device")?;
-        let config = device.default_input_config().map_err(|e| e.to_string())?;
+        let supported = device.default_input_config().map_err(|e| e.to_string())?;
+        println!("Audio streaming config: {:?}", supported);
 
-        let sample_rate = 48000u32;
-        let channels: Channels = Channels::Stereo;
-        let frame_samples = (sample_rate / 1000 * 20) as usize;
+        // Audio parameters - same as file capture
+        let device_sample_rate = supported.sample_rate().0;
+        let device_channels = supported.channels();
+        let opus_sample_rate = 48000;
+        let opus_channels = 2;
+        let frame_ms = 20;
+        let opus_frame_samples_per_channel = (opus_sample_rate / 1000 * frame_ms) as i32; // 960
+        let device_frame_samples_per_channel = (device_sample_rate / 1000 * frame_ms) as i32; // 320 for 16kHz
+        let device_frame_total_samples = (device_frame_samples_per_channel * device_channels as i32) as usize;
 
-        // create opus encoder
-        let mut opus_enc = OpusEncoder::new(sample_rate as u32, channels, Application::Audio)
+        // Create Opus encoder
+        let mut encoder = opus::Encoder::new(opus_sample_rate, opus::Channels::Stereo, opus::Application::Audio)
             .map_err(|e| e.to_string())?;
 
-        // channel to move PCM slices into spawned task
-        let (tx, rx) = sync_channel::<Vec<i16>>(10);
+        // channel to move PCM into encoder task
+        let (tx, rx) = std::sync::mpsc::sync_channel::<Vec<i16>>(10);
 
-        // input stream callback: collect samples and send to encoder task
+        // Setup control flag
+        let thread_running = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let thread_running_clone = thread_running.clone();
+        self.audio_capture_running = Some(thread_running.clone());
+
+        // build input stream with correct sample format handling - SAME as file capture
         let tx_cb = tx.clone();
-        let stream = device.build_input_stream(
-            &config.into(),
-            move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                // convert f32 -> i16 per channel
-                let mut buf: Vec<i16> = Vec::with_capacity(data.len());
-                for s in data.iter() {
-                    let v = (s * i16::MAX as f32) as i16;
-                    buf.push(v);
-                }
-                let _ = tx_cb.send(buf);
-            },
-            move |e| eprintln!("cpal input stream error: {:?}", e),
-        ).map_err(|e| e.to_string())?;
+        let stream = match supported.sample_format() {
+            SampleFormat::F32 => {
+                device.build_input_stream(
+                    &supported.into(),
+                    move |data: &[f32], _: &cpal::InputCallbackInfo| {
+                        let mut buf = Vec::with_capacity(data.len());
+                        for &s in data {
+                            let v = (s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
+                            buf.push(v);
+                        }
+                        let _ = tx_cb.send(buf);
+                    },
+                    move |e| eprintln!("cpal input stream error: {:?}", e),
+                ).map_err(|e| e.to_string())?
+            }
+            SampleFormat::I16 => {
+                device.build_input_stream(
+                    &supported.into(),
+                    move |data: &[i16], _: &cpal::InputCallbackInfo| {
+                        let _ = tx_cb.send(data.to_vec());
+                    },
+                    move |e| eprintln!("cpal input stream error: {:?}", e),
+                ).map_err(|e| e.to_string())?
+            }
+            SampleFormat::U16 => {
+                device.build_input_stream(
+                    &supported.into(),
+                    move |data: &[u16], _: &cpal::InputCallbackInfo| {
+                        let mut tmp = Vec::with_capacity(data.len());
+                        for &u in data {
+                            tmp.push((u as i32 - 0x8000) as i16);
+                        }
+                        let _ = tx_cb.send(tmp);
+                    },
+                    move |e| eprintln!("cpal input stream error: {:?}", e),
+                ).map_err(|e| e.to_string())?
+            }
+        };
 
+        // start and keep stream alive
         stream.play().map_err(|e| e.to_string())?;
+        println!("Started audio capture streaming (Device: {}Hz/{}ch -> Opus: {}Hz/{}ch)", 
+            device_sample_rate, device_channels, opus_sample_rate, opus_channels);
+        self.audio_input_stream = Some(stream);
 
-        // spawn encoder + send task
-        tokio::spawn(async move {
-            // buffer accumulator for frame_samples * channels
+        // spawn encoder + streaming task - REUSES same logic as file capture
+        std::thread::spawn(move || {
             let mut acc: Vec<i16> = Vec::new();
-            while let Ok(mut pcm) = rx.recv() {
-                acc.append(&mut pcm);
-                // encode while we have enough samples for a 20ms frame
-                let stride = frame_samples * channels as usize;
-                while acc.len() >= stride {
-                    let frame = acc.drain(..stride).collect::<Vec<i16>>();
-                    // encode to opus
-                    let mut opus_output = vec![0u8; 4000]; // Buffer for encoded data
-                    match opus_enc.encode(&frame, &mut opus_output) {
-                        Ok(encoded_len) => {
-                            opus_output.truncate(encoded_len); // Resize to actual encoded length
-                            // write to audio_track
-                            let sample = Sample {
-                                data: Bytes::from(opus_output),
-                                duration: std::time::Duration::from_millis(20),
-                                ..Default::default()
-                            };
-                            if let Err(e) = audio_track.write_sample(&sample).await {
-                                eprintln!("audio_track write_sample error: {:?}", e);
-                                // continue trying; do not break
+            let mut packet_count = 0;
+            
+            println!("Audio streaming encoder thread started");
+
+            loop {
+                if !thread_running_clone.load(std::sync::atomic::Ordering::Relaxed) {
+                    println!("Audio streaming thread stopping");
+                    break;
+                }
+
+                match rx.recv_timeout(std::time::Duration::from_millis(500)) {
+                    Ok(pcm_chunk) => {
+                        acc.extend_from_slice(&pcm_chunk);
+                        while acc.len() >= device_frame_total_samples {
+                            let device_frame: Vec<i16> = acc.drain(..device_frame_total_samples).collect();
+
+                            // SAME resampling logic as file capture
+                            let resampled_frame = resample_and_convert(
+                                &device_frame, 
+                                device_sample_rate, 
+                                device_channels, 
+                                opus_sample_rate, 
+                                opus_channels as u16
+                            );
+                            
+                            // SAME encoding logic as file capture
+                            match encode_pcm_to_opus(&mut encoder, &resampled_frame, opus_frame_samples_per_channel) {
+                                Ok(encoded) => {
+                                    packet_count += 1;
+
+                                    // Send to WebRTC audio track instead of file
+                                    let sample = webrtc::media::Sample {
+                                        data: Bytes::from(encoded),
+                                        duration: std::time::Duration::from_millis(20), // 20ms frame
+                                        ..Default::default()
+                                    };
+
+                                    // Use tokio::task::block_in_place since we're in a std::thread
+                                    tokio::task::block_in_place(|| {
+                                        tokio::runtime::Handle::current().block_on(async {
+                                            if let Err(e) = audio_track.write_sample(&sample).await {
+                                                eprintln!("audio_track write_sample error: {:?}", e);
+                                            }
+                                        })
+                                    });
+
+                                    // Debug output every second
+                                    if packet_count % 50 == 0 { // 50 packets = 1 second
+                                        println!("Streamed {} audio packets", packet_count);
+                                    }
+                                }
+                                Err(err) => {
+                                    eprintln!("Audio streaming encode error: {}", err);
+                                }
                             }
                         }
-                        Err(e) => eprintln!("Opus encode error: {:?}", e),
+                    }
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                        continue;
+                    }
+                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                        println!("Audio streaming input disconnected");
+                        break;
                     }
                 }
             }
+
+            println!("Audio streaming completed. Total packets: {}", packet_count);
         });
 
         Ok(())
@@ -1897,6 +2240,126 @@ async fn save_to_disk_by_writer2(
     Ok(())
 }
 
+async fn save_audio_to_disk(
+    track: Arc<TrackRemote>,
+    output_path: String,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    use std::fs::File;
+        use ogg::writing::{PacketWriter, PacketWriteEndInfo};
+        use rand::Rng;
+
+        println!("🎵 Starting audio track save to: {}", output_path);
+
+        // Ensure output directory exists
+        if let Some(parent) = std::path::Path::new(output_path.as_str()).parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        // Opus parameters (standard for WebRTC)
+        let opus_sample_rate = 48000u32;
+        let opus_channels = 2u8;
+        let pre_skip = 312u16; // Standard pre-skip for Opus at 48kHz
+
+        // Create output file and packet writer
+        let file = File::create(output_path)?;
+        let mut pw = PacketWriter::new(file);
+        let stream_serial: u32 = rand::thread_rng().gen();
+
+        // Write OpusHead header (19 bytes total)
+        let mut opus_head = Vec::new();
+        opus_head.extend_from_slice(b"OpusHead");                   // 8 bytes: magic signature
+        opus_head.push(1);                                          // 1 byte: version
+        opus_head.push(opus_channels);                              // 1 byte: channel count
+        opus_head.extend_from_slice(&pre_skip.to_le_bytes());       // 2 bytes: pre-skip
+        opus_head.extend_from_slice(&opus_sample_rate.to_le_bytes()); // 4 bytes: input sample rate
+        opus_head.extend_from_slice(&0u16.to_le_bytes());           // 2 bytes: output gain (0 dB)
+        opus_head.push(0);                                          // 1 byte: channel mapping family
+
+        println!("Writing OpusHead: {} bytes", opus_head.len());
+        pw.write_packet(
+            opus_head.into_boxed_slice(),
+            stream_serial,
+            PacketWriteEndInfo::EndPage,
+            0
+        )?;
+
+        // Write OpusTags header
+        let vendor = b"webrtc-rs-receiver";
+        let mut opus_tags = Vec::new();
+        opus_tags.extend_from_slice(b"OpusTags");                   // 8 bytes: magic signature
+        opus_tags.extend_from_slice(&(vendor.len() as u32).to_le_bytes()); // 4 bytes: vendor string length
+        opus_tags.extend_from_slice(vendor);                        // vendor string
+        opus_tags.extend_from_slice(&0u32.to_le_bytes());           // 4 bytes: user comment list length
+
+        println!("Writing OpusTags: {} bytes", opus_tags.len());
+        pw.write_packet(
+            opus_tags.into_boxed_slice(),
+            stream_serial,
+            PacketWriteEndInfo::EndPage,
+            0
+        )?;
+
+        // Process RTP packets and extract Opus payload
+        let mut packet_count = 0;
+        let mut granule_pos: u64 = 0;
+        let mut total_payload_size = 0;
+        let opus_frame_samples_per_channel = 960; // 20ms at 48kHz
+
+        println!("🎵 Starting to process audio packets...");
+
+        while let Ok((rtp_packet, _)) = track.read_rtp().await {
+            packet_count += 1;
+            let payload_size = rtp_packet.payload.len();
+            total_payload_size += payload_size;
+
+            // Skip empty packets
+            if payload_size == 0 {
+                println!("⚠️ Skipping empty RTP packet #{}", packet_count);
+                continue;
+            }
+
+            // Extract Opus payload from RTP packet
+            // RTP payload for Opus is the raw Opus packet
+            let opus_payload = rtp_packet.payload;
+
+            // Update granule position (samples per channel for this frame)
+            granule_pos += opus_frame_samples_per_channel;
+
+            // Write Opus packet to Ogg container
+            match pw.write_packet(
+                opus_payload.to_vec().into_boxed_slice(),
+                stream_serial,
+                PacketWriteEndInfo::NormalPacket,
+                granule_pos
+            ) {
+                Ok(_) => {
+                    // Log progress every 50 packets (every ~1 second for 20ms frames)
+                    if packet_count % 50 == 0 {
+                        let duration_secs = granule_pos as f64 / opus_sample_rate as f64;
+                        println!(
+                            "🎵 Packet #{}: granule_pos={}, duration={:.2}s, payload_size={}",
+                            packet_count, granule_pos, duration_secs, payload_size
+                        );
+                    }
+                }
+                Err(e) => {
+                    eprintln!("❌ Failed to write Opus packet #{}: {:?}", packet_count, e);
+                    break;
+                }
+            }
+        }
+
+        // Don't write explicit EOS packet - let PacketWriter handle it on drop
+        println!(
+            "✅ Audio save completed: {} packets, {:.2}s duration, {} bytes total",
+            packet_count,
+            granule_pos as f64 / opus_sample_rate as f64,
+            total_payload_size
+        );
+
+        Ok(())
+}
+
 fn resample_and_convert(input: &[i16], input_rate:u32, input_channels: u16, output_rate: u32, output_channels: u16) -> Vec<i16> {
     // 16kHz stereo -> 48kHz stereo: 3배 업샘플링
     let ratio = output_rate as f32 / input_rate as f32; // 3.0
@@ -1943,8 +2406,11 @@ async fn test_realtime_webcam_to_mp4() {
     }
 }
 
+/**
+ * Test capturing audio from microphone and encoding to Opus file.
+ */
 #[tokio::test]
-async fn test_realtime_mic_to_opus() {
+async fn test_realtime_mic_to_opus_file() {
     std::env::set_var("RUST_LOG", "debug");
     pretty_env_logger::init();
 
