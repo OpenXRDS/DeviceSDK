@@ -22,6 +22,9 @@ pub struct Jpeg2H264Transcoder {
 impl Jpeg2H264Transcoder {
     pub fn new(width: u32, height: u32, fps: u32) -> Result<Self, Error> {
         ffmpeg::init().unwrap();
+        unsafe {
+            ffmpeg::ffi::av_log_set_level(ffmpeg::ffi::AV_LOG_ERROR);
+        }
 
         // H.264 encoder setup with more flexible settings
         let encoder_codec = find(codec::Id::H264)
