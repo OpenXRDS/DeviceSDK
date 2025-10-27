@@ -11,6 +11,7 @@ mod xrds_webrtc {
             pub mod pcm2opus;
         }
         pub mod streaming_mp4_writer;
+        pub mod audio_capturer;
     }
 }
 pub use client::*;

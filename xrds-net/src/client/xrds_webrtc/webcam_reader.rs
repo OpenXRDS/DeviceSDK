@@ -159,7 +159,7 @@ impl WebcamReader {
                         }
 
                         last_frame_time = now;
-                        log::debug!("📸 Frame captured, actual interval: {:.1}ms", elapsed.as_secs_f64() * 1000.0);
+                        log::trace!("📸 Frame captured, actual interval: {:.1}ms", elapsed.as_secs_f64() * 1000.0);
                     }
                     Err(e) => {
                         log::error!("❌ Error capturing frame: {}", e);
@@ -228,14 +228,14 @@ impl WebcamReader {
                     chunk_buffer.truncate(bytes_read);
                     frame_data.extend_from_slice(&chunk_buffer);
                     
-                    log::debug!("📥 Read chunk: {} bytes (total: {})", bytes_read, frame_data.len());
+                    log::trace!("📥 Read chunk: {} bytes (total: {})", bytes_read, frame_data.len());
 
                     // Check if we have a complete JPEG frame (look for JPEG SOI and EOI markers)
                     if frame_data.len() > 8 &&
                             frame_data[0] == 0xFF && frame_data[1] == 0xD8 && // SOI
                             frame_data[frame_data.len() - 2] == 0xFF && frame_data[frame_data.len() - 1] == 0xD9 // EOI
                         {
-                            log::debug!("✅ Complete JPEG frame captured, size: {} bytes", frame_data.len());
+                            log::trace!("✅ Complete JPEG frame captured, size: {} bytes", frame_data.len());
                             return Ok(frame_data);
                         }
                 }
