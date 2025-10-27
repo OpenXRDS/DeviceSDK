@@ -1,9 +1,8 @@
-use std::io::{Read, BufRead, Write};
+use std::io::{Read, BufRead};
 use std::io::BufReader;
 use std::path::Path;
 use anyhow::Result as AnyResult;
 use cpal::traits::StreamTrait;
-use ffmpeg_next::frame::audio;
 use webrtc::data_channel::RTCDataChannel;
 use std::time::Duration;
 use tokio::sync::Mutex;
@@ -44,7 +43,6 @@ use bytes::Bytes;
 use tokio::sync::mpsc::UnboundedSender;
 use webrtc::data_channel::data_channel_init::RTCDataChannelInit;
 use cpal::Stream;
-use ogg::writing::{PacketWriter, PacketWriteEndInfo};
 
 use crate::common::data_structure::WebRTCMessage;
 use crate::common::data_structure::{CREATE_SESSION, LIST_SESSIONS, JOIN_SESSION, 
@@ -679,16 +677,8 @@ impl WebRTCClient {
             let mut capturer = audio_capturer;
             match capturer.init() {
                 Ok(_) => {
-                    match capturer.start_capture_direct_to_webrtc(audio_track.clone()).await {
-                        Ok(_) => {
-                            println!("✅ Audio capture started successfully");
-                            self.audio_capturer = Some(capturer);
-                        }
-                        Err(e) => {
-                            eprintln!("⚠️ Audio capture failed, continuing with video only: {}", e);
-                            // Continue without audio instead of failing entirely
-                        }
-                    }
+                    capturer.connect_to_webrtc(audio_track.clone()).await?;
+                    self.audio_capturer = Some(capturer);
                 }
                 Err(e) => {
                     eprintln!("⚠️ Audio initialization failed, continuing with video only: {}", e);
@@ -1236,8 +1226,11 @@ impl WebRTCClient {
             // Setup RTCP feedback for video quality
             Self::setup_rtcp_feedback(pc_for_rtcp, media_ssrc);
 
+            /*
+             * Currently handlers simply write received media to disk for debugging.
+             * TODO: Open an interface to connect to user-defined processing pipelines.
+             */
             Box::pin(async move {
-    
                 match mime_type.as_str() {
                     "video/h264" | MIME_TYPE_H264 => {
                         tokio::spawn(Self::handle_subscriber_video_track(track, writer));
@@ -2029,14 +2022,14 @@ async fn save_audio_to_disk(
                     // Log progress every 50 packets (every ~1 second for 20ms frames)
                     if packet_count % 50 == 0 {
                         let duration_secs = granule_pos as f64 / opus_sample_rate as f64;
-                        println!(
+                        log::trace!(
                             "🎵 Packet #{}: granule_pos={}, duration={:.2}s, payload_size={}",
                             packet_count, granule_pos, duration_secs, payload_size
                         );
                     }
                 }
                 Err(e) => {
-                    eprintln!("❌ Failed to write Opus packet #{}: {:?}", packet_count, e);
+                    log::error!("❌ Failed to write Opus packet #{}: {:?}", packet_count, e);
                     break;
                 }
             }
