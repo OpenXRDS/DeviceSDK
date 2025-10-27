@@ -950,9 +950,12 @@ mod tests {
         server_handle.abort();
     }
  
+    /*
+        .h264 and .opus file must be produced in the debug folder after running this test
+     */
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn test_client_webrtc_audio_stream() {
-        std::env::set_var("RUST_LOG", "info");
+    async fn test_client_webrtc_av_stream() {
+        std::env::set_var("RUST_LOG", "debug");
         pretty_env_logger::init();
         init_crypto();
 
@@ -1011,6 +1014,13 @@ mod tests {
         let (msg, mut publisher) = wait_for_message(publisher, ICE_CANDIDATE_ACK, 10).await;
         println!("Test: ICE candidate ACK received: {:?}", msg.ice_candidates);
         publisher.handle_ice_candidate(msg).await.expect("Failed to handle ICE candidate ACK");
+
+        let stream_source = StreamSource::Webcam(0);
+        let _ = publisher.start_streaming(Some(stream_source)).await.expect("Failed to start streaming");
+
+        // wait till the video file is sent
+        sleep(Duration::from_secs(10)).await;
+        publisher.stop_stream().await.expect("Failed to stop streaming");
 
         server_handle.abort();
     }
