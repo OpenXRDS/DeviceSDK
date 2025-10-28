@@ -12,11 +12,14 @@ mod xrds_webrtc {
         }
         pub mod streaming_mp4_writer;
         pub mod audio_capturer;
+        pub mod handlers;
+        pub use handlers::{VideoTrackHandler, AudioTrackHandler, MediaTrackHandler};
     }
 }
 pub use client::*;
 pub use xrds_websocket::*;
 pub use xrds_webrtc::*;
+
 
 #[cfg(test)]
 mod tests;

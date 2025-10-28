@@ -17,6 +17,7 @@ XRDS network library
 - WS(S)
   - Websocket
 - CoAP
+- WebRTC
 
 ## Dependencies
 

@@ -43,13 +43,18 @@ use bytes::Bytes;
 use tokio::sync::mpsc::UnboundedSender;
 use webrtc::data_channel::data_channel_init::RTCDataChannelInit;
 use cpal::Stream;
+use std::future::Future;
+use std::pin::Pin;
 
 use crate::common::data_structure::WebRTCMessage;
 use crate::common::data_structure::{CREATE_SESSION, LIST_SESSIONS, JOIN_SESSION, 
         LEAVE_SESSION, CLOSE_SESSION, LIST_PARTICIPANTS, OFFER, ANSWER, WELCOME, ICE_CANDIDATE, ICE_CANDIDATE_ACK};
 use crate::client::xrds_webrtc::webcam_reader::WebcamReader;
-use crate::client::xrds_webrtc::media::audio_capturer::AudioCapturer;
-use crate::client::xrds_webrtc::media::audio_capturer::resample_and_convert;
+use crate::client::xrds_webrtc::media::audio_capturer::{AudioCapturer, resample_and_convert};
+use crate::client::xrds_webrtc::media::handlers::{
+    VideoTrackHandler, AudioTrackHandler, MediaTrackHandler,
+    VideoTrackCallback, AudioTrackCallback, MediaTrackCallback
+};
 
 pub struct NetworkStreamReader {
     reader: tokio::io::BufReader<TcpStream>,
@@ -119,6 +124,8 @@ impl StreamReaderFactory {
     }
 }
 
+
+
 pub struct WebRTCClient {
     client_id: Option<String>,
     write: Option<Arc<Mutex<SplitSink<WsStream<MaybeTlsStream<TcpStream>>, Message>>>>,
@@ -151,8 +158,21 @@ pub struct WebRTCClient {
 
     audio_stream_shutdown: Option<std::sync::Arc<AtomicBool>>,
     audio_input_stream: Option<Stream>,
-
     audio_capturer: Option<AudioCapturer>,
+
+    // Callback handlers
+    video_track_handler: Option<Arc<dyn VideoTrackHandler>>,
+    audio_track_handler: Option<Arc<dyn AudioTrackHandler>>,
+    media_track_handler: Option<Arc<dyn MediaTrackHandler>>,
+    
+    // Function-based callbacks (alternative to trait-based)
+    video_track_callback: Option<VideoTrackCallback>,
+    audio_track_callback: Option<AudioTrackCallback>,
+    media_track_callback: Option<MediaTrackCallback>,
+    
+    // Track collection for combined handler
+    received_video_track: Option<Arc<TrackRemote>>,
+    received_audio_track: Option<Arc<TrackRemote>>,
 }
 
 #[allow(dead_code)]
@@ -191,6 +211,15 @@ impl WebRTCClient {
             audio_track: None,
             audio_input_stream: None,
             audio_capturer: None,
+
+            video_track_handler: None,
+            audio_track_handler: None,
+            media_track_handler: None,
+            video_track_callback: None,
+            audio_track_callback: None,
+            media_track_callback: None,
+            received_video_track: None,
+            received_audio_track: None,
         }
     }
     
@@ -204,6 +233,54 @@ impl WebRTCClient {
 
     pub fn get_answer(&self) -> Option<&RTCSessionDescription> {
         self.answer.as_ref()
+    }
+
+    /**
+     * Interfaces to set custom handlers for incoming media tracks.
+     */
+    // Trait-based registration
+    pub fn register_video_handler(&mut self, handler: Arc<dyn VideoTrackHandler>) {
+        self.video_track_handler = Some(handler);
+    }
+    
+    pub fn register_audio_handler(&mut self, handler: Arc<dyn AudioTrackHandler>) {
+        self.audio_track_handler = Some(handler);
+    }
+    
+    pub fn register_media_handler(&mut self, handler: Arc<dyn MediaTrackHandler>) {
+        self.media_track_handler = Some(handler);
+    }
+    
+    // Function-based registration (more convenient)
+    pub fn on_video_track<F>(&mut self, callback: F)
+    where
+        F: Fn(Arc<TrackRemote>) -> Pin<Box<dyn Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>> + Send>> + Send + Sync + 'static,
+    {
+        self.video_track_callback = Some(Arc::new(callback));
+    }
+    
+    pub fn on_audio_track<F>(&mut self, callback: F)
+    where
+        F: Fn(Arc<TrackRemote>) -> Pin<Box<dyn Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>> + Send>> + Send + Sync + 'static,
+    {
+        self.audio_track_callback = Some(Arc::new(callback));
+    }
+    
+    pub fn on_media_tracks<F>(&mut self, callback: F)
+    where
+        F: Fn(Option<Arc<TrackRemote>>, Option<Arc<TrackRemote>>) -> Pin<Box<dyn Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>> + Send>> + Send + Sync + 'static,
+    {
+        self.media_track_callback = Some(Arc::new(callback));
+    }
+    
+    // Clear handlers
+    pub fn clear_handlers(&mut self) {
+        self.video_track_handler = None;
+        self.audio_track_handler = None;
+        self.media_track_handler = None;
+        self.video_track_callback = None;
+        self.audio_track_callback = None;
+        self.media_track_callback = None;
     }
 
     /**
@@ -1187,36 +1264,67 @@ impl WebRTCClient {
      * Temporarily save received media to a file for debugging
      */
     async fn setup_subscriber_media_handlers(&mut self, pc: Arc<RTCPeerConnection>) -> Result<(), String> {
-        let mut debug_file_path = self.get_subscriber_output_path()?;
-        debug_file_path = debug_file_path.trim_end_matches('/').to_string();
-        let file_name_by_time = chrono::Local::now().format("%Y%m%d_%H%M%S").to_string();
+        // Setup default file saving if no custom handlers are registered
+        let should_use_default_handlers = self.video_track_handler.is_none() 
+        && self.audio_track_handler.is_none() 
+        && self.media_track_handler.is_none()
+        && self.video_track_callback.is_none()
+        && self.audio_track_callback.is_none()
+        && self.media_track_callback.is_none();
+        
+        let mut _debug_file_path = self.get_subscriber_output_path()?;
+        _debug_file_path = _debug_file_path.trim_end_matches('/').to_string();
+        let _file_name_by_time = chrono::Local::now().format("%Y%m%d_%H%M%S").to_string();
 
-        // generate video file name by time
-        let video_file_name = format!(
-            "{}/{}.h264",
-            debug_file_path.clone(),
-            file_name_by_time
-        );
-        let audio_file_name = format!(
-            "{}/{}.opus",
-            debug_file_path.clone(),
-            file_name_by_time
-        );
+        let (video_file_name, audio_file_name) = if should_use_default_handlers {
+            let _debug_file_path = self.get_subscriber_output_path()?;
+            let _file_name_by_time = chrono::Local::now().format("%Y%m%d_%H%M%S").to_string();
 
-        log::info!("Saving received video to {}", video_file_name);
-        log::info!("Saving received audio to {}", audio_file_name);
+            let video_file = format!("{}/{}.h264", _debug_file_path, _file_name_by_time);
+            let audio_file = format!("{}/{}.opus", _debug_file_path, _file_name_by_time);
+            
+            println!("📹 Default video output: {}", video_file);
+            println!("🎵 Default audio output: {}", audio_file);
+            
+            (Some(video_file), Some(audio_file))
+        } else {
+            println!("🔧 Using custom track handlers");
+            (None, None)
+        };
 
-        let h264_writer: Arc<Mutex<dyn webrtc::media::io::Writer + Send + Sync>> =
-            Arc::new(Mutex::new(H264Writer::new(File::create(&video_file_name).map_err(|e| e.to_string())?)));
+        // Create writer for default video handling
+        let h264_writer = if let Some(ref video_file) = video_file_name {
+            Some(Arc::new(Mutex::new(H264Writer::new(
+            File::create(video_file).map_err(|e| e.to_string())?
+            ))))
+        } else {
+            None
+        };
+
+        // Clone handlers for use in closure
+        let video_handler = self.video_track_handler.clone();
+        let audio_handler = self.audio_track_handler.clone();
+        let media_handler = self.media_track_handler.clone();
+        let video_callback = self.video_track_callback.clone();
+        let audio_callback = self.audio_track_callback.clone();
+        let media_callback = self.media_track_callback.clone();
 
         let pc_clone = Arc::clone(&pc);
-        let h264_writer_clone = Arc::clone(&h264_writer);
+        let h264_writer_clone = h264_writer.clone();
 
         pc.on_track(Box::new(move |track, _, _| {
             let media_ssrc = track.ssrc();
             let pc_for_rtcp = Arc::clone(&pc_clone);
-            let writer = Arc::clone(&h264_writer_clone);
-            let audio_file_name_clone = audio_file_name.clone();
+            let writer = h264_writer_clone.clone();
+            let audio_output_path = audio_file_name.clone();
+
+            // Clone handlers for this track
+            let video_handler = video_handler.clone();
+            let audio_handler = audio_handler.clone();
+            let media_handler = media_handler.clone();
+            let video_callback = video_callback.clone();
+            let audio_callback = audio_callback.clone();
+            let media_callback = media_callback.clone();
 
             let codec = track.codec();
             let mime_type = codec.capability.mime_type.to_lowercase();
@@ -1226,22 +1334,53 @@ impl WebRTCClient {
             // Setup RTCP feedback for video quality
             Self::setup_rtcp_feedback(pc_for_rtcp, media_ssrc);
 
-            /*
-             * Currently handlers simply write received media to disk for debugging.
-             * TODO: Open an interface to connect to user-defined processing pipelines.
-             */
             Box::pin(async move {
                 match mime_type.as_str() {
                     "video/h264" | MIME_TYPE_H264 => {
-                        tokio::spawn(Self::handle_subscriber_video_track(track, writer));
+                        println!("📹 Processing H.264 video track");
+                        // Try custom handlers first
+                        if let Some(handler) = video_handler {
+                            tokio::spawn(async move {
+                                if let Err(e) = handler.handle_video_track(track).await {
+                                    eprintln!("❌ Custom video handler error: {:?}", e);
+                                }
+                            });
+                        } else if let Some(callback) = video_callback {
+                            tokio::spawn(async move {
+                                if let Err(e) = callback(track).await {
+                                    eprintln!("❌ Video callback error: {:?}", e);
+                                }
+                            });
+                        } else if let Some(writer) = writer {
+                            // Default file saving
+                            tokio::spawn(Self::handle_subscriber_video_track(track, writer));
+                        }
                     }
                     MIME_TYPE_OPUS => {
                         tokio::spawn(async move {
                             println!("🎵 Processing audio track...");
-                            if let Err(e) = save_audio_to_disk(track, audio_file_name_clone.clone()).await {
-                                eprintln!("❌ Audio save error: {:?}", e);
-                            } else {
-                                println!("✅ Audio saved to: {}", audio_file_name_clone);
+                            // Try custom handlers first
+                            if let Some(handler) = audio_handler {
+                                tokio::spawn(async move {
+                                    if let Err(e) = handler.handle_audio_track(track).await {
+                                        eprintln!("❌ Custom audio handler error: {:?}", e);
+                                    }
+                                });
+                            } else if let Some(callback) = audio_callback {
+                                tokio::spawn(async move {
+                                    if let Err(e) = callback(track).await {
+                                        eprintln!("❌ Audio callback error: {:?}", e);
+                                    }
+                                });
+                            } else if let Some(output_path) = audio_output_path {
+                                // Default file saving
+                                tokio::spawn(async move {
+                                    if let Err(e) = save_audio_to_disk(track, output_path.clone()).await {
+                                        eprintln!("❌ Audio save error: {:?}", e);
+                                    } else {
+                                        println!("✅ Audio saved to: {}", output_path);
+                                    }
+                                });
                             }
                         });
                     }
@@ -1249,7 +1388,12 @@ impl WebRTCClient {
                         println!("❓ Received unknown track type: {} (SSRC: {})", mime_type, media_ssrc);
                     }
                 }
-            })
+
+                // Handle combined media callback
+                if let Some(_media_cb) = media_callback {
+                    // TODO: Combined Media Callback needs more handling than just spawning
+                }
+            })  // end of box::pin(async move {
         }));
 
         Ok(())
