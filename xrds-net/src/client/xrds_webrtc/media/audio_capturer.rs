@@ -27,16 +27,6 @@ pub struct AudioCapturer {
     // Store channels that won't be moved
     pcm_tx: Option<std::sync::mpsc::Sender<Vec<i16>>>,
     opus_rx: Option<std::sync::mpsc::Receiver<Vec<u8>>>,
-
-    // Keep minimal device info for debugging/logging
-    device_info: Option<AudioDeviceInfo>,
-}
-
-#[derive(Debug, Clone)]
-struct AudioDeviceInfo {
-    sample_rate: u32,
-    channels: u16,
-    format: String,
 }
 
 impl AudioCapturer {
@@ -46,7 +36,6 @@ impl AudioCapturer {
             audio_stream_shutdown: None,
             pcm_tx: None,
             opus_rx: None,
-            device_info: None,
         })
     }
 
@@ -59,15 +48,8 @@ impl AudioCapturer {
 
         let device_sample_rate = supported_config.sample_rate().0;
         let device_channels = supported_config.channels();
-        
-        // Store minimal info for later use
-        self.device_info = Some(AudioDeviceInfo {
-            sample_rate: device_sample_rate,
-            channels: device_channels,
-            format: format!("{:?}", supported_config.sample_format()),
-        });
 
-        println!("Audio device: {}Hz, {} channels, format: {:?}", 
+        log::info!("Audio device: {}Hz, {} channels, format: {:?}", 
             device_sample_rate, device_channels, supported_config.sample_format());
 
         // Create channels - only store what we need

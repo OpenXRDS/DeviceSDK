@@ -6,21 +6,125 @@ mod tests {
         CREATE_SESSION, JOIN_SESSION, OFFER, ANSWER, WELCOME, ICE_CANDIDATE, ICE_CANDIDATE_ACK};
     use crate::common::{append_to_path};
     use crate::server::XRNetServer;
-    use tokio::time::{sleep, Duration};
-    use tokio::time::timeout;
+    use crate::client::media::VideoTrackHandler;
+    use tokio::time::{sleep, Duration, timeout};
     
     use rustls::crypto::{CryptoProvider, ring};
     use ring::default_provider;
     use once_cell::sync::OnceCell;
     use serial_test::serial;
     use std::time::Instant;
-    use std::sync::Mutex;
+    use std::sync::{Arc,Mutex};
+    use webrtc::track::track_remote::TrackRemote;
+    use std::future::Future;
+    use std::pin::Pin;
 
     
     static HTTP_ECHO_SERVER_URL: &str = "https://echo.free.beeceptor.com";
     static CRYPTO_INIT: OnceCell<()> = OnceCell::new();
     static LAST_HTTP3_TEST: Mutex<Option<Instant>> = Mutex::new(None);
     static DEFAULT_DEBUG_FILE_PATH: &str = "test_output";
+
+    pub struct CustomVideoProcessor {
+        pub output_path: String,
+    }
+
+    impl VideoTrackHandler for CustomVideoProcessor {
+        fn handle_video_track<'a>(
+        &'a self,
+        track: Arc<TrackRemote>,
+        ) -> Pin<Box<dyn Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>> + Send + 'a>> {
+            Box::pin(async move {
+                println!("🎬 Custom video processor started for track: {}", track.id());
+                println!("🎬 Track SSRC: {}", track.ssrc());
+                println!("🎬 Track codec: {:?}", track.codec());
+                
+                let mut packet_count = 0;
+                let mut total_bytes = 0;
+                let mut min_size = usize::MAX;
+                let mut max_size = 0;
+                
+                // Read RTP packets and print their sizes
+                while let Ok((rtp_packet, _attributes)) = track.read_rtp().await {
+                    packet_count += 1;
+                    let payload_size = rtp_packet.payload.len();
+                    let total_packet_size = payload_size + 12; // RTP header is typically 12 bytes
+                    
+                    total_bytes += payload_size;
+                    min_size = min_size.min(payload_size);
+                    max_size = max_size.max(payload_size);
+                    
+                    // Print packet info every 30 packets (roughly 1 second at 30fps)
+                    if packet_count % 30 == 0 {
+                        println!("📦 Packet #{}: payload={}B, total={}B, seq={}, timestamp={}", 
+                            packet_count, 
+                            payload_size, 
+                            total_packet_size, 
+                            rtp_packet.header.sequence_number,
+                            rtp_packet.header.timestamp
+                        );
+                        
+                        let avg_size = if packet_count > 0 { total_bytes / packet_count } else { 0 };
+                        println!("📊 Stats: avg={}B, min={}B, max={}B, total_packets={}", 
+                            avg_size, min_size, max_size, packet_count);
+                    }
+                    
+                    // Print detailed info for first few packets
+                    if packet_count <= 5 {
+                        println!("🔍 Packet #{} details:", packet_count);
+                        println!("   - Payload size: {} bytes", payload_size);
+                        println!("   - RTP header size: ~12 bytes");
+                        println!("   - Total packet size: ~{} bytes", total_packet_size);
+                        println!("   - Sequence number: {}", rtp_packet.header.sequence_number);
+                        println!("   - Timestamp: {}", rtp_packet.header.timestamp);
+                        println!("   - SSRC: {}", rtp_packet.header.ssrc);
+                        
+                        // Check if it's a keyframe (for H.264)
+                        if payload_size > 0 {
+                            let nal_type = rtp_packet.payload[0] & 0x1F;
+                            match nal_type {
+                                7 => println!("   - NAL type: SPS (Sequence Parameter Set)"),
+                                8 => println!("   - NAL type: PPS (Picture Parameter Set)"),
+                                5 => println!("   - NAL type: IDR frame (keyframe)"),
+                                1 => println!("   - NAL type: Non-IDR frame"),
+                                _ => println!("   - NAL type: {} (other)", nal_type),
+                            }
+                        }
+                    }
+                }
+                
+                println!("🔚 Video processing ended:");
+                println!("   - Total packets: {}", packet_count);
+                println!("   - Total payload bytes: {}", total_bytes);
+                println!("   - Average packet size: {}B", if packet_count > 0 { total_bytes / packet_count } else { 0 });
+                println!("   - Min packet size: {}B", if min_size == usize::MAX { 0 } else { min_size });
+                println!("   - Max packet size: {}B", max_size);
+                
+                Ok(())
+            })
+        }
+    }
+
+    async fn custom_audio_handler(track: Arc<TrackRemote>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        println!("🎵 Custom audio processing started");
+        
+        let mut packet_count = 0;
+        while let Ok((rtp_packet, _)) = track.read_rtp().await {
+            packet_count += 1;
+            
+            if packet_count % 50 == 0 {
+                println!("📦 Audio Packet #{}: payload_size={}B, seq={}, timestamp={}", 
+                    packet_count, 
+                    rtp_packet.payload.len(), 
+                    rtp_packet.header.sequence_number,
+                    rtp_packet.header.timestamp
+                );
+            }
+        }
+        
+        println!("🎵 Custom audio processing ended: {} packets", packet_count);
+        Ok(())
+    }
 
     fn run_http3_test_with_retry(url: &str, max_attempts: usize) -> (u32, String, Option<String>) {
         for attempt in 1..=max_attempts {
@@ -149,25 +253,6 @@ mod tests {
         /* Assertions */
         assert!(response.error.is_some());  // wrong host name
     }
-
-    /*
-        Disabled due to hardness of testing the IP address
-     */
-    // #[test]
-    // fn test_http_request_host_ip() {
-    //     let client_builder = ClientBuilder::new();
-    //     let client = client_builder.set_protocol(PROTOCOLS::HTTP)
-    //         .build();
-
-    //     let response = client.set_url("192.168.10.240")
-    //                             .set_follow_redirect(true).request();
-    //     println!("error: {}", response.error.as_ref().unwrap());
-    //     assert!(response.error.is_none());  // successful request
-
-    //     assert!(response.headers.len() > 0);
-    //     assert!(response.body.len() > 0);
-    //     assert_eq!(response.status_code, 200);
-    // }
 
     #[test]
     fn test_http_request_get_with_redirection() {
@@ -1022,6 +1107,157 @@ mod tests {
         sleep(Duration::from_secs(10)).await;
         publisher.stop_stream().await.expect("Failed to stop streaming");
 
+        server_handle.abort();
+    }
+ 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_client_webrtc_custom_handler() {
+        std::env::set_var("RUST_LOG", "info");
+        pretty_env_logger::init();
+        init_crypto();
+
+        let port = line!() + 8000;
+        let server_handle = run_server(PROTOCOLS::WEBRTC, port);
+        sleep(Duration::from_secs(2)).await;
+
+        let addr_str = "ws://127.0.0.1".to_owned() + ":" + port.to_string().as_str() + "/";
+
+        let mut publisher = WebRTCClient::new();
+        publisher.connect(addr_str.as_str()).await.expect("Failed to connect");
+
+        let (_msg, publisher) = wait_for_message(publisher, WELCOME, 2).await;
+        
+        let publisher = publisher.create_session().await.expect("Failed to create session");
+        let (msg, publisher) = wait_for_message(publisher, CREATE_SESSION, 5).await;
+
+        let session_id = msg.session_id;
+        println!("Test: session_id created: {}", session_id);
+        
+        let mut publisher = publisher;
+        publisher.publish(&session_id).await.expect("Failed to publish");   // includes creating offer
+        let (_publish_result, publisher) = wait_for_message(publisher, OFFER, 5).await;
+        println!("Test: publish_result received: {:?}", _publish_result.sdp); // sdp is supposed to be None for this test
+
+        // subscriber joins the session
+        let mut subscriber = WebRTCClient::new();
+        subscriber.set_debug_file_path(DEFAULT_DEBUG_FILE_PATH).await.expect("Failed to set debug file path");
+        subscriber.connect(addr_str.as_str()).await.expect("Failed to connect");
+        
+        let video_processor = Arc::new(CustomVideoProcessor {
+            output_path: "custom_video_output.h264".to_string(),
+        });
+        subscriber.register_video_handler(video_processor);
+
+        let (msg, subscriber) = wait_for_message(subscriber, WELCOME, 2).await;
+        let _client_id = msg.client_id;
+        // println!("Test: client_id received: {}", client_id);
+        
+        let subscriber = subscriber.join_session(&session_id).await.expect("Failed to join session");
+        let (join_result, subscriber) = wait_for_message(subscriber, JOIN_SESSION, 5).await;
+        // println!("Test: join_result received: {:?}", join_result.sdp); // sdp is supposed to be None for this test
+        
+        let mut subscriber = subscriber;
+        subscriber.handle_offer(join_result.sdp.unwrap()).await.expect("Failed to handle offer");
+
+        let (_answer_result, subscriber) = wait_for_message(subscriber, ANSWER, 5).await;
+        // println!("Test: answer_result received: {:?}", answer_result.sdp); // sdp is supposed to be None for this test
+
+        let (offer_result, mut publisher) = wait_for_message(publisher, ANSWER, 5).await;
+        publisher.handle_answer(offer_result).await.expect("Failed to handle answer");
+
+        publisher.send_ice_candidates(false).await.expect("Failed to send ICE candidates");
+
+        let (msg, mut subscriber) = wait_for_message(subscriber, ICE_CANDIDATE, 10).await;
+        println!("Test: ICE candidate received: {:?}", msg.ice_candidates);
+        subscriber.handle_ice_candidate(msg).await.expect("Failed to handle ICE candidate");
+
+        subscriber.send_ice_candidates(true).await.expect("Failed to send ICE candidates");
+        
+        let (msg, mut publisher) = wait_for_message(publisher, ICE_CANDIDATE_ACK, 10).await;
+        println!("Test: ICE candidate ACK received: {:?}", msg.ice_candidates);
+        publisher.handle_ice_candidate(msg).await.expect("Failed to handle ICE candidate ACK");
+
+
+        let stream_source = StreamSource::Webcam(0);
+        let _ = publisher.start_streaming(Some(stream_source)).await.expect("Failed to start streaming");
+
+        // wait till the video file is sent
+        sleep(Duration::from_secs(10)).await;
+        publisher.stop_stream().await.expect("Failed to stop streaming");
+        server_handle.abort();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_client_webrtc_custom_callback_fn() {
+        std::env::set_var("RUST_LOG", "info");
+        pretty_env_logger::init();
+        init_crypto();
+
+        let port = line!() + 8000;
+        let server_handle = run_server(PROTOCOLS::WEBRTC, port);
+        sleep(Duration::from_secs(2)).await;
+
+        let addr_str = "ws://127.0.0.1".to_owned() + ":" + port.to_string().as_str() + "/";
+
+        let mut publisher = WebRTCClient::new();
+        publisher.connect(addr_str.as_str()).await.expect("Failed to connect");
+
+        let (_msg, publisher) = wait_for_message(publisher, WELCOME, 2).await;
+        
+        let publisher = publisher.create_session().await.expect("Failed to create session");
+        let (msg, publisher) = wait_for_message(publisher, CREATE_SESSION, 5).await;
+
+        let session_id = msg.session_id;
+        println!("Test: session_id created: {}", session_id);
+        
+        let mut publisher = publisher;
+        publisher.publish(&session_id).await.expect("Failed to publish");   // includes creating offer
+        let (_publish_result, publisher) = wait_for_message(publisher, OFFER, 5).await;
+        println!("Test: publish_result received: {:?}", _publish_result.sdp); // sdp is supposed to be None for this test
+
+        // subscriber joins the session
+        let mut subscriber = WebRTCClient::new();
+        subscriber.set_debug_file_path(DEFAULT_DEBUG_FILE_PATH).await.expect("Failed to set debug file path");
+        subscriber.on_audio_track(|track| {
+            Box::pin(custom_audio_handler(track))
+        });
+        subscriber.connect(addr_str.as_str()).await.expect("Failed to connect");
+        
+        let (msg, subscriber) = wait_for_message(subscriber, WELCOME, 2).await;
+        let _client_id = msg.client_id;
+        // println!("Test: client_id received: {}", client_id);
+        
+        let subscriber = subscriber.join_session(&session_id).await.expect("Failed to join session");
+        let (join_result, subscriber) = wait_for_message(subscriber, JOIN_SESSION, 5).await;
+        // println!("Test: join_result received: {:?}", join_result.sdp); // sdp is supposed to be None for this test
+        
+        let mut subscriber = subscriber;
+        subscriber.handle_offer(join_result.sdp.unwrap()).await.expect("Failed to handle offer");
+
+        let (_answer_result, subscriber) = wait_for_message(subscriber, ANSWER, 5).await;
+        // println!("Test: answer_result received: {:?}", answer_result.sdp); // sdp is supposed to be None for this test
+
+        let (offer_result, mut publisher) = wait_for_message(publisher, ANSWER, 5).await;
+        publisher.handle_answer(offer_result).await.expect("Failed to handle answer");
+
+        publisher.send_ice_candidates(false).await.expect("Failed to send ICE candidates");
+
+        let (msg, mut subscriber) = wait_for_message(subscriber, ICE_CANDIDATE, 10).await;
+        println!("Test: ICE candidate received: {:?}", msg.ice_candidates);
+        subscriber.handle_ice_candidate(msg).await.expect("Failed to handle ICE candidate");
+
+        subscriber.send_ice_candidates(true).await.expect("Failed to send ICE candidates");
+        
+        let (msg, mut publisher) = wait_for_message(publisher, ICE_CANDIDATE_ACK, 10).await;
+        println!("Test: ICE candidate ACK received: {:?}", msg.ice_candidates);
+        publisher.handle_ice_candidate(msg).await.expect("Failed to handle ICE candidate ACK");
+
+        let stream_source = StreamSource::Webcam(0);
+        let _ = publisher.start_streaming(Some(stream_source)).await.expect("Failed to start streaming");
+
+        // wait till the video file is sent
+        sleep(Duration::from_secs(10)).await;
+        publisher.stop_stream().await.expect("Failed to stop streaming");
         server_handle.abort();
     }
  }
