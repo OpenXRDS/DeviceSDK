@@ -7,7 +7,7 @@ mod tests {
     use crate::common::{append_to_path};
     use crate::server::XRNetServer;
     use crate::client::media::VideoTrackHandler;
-    use tokio::time::{sleep, Duration, timeout};
+    use tokio::time::{sleep, Duration};
     
     use rustls::crypto::{CryptoProvider, ring};
     use ring::default_provider;
@@ -24,9 +24,7 @@ mod tests {
     static CRYPTO_INIT: OnceCell<()> = OnceCell::new();
     static LAST_HTTP3_TEST: Mutex<Option<Instant>> = Mutex::new(None);
     static DEFAULT_DEBUG_FILE_PATH: &str = "test_output";
-
     pub struct CustomVideoProcessor {
-        pub output_path: String,
     }
 
     impl VideoTrackHandler for CustomVideoProcessor {
@@ -126,6 +124,157 @@ mod tests {
         Ok(())
     }
 
+    //Helper function to setup signaling connection and wait for WELCOME message
+    async fn setup_signaling_connection(addr: &str) -> Result<WebRTCClient, String> {
+        let mut client = WebRTCClient::new();
+        client.connect(addr).await.map_err(|e| e.to_string())?;
+        
+        // WELCOME 메시지 대기
+        let msg = wait_for_message_type(&mut client, WELCOME, 5).await?;
+        println!("✅ Client ID received: {}", msg.client_id);
+        
+        Ok(client)
+    }
+
+    // Helper function to setup publisher signaling (create_session + publish(OFFER))
+    pub async fn setup_publisher_signaling(client: &mut WebRTCClient) -> Result<String, String> {
+        client.create_session().await?;
+        let msg = wait_for_message_type(client, CREATE_SESSION, 5).await?;
+        let session_id = msg.session_id.clone();
+        
+        client.publish(&session_id).await?;
+        let _msg = wait_for_message_type(client, OFFER, 5).await?;
+        
+        println!("✅ Publisher signaling completed: {}", session_id);
+        Ok(session_id)
+    }
+
+    /// Helper function to setup subscriber signaling (join_session + handle_offer)
+    pub async fn setup_subscriber_signaling(
+        client: &mut WebRTCClient, 
+        session_id: &str,
+        debug_path: Option<&str>
+    ) -> Result<(), String> {
+        if let Some(path) = debug_path {
+            client.set_debug_file_path(path).await?;
+        }
+
+        client.join_session(session_id).await.map_err(|e| e.to_string())?;
+        let join_result = wait_for_message_type(client, JOIN_SESSION, 5).await?;
+        
+        client.handle_offer(join_result.sdp.unwrap()).await?;
+        let _msg = wait_for_message_type(client, ANSWER, 5).await?;
+        
+        println!("✅ Subscriber signaling completed for session: {}", session_id);
+        Ok(())
+    }
+
+    /// 테스트용 헬퍼: P2P 핸드셰이크 완료 (Publisher 측)
+    pub async fn complete_publisher_handshake(client: &mut WebRTCClient) -> Result<(), String> {
+        client.send_ice_candidates(false).await?;
+        let ice_msg = wait_for_message_type(client, ICE_CANDIDATE_ACK, 15).await?;
+        client.handle_ice_candidate(ice_msg).await?;
+        
+        println!("✅ Publisher P2P handshake completed");
+        Ok(())
+    }
+
+    /// 테스트용 헬퍼: P2P 핸드셰이크 완료 (Subscriber 측)
+    pub async fn complete_subscriber_handshake(client: &mut WebRTCClient) -> Result<(), String> {
+        let ice_msg = wait_for_message_type(client, ICE_CANDIDATE, 15).await?;
+        client.handle_ice_candidate(ice_msg).await?;
+        
+        client.send_ice_candidates(true).await?;
+        
+        println!("✅ Subscriber P2P handshake completed");
+        Ok(())
+    }
+
+    // Helper function to wait for a specific message type with timeout
+    async fn wait_for_message_type(
+        client: &mut WebRTCClient, 
+        msg_type: &str, 
+        timeout_secs: u64
+    ) -> Result<WebRTCMessage, String> {
+        let start = std::time::Instant::now();
+        
+        while start.elapsed().as_secs() < timeout_secs {
+            if let Some(msg) = client.receive_message().await {
+                if msg.message_type == msg_type {
+                    return Ok(msg);
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        
+        Err(format!("Timeout waiting for {}", msg_type))
+    }
+    
+    /// 테스트용 헬퍼: 완전한 WebRTC 연결 설정 (시그널링 + P2P)
+    pub async fn establish_complete_webrtc_connection(
+        port: u32
+    ) -> Result<(WebRTCClient, WebRTCClient, String, tokio::task::JoinHandle<()>), String> {
+        let server_handle = run_server(PROTOCOLS::WEBRTC, port);
+        sleep(Duration::from_secs(2)).await;
+        
+        let addr_str = format!("ws://127.0.0.1:{}/", port);
+        
+        // Publisher 설정
+        let mut publisher = setup_signaling_connection(&addr_str).await?;
+        let session_id = setup_publisher_signaling(&mut publisher).await?;
+        
+        // Subscriber 설정
+        let mut subscriber = setup_signaling_connection(&addr_str).await?;
+        setup_subscriber_signaling(&mut subscriber, &session_id, Some(DEFAULT_DEBUG_FILE_PATH)).await?;
+        
+        // 3. Publisher가 answer 처리 (필수!)
+        let answer_msg = wait_for_message_type(&mut publisher, ANSWER, 10).await?;
+        publisher.handle_answer(answer_msg).await?;
+
+        // P2P 핸드셰이크 (병렬 실행)
+        tokio::try_join!(
+            complete_publisher_handshake(&mut publisher),
+            complete_subscriber_handshake(&mut subscriber)
+        )?;
+        
+        Ok((publisher, subscriber, session_id, server_handle))
+    }
+
+    /// 테스트용 헬퍼: 커스텀 Subscriber 설정으로 연결
+    pub async fn establish_webrtc_with_custom_subscriber<F>(
+        port: u32,
+        subscriber_setup: F
+    ) -> Result<(WebRTCClient, WebRTCClient, String, tokio::task::JoinHandle<()>), String>
+    where
+        F: FnOnce(&mut WebRTCClient),
+    {
+        let server_handle = run_server(PROTOCOLS::WEBRTC, port);
+        sleep(Duration::from_secs(2)).await;
+        
+        let addr_str = format!("ws://127.0.0.1:{}/", port);
+        
+        // Publisher 설정
+        let mut publisher = setup_signaling_connection(&addr_str).await?;
+        let session_id = setup_publisher_signaling(&mut publisher).await?;
+        
+        // Subscriber 설정 (커스텀 핸들러 적용)
+        let mut subscriber = setup_signaling_connection(&addr_str).await?;
+        subscriber_setup(&mut subscriber); // 커스텀 설정 적용
+        setup_subscriber_signaling(&mut subscriber, &session_id, Some(DEFAULT_DEBUG_FILE_PATH)).await?;
+        
+        // 3. Publisher가 answer 처리 (필수!)
+        let answer_msg = wait_for_message_type(&mut publisher, ANSWER, 10).await?;
+        publisher.handle_answer(answer_msg).await?;
+
+        // P2P 핸드셰이크
+        tokio::try_join!(
+            complete_publisher_handshake(&mut publisher),
+            complete_subscriber_handshake(&mut subscriber)
+        )?;
+        
+        Ok((publisher, subscriber, session_id, server_handle))
+    }
+
     fn run_http3_test_with_retry(url: &str, max_attempts: usize) -> (u32, String, Option<String>) {
         for attempt in 1..=max_attempts {
             println!("HTTP/3 test attempt {}/{} for {}", attempt, max_attempts, url);
@@ -182,22 +331,6 @@ mod tests {
             }
         }
         false
-    }
-
-    async fn wait_for_message(mut client: WebRTCClient, msg_type: &str, timeout_secs: u64) -> (WebRTCMessage, WebRTCClient) {
-        let msg = timeout(Duration::from_secs(timeout_secs), async {
-            loop {
-                if let Some(msg) = client.receive_message().await {
-                    if msg.message_type == msg_type {
-                        return msg;
-                    }
-                }
-                sleep(Duration::from_millis(100)).await;
-            }
-        })
-        .await
-        .expect(&format!("Timed out waiting for {}", msg_type));
-        (msg, client)
     }
 
     fn init_crypto() {
@@ -756,58 +889,32 @@ mod tests {
         let port = line!() + 8000;
         let server_handle = run_server(PROTOCOLS::WEBRTC, port);
         sleep(Duration::from_secs(2)).await;
-
         let addr_str = "ws://127.0.0.1".to_owned() + ":" + port.to_string().as_str() + "/";
 
-        let mut publisher = WebRTCClient::new();
-        publisher.connect(addr_str.as_str()).await.expect("Failed to connect");
+        // 시그널링까지 완료
+        // publisher는 offer 생성 후 대기
+        // subscriber는 offer 수신 후 answer 전달
+        let mut publisher = setup_signaling_connection(&addr_str).await.unwrap();
+        let session_id = setup_publisher_signaling(&mut publisher).await.unwrap();
+        let mut subscriber = setup_signaling_connection(&addr_str).await.unwrap();
+        setup_subscriber_signaling(&mut subscriber, &session_id, Some(DEFAULT_DEBUG_FILE_PATH)).await.unwrap();
 
-        let (_, publisher) = wait_for_message(publisher, WELCOME, 2).await;
-        
-        let publisher = publisher.create_session().await.expect("Failed to create session");
-        let (msg, publisher) = wait_for_message(publisher, CREATE_SESSION, 5).await;
+        // Publisher가 answer를 처리해야 함 (remote description 설정)
+        let answer_msg = wait_for_message_type(&mut publisher, ANSWER, 10).await.unwrap();
+        publisher.handle_answer(answer_msg).await.expect("Failed to handle answer");
 
-        let session_id = msg.session_id;
-        println!("Test: session_id created: {}", session_id);
-        
-        let mut publisher = publisher;
-        publisher.publish(&session_id).await.expect("Failed to publish");
-        let (_, publisher) = wait_for_message(publisher, OFFER, 5).await;
-        // println!("Test: publish_result received: {:?}", publish_result.sdp); // sdp is supposed to be None for this test
-
-        // subscriber joins the session
-        let mut subscriber = WebRTCClient::new();
-        subscriber.connect(addr_str.as_str()).await.expect("Failed to connect");
-
-        let (msg, subscriber) = wait_for_message(subscriber, WELCOME, 2).await;
-        let _client_id = msg.client_id;
-        // println!("Test: client_id received: {}", client_id);
-        
-        let subscriber = subscriber.join_session(&session_id).await.expect("Failed to join session");
-        let (join_result, subscriber) = wait_for_message(subscriber, JOIN_SESSION, 5).await;
-        // println!("Test: join_result received: {:?}", join_result.sdp); // sdp is supposed to be None for this test
-        
-        let mut subscriber = subscriber;
-        subscriber.handle_offer(join_result.sdp.unwrap()).await.expect("Failed to handle offer");
-        
-        // println!("Test: answer_result received: {:?}", answer_result.sdp); // sdp is supposed to be None for this test
-
-        let (offer_result, mut publisher) = wait_for_message(publisher, ANSWER, 5).await;
-        publisher.handle_answer(offer_result).await.expect("Failed to handle answer");
-
+        // 이제 ICE 후보 교환 가능 (양쪽 모두 remote description이 설정됨)
         publisher.send_ice_candidates(false).await.expect("Failed to send ICE candidates");
-
-        let (msg, mut subscriber) = wait_for_message(subscriber, ICE_CANDIDATE, 5).await;
-        println!("Test: ICE candidate received: {:?}", msg.ice_candidates);
-        subscriber.handle_ice_candidate(msg).await.expect("Failed to handle ICE candidate");
-
-        subscriber.send_ice_candidates(true).await.expect("Failed to send ICE candidates");
+        let ice_msg = wait_for_message_type(&mut subscriber, ICE_CANDIDATE, 10).await.unwrap();
+        println!("ICE candidates received: {:?}", ice_msg.ice_candidates);
         
-        let (msg, mut publisher) = wait_for_message(publisher, ICE_CANDIDATE_ACK, 5).await;
-        println!("Test: ICE candidate ACK received: {:?}", msg.ice_candidates);
-        publisher.handle_ice_candidate(msg).await.expect("Failed to handle ICE candidate ACK");
+        subscriber.handle_ice_candidate(ice_msg).await.expect("Failed to handle ICE candidate");
+        subscriber.send_ice_candidates(true).await.expect("Failed to send ICE ACK");
+        
+        let ice_ack_msg = wait_for_message_type(&mut publisher, ICE_CANDIDATE_ACK, 10).await.unwrap();
+        publisher.handle_ice_candidate(ice_ack_msg).await.expect("Failed to handle ICE ACK");
 
-
+        println!("✅ ICE candidate exchange completed successfully");
         server_handle.abort();
     }
 
@@ -816,80 +923,29 @@ mod tests {
         init_crypto();
 
         let port = line!() + 8000;
-        let server_handle = run_server(PROTOCOLS::WEBRTC, port);
-        sleep(Duration::from_secs(2)).await;
+        let (mut publisher, subscriber, _session_id, server_handle) = 
+            establish_complete_webrtc_connection(port).await
+            .expect("Failed to establish connection");
 
-        let addr_str = "ws://127.0.0.1".to_owned() + ":" + port.to_string().as_str() + "/";
-
-        let mut publisher = WebRTCClient::new();
-        publisher.connect(addr_str.as_str()).await.expect("Failed to connect");
-
-        let (_msg, publisher) = wait_for_message(publisher, WELCOME, 2).await;
-        
-        let publisher = publisher.create_session().await.expect("Failed to create session");
-        let (msg, publisher) = wait_for_message(publisher, CREATE_SESSION, 5).await;
-
-        let session_id = msg.session_id;
-        println!("Test: session_id created: {}", session_id);
-        
-        let mut publisher = publisher;
-        publisher.publish(&session_id).await.expect("Failed to publish");   // includes creating offer
-        let (_publish_result, publisher) = wait_for_message(publisher, OFFER, 5).await;
-        println!("Test: publish_result received: {:?}", _publish_result.sdp); // sdp is supposed to be None for this test
-
-        // subscriber joins the session
-        let mut subscriber = WebRTCClient::new();
-        subscriber.set_debug_file_path(DEFAULT_DEBUG_FILE_PATH).await.expect("Failed to set debug file path");
-        subscriber.connect(addr_str.as_str()).await.expect("Failed to connect");
-
-        let (msg, subscriber) = wait_for_message(subscriber, WELCOME, 2).await;
-        let _client_id = msg.client_id;
-        // println!("Test: client_id received: {}", client_id);
-        
-        let subscriber = subscriber.join_session(&session_id).await.expect("Failed to join session");
-        let (join_result, subscriber) = wait_for_message(subscriber, JOIN_SESSION, 5).await;
-        // println!("Test: join_result received: {:?}", join_result.sdp); // sdp is supposed to be None for this test
-        
-        let mut subscriber = subscriber;
-        subscriber.handle_offer(join_result.sdp.unwrap()).await.expect("Failed to handle offer");
-
-        let (_answer_result, subscriber) = wait_for_message(subscriber, ANSWER, 5).await;
-        // println!("Test: answer_result received: {:?}", answer_result.sdp); // sdp is supposed to be None for this test
-
-        let (offer_result, mut publisher) = wait_for_message(publisher, ANSWER, 5).await;
-        publisher.handle_answer(offer_result).await.expect("Failed to handle answer");
-
-        publisher.send_ice_candidates(false).await.expect("Failed to send ICE candidates");
-
-        let (msg, mut subscriber) = wait_for_message(subscriber, ICE_CANDIDATE, 10).await;
-        println!("Test: ICE candidate received: {:?}", msg.ice_candidates);
-        subscriber.handle_ice_candidate(msg).await.expect("Failed to handle ICE candidate");
-
-        subscriber.send_ice_candidates(true).await.expect("Failed to send ICE candidates");
-        
-        let (msg, mut publisher) = wait_for_message(publisher, ICE_CANDIDATE_ACK, 10).await;
-        println!("Test: ICE candidate ACK received: {:?}", msg.ice_candidates);
-        publisher.handle_ice_candidate(msg).await.expect("Failed to handle ICE candidate ACK");
-
-        // let sample_file_path = "samples/tsm_1080p.mp4";
         let sample_file_path = "samples/sample_video.h264";
-        // try open the file
-        let file = std::fs::read(sample_file_path).expect("Failed to open sample video file");
-        let stream_source = StreamSource::File(sample_file_path.to_string());
-        let _ = publisher.start_streaming(Some(stream_source)).await.expect("Failed to start streaming");
+        let file = std::fs::read(sample_file_path).expect("Failed to read sample file");
+        
+        let _ = publisher.start_streaming(Some(StreamSource::File(sample_file_path.to_string()))).await
+            .expect("Failed to start file streaming");
 
-        // wait till the video file is sent
         sleep(Duration::from_secs(120)).await;
-
-        let received_file = std::fs::read(format!("{}/received.h264", DEFAULT_DEBUG_FILE_PATH)).expect("Failed to open received file");
+        let video_debug_file_path = subscriber.get_debug_video_file_path().unwrap();
+        let received_file = std::fs::read(video_debug_file_path)
+            .expect("Failed to read received file");
         server_handle.abort();
 
-        assert!(is_valid_h264(&file), "Sent file is not a valid H264 file");
-        assert!(is_valid_h264(&received_file), "Received file is not a valid H264 file");
+        // Assertions
+        assert!(is_valid_h264(&file), "Sent file is not valid H264");
+        assert!(is_valid_h264(&received_file), "Received file is not valid H264");
 
         let size_ratio = (file.len() as f64) / (received_file.len() as f64);
-        assert!(size_ratio > 0.9 && size_ratio < 1.1, "Sent file size {} is different from received file size {}", file.len(), received_file.len());
-        println!("Sent file size: {}, Received file size: {}, Size ratio: {}", file.len(), received_file.len(), size_ratio);
+        assert!(size_ratio > 0.9 && size_ratio < 1.1, 
+            "File size mismatch: sent={}, received={}", file.len(), received_file.len());
 
         // Size difference is normal due to network overhead and possible keyframe differences
     }
@@ -901,66 +957,14 @@ mod tests {
         init_crypto();
 
         let port = line!() + 8000;
-        let server_handle = run_server(PROTOCOLS::WEBRTC, port);
-        sleep(Duration::from_secs(2)).await;
+        let (mut publisher, _subscriber, _session_id, server_handle) = 
+            establish_complete_webrtc_connection(port).await
+            .expect("Failed to establish WebRTC connection");
 
-        let addr_str = "ws://127.0.0.1".to_owned() + ":" + port.to_string().as_str() + "/";
+        // 연결이 완료된 상태에서 스트리밍 시작
+        let _ = publisher.start_streaming(Some(StreamSource::Webcam(0))).await
+            .expect("Failed to start streaming");
 
-        let mut publisher = WebRTCClient::new();
-        publisher.connect(addr_str.as_str()).await.expect("Failed to connect");
-
-        let (_msg, publisher) = wait_for_message(publisher, WELCOME, 2).await;
-        
-        let publisher = publisher.create_session().await.expect("Failed to create session");
-        let (msg, publisher) = wait_for_message(publisher, CREATE_SESSION, 5).await;
-
-        let session_id = msg.session_id;
-        println!("Test: session_id created: {}", session_id);
-        
-        let mut publisher = publisher;
-        publisher.publish(&session_id).await.expect("Failed to publish");   // includes creating offer
-        let (_publish_result, publisher) = wait_for_message(publisher, OFFER, 5).await;
-        println!("Test: publish_result received: {:?}", _publish_result.sdp); // sdp is supposed to be None for this test
-
-        // subscriber joins the session
-        let mut subscriber = WebRTCClient::new();
-        subscriber.set_debug_file_path(DEFAULT_DEBUG_FILE_PATH).await.expect("Failed to set debug file path");
-        subscriber.connect(addr_str.as_str()).await.expect("Failed to connect");
-
-        let (msg, subscriber) = wait_for_message(subscriber, WELCOME, 2).await;
-        let _client_id = msg.client_id;
-        // println!("Test: client_id received: {}", client_id);
-        
-        let subscriber = subscriber.join_session(&session_id).await.expect("Failed to join session");
-        let (join_result, subscriber) = wait_for_message(subscriber, JOIN_SESSION, 5).await;
-        // println!("Test: join_result received: {:?}", join_result.sdp); // sdp is supposed to be None for this test
-        
-        let mut subscriber = subscriber;
-        subscriber.handle_offer(join_result.sdp.unwrap()).await.expect("Failed to handle offer");
-
-        let (_answer_result, subscriber) = wait_for_message(subscriber, ANSWER, 5).await;
-        // println!("Test: answer_result received: {:?}", answer_result.sdp); // sdp is supposed to be None for this test
-
-        let (offer_result, mut publisher) = wait_for_message(publisher, ANSWER, 5).await;
-        publisher.handle_answer(offer_result).await.expect("Failed to handle answer");
-
-        publisher.send_ice_candidates(false).await.expect("Failed to send ICE candidates");
-
-        let (msg, mut subscriber) = wait_for_message(subscriber, ICE_CANDIDATE, 10).await;
-        println!("Test: ICE candidate received: {:?}", msg.ice_candidates);
-        subscriber.handle_ice_candidate(msg).await.expect("Failed to handle ICE candidate");
-
-        subscriber.send_ice_candidates(true).await.expect("Failed to send ICE candidates");
-        
-        let (msg, mut publisher) = wait_for_message(publisher, ICE_CANDIDATE_ACK, 10).await;
-        println!("Test: ICE candidate ACK received: {:?}", msg.ice_candidates);
-        publisher.handle_ice_candidate(msg).await.expect("Failed to handle ICE candidate ACK");
-
-
-        let stream_source = StreamSource::Webcam(0);
-        let _ = publisher.start_streaming(Some(stream_source)).await.expect("Failed to start streaming");
-
-        // wait till the video file is sent
         sleep(Duration::from_secs(10)).await;
         publisher.stop_stream().await.expect("Failed to stop streaming");
         server_handle.abort();
@@ -973,140 +977,14 @@ mod tests {
         init_crypto();
 
         let port = line!() + 8000;
-        let server_handle = run_server(PROTOCOLS::WEBRTC, port);
-        sleep(Duration::from_secs(2)).await;
+        let (publisher, _subscriber, _session_id, server_handle) = 
+            establish_complete_webrtc_connection(port).await
+            .expect("Failed to establish WebRTC connection");
 
-        let addr_str = "ws://127.0.0.1".to_owned() + ":" + port.to_string().as_str() + "/";
-
-        let mut publisher = WebRTCClient::new();
-        publisher.connect(addr_str.as_str()).await.expect("Failed to connect");
-
-        let (_msg, publisher) = wait_for_message(publisher, WELCOME, 2).await;
-        
-        let publisher = publisher.create_session().await.expect("Failed to create session");
-        let (msg, publisher) = wait_for_message(publisher, CREATE_SESSION, 5).await;
-
-        let session_id = msg.session_id;
-        println!("Test: session_id created: {}", session_id);
-        
-        let mut publisher = publisher;
-        publisher.publish(&session_id).await.expect("Failed to publish");   // includes creating offer
-        let (_publish_result, publisher) = wait_for_message(publisher, OFFER, 5).await;
-        println!("Test: publish_result received: {:?}", _publish_result.sdp); // sdp is supposed to be None for this test
-
-        // subscriber joins the session
-        let mut subscriber = WebRTCClient::new();
-        subscriber.set_debug_file_path(DEFAULT_DEBUG_FILE_PATH).await.expect("Failed to set debug file path");
-        subscriber.connect(addr_str.as_str()).await.expect("Failed to connect");
-
-        let (msg, subscriber) = wait_for_message(subscriber, WELCOME, 2).await;
-        let _client_id = msg.client_id;
-        // println!("Test: client_id received: {}", client_id);
-        
-        let subscriber = subscriber.join_session(&session_id).await.expect("Failed to join session");
-        let (join_result, subscriber) = wait_for_message(subscriber, JOIN_SESSION, 5).await;
-        // println!("Test: join_result received: {:?}", join_result.sdp); // sdp is supposed to be None for this test
-        
-        let mut subscriber = subscriber;
-        subscriber.handle_offer(join_result.sdp.unwrap()).await.expect("Failed to handle offer");
-
-        let (_answer_result, subscriber) = wait_for_message(subscriber, ANSWER, 5).await;
-        // println!("Test: answer_result received: {:?}", answer_result.sdp); // sdp is supposed to be None for this test
-
-        let (offer_result, mut publisher) = wait_for_message(publisher, ANSWER, 5).await;
-        publisher.handle_answer(offer_result).await.expect("Failed to handle answer");
-
-        publisher.send_ice_candidates(false).await.expect("Failed to send ICE candidates");
-
-        let (msg, mut subscriber) = wait_for_message(subscriber, ICE_CANDIDATE, 10).await;
-        println!("Test: ICE candidate received: {:?}", msg.ice_candidates);
-        subscriber.handle_ice_candidate(msg).await.expect("Failed to handle ICE candidate");
-
-        subscriber.send_ice_candidates(true).await.expect("Failed to send ICE candidates");
-        
-        let (msg, mut publisher) = wait_for_message(publisher, ICE_CANDIDATE_ACK, 10).await;
-        println!("Test: ICE candidate ACK received: {:?}", msg.ice_candidates);
-        publisher.handle_ice_candidate(msg).await.expect("Failed to handle ICE candidate ACK");
-
-        publisher.send_data_channel_message("hello webrtc").await.expect("Failed to send data channel message");
+        publisher.send_data_channel_message("hello webrtc").await
+            .expect("Failed to send data channel message");
 
         sleep(Duration::from_secs(10)).await;
-        
-        server_handle.abort();
-    }
- 
-    /*
-        .h264 and .opus file must be produced in the debug folder after running this test
-     */
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn test_client_webrtc_av_stream() {
-        std::env::set_var("RUST_LOG", "debug");
-        pretty_env_logger::init();
-        init_crypto();
-
-        let port = line!() + 8000;
-        let server_handle = run_server(PROTOCOLS::WEBRTC, port);
-        sleep(Duration::from_secs(2)).await;
-
-        let addr_str = "ws://127.0.0.1".to_owned() + ":" + port.to_string().as_str() + "/";
-
-        let mut publisher = WebRTCClient::new();
-        publisher.connect(addr_str.as_str()).await.expect("Failed to connect");
-
-        let (_msg, publisher) = wait_for_message(publisher, WELCOME, 2).await;
-        
-        let publisher = publisher.create_session().await.expect("Failed to create session");
-        let (msg, publisher) = wait_for_message(publisher, CREATE_SESSION, 5).await;
-
-        let session_id = msg.session_id;
-        println!("Test: session_id created: {}", session_id);
-        
-        let mut publisher = publisher;
-        publisher.publish(&session_id).await.expect("Failed to publish");   // includes creating offer
-        let (_publish_result, publisher) = wait_for_message(publisher, OFFER, 5).await;
-        println!("Test: publish_result received: {:?}", _publish_result.sdp); // sdp is supposed to be None for this test
-
-        // subscriber joins the session
-        let mut subscriber = WebRTCClient::new();
-        subscriber.set_debug_file_path(DEFAULT_DEBUG_FILE_PATH).await.expect("Failed to set debug file path");
-        subscriber.connect(addr_str.as_str()).await.expect("Failed to connect");
-
-        let (msg, subscriber) = wait_for_message(subscriber, WELCOME, 2).await;
-        let _client_id = msg.client_id;
-        // println!("Test: client_id received: {}", client_id);
-        
-        let subscriber = subscriber.join_session(&session_id).await.expect("Failed to join session");
-        let (join_result, subscriber) = wait_for_message(subscriber, JOIN_SESSION, 5).await;
-        // println!("Test: join_result received: {:?}", join_result.sdp); // sdp is supposed to be None for this test
-        
-        let mut subscriber = subscriber;
-        subscriber.handle_offer(join_result.sdp.unwrap()).await.expect("Failed to handle offer");
-
-        let (_answer_result, subscriber) = wait_for_message(subscriber, ANSWER, 5).await;
-        // println!("Test: answer_result received: {:?}", answer_result.sdp); // sdp is supposed to be None for this test
-
-        let (offer_result, mut publisher) = wait_for_message(publisher, ANSWER, 5).await;
-        publisher.handle_answer(offer_result).await.expect("Failed to handle answer");
-
-        publisher.send_ice_candidates(false).await.expect("Failed to send ICE candidates");
-
-        let (msg, mut subscriber) = wait_for_message(subscriber, ICE_CANDIDATE, 10).await;
-        println!("Test: ICE candidate received: {:?}", msg.ice_candidates);
-        subscriber.handle_ice_candidate(msg).await.expect("Failed to handle ICE candidate");
-
-        subscriber.send_ice_candidates(true).await.expect("Failed to send ICE candidates");
-        
-        let (msg, mut publisher) = wait_for_message(publisher, ICE_CANDIDATE_ACK, 10).await;
-        println!("Test: ICE candidate ACK received: {:?}", msg.ice_candidates);
-        publisher.handle_ice_candidate(msg).await.expect("Failed to handle ICE candidate ACK");
-
-        let stream_source = StreamSource::Webcam(0);
-        let _ = publisher.start_streaming(Some(stream_source)).await.expect("Failed to start streaming");
-
-        // wait till the video file is sent
-        sleep(Duration::from_secs(10)).await;
-        publisher.stop_stream().await.expect("Failed to stop streaming");
-
         server_handle.abort();
     }
  
@@ -1117,71 +995,15 @@ mod tests {
         init_crypto();
 
         let port = line!() + 8000;
-        let server_handle = run_server(PROTOCOLS::WEBRTC, port);
-        sleep(Duration::from_secs(2)).await;
+        let (mut publisher, _subscriber, _session_id, server_handle) = 
+            establish_webrtc_with_custom_subscriber(port, |subscriber| {
+                let video_processor = Arc::new(CustomVideoProcessor {});
+                subscriber.register_video_handler(video_processor);
+            }).await.expect("Failed to establish connection with custom handler");
 
-        let addr_str = "ws://127.0.0.1".to_owned() + ":" + port.to_string().as_str() + "/";
+        let _ = publisher.start_streaming(Some(StreamSource::Webcam(0))).await
+            .expect("Failed to start streaming");
 
-        let mut publisher = WebRTCClient::new();
-        publisher.connect(addr_str.as_str()).await.expect("Failed to connect");
-
-        let (_msg, publisher) = wait_for_message(publisher, WELCOME, 2).await;
-        
-        let publisher = publisher.create_session().await.expect("Failed to create session");
-        let (msg, publisher) = wait_for_message(publisher, CREATE_SESSION, 5).await;
-
-        let session_id = msg.session_id;
-        println!("Test: session_id created: {}", session_id);
-        
-        let mut publisher = publisher;
-        publisher.publish(&session_id).await.expect("Failed to publish");   // includes creating offer
-        let (_publish_result, publisher) = wait_for_message(publisher, OFFER, 5).await;
-        println!("Test: publish_result received: {:?}", _publish_result.sdp); // sdp is supposed to be None for this test
-
-        // subscriber joins the session
-        let mut subscriber = WebRTCClient::new();
-        subscriber.set_debug_file_path(DEFAULT_DEBUG_FILE_PATH).await.expect("Failed to set debug file path");
-        subscriber.connect(addr_str.as_str()).await.expect("Failed to connect");
-        
-        let video_processor = Arc::new(CustomVideoProcessor {
-            output_path: "custom_video_output.h264".to_string(),
-        });
-        subscriber.register_video_handler(video_processor);
-
-        let (msg, subscriber) = wait_for_message(subscriber, WELCOME, 2).await;
-        let _client_id = msg.client_id;
-        // println!("Test: client_id received: {}", client_id);
-        
-        let subscriber = subscriber.join_session(&session_id).await.expect("Failed to join session");
-        let (join_result, subscriber) = wait_for_message(subscriber, JOIN_SESSION, 5).await;
-        // println!("Test: join_result received: {:?}", join_result.sdp); // sdp is supposed to be None for this test
-        
-        let mut subscriber = subscriber;
-        subscriber.handle_offer(join_result.sdp.unwrap()).await.expect("Failed to handle offer");
-
-        let (_answer_result, subscriber) = wait_for_message(subscriber, ANSWER, 5).await;
-        // println!("Test: answer_result received: {:?}", answer_result.sdp); // sdp is supposed to be None for this test
-
-        let (offer_result, mut publisher) = wait_for_message(publisher, ANSWER, 5).await;
-        publisher.handle_answer(offer_result).await.expect("Failed to handle answer");
-
-        publisher.send_ice_candidates(false).await.expect("Failed to send ICE candidates");
-
-        let (msg, mut subscriber) = wait_for_message(subscriber, ICE_CANDIDATE, 10).await;
-        println!("Test: ICE candidate received: {:?}", msg.ice_candidates);
-        subscriber.handle_ice_candidate(msg).await.expect("Failed to handle ICE candidate");
-
-        subscriber.send_ice_candidates(true).await.expect("Failed to send ICE candidates");
-        
-        let (msg, mut publisher) = wait_for_message(publisher, ICE_CANDIDATE_ACK, 10).await;
-        println!("Test: ICE candidate ACK received: {:?}", msg.ice_candidates);
-        publisher.handle_ice_candidate(msg).await.expect("Failed to handle ICE candidate ACK");
-
-
-        let stream_source = StreamSource::Webcam(0);
-        let _ = publisher.start_streaming(Some(stream_source)).await.expect("Failed to start streaming");
-
-        // wait till the video file is sent
         sleep(Duration::from_secs(10)).await;
         publisher.stop_stream().await.expect("Failed to stop streaming");
         server_handle.abort();
@@ -1194,68 +1016,16 @@ mod tests {
         init_crypto();
 
         let port = line!() + 8000;
-        let server_handle = run_server(PROTOCOLS::WEBRTC, port);
-        sleep(Duration::from_secs(2)).await;
+        let (mut publisher, _subscriber, _session_id, server_handle) = 
+            establish_webrtc_with_custom_subscriber(port, |subscriber| {
+                subscriber.on_audio_track(|track| {
+                    Box::pin(custom_audio_handler(track))
+                });
+            }).await.expect("Failed to establish connection");
 
-        let addr_str = "ws://127.0.0.1".to_owned() + ":" + port.to_string().as_str() + "/";
+        let _ = publisher.start_streaming(Some(StreamSource::Webcam(0))).await
+            .expect("Failed to start streaming");
 
-        let mut publisher = WebRTCClient::new();
-        publisher.connect(addr_str.as_str()).await.expect("Failed to connect");
-
-        let (_msg, publisher) = wait_for_message(publisher, WELCOME, 2).await;
-        
-        let publisher = publisher.create_session().await.expect("Failed to create session");
-        let (msg, publisher) = wait_for_message(publisher, CREATE_SESSION, 5).await;
-
-        let session_id = msg.session_id;
-        println!("Test: session_id created: {}", session_id);
-        
-        let mut publisher = publisher;
-        publisher.publish(&session_id).await.expect("Failed to publish");   // includes creating offer
-        let (_publish_result, publisher) = wait_for_message(publisher, OFFER, 5).await;
-        println!("Test: publish_result received: {:?}", _publish_result.sdp); // sdp is supposed to be None for this test
-
-        // subscriber joins the session
-        let mut subscriber = WebRTCClient::new();
-        subscriber.set_debug_file_path(DEFAULT_DEBUG_FILE_PATH).await.expect("Failed to set debug file path");
-        subscriber.on_audio_track(|track| {
-            Box::pin(custom_audio_handler(track))
-        });
-        subscriber.connect(addr_str.as_str()).await.expect("Failed to connect");
-        
-        let (msg, subscriber) = wait_for_message(subscriber, WELCOME, 2).await;
-        let _client_id = msg.client_id;
-        // println!("Test: client_id received: {}", client_id);
-        
-        let subscriber = subscriber.join_session(&session_id).await.expect("Failed to join session");
-        let (join_result, subscriber) = wait_for_message(subscriber, JOIN_SESSION, 5).await;
-        // println!("Test: join_result received: {:?}", join_result.sdp); // sdp is supposed to be None for this test
-        
-        let mut subscriber = subscriber;
-        subscriber.handle_offer(join_result.sdp.unwrap()).await.expect("Failed to handle offer");
-
-        let (_answer_result, subscriber) = wait_for_message(subscriber, ANSWER, 5).await;
-        // println!("Test: answer_result received: {:?}", answer_result.sdp); // sdp is supposed to be None for this test
-
-        let (offer_result, mut publisher) = wait_for_message(publisher, ANSWER, 5).await;
-        publisher.handle_answer(offer_result).await.expect("Failed to handle answer");
-
-        publisher.send_ice_candidates(false).await.expect("Failed to send ICE candidates");
-
-        let (msg, mut subscriber) = wait_for_message(subscriber, ICE_CANDIDATE, 10).await;
-        println!("Test: ICE candidate received: {:?}", msg.ice_candidates);
-        subscriber.handle_ice_candidate(msg).await.expect("Failed to handle ICE candidate");
-
-        subscriber.send_ice_candidates(true).await.expect("Failed to send ICE candidates");
-        
-        let (msg, mut publisher) = wait_for_message(publisher, ICE_CANDIDATE_ACK, 10).await;
-        println!("Test: ICE candidate ACK received: {:?}", msg.ice_candidates);
-        publisher.handle_ice_candidate(msg).await.expect("Failed to handle ICE candidate ACK");
-
-        let stream_source = StreamSource::Webcam(0);
-        let _ = publisher.start_streaming(Some(stream_source)).await.expect("Failed to start streaming");
-
-        // wait till the video file is sent
         sleep(Duration::from_secs(10)).await;
         publisher.stop_stream().await.expect("Failed to stop streaming");
         server_handle.abort();

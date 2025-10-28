@@ -453,11 +453,11 @@ mod tests {
         let addr_str = "ws://127.0.0.1".to_owned() + ":" + &current_line.to_string() + "/";
 
         webrtc_client.connect(addr_str.as_str()).await.expect("Failed to connect");
-        let (msg, webrtc_client) = wait_for_message(webrtc_client, WELCOME, 5).await;
+        let (msg, mut webrtc_client) = wait_for_message(webrtc_client, WELCOME, 5).await;
         println!("Test: client_id received: {}", msg.client_id.clone());
 
-        let result = webrtc_client.create_session().await.expect("Failed to create session");
-        let (msg, _) = wait_for_message(result, CREATE_SESSION, 5).await;
+        webrtc_client.create_session().await.expect("Failed to create session");
+        let (msg, _) = wait_for_message(webrtc_client, CREATE_SESSION, 5).await;
         println!("Test: session_id received: {}", msg.session_id);
 
         server_handle.abort();
@@ -474,13 +474,13 @@ mod tests {
         let addr_str = "ws://127.0.0.1".to_owned() + ":" + &current_line.to_string() + "/";
 
         webrtc_client.connect(addr_str.as_str()).await.expect("Failed to connect");
-        let (msg, webrtc_client) = wait_for_message(webrtc_client, WELCOME, 5).await;
+        let (msg, mut webrtc_client) = wait_for_message(webrtc_client, WELCOME, 5).await;
         println!("Test: client_id received: {}", msg.client_id);
 
-        let mut client = webrtc_client.create_session().await.expect("Failed to create session");
-        
-        client = client.list_sessions().await.expect("Failed to list sessions");
-        let (msg, _) = wait_for_message(client, LIST_SESSIONS, 5).await;
+        webrtc_client.create_session().await.expect("Failed to create session");
+
+        webrtc_client = webrtc_client.list_sessions().await.expect("Failed to list sessions");
+        let (msg, _) = wait_for_message(webrtc_client, LIST_SESSIONS, 5).await;
 
         println!("Test: session_list received: {}", msg.session_id);
 
@@ -498,13 +498,13 @@ mod tests {
         let addr_str = "ws://127.0.0.1".to_owned() + ":" + &current_line.to_string() + "/";
 
         webrtc_client.connect(addr_str.as_str()).await.expect("Failed to connect");
-        let (msg, webrtc_client) = wait_for_message(webrtc_client, WELCOME, 5).await;
+        let (msg, mut webrtc_client) = wait_for_message(webrtc_client, WELCOME, 5).await;
         println!("Test: client_id received: {}", msg.client_id);
-        
-        let mut client = webrtc_client.create_session().await.expect("Failed to create session");
-        client = client.create_session().await.expect("Failed to create session");
-        client = client.list_sessions().await.expect("Failed to list sessions");
-        let (msg, _) = wait_for_message(client, LIST_SESSIONS, 5).await;
+
+        webrtc_client.create_session().await.expect("Failed to create session");
+        webrtc_client.create_session().await.expect("Failed to create session");
+        webrtc_client = webrtc_client.list_sessions().await.expect("Failed to list sessions");
+        let (msg, _) = wait_for_message(webrtc_client, LIST_SESSIONS, 5).await;
 
         println!("Test: session_list received: {}", msg.session_id);
 
@@ -522,23 +522,23 @@ mod tests {
         let addr_str = "ws://127.0.0.1".to_owned() + ":" + &current_line.to_string() + "/";
         
         webrtc_client.connect(addr_str.as_str()).await.expect("Failed to connect");
-        let (_, webrtc_client) = wait_for_message(webrtc_client, WELCOME, 5).await;
+        let (_, mut webrtc_client) = wait_for_message(webrtc_client, WELCOME, 5).await;
         
-        let mut client = webrtc_client.create_session().await.expect("Failed to create session");
+        webrtc_client.create_session().await.expect("Failed to create session");
 
-        client = client.list_sessions().await.expect("Failed to list sessions");
-        let (msg, client) = wait_for_message(client, LIST_SESSIONS, 5).await;
+        webrtc_client = webrtc_client.list_sessions().await.expect("Failed to list sessions");
+        let (msg, webrtc_client) = wait_for_message(webrtc_client, LIST_SESSIONS, 5).await;
         let session_list = msg.session_id.clone();
         let session_list = payload_str_to_vector_str(session_list.as_str());
 
         let session_id = session_list[0].clone();
         println!("Test: session_id received: {}", session_id);
 
-        let client = client.close_session(session_id.as_str()).await.expect("Failed to close session");
-        let (_, client) = wait_for_message(client, CLOSE_SESSION, 5).await;
-        
-        let client = client.list_sessions().await.expect("Failed to list sessions");
-        let (msg, _) = wait_for_message(client, LIST_SESSIONS, 5).await;
+        let webrtc_client = webrtc_client.close_session(session_id.as_str()).await.expect("Failed to close session");
+        let (_, webrtc_client) = wait_for_message(webrtc_client, CLOSE_SESSION, 5).await;
+
+        let webrtc_client = webrtc_client.list_sessions().await.expect("Failed to list sessions");
+        let (msg, _) = wait_for_message(webrtc_client, LIST_SESSIONS, 5).await;
         let session_list = payload_str_to_vector_str(&msg.session_id.as_str());
         println!("Test: session_list received: {:?}", session_list);
         
@@ -558,7 +558,7 @@ mod tests {
         let mut webrtc_subscriber = WebRTCClient::new();
 
         webrtc_publisher.connect(addr_str.as_str()).await.expect("Failed to connect");
-        let (_, webrtc_publisher) = wait_for_message(webrtc_publisher, WELCOME, 5).await;
+        let (_, mut webrtc_publisher) = wait_for_message(webrtc_publisher, WELCOME, 5).await;
 
         webrtc_publisher.create_session().await.expect("Failed to create session");        
 
@@ -566,14 +566,14 @@ mod tests {
         let (_, webrtc_subscriber) = wait_for_message(webrtc_subscriber, WELCOME, 5).await;
 
         let webrtc_subscriber = webrtc_subscriber.list_sessions().await.expect("Failed to list sessions");
-        let (msg, webrtc_subscriber) = wait_for_message(webrtc_subscriber, LIST_SESSIONS, 5).await;
+        let (msg, mut webrtc_subscriber) = wait_for_message(webrtc_subscriber, LIST_SESSIONS, 5).await;
         println!("Test: session_list received: {}", msg.session_id);
 
         let session_id = payload_str_to_vector_str(msg.session_id.as_str());
         let session_id = session_id[0].clone();
         println!("Test: session_id received: {}", session_id);
 
-        let webrtc_subscriber = webrtc_subscriber.join_session(session_id.as_str()).await.expect("Failed to join session");
+        webrtc_subscriber.join_session(session_id.as_str()).await.expect("Failed to join session");
         let (msg, _) = wait_for_message(webrtc_subscriber, JOIN_SESSION, 5).await;
 
         println!("Test: join_result received: {:?}", msg);  // sdp is supposed to be None for this test 
@@ -592,15 +592,15 @@ mod tests {
         let mut client = WebRTCClient::new();
         client.connect(addr_str.as_str()).await.expect("Failed to connect");
 
-        let (msg, client) = wait_for_message(client, WELCOME, 2).await;
+        let (msg, mut client) = wait_for_message(client, WELCOME, 2).await;
         let client_id = msg.client_id;
         println!("Test: client_id received: {}", client_id);
 
-        let client = client.create_session().await.expect("Failed to create session");
+        client.create_session().await.expect("Failed to create session");
         let (_, client) = wait_for_message(client, CREATE_SESSION, 5).await;
 
         let client = client.list_sessions().await.expect("Failed to list sessions");
-        let (session_list_msg, client) = wait_for_message(client, LIST_SESSIONS, 5).await;
+        let (session_list_msg, mut client) = wait_for_message(client, LIST_SESSIONS, 5).await;
         let session_list = payload_str_to_vector_str(session_list_msg.session_id.clone().as_str());
         println!("Test: session_list received: {:?}", session_list);
 
@@ -608,7 +608,7 @@ mod tests {
         println!("Test: session_id received: {}", session_id);
 
         let session_id = session_list[0].clone();
-        let client = client.join_session(&session_id).await.expect("Failed to join session");
+        client.join_session(&session_id).await.expect("Failed to join session");
         let (join_sdp, client) = wait_for_message(client, JOIN_SESSION, 5).await;
         println!("Test: join_result received: {:?}", join_sdp.sdp); // sdp is supposed to be None for this test
 
@@ -631,15 +631,15 @@ mod tests {
         let mut client = WebRTCClient::new();
         client.connect(addr_str.as_str()).await.expect("Failed to connect");
 
-        let (msg, client) = wait_for_message(client, WELCOME, 2).await;
+        let (msg, mut client) = wait_for_message(client, WELCOME, 2).await;
         let client_id = msg.client_id;
         println!("Test: client_id received: {}", client_id);
 
-        let client = client.create_session().await.expect("Failed to create session");
+        client.create_session().await.expect("Failed to create session");
         let (_, client) = wait_for_message(client, CREATE_SESSION, 5).await;
 
         let client = client.list_sessions().await.expect("Failed to list sessions");
-        let (session_list_msg, client) = wait_for_message(client, LIST_SESSIONS, 5).await;
+        let (session_list_msg, mut  client) = wait_for_message(client, LIST_SESSIONS, 5).await;
         let session_list = payload_str_to_vector_str(&session_list_msg.session_id);
         println!("Test: session_list received: {:?}", session_list);
 
@@ -647,7 +647,7 @@ mod tests {
         println!("Test: session_id received: {}", session_id);
 
         let session_id = session_list[0].clone();
-        let client = client.join_session(&session_id).await.expect("Failed to join session");
+        client.join_session(&session_id).await.expect("Failed to join session");
         let (join_sdp, client) = wait_for_message(client, JOIN_SESSION, 5).await;
         println!("Test: join_result received: {:?}", join_sdp.sdp); // sdp is supposed to be None for this test
 
@@ -681,12 +681,12 @@ mod tests {
         let mut client = WebRTCClient::new();
         client.connect(addr_str.as_str()).await.expect("Failed to connect");
 
-        let (msg, client) = wait_for_message(client, WELCOME, 2).await;
+        let (msg, mut client) = wait_for_message(client, WELCOME, 2).await;
         let client_id = msg.client_id;
         println!("Test: client_id received: {}", client_id);
 
         // create session
-        let client = client.create_session().await.expect("Failed to create session");
+        client.create_session().await.expect("Failed to create session");
         let (msg, client) = wait_for_message(client, CREATE_SESSION, 5).await;
         let session_id = msg.session_id;
         println!("Test: session_id created: {}", session_id);
@@ -709,9 +709,9 @@ mod tests {
         let mut publisher = WebRTCClient::new();
         publisher.connect(addr_str.as_str()).await.expect("Failed to connect");
 
-        let (_, publisher) = wait_for_message(publisher, WELCOME, 2).await;
+        let (_, mut publisher) = wait_for_message(publisher, WELCOME, 2).await;
         
-        let publisher = publisher.create_session().await.expect("Failed to create session");
+        publisher.create_session().await.expect("Failed to create session");
         let (msg, publisher) = wait_for_message(publisher, CREATE_SESSION, 5).await;
 
         let session_id = msg.session_id.clone();
@@ -726,11 +726,11 @@ mod tests {
         let mut subscriber = WebRTCClient::new();
         subscriber.connect(addr_str.as_str()).await.expect("Failed to connect");
 
-        let (_, subscriber) = wait_for_message(subscriber, WELCOME, 2).await;
+        let (_, mut subscriber) = wait_for_message(subscriber, WELCOME, 2).await;
         // let client_id = msg.client_id;
         // println!("Test: client_id received: {}", client_id);
         
-        let subscriber = subscriber.join_session(&session_id).await.expect("Failed to join session");
+        subscriber.join_session(&session_id).await.expect("Failed to join session");
         let (join_result, subscriber) = wait_for_message(subscriber, JOIN_SESSION, 5).await;
         // println!("Test: join_result received: {:?}", join_result.sdp); // sdp is supposed to be None for this test
         
