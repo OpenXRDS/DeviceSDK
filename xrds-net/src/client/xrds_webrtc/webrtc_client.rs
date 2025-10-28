@@ -1,5 +1,4 @@
-use std::io::{Read, BufRead};
-use std::io::BufReader;
+use std::io::{Read, BufRead, BufReader};
 use std::path::Path;
 use anyhow::Result as AnyResult;
 use cpal::traits::StreamTrait;
@@ -45,6 +44,7 @@ use webrtc::data_channel::data_channel_init::RTCDataChannelInit;
 use cpal::Stream;
 use std::future::Future;
 use std::pin::Pin;
+use tokio::time::timeout;
 
 use crate::common::data_structure::WebRTCMessage;
 use crate::common::data_structure::{CREATE_SESSION, LIST_SESSIONS, JOIN_SESSION, 
@@ -148,6 +148,8 @@ pub struct WebRTCClient {
 
     read_flag: bool,
     debug_file_path: Option<String>,
+    debug_video_file_path: Option<String>,
+    debug_audio_file_path: Option<String>,
 
     // fields for sending video stream from webcam
     video_stream_shutdown: Option<std::sync::Arc<AtomicBool>>,
@@ -170,9 +172,6 @@ pub struct WebRTCClient {
     audio_track_callback: Option<AudioTrackCallback>,
     media_track_callback: Option<MediaTrackCallback>,
     
-    // Track collection for combined handler
-    received_video_track: Option<Arc<TrackRemote>>,
-    received_audio_track: Option<Arc<TrackRemote>>,
 }
 
 #[allow(dead_code)]
@@ -199,6 +198,8 @@ impl WebRTCClient {
 
             read_flag: false,
             debug_file_path: None,
+            debug_video_file_path: None,
+            debug_audio_file_path: None,
 
             video_stream_shutdown: None,
             video_stream_handles: Vec::new(),
@@ -218,11 +219,17 @@ impl WebRTCClient {
             video_track_callback: None,
             audio_track_callback: None,
             media_track_callback: None,
-            received_video_track: None,
-            received_audio_track: None,
         }
     }
     
+    pub fn get_debug_video_file_path(&self) -> Option<&String> {
+        self.debug_video_file_path.as_ref()
+    }
+
+    pub fn get_debug_audio_file_path(&self) -> Option<&String> {
+        self.debug_audio_file_path.as_ref()
+    }
+
     pub fn get_client_id(&self) -> Option<&String> {
         self.client_id.as_ref()
     }
@@ -387,7 +394,10 @@ impl WebRTCClient {
         None
     }
 
-    pub async fn create_session(self) -> Result<Self, Box<dyn Error>> {
+    /**
+     * Publishes a create_session request to the signaling server.
+     */
+    pub async fn create_session(&mut self) -> Result<(), String> {
         let client_id = self.client_id.as_ref().ok_or("client_id not set")?;
         
         let msg = WebRTCMessage {
@@ -404,12 +414,12 @@ impl WebRTCClient {
 
         if let Some(write) = &self.write {
             let mut write_guard = write.lock().await;
-            write_guard.send(Message::Text(msg.into())).await?;
+            write_guard.send(Message::Text(msg.into())).await.map_err(|e| e.to_string())?;
         } else {
             return Err("WebSocket write stream not initialized".into());
         }
 
-        Ok(self)
+        Ok(())
     }
 
     pub async fn send_message(&mut self, message: &str) -> Result<(), Box<dyn Error>> {
@@ -492,7 +502,7 @@ impl WebRTCClient {
         Ok(self)
     }
 
-    pub async fn join_session(mut self, session_id: &str) -> Result<Self, Box<dyn Error>> {
+    pub async fn join_session(&mut self, session_id: &str) -> Result<(), Box<dyn Error>> {
         if self.client_id.is_none() {
             return Err("Client ID is not set".into());
         }
@@ -521,7 +531,7 @@ impl WebRTCClient {
             return Err("WebSocket write stream not initialized".into());
         }
 
-        Ok(self)
+        Ok(())
     }
 
     pub async fn leave_session(self, session_id: &str) -> Result<Self, Box<dyn Error>> {
@@ -1101,6 +1111,11 @@ impl WebRTCClient {
             None => return Err("PeerConnection is not set".to_string()),
         };
 
+        // 🔥 remote description이 설정되었는지 확인
+        if pc.remote_description().await.is_none() {
+            return Err("Remote description must be set before handling ICE candidates".to_string());
+        }
+
         let ice_candidates_str = msg.ice_candidates.clone().ok_or("ICE candidates not set")?;
         let ice_candidates: Vec<RTCIceCandidate> = serde_json::from_str(&ice_candidates_str).map_err(|e| e.to_string())?;
 
@@ -1282,6 +1297,8 @@ impl WebRTCClient {
 
             let video_file = format!("{}/{}.h264", _debug_file_path, _file_name_by_time);
             let audio_file = format!("{}/{}.opus", _debug_file_path, _file_name_by_time);
+            self.debug_video_file_path = Some(video_file.clone());
+            self.debug_audio_file_path = Some(audio_file.clone());
             
             println!("📹 Default video output: {}", video_file);
             println!("🎵 Default audio output: {}", audio_file);
@@ -1304,10 +1321,8 @@ impl WebRTCClient {
         // Clone handlers for use in closure
         let video_handler = self.video_track_handler.clone();
         let audio_handler = self.audio_track_handler.clone();
-        let media_handler = self.media_track_handler.clone();
         let video_callback = self.video_track_callback.clone();
         let audio_callback = self.audio_track_callback.clone();
-        let media_callback = self.media_track_callback.clone();
 
         let pc_clone = Arc::clone(&pc);
         let h264_writer_clone = h264_writer.clone();
@@ -1321,10 +1336,8 @@ impl WebRTCClient {
             // Clone handlers for this track
             let video_handler = video_handler.clone();
             let audio_handler = audio_handler.clone();
-            let media_handler = media_handler.clone();
             let video_callback = video_callback.clone();
             let audio_callback = audio_callback.clone();
-            let media_callback = media_callback.clone();
 
             let codec = track.codec();
             let mime_type = codec.capability.mime_type.to_lowercase();
@@ -1388,12 +1401,7 @@ impl WebRTCClient {
                         println!("❓ Received unknown track type: {} (SSRC: {})", mime_type, media_ssrc);
                     }
                 }
-
-                // Handle combined media callback
-                if let Some(_media_cb) = media_callback {
-                    // TODO: Combined Media Callback needs more handling than just spawning
-                }
-            })  // end of box::pin(async move {
+            })  // end of box::pin 
         }));
 
         Ok(())
@@ -1608,6 +1616,23 @@ impl WebRTCClient {
         self.data_channel = Some(data_channel);
         Ok(())
     }
+    
+    // FIXED: Internal helper for waiting for messages - works with mutable reference
+    async fn wait_for_message_internal(&mut self, msg_type: &str, timeout_secs: u64) -> Result<WebRTCMessage, String> {
+        timeout(Duration::from_secs(timeout_secs), async {
+            loop {
+                if let Some(msg) = self.receive_message().await {
+                    if msg.message_type == msg_type {
+                        return msg;
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await
+        .map_err(|_| format!("Timeout waiting for {}", msg_type))
+    }
+
     /**
      * END OF CONNECTION SETUP METHODS
      * **********************************************************************************************************
@@ -2015,7 +2040,7 @@ impl WebRTCClient {
 
         Ok(())
     }
-}
+}   // end of impl WebRTCClient
 
 impl Drop for WebRTCClient {
     fn drop(&mut self) {
