@@ -75,7 +75,9 @@ int net_init();
 
 int net_cleanup();
 
-ClientHandle client_create(int protocol);
+int net_cleanup_with_timeout(int timeout_seconds);
+
+ClientHandle client_create(int protocol_val);
 
 int client_destroy(ClientHandle handle);
 
@@ -98,8 +100,6 @@ int client_set_header(ClientHandle handle, const char *key, const char *value);
 int client_set_timeout(ClientHandle handle, int timeout_seconds);
 
 WebRTCHandle webrtc_client_create();
-
-int webrtc_client_destroy(WebRTCHandle handle);
 
 int webrtc_connect_to_signaling_server(WebRTCHandle handle, const char *server_url);
 

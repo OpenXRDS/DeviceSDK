@@ -2,13 +2,20 @@ use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_int, c_void};
 use std::ptr;
 use std::sync::{Arc, OnceLock};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::collections::HashMap;
+use std::time::Duration;
 use tokio::sync::Mutex;
+use tokio::time::timeout;
 
 use xrds_net::client::{Client, ClientBuilder};
 use xrds_net::client::webrtc_client::{WebRTCClient, StreamSource};
 use xrds_net::common::enums::PROTOCOLS;
 use xrds_net::common::data_structure::NetResponse;
+
+// Add shutdown flag and operation counter
+static SHUTDOWN_FLAG: AtomicBool = AtomicBool::new(false);
+static ACTIVE_OPERATIONS: AtomicUsize = AtomicUsize::new(0);
 
 // FFI-safe handle types
 pub type ClientHandle = *mut c_void;
@@ -31,11 +38,10 @@ fn get_runtime() -> &'static tokio::runtime::Runtime {
         tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime")
     })
 }
-
 // Internal client storage - separate for each type
-static mut NET_CLIENT_STORAGE: Option<Arc<Mutex<HashMap<usize, ClientWrapper>>>> = None;
-static mut WEBRTC_CLIENT_STORAGE: Option<Arc<Mutex<HashMap<usize, WebRTCClient>>>> = None;
-static mut NEXT_HANDLE_ID: usize = 1;
+static mut NET_CLIENT_STORAGE: OnceLock<Arc<Mutex<HashMap<usize, ClientWrapper>>>> = OnceLock::new();
+static mut WEBRTC_CLIENT_STORAGE: OnceLock<Arc<Mutex<HashMap<usize, WebRTCClient>>>> = OnceLock::new();
+static NEXT_HANDLE_ID: AtomicUsize = AtomicUsize::new(1);
 
 // ============================================================================
 // INITIALIZATION AND CLEANUP
@@ -44,28 +50,82 @@ static mut NEXT_HANDLE_ID: usize = 1;
 #[no_mangle]
 pub extern "C" fn net_init() -> c_int {
     unsafe {
-        if NET_CLIENT_STORAGE.is_none() {
-            NET_CLIENT_STORAGE = Some(Arc::new(Mutex::new(HashMap::new())));
-        }
-        
-        if WEBRTC_CLIENT_STORAGE.is_none() {
-            WEBRTC_CLIENT_STORAGE = Some(Arc::new(Mutex::new(HashMap::new())));
-        }
-        
-        // Initialize the runtime
-        let _ = get_runtime();
-        
-        NET_SUCCESS
+            // Reset shutdown flag
+            SHUTDOWN_FLAG.store(false, Ordering::Release);
+            
+            if NET_CLIENT_STORAGE.get().is_none() {
+                NET_CLIENT_STORAGE = OnceLock::new();
+            }
+            
+            if WEBRTC_CLIENT_STORAGE.get().is_none() {
+                WEBRTC_CLIENT_STORAGE = OnceLock::new();
+            }
+            
+            // Initialize the runtime
+            let _ = get_runtime();
+            
+            let _handle_id = NEXT_HANDLE_ID.fetch_add(1, Ordering::AcqRel);
+            NET_SUCCESS
     }
 }
 
 #[no_mangle]
 pub extern "C" fn net_cleanup() -> c_int {
-    unsafe {
-        NET_CLIENT_STORAGE = None;
-        WEBRTC_CLIENT_STORAGE = None;
-        NET_SUCCESS
+    net_cleanup_with_timeout(30) // 30 second default timeout
+}
+
+#[no_mangle]
+pub extern "C" fn net_cleanup_with_timeout(timeout_seconds: c_int) -> c_int {
+    // Step 1: Set shutdown flag to prevent new operations
+    SHUTDOWN_FLAG.store(true, Ordering::Release);
+    
+    // Step 2: Wait for active operations to complete
+    let timeout_duration = Duration::from_secs(timeout_seconds as u64);
+    let start_time = std::time::Instant::now();
+    
+    while ACTIVE_OPERATIONS.load(Ordering::Acquire) > 0 {
+        if start_time.elapsed() > timeout_duration {
+            // Force shutdown after timeout
+            break;
+        }
+        
+        // Brief sleep to avoid busy waiting
+        // Step 3: Safely drop storage
+        unsafe {
+            if let Some(storage) = NET_CLIENT_STORAGE.get() {
+                // Use timeout to avoid hanging on mutex locks
+                if let Ok(runtime) = std::panic::catch_unwind(|| get_runtime()) {
+                    let _ = runtime.block_on(async {
+                        match timeout(Duration::from_secs(5), storage.lock()).await {
+                            Ok(mut clients) => {
+                                clients.clear();
+                            }
+                            Err(_) => {
+                                // Timeout - force cleanup
+                                eprintln!("Warning: Timeout during client storage cleanup");
+                            }
+                        }
+                    });
+                }
+            }
+            
+            if let Some(storage) = WEBRTC_CLIENT_STORAGE.get() {
+                if let Ok(runtime) = std::panic::catch_unwind(|| get_runtime()) {
+                    let _ = runtime.block_on(async {
+                        match timeout(Duration::from_secs(5), storage.lock()).await {
+                            Ok(mut clients) => {
+                                clients.clear();
+                            }
+                            Err(_) => {
+                                eprintln!("Warning: Timeout during WebRTC storage cleanup");
+                            }
+                        }
+                    });
+                }
+            }
+        }
     }
+    NET_SUCCESS
 }
 
 // ============================================================================
@@ -73,31 +133,31 @@ pub extern "C" fn net_cleanup() -> c_int {
 // ============================================================================
 
 #[no_mangle]
-pub extern "C" fn client_create(protocol: c_int) -> ClientHandle {
+pub extern "C" fn client_create(protocol_val: c_int) -> ClientHandle {
     unsafe {
-        if NET_CLIENT_STORAGE.is_none() {
+        // Initialize storage if needed
+        let storage = NET_CLIENT_STORAGE.get_or_init(|| {
+            Arc::new(Mutex::new(HashMap::new()))
+        });
+        
+        let client_builder = ClientBuilder::new();
+        let mut protocol_result = match_protocol_enum(protocol_val);
+        if protocol_result.is_none() {
             return ptr::null_mut();
         }
-        let client_builder = ClientBuilder::new();
-        let protocol = match_protocol_enum(protocol).unwrap();
+        let protocol = protocol_result.unwrap();
         if protocol == PROTOCOLS::WEBRTC {
             return ptr::null_mut(); // Use webrtc_client_create instead
         }
         let client = client_builder.set_protocol(protocol).build();
         let wrapper = ClientWrapper::new(client);
-        let handle_id = NEXT_HANDLE_ID;
-        NEXT_HANDLE_ID += 1;
+        let handle_id = NEXT_HANDLE_ID.fetch_add(1, Ordering::AcqRel);
         
-        if let Some(ref storage) = NET_CLIENT_STORAGE {
-            get_runtime().block_on(async {
-                let mut clients = storage.lock().await;
-                clients.insert(handle_id, wrapper);
-            });
-            
-            handle_id as ClientHandle
-        } else {
-            ptr::null_mut()
-        }
+        get_runtime().block_on(async {
+            let mut clients = storage.lock().await;
+            clients.insert(handle_id, wrapper);
+        });
+        handle_id as ClientHandle
     }
 }
 
@@ -108,7 +168,7 @@ pub extern "C" fn client_destroy(handle: ClientHandle) -> c_int {
     }
     
     unsafe {
-        if let Some(ref storage) = NET_CLIENT_STORAGE {
+        if let Some(storage) = NET_CLIENT_STORAGE.get() {
             let handle_id = handle as usize;
             get_runtime().block_on(async {
                 let mut clients = storage.lock().await;
@@ -131,7 +191,7 @@ pub extern "C" fn client_request(
     }
     
     unsafe {
-        if let Some(ref storage) = NET_CLIENT_STORAGE {
+        if let Some(ref storage) = NET_CLIENT_STORAGE.get() {
             let handle_id = handle as usize;
             
             get_runtime().block_on(async {
@@ -171,7 +231,7 @@ pub extern "C" fn client_connect(
             Err(_) => return NET_ERROR_INVALID_PARAM,
         };
         
-        if let Some(ref storage) = NET_CLIENT_STORAGE {
+        if let Some(ref storage) = NET_CLIENT_STORAGE.get() {
             let handle_id = handle as usize;
             
             get_runtime().block_on(async {
@@ -210,7 +270,7 @@ pub extern "C" fn client_set_user(
             Err(_) => return NET_ERROR_INVALID_PARAM,
         };
         
-        if let Some(ref storage) = NET_CLIENT_STORAGE {
+        if let Some(ref storage) = NET_CLIENT_STORAGE.get() {
             let handle_id = handle as usize;
             
             get_runtime().block_on(async {
@@ -243,7 +303,7 @@ pub extern "C" fn client_set_password(
             Err(_) => return NET_ERROR_INVALID_PARAM,
         };
         
-        if let Some(ref storage) = NET_CLIENT_STORAGE {
+        if let Some(ref storage) = NET_CLIENT_STORAGE.get() {
             let handle_id = handle as usize;
             
             get_runtime().block_on(async {
@@ -276,7 +336,7 @@ pub extern "C" fn client_set_url(
             Err(_) => return NET_ERROR_INVALID_PARAM,
         };
         
-        if let Some(ref storage) = NET_CLIENT_STORAGE {
+        if let Some(ref storage) = NET_CLIENT_STORAGE.get() {
             let handle_id = handle as usize;
             
             get_runtime().block_on(async {
@@ -309,7 +369,7 @@ pub extern "C" fn client_set_method(
             Err(_) => return NET_ERROR_INVALID_PARAM,
         };
         
-        if let Some(ref storage) = NET_CLIENT_STORAGE {
+        if let Some(ref storage) = NET_CLIENT_STORAGE.get() {
             let handle_id = handle as usize;
             
             get_runtime().block_on(async {
@@ -342,7 +402,7 @@ pub extern "C" fn client_set_req_body(
             Err(_) => return NET_ERROR_INVALID_PARAM,
         };
         
-        if let Some(ref storage) = NET_CLIENT_STORAGE {
+        if let Some(ref storage) = NET_CLIENT_STORAGE.get() {
             let handle_id = handle as usize;
             
             get_runtime().block_on(async {
@@ -381,7 +441,7 @@ pub extern "C" fn client_set_header(
             Err(_) => return NET_ERROR_INVALID_PARAM,
         };
         
-        if let Some(ref storage) = NET_CLIENT_STORAGE {
+        if let Some(ref storage) = NET_CLIENT_STORAGE.get() {
             let handle_id = handle as usize;
             
             get_runtime().block_on(async {
@@ -409,7 +469,7 @@ pub extern "C" fn client_set_timeout(
     }
     
     unsafe {
-        if let Some(ref storage) = NET_CLIENT_STORAGE {
+        if let Some(ref storage) = NET_CLIENT_STORAGE.get() {
             let handle_id = handle as usize;
             
             get_runtime().block_on(async {
@@ -435,35 +495,29 @@ pub extern "C" fn client_set_timeout(
 #[no_mangle]
 pub extern "C" fn webrtc_client_create() -> WebRTCHandle {
     unsafe {
-        if WEBRTC_CLIENT_STORAGE.is_none() {
-            return ptr::null_mut();
-        }
+        // Initialize storage if needed
+        let storage = WEBRTC_CLIENT_STORAGE.get_or_init(|| {
+            Arc::new(Mutex::new(HashMap::new()))
+        });
         
         let client = WebRTCClient::new();
-        let handle_id = NEXT_HANDLE_ID;
-        NEXT_HANDLE_ID += 1;
+        let handle_id = NEXT_HANDLE_ID.fetch_add(1, Ordering::AcqRel);
         
-        if let Some(ref storage) = WEBRTC_CLIENT_STORAGE {
-            get_runtime().block_on(async {
-                let mut clients = storage.lock().await;
-                clients.insert(handle_id, client);
-            });
-            
-            handle_id as WebRTCHandle
-        } else {
-            ptr::null_mut()
-        }
+        get_runtime().block_on(async {
+            let mut clients = storage.lock().await;
+            clients.insert(handle_id, client);
+        });
+        
+        handle_id as WebRTCHandle
     }
 }
-
-#[no_mangle]
 pub extern "C" fn webrtc_client_destroy(handle: WebRTCHandle) -> c_int {
     if handle.is_null() {
         return NET_ERROR_INVALID_HANDLE;
     }
     
     unsafe {
-        if let Some(ref storage) = WEBRTC_CLIENT_STORAGE {
+        if let Some(ref storage) = WEBRTC_CLIENT_STORAGE.get() {
             let handle_id = handle as usize;
             get_runtime().block_on(async {
                 let mut clients = storage.lock().await;
@@ -491,7 +545,7 @@ pub extern "C" fn webrtc_connect_to_signaling_server(
             Err(_) => return NET_ERROR_INVALID_PARAM,
         };
         
-        if let Some(ref storage) = WEBRTC_CLIENT_STORAGE {
+        if let Some(ref storage) = WEBRTC_CLIENT_STORAGE.get() {
             let handle_id = handle as usize;
             
             get_runtime().block_on(async {
@@ -522,7 +576,7 @@ pub extern "C" fn webrtc_create_session(
     }
     
     unsafe {
-        if let Some(ref storage) = WEBRTC_CLIENT_STORAGE {
+        if let Some(ref storage) = WEBRTC_CLIENT_STORAGE.get() {
             let handle_id = handle as usize;
             
             get_runtime().block_on(async {
@@ -530,7 +584,10 @@ pub extern "C" fn webrtc_create_session(
                 if let Some(client) = clients.get_mut(&handle_id) {
                     match client.create_session().await {
                         Ok(session_id) => {
-                            let c_session_id = CString::new(session_id).unwrap();
+                            let c_session_id = match CString::new(session_id) {
+                                Ok(cstr) => cstr,
+                                Err(_) => return NET_ERROR_SESSION_FAILED, // Contains null bytes
+                            };
                             let session_bytes = c_session_id.as_bytes_with_nul();
                             
                             if session_bytes.len() <= session_id_len as usize {
@@ -571,7 +628,7 @@ pub extern "C" fn webrtc_join_session(
             Err(_) => return NET_ERROR_INVALID_PARAM,
         };
         
-        if let Some(ref storage) = WEBRTC_CLIENT_STORAGE {
+        if let Some(ref storage) = WEBRTC_CLIENT_STORAGE.get() {
             let handle_id = handle as usize;
             
             get_runtime().block_on(async {
@@ -606,7 +663,7 @@ pub extern "C" fn webrtc_publish_session(
             Err(_) => return NET_ERROR_INVALID_PARAM,
         };
         
-        if let Some(ref storage) = WEBRTC_CLIENT_STORAGE {
+        if let Some(ref storage) = WEBRTC_CLIENT_STORAGE.get() {
             let handle_id = handle as usize;
             
             get_runtime().block_on(async {
@@ -636,7 +693,7 @@ pub extern "C" fn webrtc_start_webcam_stream(
     }
     
     unsafe {
-        if let Some(ref storage) = WEBRTC_CLIENT_STORAGE {
+        if let Some(ref storage) = WEBRTC_CLIENT_STORAGE.get() {
             let handle_id = handle as usize;
             
             get_runtime().block_on(async {
@@ -672,7 +729,7 @@ pub extern "C" fn webrtc_start_file_stream(
             Err(_) => return NET_ERROR_INVALID_PARAM,
         };
         
-        if let Some(ref storage) = WEBRTC_CLIENT_STORAGE {
+        if let Some(ref storage) = WEBRTC_CLIENT_STORAGE.get() {
             let handle_id = handle as usize;
             
             get_runtime().block_on(async {
@@ -700,7 +757,7 @@ pub extern "C" fn webrtc_stop_stream(handle: WebRTCHandle) -> c_int {
     }
     
     unsafe {
-        if let Some(ref storage) = WEBRTC_CLIENT_STORAGE {
+        if let Some(ref storage) = WEBRTC_CLIENT_STORAGE.get() {
             let handle_id = handle as usize;
             
             get_runtime().block_on(async {
@@ -730,7 +787,7 @@ pub extern "C" fn webrtc_wait_for_subscriber(
     }
     
     unsafe {
-        if let Some(ref storage) = WEBRTC_CLIENT_STORAGE {
+        if let Some(ref storage) = WEBRTC_CLIENT_STORAGE.get() {
             let handle_id = handle as usize;
             
             get_runtime().block_on(async {
@@ -1049,7 +1106,7 @@ pub extern "C" fn client_get_response(handle: ClientHandle) -> CNetResponse {
     }
     
     unsafe {
-        if let Some(ref storage) = NET_CLIENT_STORAGE {
+        if let Some(storage) = NET_CLIENT_STORAGE.get() {
             let handle_id = handle as usize;
             
             get_runtime().block_on(async {
@@ -1168,6 +1225,5 @@ pub extern "C" fn client_copy_response_error(
         }
     }
 }
-
 // Update the rest of your existing functions (client_set_req_body, client_set_header, etc.)
 // to work with ClientWrapper instead of Client directly...
