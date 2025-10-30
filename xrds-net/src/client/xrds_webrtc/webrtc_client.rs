@@ -146,7 +146,6 @@ pub struct WebRTCClient {
     ice_candidates: Option<Arc<Mutex<Vec<RTCIceCandidate>>>>,
     rtp_sender: Option<Arc<RTCRtpSender>>,
 
-    read_flag: bool,
     debug_file_path: Option<String>,
     debug_video_file_path: Option<String>,
     debug_audio_file_path: Option<String>,
@@ -171,7 +170,6 @@ pub struct WebRTCClient {
     video_track_callback: Option<VideoTrackCallback>,
     audio_track_callback: Option<AudioTrackCallback>,
     media_track_callback: Option<MediaTrackCallback>,
-    
 }
 
 #[allow(dead_code)]
@@ -196,7 +194,6 @@ impl WebRTCClient {
             ice_candidates: None,
             rtp_sender: None,
 
-            read_flag: false,
             debug_file_path: None,
             debug_video_file_path: None,
             debug_audio_file_path: None,
@@ -240,6 +237,10 @@ impl WebRTCClient {
 
     pub fn get_answer(&self) -> Option<&RTCSessionDescription> {
         self.answer.as_ref()
+    }
+
+    pub fn get_offer(&self) -> Option<&RTCSessionDescription> {
+        self.offer.as_ref()
     }
 
     /**
@@ -290,10 +291,17 @@ impl WebRTCClient {
         self.media_track_callback = None;
     }
 
+    pub async fn connect_to_signaling_server(&mut self, addr: &str) -> Result<(), Box<dyn Error>> {
+        self.connect(addr).await?;
+
+        self.wait_for_message_internal(WELCOME, 5).await?;
+        Ok(())
+    }
+
     /**
      * Connect to the WebRTC server using WebSocket.
      */
-    pub async fn connect(&mut self, addr: &str) -> Result<(), Box<dyn Error>> {
+    async fn connect(&mut self, addr: &str) -> Result<(), Box<dyn Error>> {
         let (ws_stream, _) = connect_async(addr).await?;
         println!("Connected to {}", addr);
 
@@ -334,50 +342,10 @@ impl WebRTCClient {
     }
 
     /**
-     * This function is supposed to run in a separate thread.
-     * It will receive messages from the server and process them.
-     */
-    pub async fn run(&mut self) {
-        self.read_flag = true;
-        while self.read_flag {
-            self.handle_incoming_message().await;
-        }
-    }
- 
-    /**
-     * These messages are from peer connection via Signaling server.
-     */
-    async fn handle_incoming_message(&mut self) {
-        if let Some(ref mut rx) = self.incoming_rx {
-            if let Some(msg) = rx.recv().await {
-
-                if msg.message_type == WELCOME {
-                    self.client_id = Some(msg.client_id.clone());
-                } else if msg.message_type == CREATE_SESSION {  // 
-                    self.session_id = msg.session_id.clone().into();
-                } else if msg.message_type == OFFER {
-                    self.handle_offer(msg.sdp.unwrap()).await.unwrap();
-                } else if msg.message_type == ANSWER {
-                    self.handle_answer(msg).await.unwrap();
-                    self.send_ice_candidates(false).await.unwrap();
-                } else if msg.message_type == ICE_CANDIDATE {
-                    self.handle_ice_candidate(msg).await.unwrap();
-                    self.send_ice_candidates(true).await.unwrap();
-                } else if msg.message_type == ICE_CANDIDATE_ACK {
-                    self.handle_ice_candidate(msg).await.unwrap();
-                }
-                else {
-                    println!("Unhandled message type: {}", msg.message_type);
-                }
-            }
-        }
-    }
-
-    /**
      * This function is designed for step by step unit testing.
      * For actual usage, use run_receive_loop instead.
      */
-    pub async fn receive_message(&mut self) -> Option<WebRTCMessage> {
+    async fn receive_message(&mut self) -> Option<WebRTCMessage> {
         if let Some(ref mut rx) = self.incoming_rx {
             if let Some(msg) = rx.recv().await {
                 let msg_clone = msg.clone();
@@ -397,7 +365,7 @@ impl WebRTCClient {
     /**
      * Publishes a create_session request to the signaling server.
      */
-    pub async fn create_session(&mut self) -> Result<(), String> {
+    pub async fn create_session(&mut self) -> Result<String, String> {
         let client_id = self.client_id.as_ref().ok_or("client_id not set")?;
         
         let msg = WebRTCMessage {
@@ -419,9 +387,15 @@ impl WebRTCClient {
             return Err("WebSocket write stream not initialized".into());
         }
 
-        Ok(())
+        let response = self.wait_for_message_internal(CREATE_SESSION, 5).await?;
+        self.session_id = Some(response.session_id.clone());
+        println!("✅ Session created: {}", response.session_id.clone());
+        Ok(response.session_id)
     }
 
+    /**
+     * Sends a generic text message to the signaling server via websocket.
+     */
     pub async fn send_message(&mut self, message: &str) -> Result<(), Box<dyn Error>> {
         if let Some(write) = &self.write {
             let mut write_guard = write.lock().await;
@@ -433,11 +407,13 @@ impl WebRTCClient {
         Ok(())
     }
 
+    /**
+     * Close the WebRTC connection and cleanup.
+     */
     pub async fn close_connection(&mut self) -> Result<(), Box<dyn Error>> {
         if let Some(write) = &self.write {
             let mut write_guard = write.lock().await;
             write_guard.send(Message::Close(None)).await?;
-            
         } else {
             return Err("WebSocket write stream not initialized".into());
         }
@@ -450,7 +426,11 @@ impl WebRTCClient {
         Ok(())
     }
 
-    pub async fn list_sessions(self) -> Result<Self, Box<dyn Error>> {
+    /**
+     * List existing sessions from the signaling server.
+     * session IDs are returned in the session_id field of the response message.
+     */
+    pub async fn list_sessions(&mut self) -> Result<WebRTCMessage, String> {
         let client_id = self.client_id.as_ref().ok_or("client_id not set")?;
 
         let msg = WebRTCMessage {
@@ -467,15 +447,20 @@ impl WebRTCClient {
 
         if let Some(write) = &self.write {
             let mut write_guard = write.lock().await;
-            write_guard.send(Message::Text(msg.into())).await?;
+            write_guard.send(Message::Text(msg.into())).await.map_err(|e| e.to_string())?;
         } else {
             return Err("WebSocket write stream not initialized".into());
         }
 
-        Ok(self)
+        let message = self.wait_for_message_internal(LIST_SESSIONS, 5).await?;
+        Ok(message)
     }
 
-    pub async fn close_session(self, session_id: &str) -> Result<Self, Box<dyn Error>> {
+    /**
+     * Close an existing session.
+     * The session is like a chatroom where multiple clients can join.
+     */
+    pub async fn close_session(&mut self, session_id: &str) -> Result<(), String> {
         if self.client_id.is_none() {
             return Err("[close_session]Client ID is not set".into());
         }
@@ -494,15 +479,22 @@ impl WebRTCClient {
 
         if let Some(write) = &self.write {
             let mut write_guard = write.lock().await;
-            write_guard.send(Message::Text(msg.into())).await?;
+            write_guard.send(Message::Text(msg.into())).await.map_err(|e| e.to_string())?;
         } else {
             return Err("WebSocket write stream not initialized".into());
         }
 
-        Ok(self)
+        self.wait_for_message_internal(CLOSE_SESSION, 5).await?;
+
+        Ok(())
     }
 
-    pub async fn join_session(&mut self, session_id: &str) -> Result<(), Box<dyn Error>> {
+    /**
+     * Join an existing session as a subscriber.
+     * Handles the offer
+     * Creates and sends the answer to the signaling server.
+     */
+    pub async fn join_session(&mut self, session_id: &str) -> Result<(), String> {
         if self.client_id.is_none() {
             return Err("Client ID is not set".into());
         }
@@ -526,15 +518,36 @@ impl WebRTCClient {
         println!("Sending message: {}", msg);
         if let Some(write) = &self.write {
             let mut write_guard = write.lock().await;
-            write_guard.send(Message::Text(msg.into())).await?;
+            write_guard.send(Message::Text(msg.into())).await.map_err(|e| e.to_string())?;
         } else {
             return Err("WebSocket write stream not initialized".into());
         }
 
+        let join_result = self.wait_for_message_internal(JOIN_SESSION, 5).await?;
+
+        println!("Join session result received: {:?}", join_result);
+        // 🔥 내부적으로 offer 처리 및 answer 생성
+        if let Some(offer_sdp) = join_result.sdp {
+            // 🔥 Check if SDP is empty string
+            if offer_sdp.trim().is_empty() {
+                return Err("SDP offer is empty".to_string());
+            }
+            self.handle_offer(offer_sdp).await?;
+        } else {
+            return Err("No SDP offer received from publisher".to_string());
+        }
+
+        // 🔥 내부적으로 answer 전송 확인 대기
+        let _response = self.wait_for_message_internal(ANSWER, 5).await?;
+        
+        println!("✅ Joined session and sent answer: {}", session_id);
         Ok(())
     }
 
-    pub async fn leave_session(self, session_id: &str) -> Result<Self, Box<dyn Error>> {
+    /**
+     * Leave the current session.
+     */
+    pub async fn leave_session(&mut self, session_id: &str) -> Result<(), String> {
         if self.client_id.is_none() {
             return Err("Client ID is not set".into());
         }
@@ -553,15 +566,20 @@ impl WebRTCClient {
         
         if let Some(write) = &self.write {
             let mut write_guard = write.lock().await;
-            let _ = write_guard.send(Message::Text(msg.into())).await?;
+            write_guard.send(Message::Text(msg.into())).await.map_err(|e| e.to_string())?;
         } else {
             return Err("WebSocket write stream not initialized".into());
         }
 
-        Ok(self)
+        self.wait_for_message_internal(LEAVE_SESSION, 5).await?;
+
+        Ok(())
     }
 
-    pub async fn list_participants(self, session_id: &str) -> Result<Self, Box<dyn Error>> {
+    /**
+     * List participants in the given session.
+     */
+    pub async fn list_participants(&mut self, session_id: &str) -> Result<WebRTCMessage, String> {
 
         let msg = WebRTCMessage {
             client_id: "".to_string(),
@@ -579,12 +597,14 @@ impl WebRTCClient {
 
         if let Some(write) = &self.write {
             let mut write_guard = write.lock().await;
-            write_guard.send(Message::Text(msg.into())).await?;
+            write_guard.send(Message::Text(msg.into())).await.map_err(|e| e.to_string())?;
         } else {
             return Err("WebSocket write stream not initialized".into());
         }
 
-        Ok(self)
+        let participants_msg = self.wait_for_message_internal(LIST_PARTICIPANTS, 5).await?;
+
+        Ok(participants_msg)
     }
 
     /* ****************************************** */
@@ -632,14 +652,13 @@ impl WebRTCClient {
                 self.stream_from_buf_read(BufReader::new(cursor), video_track).await
             }
             None => {
-                // self.stream_from_media_stream().await.map_err(|e| e.to_string())
                 Err("No stream source provided".to_string())
             }
         }
     }
 
     /**
-     * Sned video stream from webcam device to the peer connection via video track.
+     * Send video stream from webcam device to the peer connection via video track.
      */
     async fn stream_from_webcam(
         &mut self,
@@ -778,6 +797,9 @@ impl WebRTCClient {
         Ok(())
     }
 
+    /**
+     * Stop the ongoing video and audio streams.
+     */
     pub async fn stop_stream(&mut self) -> Result<(), String> {
         // Stop video first
         if let Some(flag) = &self.video_stream_shutdown {
@@ -858,7 +880,7 @@ impl WebRTCClient {
     /**
      * Create an offer and sent it to the server.
      */
-    pub async fn publish(&mut self, session_id: &str) -> Result<(), String> {
+    pub async fn publish(&mut self, session_id: &str) -> Result<WebRTCMessage, String> {
         if self.client_id.is_none() {
             return Err("Client ID is not set".to_string());
         }
@@ -878,7 +900,6 @@ impl WebRTCClient {
 
         // // serialize msg into json
         let msg = serde_json::to_string(&msg).map_err(|e| e.to_string())?;
-        // println!("Sending message: {}", msg);
 
         if let Some(write) = &self.write {
             let mut write_guard = write.lock().await;
@@ -887,6 +908,23 @@ impl WebRTCClient {
             return Err("WebSocket write stream not initialized".into());
         }
 
+        // 🔥 내부적으로 OFFER 확인 대기
+        let response = self.wait_for_message_internal(OFFER, 5).await?;
+
+        println!("✅ Published session: {}", response.session_id.clone());
+
+        Ok(response)
+    }
+
+    pub async fn wait_for_subscriber(&mut self, timeout_secs: u64) -> Result<(), String> {
+        println!("🔄 Publisher waiting for subscriber to join...");
+        
+        let answer_msg = self.wait_for_message_internal(ANSWER, timeout_secs).await
+            .map_err(|_| format!("Timeout: No subscriber joined within {} seconds", timeout_secs))?;
+            
+        self.handle_answer(answer_msg).await?;
+        
+        println!("✅ Subscriber joined and answer processed");
         Ok(())
     }
 
@@ -950,7 +988,26 @@ impl WebRTCClient {
         Ok(())
     }
 
-    pub async fn send_ice_candidates(&mut self, is_ack: bool) -> Result<(), String> {
+    /**
+     * Exchange ICE candidates with the signaling server.
+     * This MUST be called after offer/answer exchange.
+     * is_ack: true for subscriber side, false for publisher side.
+     */
+    pub async fn exchange_ice_candidates(&mut self, is_ack: bool) -> Result<(), String> {
+        if is_ack { // subscriber side
+            let ice_msg = self.wait_for_message_internal(ICE_CANDIDATE, 15).await?;
+            self.handle_ice_candidate(ice_msg).await?;
+            self.send_ice_candidates(true).await?;
+        } else {    // publisher side
+            self.send_ice_candidates(false).await?;
+            let ice_msg = self.wait_for_message_internal(ICE_CANDIDATE_ACK, 15).await?;
+            self.handle_ice_candidate(ice_msg).await?;
+            
+        }
+        Ok(())
+    }
+
+    async fn send_ice_candidates(&mut self, is_ack: bool) -> Result<(), String> {
         let message_type = if is_ack {
             ICE_CANDIDATE_ACK.to_string()
         } else {
@@ -993,7 +1050,7 @@ impl WebRTCClient {
         Ok(())
     }
 
-    pub async fn create_offer(&mut self) -> Result<(), String> {
+    async fn create_offer(&mut self) -> Result<(), String> {
         self.setup_webrtc().await.map_err(|e| e.to_string())?;
         
         let api = match &self.api {
@@ -1067,7 +1124,7 @@ impl WebRTCClient {
     /**
      * Client works as a publisher and receives an answer from the subscriber
      */
-    pub async fn handle_answer(&mut self, msg: WebRTCMessage) -> Result<(), String> {
+    async fn handle_answer(&mut self, msg: WebRTCMessage) -> Result<(), String> {
         if self.client_id.is_none() {
             return Err("Client ID is not set".to_string());
         }
@@ -1079,16 +1136,14 @@ impl WebRTCClient {
             Some(pc) => pc,
             None => return Err("PeerConnection is not set".to_string()),
         };
-        pc.set_remote_description(self.answer.clone().unwrap()).await.map_err(|e| e.to_string())?;
-
-        Ok(())
+        return pc.set_remote_description(self.answer.clone().unwrap()).await.map_err(|e| e.to_string());
     }
 
     /**
      * Client works as a subscriber and creates an answer to the offer received from publisher
-     * 
+     * Handles the offer received from the publisher.
      */
-    pub async fn handle_offer(&mut self, offer_string: String) -> Result<(), String> {
+    async fn handle_offer(&mut self, offer_string: String) -> Result<(), String> {
         let offer = RTCSessionDescription::offer(offer_string.clone()).map_err(|e| e.to_string())?;
         
         if self.client_id.is_none() {
@@ -1101,7 +1156,7 @@ impl WebRTCClient {
         Ok(())
     }
 
-    pub async fn handle_ice_candidate(&mut self, msg: WebRTCMessage) -> Result<(), String> {
+    async fn handle_ice_candidate(&mut self, msg: WebRTCMessage) -> Result<(), String> {
         if self.client_id.is_none() {
             return Err("Client ID is not set".to_string());
         }
@@ -1143,11 +1198,12 @@ impl WebRTCClient {
         self.setup_subscriber_event_handlers(Arc::clone(&pc)).await?;
 
         // Set remote description and create answer
-        pc.set_remote_description(offer).await.map_err(|e| e.to_string())?;
+        pc.set_remote_description(offer.clone()).await.map_err(|e| e.to_string())?;
         let answer = pc.create_answer(None).await.map_err(|e| e.to_string())?;
         pc.set_local_description(answer.clone()).await.map_err(|e| e.to_string())?;
         
         self.pc = Some(pc);
+        self.offer = Some(offer);
         self.answer = Some(answer);
 
         Ok(())
@@ -1276,7 +1332,8 @@ impl WebRTCClient {
     }
 
     /**
-     * Temporarily save received media to a file for debugging
+     * Setup media track handlers for subscriber side.
+     * If no custom handlers are registered, default file saving handlers are used.
      */
     async fn setup_subscriber_media_handlers(&mut self, pc: Arc<RTCPeerConnection>) -> Result<(), String> {
         // Setup default file saving if no custom handlers are registered
@@ -1433,7 +1490,7 @@ impl WebRTCClient {
     }
 
     /**
-     * Temporarily save received audio to a file for debugging
+     * Helper function to handle video track by saving to disk.
      */
     async fn handle_subscriber_video_track(
         track: Arc<TrackRemote>,
@@ -1489,7 +1546,7 @@ impl WebRTCClient {
         Ok(())
     }
 
-    pub async fn collect_ice_candidates(&mut self, timeout_secs: u64) -> Result<Vec<RTCIceCandidate>, String> {
+    async fn collect_ice_candidates(&mut self, timeout_secs: u64) -> Result<Vec<RTCIceCandidate>, String> {
         let pc = self.pc.as_ref().ok_or("PeerConnection not set")?;
     
         let (ice_complete_tx, mut ice_complete_rx) = tokio::sync::oneshot::channel();
@@ -1617,7 +1674,9 @@ impl WebRTCClient {
         Ok(())
     }
     
-    // FIXED: Internal helper for waiting for messages - works with mutable reference
+    /**
+     * Wait for a specific message type from the signaling server within the given timeout.
+     */
     async fn wait_for_message_internal(&mut self, msg_type: &str, timeout_secs: u64) -> Result<WebRTCMessage, String> {
         timeout(Duration::from_secs(timeout_secs), async {
             loop {
@@ -1638,6 +1697,10 @@ impl WebRTCClient {
      * **********************************************************************************************************
      */
 
+     /**
+      * Send a text message over the established data channel of WebRTC connection.
+      * This message transfers to the remote peer.
+      */
     pub async fn send_data_channel_message(&self, message: &str) -> Result<(), String> {
         if let Some(dc) = &self.data_channel {
             dc.send_text(message.to_string()).await.map_err(|e| e.to_string())?;
@@ -1647,7 +1710,7 @@ impl WebRTCClient {
         }
     }
 
-    pub async fn set_debug_file_path(&mut self, path: &str) 
+    pub async fn set_debug_dir_path(&mut self, path: &str) 
         -> Result<(), String> {
         // check if path is valid
         if !Path::new(path).exists() {
