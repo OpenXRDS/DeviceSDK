@@ -2,8 +2,7 @@ mod tests {
     use crate::client::{ClientBuilder};
     use crate::client::xrds_webrtc::webrtc_client::{WebRTCClient, StreamSource};
     use crate::common::enums::{PROTOCOLS, FtpCommands};
-    use crate::common::data_structure::{FtpPayload, WebRTCMessage, 
-        CREATE_SESSION, JOIN_SESSION, OFFER, ANSWER, WELCOME, ICE_CANDIDATE, ICE_CANDIDATE_ACK};
+    use crate::common::data_structure::FtpPayload;
     use crate::common::{append_to_path};
     use crate::server::XRNetServer;
     use crate::client::media::VideoTrackHandler;
@@ -123,95 +122,9 @@ mod tests {
         println!("🎵 Custom audio processing ended: {} packets", packet_count);
         Ok(())
     }
-
-    //Helper function to setup signaling connection and wait for WELCOME message
-    async fn setup_signaling_connection(addr: &str) -> Result<WebRTCClient, String> {
-        let mut client = WebRTCClient::new();
-        client.connect(addr).await.map_err(|e| e.to_string())?;
-        
-        // WELCOME 메시지 대기
-        let msg = wait_for_message_type(&mut client, WELCOME, 5).await?;
-        println!("✅ Client ID received: {}", msg.client_id);
-        
-        Ok(client)
-    }
-
-    // Helper function to setup publisher signaling (create_session + publish(OFFER))
-    pub async fn setup_publisher_signaling(client: &mut WebRTCClient) -> Result<String, String> {
-        client.create_session().await?;
-        let msg = wait_for_message_type(client, CREATE_SESSION, 5).await?;
-        let session_id = msg.session_id.clone();
-        
-        client.publish(&session_id).await?;
-        let _msg = wait_for_message_type(client, OFFER, 5).await?;
-        
-        println!("✅ Publisher signaling completed: {}", session_id);
-        Ok(session_id)
-    }
-
-    /// Helper function to setup subscriber signaling (join_session + handle_offer)
-    pub async fn setup_subscriber_signaling(
-        client: &mut WebRTCClient, 
-        session_id: &str,
-        debug_path: Option<&str>
-    ) -> Result<(), String> {
-        if let Some(path) = debug_path {
-            client.set_debug_file_path(path).await?;
-        }
-
-        client.join_session(session_id).await.map_err(|e| e.to_string())?;
-        let join_result = wait_for_message_type(client, JOIN_SESSION, 5).await?;
-        
-        client.handle_offer(join_result.sdp.unwrap()).await?;
-        let _msg = wait_for_message_type(client, ANSWER, 5).await?;
-        
-        println!("✅ Subscriber signaling completed for session: {}", session_id);
-        Ok(())
-    }
-
-    /// 테스트용 헬퍼: P2P 핸드셰이크 완료 (Publisher 측)
-    pub async fn complete_publisher_handshake(client: &mut WebRTCClient) -> Result<(), String> {
-        client.send_ice_candidates(false).await?;
-        let ice_msg = wait_for_message_type(client, ICE_CANDIDATE_ACK, 15).await?;
-        client.handle_ice_candidate(ice_msg).await?;
-        
-        println!("✅ Publisher P2P handshake completed");
-        Ok(())
-    }
-
-    /// 테스트용 헬퍼: P2P 핸드셰이크 완료 (Subscriber 측)
-    pub async fn complete_subscriber_handshake(client: &mut WebRTCClient) -> Result<(), String> {
-        let ice_msg = wait_for_message_type(client, ICE_CANDIDATE, 15).await?;
-        client.handle_ice_candidate(ice_msg).await?;
-        
-        client.send_ice_candidates(true).await?;
-        
-        println!("✅ Subscriber P2P handshake completed");
-        Ok(())
-    }
-
-    // Helper function to wait for a specific message type with timeout
-    async fn wait_for_message_type(
-        client: &mut WebRTCClient, 
-        msg_type: &str, 
-        timeout_secs: u64
-    ) -> Result<WebRTCMessage, String> {
-        let start = std::time::Instant::now();
-        
-        while start.elapsed().as_secs() < timeout_secs {
-            if let Some(msg) = client.receive_message().await {
-                if msg.message_type == msg_type {
-                    return Ok(msg);
-                }
-            }
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
-        
-        Err(format!("Timeout waiting for {}", msg_type))
-    }
     
     /// 테스트용 헬퍼: 완전한 WebRTC 연결 설정 (시그널링 + P2P)
-    pub async fn establish_complete_webrtc_connection(
+    async fn establish_complete_webrtc_connection(
         port: u32
     ) -> Result<(WebRTCClient, WebRTCClient, String, tokio::task::JoinHandle<()>), String> {
         let server_handle = run_server(PROTOCOLS::WEBRTC, port);
@@ -220,28 +133,31 @@ mod tests {
         let addr_str = format!("ws://127.0.0.1:{}/", port);
         
         // Publisher 설정
-        let mut publisher = setup_signaling_connection(&addr_str).await?;
-        let session_id = setup_publisher_signaling(&mut publisher).await?;
+        let mut publisher = WebRTCClient::new();
+        publisher.connect_to_signaling_server(&addr_str).await.map_err(|e| e.to_string())?;
+        let session_id = publisher.create_session().await?; // session은 만들었으나 유효한 정보 아직 없음
+        let _msg = publisher.publish(&session_id).await?;   // publish로 OFFER 생성 및 전송
         
         // Subscriber 설정
-        let mut subscriber = setup_signaling_connection(&addr_str).await?;
-        setup_subscriber_signaling(&mut subscriber, &session_id, Some(DEFAULT_DEBUG_FILE_PATH)).await?;
+        let mut subscriber = WebRTCClient::new();
+        subscriber.connect_to_signaling_server(&addr_str).await.map_err(|e| e.to_string())?;
+        subscriber.set_debug_dir_path(DEFAULT_DEBUG_FILE_PATH).await?;
         
-        // 3. Publisher가 answer 처리 (필수!)
-        let answer_msg = wait_for_message_type(&mut publisher, ANSWER, 10).await?;
-        publisher.handle_answer(answer_msg).await?;
-
-        // P2P 핸드셰이크 (병렬 실행)
+        subscriber.join_session(session_id.as_str()).await.map_err(|e| e.to_string())?;
+        
+        // After publishing, Waits for ANSWER from subscriber
+        publisher.wait_for_subscriber(10).await?;
+        
         tokio::try_join!(
-            complete_publisher_handshake(&mut publisher),
-            complete_subscriber_handshake(&mut subscriber)
+            publisher.exchange_ice_candidates(false),
+            subscriber.exchange_ice_candidates(true)
         )?;
-        
+
         Ok((publisher, subscriber, session_id, server_handle))
     }
 
     /// 테스트용 헬퍼: 커스텀 Subscriber 설정으로 연결
-    pub async fn establish_webrtc_with_custom_subscriber<F>(
+    async fn establish_webrtc_with_custom_subscriber<F>(
         port: u32,
         subscriber_setup: F
     ) -> Result<(WebRTCClient, WebRTCClient, String, tokio::task::JoinHandle<()>), String>
@@ -254,24 +170,23 @@ mod tests {
         let addr_str = format!("ws://127.0.0.1:{}/", port);
         
         // Publisher 설정
-        let mut publisher = setup_signaling_connection(&addr_str).await?;
-        let session_id = setup_publisher_signaling(&mut publisher).await?;
+        let mut publisher = WebRTCClient::new();
+        publisher.connect_to_signaling_server(&addr_str).await.map_err(|e| e.to_string())?;
+        let session_id = publisher.create_session().await?;
+        let _msg = publisher.publish(&session_id).await?;
         
         // Subscriber 설정 (커스텀 핸들러 적용)
-        let mut subscriber = setup_signaling_connection(&addr_str).await?;
+        let mut subscriber = WebRTCClient::new();
+        subscriber.connect_to_signaling_server(&addr_str).await.map_err(|e| e.to_string())?;
+        subscriber.set_debug_dir_path(DEFAULT_DEBUG_FILE_PATH).await?;
         subscriber_setup(&mut subscriber); // 커스텀 설정 적용
-        setup_subscriber_signaling(&mut subscriber, &session_id, Some(DEFAULT_DEBUG_FILE_PATH)).await?;
+        subscriber.join_session(session_id.as_str()).await.map_err(|e| e.to_string())?;
         
-        // 3. Publisher가 answer 처리 (필수!)
-        let answer_msg = wait_for_message_type(&mut publisher, ANSWER, 10).await?;
-        publisher.handle_answer(answer_msg).await?;
-
-        // P2P 핸드셰이크
+        publisher.wait_for_subscriber(10).await?;
         tokio::try_join!(
-            complete_publisher_handshake(&mut publisher),
-            complete_subscriber_handshake(&mut subscriber)
+            publisher.exchange_ice_candidates(false),
+            subscriber.exchange_ice_candidates(true)
         )?;
-        
         Ok((publisher, subscriber, session_id, server_handle))
     }
 
@@ -882,41 +797,7 @@ mod tests {
     }
 
     /************************** start of WebRTC tests **************************/
-    #[tokio::test]
-    async fn test_client_webrtc_exchange_ice_candidate() {
-        init_crypto();
-
-        let port = line!() + 8000;
-        let server_handle = run_server(PROTOCOLS::WEBRTC, port);
-        sleep(Duration::from_secs(2)).await;
-        let addr_str = "ws://127.0.0.1".to_owned() + ":" + port.to_string().as_str() + "/";
-
-        // 시그널링까지 완료
-        // publisher는 offer 생성 후 대기
-        // subscriber는 offer 수신 후 answer 전달
-        let mut publisher = setup_signaling_connection(&addr_str).await.unwrap();
-        let session_id = setup_publisher_signaling(&mut publisher).await.unwrap();
-        let mut subscriber = setup_signaling_connection(&addr_str).await.unwrap();
-        setup_subscriber_signaling(&mut subscriber, &session_id, Some(DEFAULT_DEBUG_FILE_PATH)).await.unwrap();
-
-        // Publisher가 answer를 처리해야 함 (remote description 설정)
-        let answer_msg = wait_for_message_type(&mut publisher, ANSWER, 10).await.unwrap();
-        publisher.handle_answer(answer_msg).await.expect("Failed to handle answer");
-
-        // 이제 ICE 후보 교환 가능 (양쪽 모두 remote description이 설정됨)
-        publisher.send_ice_candidates(false).await.expect("Failed to send ICE candidates");
-        let ice_msg = wait_for_message_type(&mut subscriber, ICE_CANDIDATE, 10).await.unwrap();
-        println!("ICE candidates received: {:?}", ice_msg.ice_candidates);
-        
-        subscriber.handle_ice_candidate(ice_msg).await.expect("Failed to handle ICE candidate");
-        subscriber.send_ice_candidates(true).await.expect("Failed to send ICE ACK");
-        
-        let ice_ack_msg = wait_for_message_type(&mut publisher, ICE_CANDIDATE_ACK, 10).await.unwrap();
-        publisher.handle_ice_candidate(ice_ack_msg).await.expect("Failed to handle ICE ACK");
-
-        println!("✅ ICE candidate exchange completed successfully");
-        server_handle.abort();
-    }
+    
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn test_client_webrtc_send_video_file() {

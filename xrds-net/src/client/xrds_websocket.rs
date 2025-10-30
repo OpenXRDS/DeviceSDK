@@ -23,7 +23,6 @@ use websocket::message::OwnedMessage;
 
 #[derive(Clone)]
 pub struct XrdsWebsocket {
-    client_id: Option<String>,
     raw_url: Option<String>,
     ws_client: Option<Arc<Mutex<WS_Client<Box<dyn NetworkStream + Send>>>>>,
 }
@@ -31,12 +30,11 @@ pub struct XrdsWebsocket {
 impl XrdsWebsocket {
     pub fn new() -> Self {
         XrdsWebsocket {
-            client_id: None,
             raw_url: None,
             ws_client: None,        
         }
     }
-
+    
     pub fn connect(mut self, raw_url: &str) -> Result<Self, String> {
         self.raw_url = Some(raw_url.to_string());
         let client_result = websocket::ClientBuilder::new(raw_url).unwrap().connect(None);

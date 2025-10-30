@@ -73,10 +73,10 @@ pub struct Session {
     offer: Option<String>,  // SDP offer from the creator. Participants will receive this.
     answers: Option<HashMap<String, String>>,  // <client_id, SDP answer>
     publisher_ice_candidates: Option<Vec<String>>,  // json str of RTCIceCandidate
-    // publisher_pc: Option<Arc<AsyncMutex<RTCPeerConnection>>>,    // publisher's RTCPeerConnection
-    // subscriber_pcs: Option<Arc<AsyncMutex<HashMap<String, RTCPeerConnection>>>>,  // <client_id, RTCPeerConnection>
+    
 }
 
+#[allow(dead_code)]
 struct WebRTCClient {
     client_id: String,
     peer_addr: String,
@@ -389,8 +389,6 @@ impl WebRTCServer {
             offer: None,
             answers: None,
             publisher_ice_candidates: None,
-            // publisher_pc: None,
-            // subscriber_pcs: None,
         };
 
         self.sessions.lock().await.insert(session_id.clone(), session);
@@ -499,6 +497,7 @@ impl WebRTCServer {
         }
 
         session.participants.push(client_id.to_string());
+        log::debug!("Client {} joined session {}", client_id, session.session_id.clone());
 
         // if sdp exists, send it to the client
         let sdp = session.offer.clone().unwrap_or_default();
