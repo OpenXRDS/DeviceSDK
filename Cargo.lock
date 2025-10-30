@@ -7438,6 +7438,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "cbindgen",
+ "tokio",
  "xrds-audio",
  "xrds-components",
  "xrds-core",

@@ -21,3 +21,14 @@ pub mod common;
 pub mod client;
 pub mod server;
 
+#[cfg(test)]
+mod tests {
+    use crate::client::webrtc_client::WebRTCClient;
+
+
+    #[test]
+    fn test_library_exports() {
+        let _client = WebRTCClient::new();
+        
+    }
+}
