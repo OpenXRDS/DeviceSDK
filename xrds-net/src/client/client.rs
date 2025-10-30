@@ -221,8 +221,22 @@ impl Client {
         self
     }
 
+    pub fn set_user(mut self, user: &str) -> Self {
+        self.user = Some(user.to_string());
+        self
+    }
+
+    pub fn set_password(mut self, password: &str) -> Self {
+        self.password = Some(password.to_string());
+        self
+    }
+
     pub fn get_mqtt_connection(&self) -> Option<Arc<Mutex<MqttConnection>>> {
         self.mqtt_connection.clone()
+    }
+
+    pub fn get_protocol(&self) -> PROTOCOLS {
+        self.protocol.clone()
     }
 
     fn parse_headers(&self, headers: &str) -> Vec<(String, String)> {
