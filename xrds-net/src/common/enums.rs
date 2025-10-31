@@ -14,13 +14,13 @@
  limitations under the License.
  */
 
+ // TODO: Add COAPS protocol later
  #[derive(Debug, Clone, Copy, PartialEq)]
  pub enum PROTOCOLS {
     HTTP,
     HTTPS,
     FILE,
     COAP,
-    // COAPS,
     MQTT,
     FTP,
     SFTP,

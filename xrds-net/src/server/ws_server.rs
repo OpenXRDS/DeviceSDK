@@ -33,7 +33,7 @@ struct Client {
     This function echoes the received message
  */
 async fn default_handler(msg: Vec<u8>) -> Option<Vec<u8>> {
-    println!("Default Handler echoing: {:?}", msg.clone());
+    println!("Default Handler echoing: {:?}", msg);
     Some(msg)
 }
 
@@ -67,11 +67,11 @@ impl WebSocketServer {
     /**
      * Server user must provide handlers for each Owned Message type
      * msg_type can be one of the following:
-     * - Text
-     * - Binary
-     * - Close
-     * - Ping
-     * - Pong
+     * - text
+     * - binary
+     * - close
+     * - ping
+     * - pong
      * 
      * return value of handler is Option<Vec<u8>>, which will be sent back to client
      */
