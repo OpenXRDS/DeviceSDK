@@ -11,7 +11,7 @@ use tokio::time::timeout;
 use xrds_net::client::{Client, ClientBuilder};
 use xrds_net::client::webrtc_client::{WebRTCClient, StreamSource};
 use xrds_net::common::enums::PROTOCOLS;
-use xrds_net::common::data_structure::{NetResponse, WebRTCMessage};
+use xrds_net::common::data_structure::{NetResponse};
 
 // FFI-safe handle types
 pub type ClientHandle = usize;
@@ -499,10 +499,7 @@ pub extern "C" fn client_create(protocol_val: c_int) -> ClientHandle {
     }
 
     let manager = NetManager::instance();
-    match manager.create_client(protocol) {
-        Ok(handle) => handle,
-        Err(_) => 0,
-    }
+    manager.create_client(protocol).unwrap_or_default()
 }
 
 #[no_mangle]
@@ -532,10 +529,7 @@ pub extern "C" fn webrtc_client_create() -> WebRTCHandle {
     };
 
     let manager = NetManager::instance();
-    match manager.create_webrtc_client() {
-        Ok(handle) => handle,
-        Err(_) => 0,
-    }
+    manager.create_webrtc_client().unwrap_or_default()
 }
 
 #[no_mangle]
@@ -1239,14 +1233,14 @@ pub extern "C" fn net_force_shutdown() -> c_int {
 #[no_mangle]
 pub extern "C" fn net_get_error_message(error_code: c_int) -> *const c_char {
     match error_code {
-        NET_SUCCESS => "Success\0".as_ptr() as *const c_char,
-        NET_ERROR_INVALID_HANDLE => "Invalid handle\0".as_ptr() as *const c_char,
-        NET_ERROR_INVALID_PARAM => "Invalid parameter\0".as_ptr() as *const c_char,
-        NET_ERROR_CONNECTION_FAILED => "Connection failed\0".as_ptr() as *const c_char,
-        NET_ERROR_TIMEOUT => "Operation timed out\0".as_ptr() as *const c_char,
-        NET_ERROR_SESSION_FAILED => "Session operation failed\0".as_ptr() as *const c_char,
-        NET_ERROR_STREAM_FAILED => "Stream operation failed\0".as_ptr() as *const c_char,
-        _ => "Unknown error\0".as_ptr() as *const c_char,
+        NET_SUCCESS => "Success".as_ptr() as *const c_char,
+        NET_ERROR_INVALID_HANDLE => "Invalid handle".as_ptr() as *const c_char,
+        NET_ERROR_INVALID_PARAM => "Invalid parameter".as_ptr() as *const c_char,
+        NET_ERROR_CONNECTION_FAILED => "Connection failed".as_ptr() as *const c_char,
+        NET_ERROR_TIMEOUT => "Operation timed out".as_ptr() as *const c_char,
+        NET_ERROR_SESSION_FAILED => "Session operation failed".as_ptr() as *const c_char,
+        NET_ERROR_STREAM_FAILED => "Stream operation failed".as_ptr() as *const c_char,
+        _ => "Unknown error".as_ptr() as *const c_char,
     }
 }
 

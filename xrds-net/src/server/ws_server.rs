@@ -77,7 +77,7 @@ impl WebSocketServer {
         F: Fn(Vec<u8>) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Option<Vec<u8>>> + Send + Sync + 'static,
     {
-        let handler_arc: Arc<dyn Fn(Vec<u8>) -> Pin<Box<dyn Future<Output = Option<Vec<u8>>> + Send + Sync + 'static>> + Send + Sync> =
+        let handler_arc: WsHandler =
             Arc::new(move |data| {
                 let fut: Fut = handler(data);
                 Box::pin(fut) as Pin<Box<dyn Future<Output = Option<Vec<u8>>> + Send + Sync + 'static>>

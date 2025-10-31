@@ -21,10 +21,18 @@ use websocket::client::sync::Client as WS_Client;
 use websocket::stream::sync::NetworkStream;
 use websocket::message::OwnedMessage;
 
+type XrdsClient = Option<Arc<Mutex<WS_Client<Box<dyn NetworkStream + Send>>>>>;
+
 #[derive(Clone)]
 pub struct XrdsWebsocket {
     raw_url: Option<String>,
-    ws_client: Option<Arc<Mutex<WS_Client<Box<dyn NetworkStream + Send>>>>>,
+    ws_client: XrdsClient,
+}
+
+impl Default for XrdsWebsocket {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl XrdsWebsocket {
@@ -40,10 +48,12 @@ impl XrdsWebsocket {
         let client_result = websocket::ClientBuilder::new(raw_url).unwrap().connect(None);
         
         if client_result.is_err() {
-            return Err(client_result.err().unwrap().to_string());
+            Err(client_result.err().unwrap().to_string())
+        } else if let Ok(client)= client_result {
+            self.ws_client = Some(Arc::new(Mutex::new(client)));
+             Ok(self)
         } else {
-            self.ws_client = Some(Arc::new(Mutex::new(client_result.unwrap())));
-            return Ok(self);
+            Err("Failed to connect to the WebSocket server.".to_string())
         }
     }
 
@@ -51,11 +61,7 @@ impl XrdsWebsocket {
         let mut ws_client = self.ws_client.clone();
         let mut client = ws_client.as_mut().unwrap().lock().unwrap();
 
-        let message_type = match msg_type {
-            Some(t) => t,
-            None => "binary",
-        };
-
+        let message_type = msg_type.unwrap_or("binary");
         let binding = message_type.to_lowercase().clone();
         let message_type = binding.as_str();
 
@@ -68,9 +74,9 @@ impl XrdsWebsocket {
         let send_result = client.send_message(&message);
 
         if send_result.is_err() {
-            return Err(send_result.err().unwrap().to_string());
+            Err(send_result.err().unwrap().to_string())
         } else {
-            return Ok(self.clone());
+            Ok(self.clone())
         }
     }
 
@@ -80,21 +86,20 @@ impl XrdsWebsocket {
             .lock().unwrap()
             .recv_message();
 
-        if message.is_err() {
-            return Err(message.err().unwrap().to_string());
-        } else {
-            let message = message.unwrap();
+        if let Ok(message) = message {
             match message {
                 OwnedMessage::Binary(data) => {
-                    return Ok(data);
+                    Ok(data)
                 },
                 OwnedMessage::Text(data) => {
-                    return Ok(data.into_bytes());
+                    Ok(data.into_bytes())
                 },
                 _ => {
-                    return Err("The received message is not binary.".to_string());
+                    Err("The received message is not binary.".to_string())
                 }
             }
+        } else {
+            Err(message.err().unwrap().to_string())
         }
     }
 
@@ -103,9 +108,9 @@ impl XrdsWebsocket {
         let close_msg = OwnedMessage::Close(None);
         let close_result = ws_client.lock().unwrap().send_message(&close_msg);
         if close_result.is_err() {
-            return Err(close_result.err().unwrap().to_string());
+            Err(close_result.err().unwrap().to_string())
         } else {
-            return Ok(());
+            Ok(())
         }
     }
 }

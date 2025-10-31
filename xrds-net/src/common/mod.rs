@@ -71,14 +71,14 @@ pub fn parse_url(url: &str) -> Result<XrUrl, String> {
     }
 
     // 5. port range check
-    if port < 1 || port > 65535 {
+    if !(1..=65535).contains(&port) {
         return Err("Invalid port range".to_string());
     }
 
     Ok(XrUrl {   // temporal return value
         scheme: scheme.to_string(),
         host: host.to_string(),
-        port: port,
+        port,
         path: path.to_string(),
         raw_url: url.to_string(),
         
@@ -184,8 +184,9 @@ pub fn fill_mandatory_http_headers(url: XrUrl, headers: Option<Vec<(String, Stri
     if !has_method {
         let mut method_str = "GET";
         if method.is_some() {
-            let binding = method.as_ref().unwrap();
-            method_str = binding.as_str();
+            if let Some(m) = &method {
+                method_str = m.as_str();
+            }
         }
         mandatory_headers.push(quiche::h3::Header::new(b":method", method_str.as_bytes()));
     }
@@ -231,9 +232,8 @@ pub fn payload_str_to_vector_str(payload: &str) -> Vec<String> {
     let payload_tokens = payload.split(",").collect::<Vec<&str>>();
     let mut payload_vector = Vec::new();
     for token in payload_tokens {
-        let token = token.trim().replace('\"', "")
-            .replace('[', "")
-            .replace(']',"");
+        let token = token.trim()
+            .replace(['\"', '[', ']'], "");
         if !token.is_empty() {
             payload_vector.push(token.to_string());
         }
@@ -244,8 +244,7 @@ pub fn payload_str_to_vector_str(payload: &str) -> Vec<String> {
 pub fn generate_random_string(length: usize) -> String {
     let charset_str = RANDOM_STRING_CHARSET;
 
-    let random_str = generate(length, charset_str);
-    random_str    
+    generate(length, charset_str)
 }
 
 pub fn generate_uuid() -> String {

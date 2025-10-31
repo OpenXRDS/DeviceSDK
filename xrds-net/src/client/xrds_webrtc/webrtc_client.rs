@@ -124,9 +124,11 @@ impl StreamReaderFactory {
     }
 }
 
+type WsWriter = Arc<Mutex<SplitSink<WsStream<MaybeTlsStream<TcpStream>>, Message>>>;
+
 pub struct WebRTCClient {
     client_id: Option<String>,
-    write: Option<Arc<Mutex<SplitSink<WsStream<MaybeTlsStream<TcpStream>>, Message>>>>,
+    write: Option<WsWriter>,
     incoming_rx: Option<mpsc::Receiver<WebRTCMessage>>,
     run_handle: Option<tokio::task::JoinHandle<()>>,
     session_id: Option<String>,
@@ -172,6 +174,12 @@ pub struct WebRTCClient {
 
 unsafe impl Send for WebRTCClient {}
 unsafe impl Sync for WebRTCClient {}
+
+impl Default for WebRTCClient {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 #[allow(dead_code)]
 impl WebRTCClient {
@@ -966,7 +974,6 @@ impl WebRTCClient {
                     ],
                     username: "gganjang".to_owned(),
                     credential: "keti007".to_owned(),
-                    ..Default::default()
                 },
             ],
             ice_transport_policy: RTCIceTransportPolicy::All, // Use this for testing
@@ -1274,7 +1281,7 @@ impl WebRTCClient {
 
     fn setup_subscriber_ice_handling(&mut self, pc: Arc<RTCPeerConnection>) -> Result<(), String> {
         self.ice_candidates = Some(Arc::new(Mutex::new(Vec::new())));
-        let candidates_vec = Arc::clone(&self.ice_candidates.as_ref().unwrap());
+        let candidates_vec = Arc::clone(self.ice_candidates.as_ref().unwrap());
 
         pc.on_ice_candidate(Box::new({
             let candidates = Arc::clone(&candidates_vec);
@@ -1697,7 +1704,6 @@ impl WebRTCClient {
      * END OF CONNECTION SETUP METHODS
      * **********************************************************************************************************
      */
-
      /**
       * Send a text message over the established data channel of WebRTC connection.
       * This message transfers to the remote peer.
@@ -1716,9 +1722,9 @@ impl WebRTCClient {
         // check if path is valid
         if !Path::new(path).exists() {
             // create the directory
-            let result = std::fs::create_dir_all(path).map_err(|e| e.to_string())?;
-            if result != () {
-                return Err("Failed to create directory".to_string());
+            std::fs::create_dir_all(path).map_err(|e| e.to_string())?;
+            if !Path::new(path).exists() {
+                return Err(format!("Failed to create directory: {}", path));
             }
         }
         self.debug_file_path = Some(path.to_string());
@@ -2002,7 +2008,7 @@ impl WebRTCClient {
                 
                 match webcam_reader.read_single_frame(1).await {
                     Ok(jpeg_frame) => {
-                        if let Err(_) = frame_sender.send(jpeg_frame) {
+                        if frame_sender.send(jpeg_frame).is_err() {
                             println!("Frame channel closed");
                             break;
                         }
@@ -2037,12 +2043,10 @@ impl WebRTCClient {
                 match transcoder.transcode_jpeg_to_h264_packet(&jpeg_frame) {
                     Ok(h264_packets) => {
                         processed_frames += 1;
-                        
-                        if !h264_packets.is_empty() {
-                            if let Err(_) = packet_sender.send(h264_packets) {
-                                println!("Packet channel closed");
-                                break;
-                            }
+
+                        if !h264_packets.is_empty() && packet_sender.send(h264_packets).is_err() {
+                            println!("Packet channel closed");
+                            break;
                         }
                         
                         if processed_frames % 90 == 0 {

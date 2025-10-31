@@ -89,7 +89,7 @@ impl ImageToVideoEncoder {
     pub fn encode_video(&mut self, img_path: &str, 
         output_path: &str, 
         octx: &mut format::context::Output) -> Result<(), String>{
-        let mut jpeg_files = get_jpeg_files(&img_path).map_err(|e| {
+        let mut jpeg_files = get_jpeg_files(img_path).map_err(|e| {
             eprintln!("Error finding JPEG files: {}", e);
             e.to_string()  // Don't exit, return error
         })?;
@@ -111,7 +111,7 @@ impl ImageToVideoEncoder {
         eprintln!("Expected duration: {:.2} seconds", 
                  jpeg_files.len() as f64 / self.fps.numerator() as f64 * self.fps.denominator() as f64);
         
-        format::context::output::dump(&octx, 0, Some(&output_path));
+        format::context::output::dump(octx, 0, Some(output_path));
         octx.write_header().unwrap();
         
         let encoder_time_base = self.fps.invert();
@@ -162,7 +162,7 @@ impl ImageToVideoEncoder {
         
         self.frame_count += 1;  // Increment AFTER setting PTS
         
-        if self.frame_count % 30 == 0 {
+        if self.frame_count.is_multiple_of(30) {
             eprintln!(
                 "Processed {} frames in {:.2} seconds",
                 self.frame_count,

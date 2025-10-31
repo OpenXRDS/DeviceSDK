@@ -26,13 +26,13 @@ impl StreamingMP4Writer {
 
         unsafe {
             let stream = ost.as_mut_ptr();
-            (*stream).codecpar.as_mut().map(|codecpar| {
-                (*codecpar).codec_type = ffmpeg::ffi::AVMediaType::AVMEDIA_TYPE_VIDEO;
-                (*codecpar).codec_id = ffmpeg::ffi::AVCodecID::AV_CODEC_ID_H264;
-                (*codecpar).width = width as i32;
-                (*codecpar).height = height as i32;
-                (*codecpar).format = ffmpeg::ffi::AVPixelFormat::AV_PIX_FMT_YUV420P as i32;
-            });
+            if let Some(codecpar) = (*stream).codecpar.as_mut() {
+                codecpar.codec_type = ffmpeg::ffi::AVMediaType::AVMEDIA_TYPE_VIDEO;
+                codecpar.codec_id = ffmpeg::ffi::AVCodecID::AV_CODEC_ID_H264;
+                codecpar.width = width as i32;
+                codecpar.height = height as i32;
+                codecpar.format = ffmpeg::ffi::AVPixelFormat::AV_PIX_FMT_YUV420P as i32;
+            }
 
             (*stream).r_frame_rate = ffmpeg::ffi::AVRational {
                 num: fps as i32,
@@ -81,7 +81,7 @@ impl StreamingMP4Writer {
             
             self.packet_count += 1;
 
-            if self.packet_count % 100 == 0 {
+            if self.packet_count.is_multiple_of(100) {
                 println!("📦 Written {} packets", self.packet_count);
             }
         }

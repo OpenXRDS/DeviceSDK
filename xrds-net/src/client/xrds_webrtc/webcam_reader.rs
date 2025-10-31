@@ -59,12 +59,8 @@ impl WebcamReader {
     pub async fn stop_webcam(&mut self) {
         println!("Stopping webcam capture...");
         self.shutdown_flag.store(true, Ordering::Relaxed);
-        
-        // Wait for clean shutdown
-        if let Err(_) = tokio::time::timeout(
-            std::time::Duration::from_secs(5), 
-            &mut self._handle
-        ).await {
+
+        if (tokio::time::timeout(std::time::Duration::from_secs(5), &mut self._handle).await).is_err() {
             println!("⚠️ Force aborting webcam capture");
             self._handle.abort();
         }

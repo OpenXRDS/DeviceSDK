@@ -83,6 +83,12 @@ pub struct ClientBuilder {
     password: Option<String>,
 }
 
+impl Default for ClientBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ClientBuilder {
     pub fn new() -> Self {
         ClientBuilder {
@@ -236,7 +242,7 @@ impl Client {
     }
 
     pub fn get_protocol(&self) -> PROTOCOLS {
-        self.protocol.clone()
+        self.protocol
     }
 
     fn parse_headers(&self, headers: &str) -> Vec<(String, String)> {
@@ -249,7 +255,7 @@ impl Client {
             }
         }
 
-        return parsed_headers;
+        parsed_headers
     }
 
     /******************************************** */
@@ -279,17 +285,14 @@ impl Client {
         }
         
         // check the protocol
-        let result = match self.protocol {
+        match self.protocol {
             PROTOCOLS::WS | PROTOCOLS::WSS => self.connect_ws(),
             PROTOCOLS::FTP => self.connect_ftp(),
             PROTOCOLS::SFTP => self.connect_sftp(),
             PROTOCOLS::MQTT => self.connect_mqtt(),
-            // PROTOCOLS::WEBRTC => self.connect_webrtc(),
             PROTOCOLS::QUIC => self.connect_quic(),
             _ => Err("The protocol does not support 'Connect'. Use 'Request' instead.".to_string()),
-        };
-
-        return result;
+        }
     }
 
     /******************************************** */
@@ -302,15 +305,12 @@ impl Client {
      */
     pub fn send(self, data: Vec<u8>, topic: Option<&str>) -> Result<Self, String> {
         // check the protocol
-        let result = match self.protocol {
+        match self.protocol {
             PROTOCOLS::WS | PROTOCOLS::WSS => self.send_ws(topic, data),
             PROTOCOLS::MQTT => self.send_mqtt(topic, data),
-            // PROTOCOLS::WEBRTC => self.send_webrtc(message),
             PROTOCOLS::QUIC => self.send_quic(data),
             _ => Err("The protocol does not support 'Send'. Use another method instead.".to_string()),
-        };
-
-        return result;
+        }
     }
 
     /******************************************** */
@@ -318,28 +318,23 @@ impl Client {
     /******************************************** */
     pub fn rcv(&self) -> Result<Vec<u8>, String> {
         // check the protocol
-        let result = match self.protocol {
-            PROTOCOLS::WS | PROTOCOLS::WSS => &self.rcv_ws(),
-            PROTOCOLS::MQTT => &self.rcv_mqtt(),
-            // PROTOCOLS::WEBRTC => self.rcv_webrtc(),
-            PROTOCOLS::QUIC => &self.rcv_quic(),
-            _ => &Err("The protocol does not support 'Receive'. Use another method instead".to_string()),
-        };
-
-        result.clone()
+        match self.protocol {
+            PROTOCOLS::WS | PROTOCOLS::WSS => self.rcv_ws(),
+            PROTOCOLS::MQTT => self.rcv_mqtt(),
+            PROTOCOLS::QUIC => self.rcv_quic(),
+             _ => Err("The protocol does not support 'Send'. Use another method instead.".to_string()),
+         }
     }
 
     pub fn close(&self) -> Result<(), String> {
         // check the protocol
-        let result = match self.protocol {
+        match self.protocol {
             PROTOCOLS::WS | PROTOCOLS::WSS => self.close_ws(),
             // PROTOCOLS::MQTT => self.close_mqtt(),
             // PROTOCOLS::WEBRTC => self.close_webrtc(),
             // PROTOCOLS::QUIC => self.close_quic(),
             _ => Err("The protocol does not support 'Close'. Use another method instead".to_string()),
-        };
-
-        return result;
+        }
     }
 
     /*************************** */
@@ -360,7 +355,7 @@ impl Client {
         let publish_result = self.mqtt_client.as_ref().unwrap()
             .publish(topic.unwrap(), QoS::AtLeastOnce, true, message);
         if publish_result.is_err() {
-            return Err(publish_result.err().unwrap().to_string());
+            Err(publish_result.err().unwrap().to_string())
         } else {
             // wait for puback confirmation in timeout
             let start_time = Instant::now();
@@ -372,11 +367,14 @@ impl Client {
                 let message = self.rcv_mqtt();
                 if message.is_err() {
                     return Err(message.err().unwrap().to_string());
-                } else {
-                    let message = message.unwrap();
-                    if message == b"PUBACK_CONFIRMED".to_vec() {
+                } else if let Ok(msg) = message {
+                    if msg == b"PUBACK_CONFIRMED".to_vec() {
                         return Ok(self); // Publish confirmed
+                    } else {
+                        continue; // keep waiting for confirmation
                     }
+                } else {
+                        return Err("Failed to receive publish confirmation.".to_string());
                 }
             }
         }
@@ -392,7 +390,7 @@ impl Client {
         match notification {
             Err(recv_err) => {
                 let err_msg = format!("Error occurred while receiving the message: {:?}", recv_err);
-                return Err(err_msg);
+                Err(err_msg)
             }
             Ok(inner_result) => {
                 match inner_result {
@@ -403,7 +401,7 @@ impl Client {
                                     Incoming::Publish(message) => {
                                         let result_vec = Vec::from(message.payload);
                                         println!("Received MQTT Publish message: {:?}", result_vec);
-                                        return Ok(result_vec);
+                                        Ok(result_vec)
                                     }
                                     Incoming::Subscribe(message) => {
                                         println!("Subscription success: {:?}", message);
@@ -431,14 +429,14 @@ impl Client {
                     }
                     Err(conn_err) => {
                         let err_msg = format!("Error occurred while receiving the message: {:?}", conn_err);
-                        return Err(err_msg);
+                        Err(err_msg)
                     }
                 }
             }
         }
     }
 
-    pub fn mqtt_subscribe(self, topic: &str) -> Result<Self, String>{
+    pub fn mqtt_subscribe(self, topic: &str) -> Result<Self, String> {
         if self.mqtt_client.is_none() {
             return Err("MQTT client is not initialized.".to_string());
         }
@@ -450,7 +448,7 @@ impl Client {
         let subscription_result = 
             self.mqtt_client.as_ref().unwrap().subscribe(topic, QoS::AtMostOnce);
         if subscription_result.is_err() {
-            return Err(subscription_result.err().unwrap().to_string());
+            Err(subscription_result.err().unwrap().to_string())
         } else {
             // wait til subscription is confirmed with SUBACK in timeout
             let start_time = Instant::now();
@@ -462,13 +460,20 @@ impl Client {
                 let message = self.rcv_mqtt();
                 if message.is_err() {
                     return Err(message.err().unwrap().to_string());
-                } else {
-                    let message = message.unwrap();
-                    if message == b"SUBACK_CONFIRMED".to_vec() {
-                        let mst_str = String::from_utf8(message.clone());
+                } else if let Ok(msg) = message {
+                    if msg.is_empty() {
+                        continue; // not a SUBACK message, keep waiting
+                    }
+                    // check if it is SUBACK_CONFIRMED
+                    if msg == b"SUBACK_CONFIRMED".to_vec() {
+                        let mst_str = String::from_utf8(msg.clone());
                         println!("Subscription message string: {:?}", mst_str);
                         return Ok(self); // Subscription confirmed
+                    } else {
+                        continue; // keep waiting for confirmation
                     }
+                } else {
+                    return Err("Failed to receive subscription confirmation.".to_string());
                 }
             }
         }
@@ -483,7 +488,7 @@ impl Client {
         self.mqtt_client = Some(client);
         self.mqtt_connection = Some(Arc::new(Mutex::new(connection)));
 
-        return Ok(self);
+        Ok(self)
     }
 
     /************************** */
@@ -492,11 +497,11 @@ impl Client {
     fn connect_ws(mut self) -> Result<Self, String> {
         let client_result = XrdsWebsocket::new().connect(self.raw_url.as_str());
 
-        if client_result.is_err() {
-            return Err(client_result.err().unwrap().to_string());
+        if let Ok(client) = client_result {
+            self.ws_client = Some(client);
+            Ok(self)
         } else {
-            self.ws_client = Some(client_result.unwrap());
-            return Ok(self);
+            Err(client_result.err().unwrap())
         }
     }
 
@@ -505,9 +510,9 @@ impl Client {
 
         let send_result = ws_client.send_ws(msg_type, message);
         if send_result.is_err() {
-            return Err(send_result.err().unwrap().to_string());
+            Err(send_result.err().unwrap().to_string())
         } else {
-            return Ok(self);
+            Ok(self)
         }
     }
 
@@ -515,10 +520,10 @@ impl Client {
         let ws_client = self.ws_client.as_ref().unwrap();
         let message = ws_client.rcv_ws();
 
-        if message.is_err() {
-            return Err(message.err().unwrap().to_string());
+        if let Ok(msg) = &message {
+            Ok(msg.clone())
         } else {
-            return Ok(message.unwrap());
+            Err(message.err().unwrap().to_string())
         }
     }
 
@@ -527,9 +532,9 @@ impl Client {
         let close_result = ws_client.close_ws();
 
         if close_result.is_err() {
-            return Err(close_result.err().unwrap().to_string());
+            Err(close_result.err().unwrap().to_string())
         } else {
-            return Ok(());
+            Ok(())
         }
     }
 
@@ -550,20 +555,19 @@ impl Client {
                 body: Vec::new(),
                 error: Some(err_message),
             }
-        } else {
-            let parsed_url = parsed_url.unwrap();
-            self.url = Some(parsed_url.clone());
-            self.host = Some(parsed_url.host);
-            self.port = Some(parsed_url.port);
-            self.path = Some(parsed_url.path);
-            if parsed_url.query.is_some() {
+        } else if let Ok(url) = &parsed_url {
+            self.url = Some(url.clone());
+            self.host = Some(url.host.clone());
+            self.port = Some(url.port);
+            self.path = Some(url.path.clone());
+            if url.query.is_some() {
                 // add query to the path
-                self.path = Some(self.path.as_ref().unwrap().to_string() + "?" + parsed_url.query.as_ref().unwrap());
+                self.path = Some(self.path.as_ref().unwrap().to_string() + "?" + url.query.as_ref().unwrap());
             }
         }
 
-        // check the protocol
-        let result = match self.protocol {
+        // check the protocol and return the response
+        match self.protocol {
             PROTOCOLS::HTTP => self.request_http(),
             PROTOCOLS::HTTPS => self.request_http(),
             PROTOCOLS::HTTP3 => self.request_http3(),
@@ -576,9 +580,7 @@ impl Client {
                 body: Vec::new(),
                 error: Some("The protocol does not support 'Request'. Use 'Connect' instead.".to_string()),
             },
-        };
-
-        return result;
+        }
     }
 
     /**
@@ -631,13 +633,13 @@ impl Client {
         let header_str = String::from_utf8(response_headers).unwrap();
         let tokenized_headers = self.parse_headers(&header_str);
 
-        return NetResponse {
+        NetResponse {
             protocol: self.protocol,
             status_code: response_code,
             headers: tokenized_headers,
             body: response_body,
             error: None,
-        };
+        }
     }
 
     /**
@@ -669,13 +671,13 @@ impl Client {
         let header_str = String::from_utf8(response_headers).unwrap();
         let tokenized_headers = self.parse_headers(&header_str);
 
-        return NetResponse {
+        NetResponse {
             protocol: self.protocol,
             status_code: response_code,
             headers: tokenized_headers,
             body: response_body,
             error: None,
-        };
+        }
     }    
 
 
@@ -703,36 +705,41 @@ impl Client {
         let status_code_str = coap_res_header.code.to_string();
         let coap_status_code = crate::common::coap_code_to_decimal(&status_code_str);
 
-        let mut headers: Vec<(String, String)> = vec![];
-        headers.push(("Code".to_string(), coap_res_header.code.to_string()));
-        headers.push(("Message ID".to_string(), coap_res_header.message_id.to_string()));
-        headers.push(("Version".to_string(), coap_res_header.get_version().to_string()));
+        let headers: Vec<(String, String)> = vec![
+            ("Code".to_string(), coap_res_header.code.to_string()),
+            ("Message ID".to_string(), coap_res_header.message_id.to_string()),
+            ("Version".to_string(), coap_res_header.get_version().to_string()),
+        ];
 
         let body_result = String::from_utf8(coap_res_payload);
-        let body: String;
-        if body_result.is_err() {
-            body = "".to_string();
+        if let Ok(body) = body_result {
+            // body is valid UTF-8
+            NetResponse {
+                protocol: self.protocol,
+                status_code: coap_status_code,
+                headers,
+                body: body.as_bytes().to_vec(),
+                error: None,
+            }
         } else {
-            body = body_result.unwrap();
+            NetResponse {
+                protocol: self.protocol,
+                status_code: coap_status_code,
+                headers,
+                body: vec![],
+                error: Some("Failed to parse CoAP response body as UTF-8 string.".to_string()),
+            }
         }
-
-        return NetResponse {
-            protocol: self.protocol,
-            status_code: coap_status_code,
-            headers,
-            body: body.as_bytes().to_vec(),
-            error: None,
-        };
     }
 
     async fn run_coap(&self) -> Result<CoapResponse, String> {
 
         let response = UdpCoAPClient::get(&self.raw_url).await;
         
-        if response.is_err() {
-            return Err(response.err().unwrap().to_string());
+        if let Ok(res) = response {
+            Ok(res)
         } else {
-            return Ok(response.unwrap());
+            Err(format!("Failed to get CoAP response: {:?}", response.err().unwrap()))
         }
     }
 
@@ -752,14 +759,14 @@ impl Client {
             let password = self.password.as_ref().unwrap();
             let login_result = ftp_stream.login(user, password);
             if login_result.is_err() {
-                return Err(login_result.err().unwrap().to_string());
+                Err(login_result.err().unwrap().to_string())
             } else {
                 // store the ftp_stream in the client
                 self.ftp_stream = Some(Arc::new(Mutex::new(ftp_stream)));
-                return Ok(self);
+                Ok(self)
             }
         } else {
-            return Err("User and password are required for FTP connection.".to_string());
+            Err("User and password are required for FTP connection.".to_string())
         }
     }
 
@@ -767,7 +774,7 @@ impl Client {
         Need to test first
      */
     fn connect_sftp(self) -> Result<Self, String> {
-        return Ok(self);  // temporal return
+        Ok(self)  // temporal return
     }
 
 
@@ -795,64 +802,66 @@ impl Client {
     fn run_ftp_cwd(self, ftp_payload: FtpPayload) -> FtpResponse {
         let response = self.ftp_stream.unwrap().lock().unwrap().cwd(ftp_payload.payload_name.as_str());
         if response.is_err() {
-            let ftp_res = FtpResponse {
+            FtpResponse {
                 payload: None,
                 error: Some(response.err().unwrap().to_string()),
-            };
-            
-            return ftp_res;
+            }
         } else {
-            let ftp_res = FtpResponse {
+            FtpResponse {
                 payload: None,
                 error: None,
-            };
-            return ftp_res;
+            }
         }
     }
 
     fn run_ftp_cdup(self) -> FtpResponse {
         let response = self.ftp_stream.unwrap().lock().unwrap().cdup();
         if response.is_err() {
-            return FtpResponse {
+            FtpResponse {
                 payload: None,
                 error: Some(response.err().unwrap().to_string()),
-            };
+            }
         } else {
-            return FtpResponse {
+            FtpResponse {
                 payload: None,
                 error: None,
-            };
+            }
         }
     }
 
     fn run_ftp_quit(self) -> FtpResponse {
         let response = self.ftp_stream.unwrap().lock().unwrap().quit();
         if response.is_err() {
-            return FtpResponse {
+            FtpResponse {
                 payload: None,
                 error: Some(response.err().unwrap().to_string()),
-            };
+            }
         } else {
-            return FtpResponse {
+            FtpResponse {
                 payload: None,
                 error: None,
-            };
+            }
         }
     }
 
     fn run_ftp_retr(self, ftp_payload: FtpPayload) -> FtpResponse {
         let data = self.ftp_stream.unwrap().lock().unwrap().retr_as_buffer(ftp_payload.payload_name.as_str());
         if data.is_err() {
-            return FtpResponse {
+            FtpResponse {
                 payload: None,
                 error: Some(data.err().unwrap().to_string()),
-            };
-        } else {
-            let data = data.unwrap().into_inner();
-            return FtpResponse {
+            }
+        } else if let Ok(dat) = data {
+            let data = dat.into_inner();
+            FtpResponse {
                 payload: Some(data),
                 error: None,
-            };
+            }
+        } else {
+            FtpResponse {
+                payload: None,
+                error: Some("Unknown error occurred in RETR command.".to_string()),
+            }
         }
     }
 
@@ -867,15 +876,15 @@ impl Client {
         let mut reader = Cursor::new(ftp_payload.payload.unwrap());
         let response = self.ftp_stream.unwrap().lock().unwrap().put_file(ftp_payload.payload_name, &mut reader);
         if response.is_err() {
-            return FtpResponse {
+            FtpResponse {
                 payload: None,
                 error: Some(response.err().unwrap().to_string()),
-            };
+            }
         } else {
-            return FtpResponse {
+            FtpResponse {
                 payload: None,
                 error: None,
-            };
+            }
         }
     }
 
@@ -883,30 +892,30 @@ impl Client {
         let mut reader = Cursor::new(ftp_payload.payload.unwrap());
         let response = self.ftp_stream.unwrap().lock().unwrap().append_file(ftp_payload.payload_name.as_str(),  &mut reader);
         if response.is_err() {
-            return FtpResponse {
+            FtpResponse {
                 payload: None,
                 error: Some(response.err().unwrap().to_string()),
-            };
+            }
         } else {
-            return FtpResponse {
+            FtpResponse {
                 payload: None,
                 error: None,
-            };
+            }
         }
     }
 
     fn run_ftp_dele(self, ftp_payload: FtpPayload) -> FtpResponse {
         let response = self.ftp_stream.unwrap().lock().unwrap().rm(ftp_payload.payload_name.as_str());
         if response.is_err() {
-            return FtpResponse {
+            FtpResponse {
                 payload: None,
                 error: Some(response.err().unwrap().to_string()),
-            };
+            }
         } else {
-            return FtpResponse {
+            FtpResponse {
                 payload: None,
                 error: None,
-            };
+            }
         }
     }
 
@@ -917,77 +926,87 @@ impl Client {
     fn run_ftp_rmd(self, ftp_payload: FtpPayload) -> FtpResponse {
         let response = self.ftp_stream.unwrap().lock().unwrap().rmdir(ftp_payload.payload_name.as_str());
         if response.is_err() {
-            return FtpResponse {
+            FtpResponse {
                 payload: None,
                 error: Some(response.err().unwrap().to_string()),
-            };
+            }
         } else {
-            return FtpResponse {
+            FtpResponse {
                 payload: None,
                 error: None,
-            };
+            }
         }
     }
 
     fn run_ftp_mkd(self, ftp_payload: FtpPayload) -> FtpResponse {
         let response = self.ftp_stream.unwrap().lock().unwrap().mkdir(ftp_payload.payload_name.as_str());
         if response.is_err() {
-            return FtpResponse {
+            FtpResponse {
                 payload: None,
                 error: Some(response.err().unwrap().to_string()),
-            };
+            }
         } else {
-            return FtpResponse {
+            FtpResponse {
                 payload: None,
                 error: None,
-            };
+            }
         }
     }
 
     fn run_ftp_pwd(self) -> FtpResponse {
         let response = self.ftp_stream.unwrap().lock().unwrap().pwd();
         if response.is_err() {
-            return FtpResponse {
+            FtpResponse {
                 payload: None,
                 error: Some(response.err().unwrap().to_string()),
-            };
-        } else {
-            let payload = response.unwrap().as_bytes().to_vec();
-            return FtpResponse {
+            }
+        } else if let Ok(res) = response {
+            let payload = res.as_bytes().to_vec();
+            FtpResponse {
                 payload: Some(payload),
                 error: None,
-            };
+            }
+        } else {
+            FtpResponse {
+                payload: None,
+                error: Some("Unknown error occurred in PWD command.".to_string()),
+            }
         }
     }
 
     fn run_ftp_list(self, ftp_payload: FtpPayload) -> FtpResponse {
         if ftp_payload.payload_name.is_empty() {
             let list_result = self.ftp_stream.unwrap().lock().unwrap().list(None);
-            if list_result.is_err() {
-                return FtpResponse {
+            if let Ok(list) = list_result {
+                FtpResponse {
+                    // convert Vec<String> to Vec<u8>
+                    payload: Some(list.join("\n").as_bytes().to_vec()),
+                    error: None,
+                }
+            } else {
+                FtpResponse {
                     payload: None,
                     error: Some(list_result.err().unwrap().to_string()),
-                };
-            } else {
-                return FtpResponse {
-                    // convert Vec<String> to Vec<u8>
-                    payload: Some(list_result.unwrap().join("\n").as_bytes().to_vec()),
-                    error: None,
-                };
+                }
             }
         } else {
             let list_result = self.ftp_stream.unwrap().lock().unwrap().list(Some(ftp_payload.payload_name.as_str()));
             if list_result.is_err() {
-                return FtpResponse {
+                FtpResponse {
                     payload: None,
                     error: Some(list_result.err().unwrap().to_string()),
-                };
-            } else {
-                return FtpResponse {
+                }
+            } else if let Ok(res) = list_result {
+                FtpResponse {
                     // convert Vec<String> to Vec<u8>
-                    payload: Some(list_result.unwrap().join("\n").as_bytes().to_vec()),
+                    payload: Some(res.join("\n").as_bytes().to_vec()),
                     error: None,
-                };
+                }
+            } else {
+                FtpResponse {
+                    payload: None,
+                    error: Some("Unknown error occurred in LIST command.".to_string()),
+                }                
             }
         }
     }
@@ -995,15 +1014,15 @@ impl Client {
     fn run_ftp_noop(self) -> FtpResponse {
         let response = self.ftp_stream.unwrap().lock().unwrap().noop();
         if response.is_err() {
-            return FtpResponse {
+            FtpResponse {
                 payload: None,
                 error: Some(response.err().unwrap().to_string()),
-            };
+            }
         } else {
-            return FtpResponse {
+            FtpResponse {
                 payload: None,
                 error: None,
-            };
+            }
         }
     }
     // ***************** End of Ftp Command Functons ***************//
@@ -1024,7 +1043,7 @@ impl Client {
 
         // scid MUST be 20 bytes long
         let scid = generate_random_string(20);
-        let scid = quiche::ConnectionId::from_ref(&scid.as_bytes());
+        let scid = quiche::ConnectionId::from_ref(scid.as_bytes());
 
         let mut poll = mio::Poll::new().unwrap();
         let poll_result = poll.registry().register(&mut socket, mio::Token(0), mio::Interest::READABLE);
@@ -1250,7 +1269,7 @@ impl Client {
             .unwrap();
 
         let scid = generate_random_string(20);
-        let scid = quiche::ConnectionId::from_ref(&scid.as_bytes());
+        let scid = quiche::ConnectionId::from_ref(scid.as_bytes());
 
         let mut quic_config = self.create_quic_config();
 
@@ -1305,10 +1324,8 @@ impl Client {
             // Adaptive polling based on connection state
             let poll_timeout = if !handshake_completed {
                 Some(Duration::from_millis(100)) // More frequent during handshake
-            } else if !connection_established {
+            } else if !connection_established || request_sent_time.is_none() {
                 Some(Duration::from_millis(50))  // Frequent during HTTP/3 setup
-            } else if request_sent_time.is_none() {
-                Some(Duration::from_millis(50))  // Frequent until request sent
             } else {
                 // After request sent, use longer timeouts to avoid missing data
                 Some(Duration::from_millis(500)) // Less frequent during response wait
@@ -1443,9 +1460,9 @@ impl Client {
     ) -> Result<(), String> {
         let result = h3.send_request(conn, req, true).map_err(|e| e.to_string());
         if result.is_err() {
-            return Err(result.err().unwrap());
+            Err(result.err().unwrap())
         } else {
-            return Ok(());
+            Ok(())
         }
         
     }

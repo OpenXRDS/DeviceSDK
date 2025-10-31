@@ -16,7 +16,8 @@ use unftp_sbe_fs::ServerExt;
 
 // const MAX_DATAGRAM_SIZE: usize = 1350;
 
-type WsHandlers = HashMap<String, Arc<dyn Fn(Vec<u8>) -> Pin<Box<dyn Future<Output = Option<Vec<u8>>> + Send + Sync + 'static>> + Send + Sync + 'static>>;
+type WsHandler = Arc<dyn Fn(Vec<u8>) -> Pin<Box<dyn Future<Output = Option<Vec<u8>>> + Send + Sync + 'static>> + Send + Sync + 'static>;
+type WsHandlers = HashMap<String, WsHandler>;
 
 #[derive(Clone)]
 pub struct XRNetServer {
@@ -56,7 +57,7 @@ impl XRNetServer {
         F: Fn(Vec<u8>) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Option<Vec<u8>>> + Send + Sync + 'static,
     {
-        let handler_arc: Arc<dyn Fn(Vec<u8>) -> Pin<Box<dyn Future<Output = Option<Vec<u8>>> + Send + Sync + 'static>> + Send + Sync> =
+        let handler_arc: WsHandler =
             Arc::new(move |data| {
                 let fut: Fut = handler(data);
                 Box::pin(fut) as Pin<Box<dyn Future<Output = Option<Vec<u8>>> + Send + Sync + 'static>>
@@ -68,11 +69,11 @@ impl XRNetServer {
         let server = Arc::new(self.clone());
 
         // Protocol Check
-        if self.protocol.len() == 0 {
+        if self.protocol.is_empty() {
             panic!("No protocol is specified");
         }
 
-        if self.port.len() == 0 {
+        if self.port.is_empty() {
             panic!("No port is specified");
         }
 
@@ -140,18 +141,17 @@ impl XRNetServer {
 
     async fn run_ftp_server(&self, port: u32) {
         println!("FTP server started");
-        let ftp_home: PathBuf;
+        
         // set root directory as designated dir if the given directory is invalid or not provided
         let root_dir_val_result = validate_path(self.root_dir.as_ref().unwrap());
-        if (self.root_dir.is_none()) || (root_dir_val_result.is_err()) {
+        let ftp_home = if (self.root_dir.is_none()) || (root_dir_val_result.is_err()) {
             println!("Given root directory is invalid. Setting to default test directory");
-            ftp_home = std::env::temp_dir();
+            std::env::temp_dir()
             
         } else {
             let target_dir = self.root_dir.as_ref().unwrap();
-            
-            ftp_home = PathBuf::from(target_dir.as_str());
-        }
+            PathBuf::from(target_dir.as_str())
+        };
         println!("ftp server home: {:?}", ftp_home);
 
         let server = libunftp::Server::with_fs(ftp_home)

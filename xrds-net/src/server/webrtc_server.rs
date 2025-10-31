@@ -76,6 +76,8 @@ pub struct Session {
     
 }
 
+type WebSocketSenderType = Vec<(String, Arc<AsyncMutex<SplitSink<WsStream<TcpStream>, Message>>>)>;
+
 #[allow(dead_code)]
 struct WebRTCClient {
     client_id: String,
@@ -142,7 +144,6 @@ impl WebRTCServer {
                     ],
                     username: "gganjang".to_owned(),
                     credential: "keti007".to_owned(),
-                    ..Default::default()
                 },
             ],
             ice_transport_policy: RTCIceTransportPolicy::All,
@@ -265,9 +266,9 @@ impl WebRTCServer {
                 // println!("preparing message back to client");
                 let result = self.signaling_handler(msg.into_data().to_vec()).await;
                 // prepare message back to client
-                if result.is_some() {
+                if let Some(result) = result {
                     // send message in text since it's json only
-                    let msg = Message::text(String::from_utf8_lossy(&result.unwrap()).to_string());
+                    let msg = Message::text(String::from_utf8_lossy(&result).to_string());
                     let mut sender = sender.lock().await;
                     if let Err(e) = sender.send(msg).await {
                         println!("Error sending message: {}", e);
@@ -365,18 +366,17 @@ impl WebRTCServer {
             error: None,
         };
         
-        let _ = self.broadcast_message(vec![publisher_id], publisher_msg.clone()).await;
+        self.broadcast_message(vec![publisher_id], publisher_msg.clone()).await;
 
         // response to the subscriber
-        let answer_msg = WebRTCMessage {
+        WebRTCMessage {
             client_id: subscriber_id.clone(),
             session_id: session_id.clone(),
             message_type: ANSWER.to_string(),
             ice_candidates: None,
             sdp: None,
             error: None,
-        };        
-        answer_msg
+        }
     }
 
     async fn handle_create_session(&self, request: WebRTCMessage) -> WebRTCMessage{
@@ -395,15 +395,14 @@ impl WebRTCServer {
 
         println!("Session {} created by {}", session_id, request.client_id);
 
-        let response = WebRTCMessage {
+        WebRTCMessage {
             client_id: request.client_id,
             session_id: session_id.clone(),
             message_type: CREATE_SESSION.to_string(),
             ice_candidates: None,
             sdp: None,
             error: None,
-        };
-        response
+        }
     }
 
     async fn handle_list_session(&self, request: WebRTCMessage) -> WebRTCMessage {
@@ -412,15 +411,14 @@ impl WebRTCServer {
         let session_ids: Vec<String> = sessions.keys().cloned().collect();
         let session_ids_str = session_ids.join(",");
 
-        let response = WebRTCMessage {
+        WebRTCMessage {
             client_id: request.client_id,
             session_id: session_ids_str.clone(),
             message_type: LIST_SESSIONS.to_string(),
             ice_candidates: None,
             sdp: None,
             error: None,
-        };
-        response
+        }
     }
 
     async fn handle_offer(&self, request: WebRTCMessage) -> WebRTCMessage {
@@ -445,18 +443,17 @@ impl WebRTCServer {
         };
 
         // send offer to all participants except the creator
-        let _ = self.broadcast_message(participants, offer_msg.clone());
+        self.broadcast_message(participants, offer_msg.clone()).await;
 
         // make a result for publisher
-        let response = WebRTCMessage {
+        WebRTCMessage {
             client_id: publisher_id.clone(),
             session_id: session_id.clone(),
             message_type: OFFER.to_string(),
             ice_candidates: None,
             sdp: session.offer.clone(),
             error: None,
-        };
-        response
+        }
     }
 
     /**
@@ -472,15 +469,14 @@ impl WebRTCServer {
         // print session list
         println!("Remaining sessions: {:?}", session_ids);
 
-        let response = WebRTCMessage {
+        WebRTCMessage {
             client_id: "".to_string(),
             session_id: session_ids.join(","),
             message_type: CLOSE_SESSION.to_string(),
             ice_candidates: None,
             sdp: None,
             error: None,
-        };
-        response
+        }
     }
 
     /**
@@ -502,15 +498,14 @@ impl WebRTCServer {
         // if sdp exists, send it to the client
         let sdp = session.offer.clone().unwrap_or_default();
 
-        let response = WebRTCMessage {
+        WebRTCMessage {
             client_id: client_id.to_string(),
             session_id: session_id.clone(),
             message_type: JOIN_SESSION.to_string(),
             ice_candidates: None,
             sdp: Some(sdp),
             error: None,
-        };
-        response
+        }
     }
 
     async fn leave_session(&self, session_id: String, client_id: &str) -> WebRTCMessage{
@@ -521,30 +516,28 @@ impl WebRTCServer {
 
         // TODO: remove the WebRTC connection too. (not implemented yet)
 
-        let response = WebRTCMessage {
+        WebRTCMessage {
             client_id: client_id.to_string(),
             session_id: session_id.clone(),
             message_type: LEAVE_SESSION.to_string(),
             ice_candidates: None,
             sdp: None,
             error: None,
-        };
-        response
+        }
     }
 
     async fn list_participants(&self, session_id: &str) -> WebRTCMessage {
         let sessions = self.sessions.lock().await;
         let session = sessions.get(session_id).unwrap();
         let participants_str = session.participants.clone().join(",");
-        let response = WebRTCMessage {
+        WebRTCMessage {
             client_id: "".to_string(),
             session_id: session_id.to_string(),
             message_type: LIST_PARTICIPANTS.to_string(),
             ice_candidates: Some(participants_str),
             sdp: None,
             error: None,
-        };
-        response
+        }
     }
 
     async fn handle_ice_candidate(&self, message: WebRTCMessage) -> WebRTCMessage {
@@ -568,15 +561,14 @@ impl WebRTCServer {
         self.broadcast_message(participants, message.clone()).await;        
 
         // message back to the caller
-        let response = WebRTCMessage {
+        WebRTCMessage {
             client_id: message.client_id.clone(),
             session_id: session_id.clone(),
             message_type: ICE_CANDIDATE.to_string(),
             ice_candidates: None,
             sdp: None,
             error: None,
-        };
-        response
+        }
     }
 
     async fn handle_ice_candidate_ack(&self, message: WebRTCMessage) -> WebRTCMessage {
@@ -611,20 +603,19 @@ impl WebRTCServer {
         }
 
         // message back to the subscriber
-        let response = WebRTCMessage {
+        WebRTCMessage {
             client_id: message.client_id.clone(),
             session_id: session_id.clone(),
             message_type: ICE_CANDIDATE_ACK.to_string(),
             ice_candidates: None,
             sdp: None,
             error: None,
-        };
-        response    
+        }
     }
 
     async fn broadcast_message(&self, client_ids: Vec<String>, message: WebRTCMessage) {
         let clients = self.clients.lock().await;
-        let senders: Vec<(String, Arc<AsyncMutex<SplitSink<WsStream<TcpStream>, Message>>>)> = client_ids
+        let senders: WebSocketSenderType = client_ids
             .into_iter()
             .filter_map(|client_id| {
                 clients.get(&client_id).map(|client| (client_id, Arc::clone(&client.sender)))

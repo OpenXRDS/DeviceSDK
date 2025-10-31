@@ -98,15 +98,15 @@ impl XrUrl {
         let sock_addr_result = url.socket_addrs(|| None);
         
         if sock_addr_result.is_err() {
-            return Err("Invalid URL".to_string());
+            Err("Invalid URL".to_string())
+        } else if let Ok(addr) = sock_addr_result {
+                if addr.is_empty() {
+                    return Err("Empty URL".to_string());
+                }
+                Ok(addr[0]) 
         } else {
-            let sock_addr = sock_addr_result.unwrap();
-            if sock_addr.len() == 0 {
-                return Err("Invalid URL".to_string());
-            } else {
-                return Ok(sock_addr[0]);
-            }
-        }        
+            Err("Invalid URL".to_string())
+        }
     }
 }
 
