@@ -66,11 +66,14 @@ impl WebSocketServer {
 
     /**
      * Server user must provide handlers for each Owned Message type
+     * msg_type can be one of the following:
      * - Text
      * - Binary
      * - Close
      * - Ping
      * - Pong
+     * 
+     * return value of handler is Option<Vec<u8>>, which will be sent back to client
      */
     pub fn register_handler<F, Fut>(&mut self, msg_type: &str, handler: F)
     where
