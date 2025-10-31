@@ -1,5 +1,5 @@
 use std::ffi::{CStr, CString};
-use std::os::raw::{c_char, c_int, c_void};
+use std::os::raw::{c_char, c_int};
 use std::ptr;
 use std::sync::{Arc, OnceLock};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -1027,7 +1027,7 @@ pub extern "C" fn webrtc_join_session(handle: WebRTCHandle, session_id: *const c
 
 #[no_mangle]
 pub extern "C" fn webrtc_publish_session(handle: WebRTCHandle, session_id: *const c_char) -> c_int {
-        let _guard = match OperationGuard::new() {
+    let _guard = match OperationGuard::new() {
         Some(guard) => guard,
         None => return NET_ERROR_INVALID_HANDLE,
     };
@@ -1045,16 +1045,14 @@ pub extern "C" fn webrtc_publish_session(handle: WebRTCHandle, session_id: *cons
 
     let manager = NetManager::instance();
     let session_owned = session.to_string();
-    let mut result_msg: WebRTCMessage = WebRTCMessage::default();
     
     match manager.block_on(async {
         let mut clients = manager.webrtc_clients.lock().await;
         match clients.get_mut(&handle) {
             Some(client) => {
                 match client.publish(&session_owned).await {
-                    Ok(msg) => {
-                        result_msg = msg;
-                        Ok(())
+                    Ok(_msg) => {
+                        Ok(())                  
                     },
                     Err(e) => Err(e),
                 }
