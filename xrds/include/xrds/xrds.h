@@ -40,9 +40,9 @@ struct CRuntimeHandler {
   void (*on_deconstruct)(void*);
 };
 
-using ClientHandle = void*;
+using ClientHandle = uintptr_t;
 
-using WebRTCHandle = void*;
+using WebRTCHandle = uintptr_t;
 
 struct CNetHeader {
   const char *name_ptr;
@@ -81,17 +81,17 @@ ClientHandle client_create(int protocol_val);
 
 int client_destroy(ClientHandle handle);
 
-int client_request(ClientHandle handle);
+WebRTCHandle webrtc_client_create();
 
-int client_connect(ClientHandle handle, const char *server_url);
-
-int client_set_user(ClientHandle handle, const char *username);
-
-int client_set_password(ClientHandle handle, const char *password);
+int webrtc_client_destroy(WebRTCHandle handle);
 
 int client_set_url(ClientHandle handle, const char *url);
 
 int client_set_method(ClientHandle handle, const char *method);
+
+int client_set_user(ClientHandle handle, const char *username);
+
+int client_set_password(ClientHandle handle, const char *password);
 
 int client_set_req_body(ClientHandle handle, const char *body);
 
@@ -99,7 +99,17 @@ int client_set_header(ClientHandle handle, const char *key, const char *value);
 
 int client_set_timeout(ClientHandle handle, int timeout_seconds);
 
-WebRTCHandle webrtc_client_create();
+int client_request(ClientHandle handle);
+
+int client_connect(ClientHandle handle, const char *server_url);
+
+CNetResponse client_get_request(ClientHandle handle);
+
+CNetResponse client_post_request(ClientHandle handle);
+
+CNetResponse client_put_request(ClientHandle handle);
+
+CNetResponse client_delete_request(ClientHandle handle);
 
 int webrtc_connect_to_signaling_server(WebRTCHandle handle, const char *server_url);
 
@@ -117,28 +127,15 @@ int webrtc_stop_stream(WebRTCHandle handle);
 
 int webrtc_wait_for_subscriber(WebRTCHandle handle, int timeout_seconds);
 
-const char *net_get_error_message(int error_code);
-
-WebRTCHandle webrtc_setup_publisher(const char *server_url,
-                                    int camera_index,
-                                    char *session_id_out,
-                                    int session_id_len);
-
-WebRTCHandle webrtc_setup_subscriber(const char *server_url, const char *session_id);
-
 CNetResponse client_get_response(ClientHandle handle);
 
-CNetResponse client_get_request(ClientHandle handle);
+int net_is_shutdown_requested();
 
-CNetResponse client_post_request(ClientHandle handle);
+int net_get_active_operations_count();
 
-CNetResponse client_put_request(ClientHandle handle);
+int net_force_shutdown();
 
-CNetResponse client_delete_request(ClientHandle handle);
-
-int client_copy_response_body(ClientHandle handle, char *buffer, int buffer_len);
-
-int client_copy_response_error(ClientHandle handle, char *buffer, int buffer_len);
+const char *net_get_error_message(int error_code);
 
 }  // extern "C"
 

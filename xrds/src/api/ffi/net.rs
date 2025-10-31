@@ -11,15 +11,11 @@ use tokio::time::timeout;
 use xrds_net::client::{Client, ClientBuilder};
 use xrds_net::client::webrtc_client::{WebRTCClient, StreamSource};
 use xrds_net::common::enums::PROTOCOLS;
-use xrds_net::common::data_structure::NetResponse;
-
-// Add shutdown flag and operation counter
-static SHUTDOWN_FLAG: AtomicBool = AtomicBool::new(false);
-static ACTIVE_OPERATIONS: AtomicUsize = AtomicUsize::new(0);
+use xrds_net::common::data_structure::{NetResponse, WebRTCMessage};
 
 // FFI-safe handle types
-pub type ClientHandle = *mut c_void;
-pub type WebRTCHandle = *mut c_void;
+pub type ClientHandle = usize;
+pub type WebRTCHandle = usize;
 
 // Error codes for FFI
 pub const NET_SUCCESS: c_int = 0;
@@ -30,948 +26,214 @@ pub const NET_ERROR_TIMEOUT: c_int = -4;
 pub const NET_ERROR_SESSION_FAILED: c_int = -5;
 pub const NET_ERROR_STREAM_FAILED: c_int = -6;
 
-// Global runtime - create once, use everywhere
-static RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
-
-fn get_runtime() -> &'static tokio::runtime::Runtime {
-    RUNTIME.get_or_init(|| {
-        tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime")
-    })
-}
-// Internal client storage - separate for each type
-static mut NET_CLIENT_STORAGE: OnceLock<Arc<Mutex<HashMap<usize, ClientWrapper>>>> = OnceLock::new();
-static mut WEBRTC_CLIENT_STORAGE: OnceLock<Arc<Mutex<HashMap<usize, WebRTCClient>>>> = OnceLock::new();
-static NEXT_HANDLE_ID: AtomicUsize = AtomicUsize::new(1);
-
 // ============================================================================
-// INITIALIZATION AND CLEANUP
+// FACTORY + SINGLETON PATTERN: NetManager
 // ============================================================================
 
-#[no_mangle]
-pub extern "C" fn net_init() -> c_int {
-    unsafe {
-            // Reset shutdown flag
-            SHUTDOWN_FLAG.store(false, Ordering::Release);
-            
-            if NET_CLIENT_STORAGE.get().is_none() {
-                NET_CLIENT_STORAGE = OnceLock::new();
-            }
-            
-            if WEBRTC_CLIENT_STORAGE.get().is_none() {
-                WEBRTC_CLIENT_STORAGE = OnceLock::new();
-            }
-            
-            // Initialize the runtime
-            let _ = get_runtime();
-            
-            let _handle_id = NEXT_HANDLE_ID.fetch_add(1, Ordering::AcqRel);
-            NET_SUCCESS
-    }
+pub struct NetManager {
+    clients: Arc<Mutex<HashMap<usize, ClientWrapper>>>,
+    webrtc_clients: Arc<Mutex<HashMap<usize, WebRTCClient>>>,
+    next_handle_id: AtomicUsize,
+    shutdown_flag: AtomicBool,
+    active_operations: AtomicUsize,
+    runtime: tokio::runtime::Runtime,
 }
 
-#[no_mangle]
-pub extern "C" fn net_cleanup() -> c_int {
-    net_cleanup_with_timeout(30) // 30 second default timeout
-}
-
-#[no_mangle]
-pub extern "C" fn net_cleanup_with_timeout(timeout_seconds: c_int) -> c_int {
-    // Step 1: Set shutdown flag to prevent new operations
-    SHUTDOWN_FLAG.store(true, Ordering::Release);
-    
-    // Step 2: Wait for active operations to complete
-    let timeout_duration = Duration::from_secs(timeout_seconds as u64);
-    let start_time = std::time::Instant::now();
-    
-    while ACTIVE_OPERATIONS.load(Ordering::Acquire) > 0 {
-        if start_time.elapsed() > timeout_duration {
-            // Force shutdown after timeout
-            break;
-        }
+impl NetManager {
+    fn new() -> Result<Self, Box<dyn std::error::Error>> {
+        let runtime = tokio::runtime::Runtime::new()?;
         
-        // Brief sleep to avoid busy waiting
-        // Step 3: Safely drop storage
-        unsafe {
-            if let Some(storage) = NET_CLIENT_STORAGE.get() {
-                // Use timeout to avoid hanging on mutex locks
-                if let Ok(runtime) = std::panic::catch_unwind(|| get_runtime()) {
-                    let _ = runtime.block_on(async {
-                        match timeout(Duration::from_secs(5), storage.lock()).await {
-                            Ok(mut clients) => {
-                                clients.clear();
-                            }
-                            Err(_) => {
-                                // Timeout - force cleanup
-                                eprintln!("Warning: Timeout during client storage cleanup");
-                            }
-                        }
-                    });
-                }
-            }
-            
-            if let Some(storage) = WEBRTC_CLIENT_STORAGE.get() {
-                if let Ok(runtime) = std::panic::catch_unwind(|| get_runtime()) {
-                    let _ = runtime.block_on(async {
-                        match timeout(Duration::from_secs(5), storage.lock()).await {
-                            Ok(mut clients) => {
-                                clients.clear();
-                            }
-                            Err(_) => {
-                                eprintln!("Warning: Timeout during WebRTC storage cleanup");
-                            }
-                        }
-                    });
-                }
-            }
-        }
+        Ok(NetManager {
+            clients: Arc::new(Mutex::new(HashMap::new())),
+            webrtc_clients: Arc::new(Mutex::new(HashMap::new())),
+            next_handle_id: AtomicUsize::new(1),
+            shutdown_flag: AtomicBool::new(false),
+            active_operations: AtomicUsize::new(0),
+            runtime,
+        })
     }
-    NET_SUCCESS
-}
 
-// ============================================================================
-// BASIC CLIENT FUNCTIONS
-// ============================================================================
+    pub fn instance() -> &'static NetManager {
+        static INSTANCE: OnceLock<NetManager> = OnceLock::new();
+        INSTANCE.get_or_init(|| {
+            NetManager::new().expect("Failed to create NetManager")
+        })
+    }
 
-#[no_mangle]
-pub extern "C" fn client_create(protocol_val: c_int) -> ClientHandle {
-    unsafe {
-        // Initialize storage if needed
-        let storage = NET_CLIENT_STORAGE.get_or_init(|| {
-            Arc::new(Mutex::new(HashMap::new()))
-        });
+    pub fn create_client(&self, protocol: PROTOCOLS) -> Result<ClientHandle, &'static str> {
+        if self.is_shutdown_requested() {
+            return Err("Shutdown in progress");
+        }
+
+        let client = ClientBuilder::new()
+            .set_protocol(protocol)
+            .build();
         
-        let client_builder = ClientBuilder::new();
-        let mut protocol_result = match_protocol_enum(protocol_val);
-        if protocol_result.is_none() {
-            return ptr::null_mut();
-        }
-        let protocol = protocol_result.unwrap();
-        if protocol == PROTOCOLS::WEBRTC {
-            return ptr::null_mut(); // Use webrtc_client_create instead
-        }
-        let client = client_builder.set_protocol(protocol).build();
         let wrapper = ClientWrapper::new(client);
-        let handle_id = NEXT_HANDLE_ID.fetch_add(1, Ordering::AcqRel);
-        
-        get_runtime().block_on(async {
-            let mut clients = storage.lock().await;
-            clients.insert(handle_id, wrapper);
+        let handle = self.next_handle();
+
+        self.runtime.block_on(async {
+            let mut clients = self.clients.lock().await;
+            clients.insert(handle, wrapper);
         });
-        handle_id as ClientHandle
-    }
-}
 
-#[no_mangle]
-pub extern "C" fn client_destroy(handle: ClientHandle) -> c_int {
-    if handle.is_null() {
-        return NET_ERROR_INVALID_HANDLE;
+        Ok(handle)
     }
-    
-    unsafe {
-        if let Some(storage) = NET_CLIENT_STORAGE.get() {
-            let handle_id = handle as usize;
-            get_runtime().block_on(async {
-                let mut clients = storage.lock().await;
-                clients.remove(&handle_id);
-            });
-            NET_SUCCESS
-        } else {
-            NET_ERROR_INVALID_HANDLE
+
+    pub fn create_webrtc_client(&self) -> Result<WebRTCHandle, &'static str> {
+        if self.is_shutdown_requested() {
+            return Err("Shutdown in progress");
         }
-    }
-}
 
-
-#[no_mangle]
-pub extern "C" fn client_request(
-    handle: ClientHandle,
-) -> c_int {
-    if handle.is_null() {
-        return NET_ERROR_INVALID_HANDLE;
-    }
-    
-    unsafe {
-        if let Some(ref storage) = NET_CLIENT_STORAGE.get() {
-            let handle_id = handle as usize;
-            
-            get_runtime().block_on(async {
-                let mut clients = storage.lock().await;
-                if let Some(wrapper) = clients.get_mut(&handle_id) {
-                    let response = wrapper.client.clone().request();
-                    
-                    if response.error.is_some() {
-                        wrapper.store_response(response);
-                        NET_ERROR_CONNECTION_FAILED
-                    } else {
-                        wrapper.store_response(response);
-                        NET_SUCCESS
-                    }
-                } else {
-                    NET_ERROR_INVALID_HANDLE
-                }
-            })
-        } else {
-            NET_ERROR_INVALID_HANDLE
-        }
-    }
-}
-
-#[no_mangle]
-pub extern "C" fn client_connect(
-    handle: ClientHandle,
-    server_url: *const c_char
-) -> c_int {
-    if handle.is_null() || server_url.is_null() {
-        return NET_ERROR_INVALID_PARAM;
-    }
-    
-    unsafe {
-        let url = match CStr::from_ptr(server_url).to_str() {
-            Ok(s) => s,
-            Err(_) => return NET_ERROR_INVALID_PARAM,
-        };
-        
-        if let Some(ref storage) = NET_CLIENT_STORAGE.get() {
-            let handle_id = handle as usize;
-            
-            get_runtime().block_on(async {
-                let mut clients = storage.lock().await;
-                if let Some(wrapper) = clients.get_mut(&handle_id) {
-                    wrapper.client = wrapper.client.clone().set_url(url);
-                    match wrapper.client.clone().connect() {
-                        Ok(connected_client) => {
-                            wrapper.client = connected_client;
-                            NET_SUCCESS
-                        },
-                        Err(_) => NET_ERROR_CONNECTION_FAILED,
-                    }
-                } else {
-                    NET_ERROR_INVALID_HANDLE
-                }
-            })
-        } else {
-            NET_ERROR_INVALID_HANDLE
-        }
-    }
-}
-
-#[no_mangle]
-pub extern "C" fn client_set_user(
-    handle: ClientHandle,
-    username: *const c_char
-) -> c_int {
-    if handle.is_null() || username.is_null() {
-        return NET_ERROR_INVALID_PARAM;
-    }
-    
-    unsafe {
-        let user = match CStr::from_ptr(username).to_str() {
-            Ok(s) => s,
-            Err(_) => return NET_ERROR_INVALID_PARAM,
-        };
-        
-        if let Some(ref storage) = NET_CLIENT_STORAGE.get() {
-            let handle_id = handle as usize;
-            
-            get_runtime().block_on(async {
-                let mut clients = storage.lock().await;
-                if let Some(wrapper) = clients.get_mut(&handle_id) {
-                    wrapper.client = wrapper.client.clone().set_user(user);
-                    NET_SUCCESS
-                } else {
-                    NET_ERROR_INVALID_HANDLE
-                }
-            })
-        } else {
-            NET_ERROR_INVALID_HANDLE
-        }
-    }
-}
-
-#[no_mangle]
-pub extern "C" fn client_set_password(
-    handle: ClientHandle,
-    password: *const c_char
-) -> c_int {
-    if handle.is_null() || password.is_null() {
-        return NET_ERROR_INVALID_PARAM;
-    }
-    
-    unsafe {
-        let pass = match CStr::from_ptr(password).to_str() {
-            Ok(s) => s,
-            Err(_) => return NET_ERROR_INVALID_PARAM,
-        };
-        
-        if let Some(ref storage) = NET_CLIENT_STORAGE.get() {
-            let handle_id = handle as usize;
-            
-            get_runtime().block_on(async {
-                let mut clients = storage.lock().await;
-                if let Some(wrapper) = clients.get_mut(&handle_id) {
-                    wrapper.client = wrapper.client.clone().set_password(pass);
-                    NET_SUCCESS
-                } else {
-                    NET_ERROR_INVALID_HANDLE
-                }
-            })
-        } else {
-            NET_ERROR_INVALID_HANDLE
-        }
-    }
-}
-
-#[no_mangle]
-pub extern "C" fn client_set_url(
-    handle: ClientHandle,
-    url: *const c_char
-) -> c_int {
-    if handle.is_null() || url.is_null() {
-        return NET_ERROR_INVALID_PARAM;
-    }
-    
-    unsafe {
-        let url_str = match CStr::from_ptr(url).to_str() {
-            Ok(s) => s,
-            Err(_) => return NET_ERROR_INVALID_PARAM,
-        };
-        
-        if let Some(ref storage) = NET_CLIENT_STORAGE.get() {
-            let handle_id = handle as usize;
-            
-            get_runtime().block_on(async {
-                let mut clients = storage.lock().await;
-                if let Some(wrapper) = clients.get_mut(&handle_id) {
-                    wrapper.client = wrapper.client.clone().set_url(url_str);
-                    NET_SUCCESS
-                } else {
-                    NET_ERROR_INVALID_HANDLE
-                }
-            })
-        } else {
-            NET_ERROR_INVALID_HANDLE
-        }
-    }
-}
-
-#[no_mangle]
-pub extern "C" fn client_set_method(
-    handle: ClientHandle,
-    method: *const c_char
-) -> c_int {
-    if handle.is_null() || method.is_null() {
-        return NET_ERROR_INVALID_PARAM;
-    }
-    
-    unsafe {
-        let method_str = match CStr::from_ptr(method).to_str() {
-            Ok(s) => s,
-            Err(_) => return NET_ERROR_INVALID_PARAM,
-        };
-        
-        if let Some(ref storage) = NET_CLIENT_STORAGE.get() {
-            let handle_id = handle as usize;
-            
-            get_runtime().block_on(async {
-                let mut clients = storage.lock().await;
-                if let Some(wrapper) = clients.get_mut(&handle_id) {
-                    wrapper.client = wrapper.client.clone().set_method(method_str);
-                    NET_SUCCESS
-                } else {
-                    NET_ERROR_INVALID_HANDLE
-                }
-            })
-        } else {
-            NET_ERROR_INVALID_HANDLE
-        }
-    }
-}
-
-#[no_mangle]
-pub extern "C" fn client_set_req_body(
-    handle: ClientHandle,
-    body: *const c_char
-) -> c_int {
-    if handle.is_null() || body.is_null() {
-        return NET_ERROR_INVALID_PARAM;
-    }
-    
-    unsafe {
-        let request_body = match CStr::from_ptr(body).to_str() {
-            Ok(s) => s,
-            Err(_) => return NET_ERROR_INVALID_PARAM,
-        };
-        
-        if let Some(ref storage) = NET_CLIENT_STORAGE.get() {
-            let handle_id = handle as usize;
-            
-            get_runtime().block_on(async {
-                let mut clients = storage.lock().await;
-                if let Some(wrapper) = clients.get_mut(&handle_id) {
-                    wrapper.client = wrapper.client.clone().set_req_body(request_body);
-                    NET_SUCCESS
-                } else {
-                    NET_ERROR_INVALID_HANDLE
-                }
-            })
-        } else {
-            NET_ERROR_INVALID_HANDLE
-        }
-    }
-}
-
-#[no_mangle]
-pub extern "C" fn client_set_header(
-    handle: ClientHandle,
-    key: *const c_char,
-    value: *const c_char
-) -> c_int {
-    if handle.is_null() || key.is_null() || value.is_null() {
-        return NET_ERROR_INVALID_PARAM;
-    }
-    
-    unsafe {
-        let header_key = match CStr::from_ptr(key).to_str() {
-            Ok(s) => s,
-            Err(_) => return NET_ERROR_INVALID_PARAM,
-        };
-        
-        let header_value = match CStr::from_ptr(value).to_str() {
-            Ok(s) => s,
-            Err(_) => return NET_ERROR_INVALID_PARAM,
-        };
-        
-        if let Some(ref storage) = NET_CLIENT_STORAGE.get() {
-            let handle_id = handle as usize;
-            
-            get_runtime().block_on(async {
-                let mut clients = storage.lock().await;
-                if let Some(wrapper) = clients.get_mut(&handle_id) {
-                    wrapper.client = wrapper.client.clone().set_req_headers(vec![(header_key, header_value)]);
-                    NET_SUCCESS
-                } else {
-                    NET_ERROR_INVALID_HANDLE
-                }
-            })
-        } else {
-            NET_ERROR_INVALID_HANDLE
-        }
-    }
-}
-
-#[no_mangle]
-pub extern "C" fn client_set_timeout(
-    handle: ClientHandle,
-    timeout_seconds: c_int
-) -> c_int {
-    if handle.is_null() || timeout_seconds < 0 {
-        return NET_ERROR_INVALID_PARAM;
-    }
-    
-    unsafe {
-        if let Some(ref storage) = NET_CLIENT_STORAGE.get() {
-            let handle_id = handle as usize;
-            
-            get_runtime().block_on(async {
-                let mut clients = storage.lock().await;
-                if let Some(wrapper) = clients.get_mut(&handle_id) {
-                    wrapper.client = wrapper.client.clone().set_timeout(timeout_seconds as u64);
-                    NET_SUCCESS
-                } else {
-                    NET_ERROR_INVALID_HANDLE
-                }
-            })
-        } else {
-            NET_ERROR_INVALID_HANDLE
-        }
-    }
-}
-
-
-// ============================================================================
-// WEBRTC CLIENT FUNCTIONS
-// ============================================================================
-
-#[no_mangle]
-pub extern "C" fn webrtc_client_create() -> WebRTCHandle {
-    unsafe {
-        // Initialize storage if needed
-        let storage = WEBRTC_CLIENT_STORAGE.get_or_init(|| {
-            Arc::new(Mutex::new(HashMap::new()))
-        });
-        
         let client = WebRTCClient::new();
-        let handle_id = NEXT_HANDLE_ID.fetch_add(1, Ordering::AcqRel);
-        
-        get_runtime().block_on(async {
-            let mut clients = storage.lock().await;
-            clients.insert(handle_id, client);
+        let handle = self.next_handle();
+
+        self.runtime.block_on(async {
+            let mut clients = self.webrtc_clients.lock().await;
+            clients.insert(handle, client);
         });
+
+        Ok(handle)
+    }
+
+    pub fn destroy_client(&self, handle: ClientHandle) -> bool {
+        self.runtime.block_on(async {
+            let mut clients = self.clients.lock().await;
+            clients.remove(&handle).is_some()
+        })
+    }
+
+    pub fn destroy_webrtc_client(&self, handle: WebRTCHandle) -> bool {
+        self.runtime.block_on(async {
+            let mut clients = self.webrtc_clients.lock().await;
+            clients.remove(&handle).is_some()
+        })
+    }
+
+    pub async fn with_client<F, R>(&self, handle: ClientHandle, f: F) -> Result<R, &'static str>
+    where
+        F: FnOnce(&mut ClientWrapper) -> R,
+    {
+        let mut clients = self.clients.lock().await;
+        match clients.get_mut(&handle) {
+            Some(wrapper) => Ok(f(wrapper)),
+            None => Err("Invalid handle"),
+        }
+    }
+
+    #[allow(dead_code)]
+    pub async fn with_webrtc_client<F, R>(&self, handle: WebRTCHandle, f: F) -> Result<R, &'static str>
+    where
+        F: FnOnce(&mut WebRTCClient) -> R,
+    {
+        let mut clients = self.webrtc_clients.lock().await;
+        match clients.get_mut(&handle) {
+            Some(client) => Ok(f(client)),
+            None => Err("Invalid handle"),
+        }
+    }
+
+    #[allow(dead_code)]
+    pub async fn with_webrtc_client_async<F, Fut, R>(&self, handle: WebRTCHandle, f: F) -> Result<R, &'static str>
+    where
+        F: FnOnce(&mut WebRTCClient) -> Fut,
+        Fut: std::future::Future<Output = R>,
+    {
+        let mut clients = self.webrtc_clients.lock().await;
+        match clients.get_mut(&handle) {
+            Some(client) => Ok(f(client).await),
+            None => Err("Invalid handle"),
+        }
+    }
+
+    // ========================================================================
+    // LIFECYCLE MANAGEMENT
+    // ========================================================================
+
+    fn next_handle(&self) -> usize {
+        self.next_handle_id.fetch_add(1, Ordering::AcqRel)
+    }
+
+    pub fn is_shutdown_requested(&self) -> bool {
+        self.shutdown_flag.load(Ordering::Acquire)
+    }
+
+    pub fn request_shutdown(&self) {
+        self.shutdown_flag.store(true, Ordering::Release);
+    }
+
+    pub fn reset_shutdown(&self) {
+        self.shutdown_flag.store(false, Ordering::Release);
+    }
+
+    pub fn increment_operations(&self) {
+        self.active_operations.fetch_add(1, Ordering::AcqRel);
+    }
+
+    pub fn decrement_operations(&self) {
+        self.active_operations.fetch_sub(1, Ordering::AcqRel);
+    }
+
+    pub fn active_operations_count(&self) -> usize {
+        self.active_operations.load(Ordering::Acquire)
+    }
+
+    pub async fn cleanup_with_timeout(&self, timeout_seconds: u64) -> Result<(), &'static str> {
+        // Set shutdown flag
+        self.request_shutdown();
         
-        handle_id as WebRTCHandle
-    }
-}
-pub extern "C" fn webrtc_client_destroy(handle: WebRTCHandle) -> c_int {
-    if handle.is_null() {
-        return NET_ERROR_INVALID_HANDLE;
-    }
-    
-    unsafe {
-        if let Some(ref storage) = WEBRTC_CLIENT_STORAGE.get() {
-            let handle_id = handle as usize;
-            get_runtime().block_on(async {
-                let mut clients = storage.lock().await;
-                clients.remove(&handle_id);
-            });
-            NET_SUCCESS
-        } else {
-            NET_ERROR_INVALID_HANDLE
+        // Wait for active operations to complete
+        let start = std::time::Instant::now();
+        while self.active_operations_count() > 0 {
+            if start.elapsed().as_secs() > timeout_seconds {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
         }
+
+        // Clean up clients with timeout
+        match timeout(Duration::from_secs(5), async {
+            self.clients.lock().await.clear();
+            self.webrtc_clients.lock().await.clear();
+        }).await {
+            Ok(_) => Ok(()),
+            Err(_) => Err("Timeout during cleanup"),
+        }
+    }
+
+    pub fn block_on<F>(&self, future: F) -> F::Output 
+    where
+        F: std::future::Future,
+    {
+        self.runtime.block_on(future)
     }
 }
 
-#[no_mangle]
-pub extern "C" fn webrtc_connect_to_signaling_server(
-    handle: WebRTCHandle, 
-    server_url: *const c_char
-) -> c_int {
-    if handle.is_null() || server_url.is_null() {
-        return NET_ERROR_INVALID_PARAM;
-    }
-    
-    unsafe {
-        let url = match CStr::from_ptr(server_url).to_str() {
-            Ok(s) => s,
-            Err(_) => return NET_ERROR_INVALID_PARAM,
-        };
+pub struct OperationGuard;
+
+impl OperationGuard {
+    pub fn new() -> Option<Self> {
+        let manager = NetManager::instance();
+        if manager.is_shutdown_requested() {
+            return None;
+        }
         
-        if let Some(ref storage) = WEBRTC_CLIENT_STORAGE.get() {
-            let handle_id = handle as usize;
-            
-            get_runtime().block_on(async {
-                let mut clients = storage.lock().await;
-                if let Some(client) = clients.get_mut(&handle_id) {
-                    match client.connect_to_signaling_server(url).await {
-                        Ok(_) => NET_SUCCESS,
-                        Err(_) => NET_ERROR_CONNECTION_FAILED,
-                    }
-                } else {
-                    NET_ERROR_INVALID_HANDLE
-                }
-            })
-        } else {
-            NET_ERROR_INVALID_HANDLE
-        }
+        manager.increment_operations();
+        Some(OperationGuard)
     }
 }
 
-#[no_mangle]
-pub extern "C" fn webrtc_create_session(
-    handle: WebRTCHandle,
-    session_id_out: *mut c_char,
-    session_id_len: c_int
-) -> c_int {
-    if handle.is_null() || session_id_out.is_null() {
-        return NET_ERROR_INVALID_PARAM;
-    }
-    
-    unsafe {
-        if let Some(ref storage) = WEBRTC_CLIENT_STORAGE.get() {
-            let handle_id = handle as usize;
-            
-            get_runtime().block_on(async {
-                let mut clients = storage.lock().await;
-                if let Some(client) = clients.get_mut(&handle_id) {
-                    match client.create_session().await {
-                        Ok(session_id) => {
-                            let c_session_id = match CString::new(session_id) {
-                                Ok(cstr) => cstr,
-                                Err(_) => return NET_ERROR_SESSION_FAILED, // Contains null bytes
-                            };
-                            let session_bytes = c_session_id.as_bytes_with_nul();
-                            
-                            if session_bytes.len() <= session_id_len as usize {
-                                ptr::copy_nonoverlapping(
-                                    session_bytes.as_ptr() as *const c_char,
-                                    session_id_out,
-                                    session_bytes.len()
-                                );
-                                NET_SUCCESS
-                            } else {
-                                NET_ERROR_INVALID_PARAM // Buffer too small
-                            }
-                        }
-                        Err(_) => NET_ERROR_SESSION_FAILED,
-                    }
-                } else {
-                    NET_ERROR_INVALID_HANDLE
-                }
-            })
-        } else {
-            NET_ERROR_INVALID_HANDLE
-        }
-    }
-}
-
-#[no_mangle]
-pub extern "C" fn webrtc_join_session(
-    handle: WebRTCHandle,
-    session_id: *const c_char
-) -> c_int {
-    if handle.is_null() || session_id.is_null() {
-        return NET_ERROR_INVALID_PARAM;
-    }
-    
-    unsafe {
-        let session = match CStr::from_ptr(session_id).to_str() {
-            Ok(s) => s,
-            Err(_) => return NET_ERROR_INVALID_PARAM,
-        };
-        
-        if let Some(ref storage) = WEBRTC_CLIENT_STORAGE.get() {
-            let handle_id = handle as usize;
-            
-            get_runtime().block_on(async {
-                let mut clients = storage.lock().await;
-                if let Some(client) = clients.get_mut(&handle_id) {
-                    match client.join_session(session).await {
-                        Ok(_) => NET_SUCCESS,
-                        Err(_) => NET_ERROR_SESSION_FAILED,
-                    }
-                } else {
-                    NET_ERROR_INVALID_HANDLE
-                }
-            })
-        } else {
-            NET_ERROR_INVALID_HANDLE
-        }
-    }
-}
-
-#[no_mangle]
-pub extern "C" fn webrtc_publish_session(
-    handle: WebRTCHandle,
-    session_id: *const c_char
-) -> c_int {
-    if handle.is_null() || session_id.is_null() {
-        return NET_ERROR_INVALID_PARAM;
-    }
-    
-    unsafe {
-        let session = match CStr::from_ptr(session_id).to_str() {
-            Ok(s) => s,
-            Err(_) => return NET_ERROR_INVALID_PARAM,
-        };
-        
-        if let Some(ref storage) = WEBRTC_CLIENT_STORAGE.get() {
-            let handle_id = handle as usize;
-            
-            get_runtime().block_on(async {
-                let mut clients = storage.lock().await;
-                if let Some(client) = clients.get_mut(&handle_id) {
-                    match client.publish(session).await {
-                        Ok(_) => NET_SUCCESS,
-                        Err(_) => NET_ERROR_SESSION_FAILED,
-                    }
-                } else {
-                    NET_ERROR_INVALID_HANDLE
-                }
-            })
-        } else {
-            NET_ERROR_INVALID_HANDLE
-        }
-    }
-}
-
-#[no_mangle]
-pub extern "C" fn webrtc_start_webcam_stream(
-    handle: WebRTCHandle,
-    camera_index: c_int
-) -> c_int {
-    if handle.is_null() {
-        return NET_ERROR_INVALID_PARAM;
-    }
-    
-    unsafe {
-        if let Some(ref storage) = WEBRTC_CLIENT_STORAGE.get() {
-            let handle_id = handle as usize;
-            
-            get_runtime().block_on(async {
-                let mut clients = storage.lock().await;
-                if let Some(client) = clients.get_mut(&handle_id) {
-                    let source = StreamSource::Webcam(camera_index as u32);
-                    match client.start_streaming(Some(source)).await {
-                        Ok(_) => NET_SUCCESS,
-                        Err(_) => NET_ERROR_STREAM_FAILED,
-                    }
-                } else {
-                    NET_ERROR_INVALID_HANDLE
-                }
-            })
-        } else {
-            NET_ERROR_INVALID_HANDLE
-        }
-    }
-}
-
-#[no_mangle]
-pub extern "C" fn webrtc_start_file_stream(
-    handle: WebRTCHandle,
-    file_path: *const c_char
-) -> c_int {
-    if handle.is_null() || file_path.is_null() {
-        return NET_ERROR_INVALID_PARAM;
-    }
-    
-    unsafe {
-        let path = match CStr::from_ptr(file_path).to_str() {
-            Ok(s) => s,
-            Err(_) => return NET_ERROR_INVALID_PARAM,
-        };
-        
-        if let Some(ref storage) = WEBRTC_CLIENT_STORAGE.get() {
-            let handle_id = handle as usize;
-            
-            get_runtime().block_on(async {
-                let mut clients = storage.lock().await;
-                if let Some(client) = clients.get_mut(&handle_id) {
-                    let source = StreamSource::File(path.to_string());
-                    match client.start_streaming(Some(source)).await {
-                        Ok(_) => NET_SUCCESS,
-                        Err(_) => NET_ERROR_STREAM_FAILED,
-                    }
-                } else {
-                    NET_ERROR_INVALID_HANDLE
-                }
-            })
-        } else {
-            NET_ERROR_INVALID_HANDLE
-        }
-    }
-}
-
-#[no_mangle]
-pub extern "C" fn webrtc_stop_stream(handle: WebRTCHandle) -> c_int {
-    if handle.is_null() {
-        return NET_ERROR_INVALID_PARAM;
-    }
-    
-    unsafe {
-        if let Some(ref storage) = WEBRTC_CLIENT_STORAGE.get() {
-            let handle_id = handle as usize;
-            
-            get_runtime().block_on(async {
-                let mut clients = storage.lock().await;
-                if let Some(client) = clients.get_mut(&handle_id) {
-                    match client.stop_stream().await {
-                        Ok(_) => NET_SUCCESS,
-                        Err(_) => NET_ERROR_STREAM_FAILED,
-                    }
-                } else {
-                    NET_ERROR_INVALID_HANDLE
-                }
-            })
-        } else {
-            NET_ERROR_INVALID_HANDLE
-        }
-    }
-}
-
-#[no_mangle]
-pub extern "C" fn webrtc_wait_for_subscriber(
-    handle: WebRTCHandle,
-    timeout_seconds: c_int
-) -> c_int {
-    if handle.is_null() {
-        return NET_ERROR_INVALID_PARAM;
-    }
-    
-    unsafe {
-        if let Some(ref storage) = WEBRTC_CLIENT_STORAGE.get() {
-            let handle_id = handle as usize;
-            
-            get_runtime().block_on(async {
-                let mut clients = storage.lock().await;
-                if let Some(client) = clients.get_mut(&handle_id) {
-                    match client.wait_for_subscriber(timeout_seconds as u64).await {
-                        Ok(_) => NET_SUCCESS,
-                        Err(_) => NET_ERROR_TIMEOUT,
-                    }
-                } else {
-                    NET_ERROR_INVALID_HANDLE
-                }
-            })
-        } else {
-            NET_ERROR_INVALID_HANDLE
-        }
-    }
-}
-
-fn match_protocol_enum(protocol: c_int) -> Option<PROTOCOLS> {
-    match protocol {
-        0 => Some(PROTOCOLS::HTTP),
-        1 => Some(PROTOCOLS::HTTPS),
-        2 => Some(PROTOCOLS::FILE),
-        3 => Some(PROTOCOLS::COAP),
-        4 => Some(PROTOCOLS::MQTT),
-        5 => Some(PROTOCOLS::FTP),
-        6 => Some(PROTOCOLS::SFTP),
-        7 => Some(PROTOCOLS::WS),
-        8 => Some(PROTOCOLS::WSS),
-        9 => Some(PROTOCOLS::WEBRTC),
-        10 => Some(PROTOCOLS::HTTP3),
-        11 => Some(PROTOCOLS::QUIC),
-        _ => None,
+impl Drop for OperationGuard {
+    fn drop(&mut self) {
+        NetManager::instance().decrement_operations();
     }
 }
 
 // ============================================================================
-// UTILITY FUNCTIONS
+// C-COMPATIBLE RESPONSE STRUCTURES (same as before)
 // ============================================================================
 
-#[no_mangle]
-pub extern "C" fn net_get_error_message(error_code: c_int) -> *const c_char {
-    match error_code {
-        NET_SUCCESS => "Success\0".as_ptr() as *const c_char,
-        NET_ERROR_INVALID_HANDLE => "Invalid handle\0".as_ptr() as *const c_char,
-        NET_ERROR_INVALID_PARAM => "Invalid parameter\0".as_ptr() as *const c_char,
-        NET_ERROR_CONNECTION_FAILED => "Connection failed\0".as_ptr() as *const c_char,
-        NET_ERROR_TIMEOUT => "Operation timed out\0".as_ptr() as *const c_char,
-        NET_ERROR_SESSION_FAILED => "Session operation failed\0".as_ptr() as *const c_char,
-        NET_ERROR_STREAM_FAILED => "Stream operation failed\0".as_ptr() as *const c_char,
-        _ => "Unknown error\0".as_ptr() as *const c_char,
-    }
-}
 
-// ============================================================================
-// HIGH-LEVEL CONVENIENCE FUNCTIONS
-// ============================================================================
-
-#[no_mangle]
-pub extern "C" fn webrtc_setup_publisher(
-    server_url: *const c_char,
-    camera_index: c_int,
-    session_id_out: *mut c_char,
-    session_id_len: c_int
-) -> WebRTCHandle {
-    if server_url.is_null() || session_id_out.is_null() {
-        return ptr::null_mut();
-    }
-    
-    let handle = webrtc_client_create();
-    if handle.is_null() {
-        return ptr::null_mut();
-    }
-    
-    // Connect to server
-    if webrtc_connect_to_signaling_server(handle, server_url) != NET_SUCCESS {
-        webrtc_client_destroy(handle);
-        return ptr::null_mut();
-    }
-    
-    // Create session
-    if webrtc_create_session(handle, session_id_out, session_id_len) != NET_SUCCESS {
-        webrtc_client_destroy(handle);
-        return ptr::null_mut();
-    }
-    
-    // Publish session
-    if webrtc_publish_session(handle, session_id_out) != NET_SUCCESS {
-        webrtc_client_destroy(handle);
-        return ptr::null_mut();
-    }
-    
-    // Start streaming
-    if webrtc_start_webcam_stream(handle, camera_index) != NET_SUCCESS {
-        webrtc_client_destroy(handle);
-        return ptr::null_mut();
-    }
-    
-    handle
-}
-
-#[no_mangle]
-pub extern "C" fn webrtc_setup_subscriber(
-    server_url: *const c_char,
-    session_id: *const c_char
-) -> WebRTCHandle {
-    if server_url.is_null() || session_id.is_null() {
-        return ptr::null_mut();
-    }
-    
-    let handle = webrtc_client_create();
-    if handle.is_null() {
-        return ptr::null_mut();
-    }
-    
-    // Connect to server
-    if webrtc_connect_to_signaling_server(handle, server_url) != NET_SUCCESS {
-        webrtc_client_destroy(handle);
-        return ptr::null_mut();
-    }
-    
-    // Join session
-    if webrtc_join_session(handle, session_id) != NET_SUCCESS {
-        webrtc_client_destroy(handle);
-        return ptr::null_mut();
-    }
-    
-    handle
-}
-
-// ============================================================================
-// TESTS
-// ============================================================================
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    
-    #[test]
-    fn test_net_init_cleanup() {
-        assert_eq!(net_init(), NET_SUCCESS);
-        assert_eq!(net_cleanup(), NET_SUCCESS);
-    }
-    
-    #[test]
-    fn test_client_create_destroy() {
-        net_init();
-        
-        let handle = client_create(1);
-        assert!(!handle.is_null());
-        
-        assert_eq!(client_destroy(handle), NET_SUCCESS);
-        
-        net_cleanup();
-    }
-    
-    #[test]
-    fn test_webrtc_client_create_destroy() {
-        net_init();
-        
-        let handle = webrtc_client_create();
-        assert!(!handle.is_null());
-        
-        assert_eq!(webrtc_client_destroy(handle), NET_SUCCESS);
-        
-        net_cleanup();
-    }
-    
-    #[test]
-    fn test_error_messages() {
-        let msg = net_get_error_message(NET_SUCCESS);
-        assert!(!msg.is_null());
-        
-        unsafe {
-            let c_str = CStr::from_ptr(msg);
-            assert_eq!(c_str.to_str().unwrap(), "Success");
-        }
-    }
-}
-
-// ============================================================================
-// C-COMPATIBLE RESPONSE STRUCTURES
-// ============================================================================
 
 #[repr(C)]
 pub struct CNetResponse {
@@ -992,20 +254,21 @@ pub struct CNetHeader {
     pub value_len: c_int,
 }
 
-// ============================================================================
-// CLIENT WRAPPER WITH RESPONSE STORAGE
-// ============================================================================
+unsafe impl Send for CNetHeader {}
+unsafe impl Sync for CNetHeader {}
 
 pub struct ClientWrapper {
     client: Client,
     last_response: Option<NetResponse>,
-    // Storage for C-compatible data (to keep pointers valid)
     response_body: Option<CString>,
     response_headers: Option<Vec<CNetHeader>>,
     response_header_strings: Option<Vec<CString>>,
     response_error: Option<CString>,
 }
 
+unsafe impl Sync for ClientWrapper {}
+
+#[allow(dead_code)]
 impl ClientWrapper {
     pub fn new(client: Client) -> Self {
         Self {
@@ -1018,13 +281,108 @@ impl ClientWrapper {
         }
     }
 
-    pub fn store_response(&mut self, response: NetResponse) {
-        // Convert body to CString
-        self.response_body = Some(CString::new(response.body.clone()).unwrap_or_default());
+    // Direct client access methods
+    pub fn client(&self) -> &Client {
+        &self.client
+    }
+
+    pub fn client_mut(&mut self) -> &mut Client {
+        &mut self.client
+    }
+
+    // Configuration methods that work directly on the client
+    pub fn set_url(&mut self, url: &str) -> &mut Self {
+        self.client = self.client.clone().set_url(url);
+        self
+    }
+
+    pub fn set_method(&mut self, method: &str) -> &mut Self {
+        self.client = self.client.clone().set_method(method);
+        self
+    }
+
+    pub fn set_user(&mut self, user: &str) -> &mut Self {
+        self.client = self.client.clone().set_user(user);
+        self
+    }
+
+    pub fn set_password(&mut self, password: &str) -> &mut Self {
+        self.client = self.client.clone().set_password(password);
+        self
+    }
+
+    pub fn set_req_body(&mut self, body: &str) -> &mut Self {
+        self.client = self.client.clone().set_req_body(body);
+        self
+    }
+
+    pub fn set_header(&mut self, key: &str, value: &str) -> &mut Self {
+        self.client = self.client.clone().set_req_headers(vec![(key, value)]);
+        self
+    }
+
+    pub fn set_timeout(&mut self, timeout: u64) -> &mut Self {
+        self.client = self.client.clone().set_timeout(timeout);
+        self
+    }
+
+    // Request method that stores response
+    pub fn request(&mut self) -> Result<(), String> {
+        let response = self.client.clone().request();
         
-        // Convert error to CString if present
+        let has_error = response.error.is_some();
+        let error_msg = response.error.clone();
+        
+        self.store_response(response);
+        
+        if has_error {
+            Err(error_msg.unwrap())
+        } else {
+            Ok(())
+        }
+    }
+
+    // Convenience HTTP methods
+    pub fn get(&mut self) -> Result<(), String> {
+        self.set_method("GET").request()
+    }
+
+    pub fn post(&mut self) -> Result<(), String> {
+        self.set_method("POST").request()
+    }
+
+    pub fn put(&mut self) -> Result<(), String> {
+        self.set_method("PUT").request()
+    }
+
+    pub fn delete(&mut self) -> Result<(), String> {
+        self.set_method("DELETE").request()
+    }
+
+    // Connection method for persistent protocols
+    pub fn connect(&mut self) -> Result<(), String> {
+        match self.client.clone().connect() {
+            Ok(connected_client) => {
+                self.client = connected_client;
+                Ok(())
+            }
+            Err(e) => Err(format!("Connection failed: {:?}", e)),
+        }
+    }
+
+    // Response storage and access (same as before)
+    pub fn store_response(&mut self, response: NetResponse) {
+        // Safe CString creation
+        self.response_body = match CString::new(response.body.clone()) {
+            Ok(cstr) => Some(cstr),
+            Err(_) => Some(CString::new("[Response contains null bytes]").unwrap()),
+        };
+        
         self.response_error = if let Some(error) = &response.error {
-            Some(CString::new(error.clone()).unwrap_or_default())
+            match CString::new(error.clone()) {
+                Ok(cstr) => Some(cstr),
+                Err(_) => Some(CString::new("[Error contains null bytes]").unwrap()),
+            }
         } else {
             Some(CString::new("").unwrap())
         };
@@ -1034,8 +392,15 @@ impl ClientWrapper {
         let mut c_headers = Vec::new();
         
         for (name, value) in &response.headers {
-            let name_cstring = CString::new(name.clone()).unwrap_or_default();
-            let value_cstring = CString::new(value.clone()).unwrap_or_default();
+            let name_cstring = match CString::new(name.clone()) {
+                Ok(cstr) => cstr,
+                Err(_) => continue, // Skip invalid headers
+            };
+            
+            let value_cstring = match CString::new(value.clone()) {
+                Ok(cstr) => cstr,
+                Err(_) => CString::new("[Value contains null bytes]").unwrap(),
+            };
             
             let c_header = CNetHeader {
                 name_ptr: name_cstring.as_ptr(),
@@ -1088,142 +453,831 @@ impl ClientWrapper {
 }
 
 // ============================================================================
-// NEW STRUCT-BASED RESPONSE ACCESS
+// FFI FUNCTIONS - Now much cleaner using the factory pattern
 // ============================================================================
 
 #[no_mangle]
-pub extern "C" fn client_get_response(handle: ClientHandle) -> CNetResponse {
-    if handle.is_null() {
-        return CNetResponse {
-            status_code: NET_ERROR_INVALID_HANDLE,
-            body_ptr: ptr::null(),
-            body_len: 0,
-            headers_ptr: ptr::null(),
-            headers_count: 0,
-            error_ptr: ptr::null(),
-            error_len: 0,
-        };
-    }
+pub extern "C" fn net_init() -> c_int {
+    let manager = NetManager::instance();
+    manager.reset_shutdown();
+    NET_SUCCESS
+}
+
+#[no_mangle]
+pub extern "C" fn net_cleanup() -> c_int {
+    net_cleanup_with_timeout(30)
+}
+
+#[no_mangle]
+pub extern "C" fn net_cleanup_with_timeout(timeout_seconds: c_int) -> c_int {
+    let manager = NetManager::instance();
     
-    unsafe {
-        if let Some(storage) = NET_CLIENT_STORAGE.get() {
-            let handle_id = handle as usize;
-            
-            get_runtime().block_on(async {
-                let clients = storage.lock().await;
-                if let Some(wrapper) = clients.get(&handle_id) {
-                    wrapper.get_c_response()
-                } else {
-                    CNetResponse {
-                        status_code: NET_ERROR_INVALID_HANDLE,
-                        body_ptr: ptr::null(),
-                        body_len: 0,
-                        headers_ptr: ptr::null(),
-                        headers_count: 0,
-                        error_ptr: ptr::null(),
-                        error_len: 0,
-                    }
-                }
-            })
-        } else {
-            CNetResponse {
-                status_code: NET_ERROR_INVALID_HANDLE,
-                body_ptr: ptr::null(),
-                body_len: 0,
-                headers_ptr: ptr::null(),
-                headers_count: 0,
-                error_ptr: ptr::null(),
-                error_len: 0,
-            }
-        }
+    match manager.block_on(manager.cleanup_with_timeout(timeout_seconds as u64)) {
+        Ok(_) => NET_SUCCESS,
+        Err(_) => NET_ERROR_TIMEOUT,
     }
 }
 
-// Convenience HTTP method functions that return response directly
+// ============================================================================
+// CLIENT FACTORY FUNCTIONS
+// ============================================================================
+
+#[no_mangle]
+pub extern "C" fn client_create(protocol_val: c_int) -> ClientHandle {
+    let _guard = match OperationGuard::new() {
+        Some(guard) => guard,
+        None => return 0,
+    };
+
+    let protocol = match match_protocol_enum(protocol_val) {
+        Some(p) => p,
+        None => return 0,
+    };
+    
+    if protocol == PROTOCOLS::WEBRTC {
+        return 0; // Use webrtc_client_create instead
+    }
+
+    let manager = NetManager::instance();
+    match manager.create_client(protocol) {
+        Ok(handle) => handle,
+        Err(_) => 0,
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn client_destroy(handle: ClientHandle) -> c_int {
+    let _guard = match OperationGuard::new() {
+        Some(guard) => guard,
+        None => return NET_ERROR_INVALID_HANDLE,
+    };
+
+    if handle == 0 {
+        return NET_ERROR_INVALID_HANDLE;
+    }
+
+    let manager = NetManager::instance();
+    if manager.destroy_client(handle) {
+        NET_SUCCESS
+    } else {
+        NET_ERROR_INVALID_HANDLE
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn webrtc_client_create() -> WebRTCHandle {
+    let _guard = match OperationGuard::new() {
+        Some(guard) => guard,
+        None => return 0,
+    };
+
+    let manager = NetManager::instance();
+    match manager.create_webrtc_client() {
+        Ok(handle) => handle,
+        Err(_) => 0,
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn webrtc_client_destroy(handle: WebRTCHandle) -> c_int {
+    let _guard = match OperationGuard::new() {
+        Some(guard) => guard,
+        None => return NET_ERROR_INVALID_HANDLE,
+    };
+
+    if handle == 0 {
+        return NET_ERROR_INVALID_HANDLE;
+    }
+
+    let manager = NetManager::instance();
+    if manager.destroy_webrtc_client(handle) {
+        NET_SUCCESS
+    } else {
+        NET_ERROR_INVALID_HANDLE
+    }
+}
+
+// ============================================================================
+// CLIENT CONFIGURATION FUNCTIONS - Using direct client access
+// ============================================================================
+
+#[no_mangle]
+pub extern "C" fn client_set_url(handle: ClientHandle, url: *const c_char) -> c_int {
+    let _guard = match OperationGuard::new() {
+        Some(guard) => guard,
+        None => return NET_ERROR_INVALID_HANDLE,
+    };
+
+    if handle == 0 || url.is_null() {
+        return NET_ERROR_INVALID_PARAM;
+    }
+
+    let url_str = unsafe {
+        match CStr::from_ptr(url).to_str() {
+            Ok(s) => s,
+            Err(_) => return NET_ERROR_INVALID_PARAM,
+        }
+    };
+
+    let manager = NetManager::instance();
+    
+    match manager.block_on(manager.with_client(handle, |wrapper| {
+        wrapper.set_url(url_str);
+    })) {
+        Ok(_) => NET_SUCCESS,
+        Err(_) => NET_ERROR_INVALID_HANDLE,
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn client_set_method(handle: ClientHandle, method: *const c_char) -> c_int {
+    let _guard = match OperationGuard::new() {
+        Some(guard) => guard,
+        None => return NET_ERROR_INVALID_HANDLE,
+    };
+
+    if handle == 0 || method.is_null() {
+        return NET_ERROR_INVALID_PARAM;
+    }
+
+    let method_str = unsafe {
+        match CStr::from_ptr(method).to_str() {
+            Ok(s) => s,
+            Err(_) => return NET_ERROR_INVALID_PARAM,
+        }
+    };
+
+    let manager = NetManager::instance();
+    
+    match manager.block_on(manager.with_client(handle, |wrapper| {
+        wrapper.set_method(method_str);
+    })) {
+        Ok(_) => NET_SUCCESS,
+        Err(_) => NET_ERROR_INVALID_HANDLE,
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn client_set_user(handle: ClientHandle, username: *const c_char) -> c_int {
+    let _guard = match OperationGuard::new() {
+        Some(guard) => guard,
+        None => return NET_ERROR_INVALID_HANDLE,
+    };
+
+    if handle == 0 || username.is_null() {
+        return NET_ERROR_INVALID_PARAM;
+    }
+
+    let user = unsafe {
+        match CStr::from_ptr(username).to_str() {
+            Ok(s) => s,
+            Err(_) => return NET_ERROR_INVALID_PARAM,
+        }
+    };
+
+    let manager = NetManager::instance();
+    
+    match manager.block_on(manager.with_client(handle, |wrapper| {
+        wrapper.set_user(user);
+    })) {
+        Ok(_) => NET_SUCCESS,
+        Err(_) => NET_ERROR_INVALID_HANDLE,
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn client_set_password(handle: ClientHandle, password: *const c_char) -> c_int {
+    let _guard = match OperationGuard::new() {
+        Some(guard) => guard,
+        None => return NET_ERROR_INVALID_HANDLE,
+    };
+
+    if handle == 0 || password.is_null() {
+        return NET_ERROR_INVALID_PARAM;
+    }
+
+    let pass = unsafe {
+        match CStr::from_ptr(password).to_str() {
+            Ok(s) => s,
+            Err(_) => return NET_ERROR_INVALID_PARAM,
+        }
+    };
+
+    let manager = NetManager::instance();
+    
+    match manager.block_on(manager.with_client(handle, |wrapper| {
+        wrapper.set_password(pass);
+    })) {
+        Ok(_) => NET_SUCCESS,
+        Err(_) => NET_ERROR_INVALID_HANDLE,
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn client_set_req_body(handle: ClientHandle, body: *const c_char) -> c_int {
+    let _guard = match OperationGuard::new() {
+        Some(guard) => guard,
+        None => return NET_ERROR_INVALID_HANDLE,
+    };
+
+    if handle == 0 || body.is_null() {
+        return NET_ERROR_INVALID_PARAM;
+    }
+
+    let body_str = unsafe {
+        match CStr::from_ptr(body).to_str() {
+            Ok(s) => s,
+            Err(_) => return NET_ERROR_INVALID_PARAM,
+        }
+    };
+
+    let manager = NetManager::instance();
+    
+    match manager.block_on(manager.with_client(handle, |wrapper| {
+        wrapper.set_req_body(body_str);
+    })) {
+        Ok(_) => NET_SUCCESS,
+        Err(_) => NET_ERROR_INVALID_HANDLE,
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn client_set_header(handle: ClientHandle, key: *const c_char, value: *const c_char) -> c_int {
+    let _guard = match OperationGuard::new() {
+        Some(guard) => guard,
+        None => return NET_ERROR_INVALID_HANDLE,
+    };
+
+    if handle == 0 || key.is_null() || value.is_null() {
+        return NET_ERROR_INVALID_PARAM;
+    }
+
+    let (key_str, value_str) = unsafe {
+        let key = match CStr::from_ptr(key).to_str() {
+            Ok(s) => s,
+            Err(_) => return NET_ERROR_INVALID_PARAM,
+        };
+        
+        let value = match CStr::from_ptr(value).to_str() {
+            Ok(s) => s,
+            Err(_) => return NET_ERROR_INVALID_PARAM,
+        };
+        
+        (key, value)
+    };
+
+    let manager = NetManager::instance();
+    
+    match manager.block_on(manager.with_client(handle, |wrapper| {
+        wrapper.set_header(key_str, value_str);
+    })) {
+        Ok(_) => NET_SUCCESS,
+        Err(_) => NET_ERROR_INVALID_HANDLE,
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn client_set_timeout(handle: ClientHandle, timeout_seconds: c_int) -> c_int {
+    let _guard = match OperationGuard::new() {
+        Some(guard) => guard,
+        None => return NET_ERROR_INVALID_HANDLE,
+    };
+
+    if handle == 0 || timeout_seconds < 0 {
+        return NET_ERROR_INVALID_PARAM;
+    }
+
+    let manager = NetManager::instance();
+    
+    match manager.block_on(manager.with_client(handle, |wrapper| {
+        wrapper.set_timeout(timeout_seconds as u64);
+    })) {
+        Ok(_) => NET_SUCCESS,
+        Err(_) => NET_ERROR_INVALID_HANDLE,
+    }
+}
+
+// ============================================================================
+// REQUEST METHODS - Using direct client access
+// ============================================================================
+
+#[no_mangle]
+pub extern "C" fn client_request(handle: ClientHandle) -> c_int {
+    let _guard = match OperationGuard::new() {
+        Some(guard) => guard,
+        None => return NET_ERROR_INVALID_HANDLE,
+    };
+
+    if handle == 0 {
+        return NET_ERROR_INVALID_HANDLE;
+    }
+
+    let manager = NetManager::instance();
+    
+    match manager.block_on(manager.with_client(handle, |wrapper| {
+        wrapper.request()
+    })) {
+        Ok(Ok(_)) => NET_SUCCESS,
+        Ok(Err(_)) => NET_ERROR_CONNECTION_FAILED,
+        Err(_) => NET_ERROR_INVALID_HANDLE,
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn client_connect(handle: ClientHandle, server_url: *const c_char) -> c_int {
+    let _guard = match OperationGuard::new() {
+        Some(guard) => guard,
+        None => return NET_ERROR_INVALID_HANDLE,
+    };
+
+    if handle == 0 || server_url.is_null() {
+        return NET_ERROR_INVALID_PARAM;
+    }
+
+    let url = unsafe {
+        match CStr::from_ptr(server_url).to_str() {
+            Ok(s) => s,
+            Err(_) => return NET_ERROR_INVALID_PARAM,
+        }
+    };
+
+    let manager = NetManager::instance();
+    
+    match manager.block_on(manager.with_client(handle, |wrapper| {
+        wrapper.set_url(url).connect()
+    })) {
+        Ok(Ok(_)) => NET_SUCCESS,
+        Ok(Err(_)) => NET_ERROR_CONNECTION_FAILED,
+        Err(_) => NET_ERROR_INVALID_HANDLE,
+    }
+}
+
+
+// ============================================================================
+// CONVENIENCE HTTP METHODS
+// ============================================================================
+
 #[no_mangle]
 pub extern "C" fn client_get_request(handle: ClientHandle) -> CNetResponse {
-    client_set_method(handle, "GET\0".as_ptr() as *const c_char);
-    client_request(handle);
-    client_get_response(handle)
+    let manager = NetManager::instance();
+    
+    let result = manager.block_on(manager.with_client(handle, |wrapper| {
+        wrapper.get()
+    }));
+
+    match result {
+        Ok(Ok(_)) => manager.block_on(manager.with_client(handle, |wrapper| {
+            wrapper.get_c_response()
+        })).unwrap_or_else(|_| error_response(NET_ERROR_INVALID_HANDLE)),
+        Ok(Err(_)) => manager.block_on(manager.with_client(handle, |wrapper| {
+            wrapper.get_c_response()
+        })).unwrap_or_else(|_| error_response(NET_ERROR_CONNECTION_FAILED)),
+        Err(_) => error_response(NET_ERROR_INVALID_HANDLE),
+    }
 }
 
 #[no_mangle]
 pub extern "C" fn client_post_request(handle: ClientHandle) -> CNetResponse {
-    client_set_method(handle, "POST\0".as_ptr() as *const c_char);
-    client_request(handle);
-    client_get_response(handle)
+    let manager = NetManager::instance();
+    
+    let result = manager.block_on(manager.with_client(handle, |wrapper| {
+        wrapper.post()
+    }));
+
+    match result {
+        Ok(Ok(_)) => manager.block_on(manager.with_client(handle, |wrapper| {
+            wrapper.get_c_response()
+        })).unwrap_or_else(|_| error_response(NET_ERROR_INVALID_HANDLE)),
+        Ok(Err(_)) => manager.block_on(manager.with_client(handle, |wrapper| {
+            wrapper.get_c_response()
+        })).unwrap_or_else(|_| error_response(NET_ERROR_CONNECTION_FAILED)),
+        Err(_) => error_response(NET_ERROR_INVALID_HANDLE),
+    }
 }
 
 #[no_mangle]
 pub extern "C" fn client_put_request(handle: ClientHandle) -> CNetResponse {
-    client_set_method(handle, "PUT\0".as_ptr() as *const c_char);
-    client_request(handle);
-    client_get_response(handle)
+    let manager = NetManager::instance();
+    
+    let result = manager.block_on(manager.with_client(handle, |wrapper| {
+        wrapper.put()
+    }));
+
+    match result {
+        Ok(Ok(_)) => manager.block_on(manager.with_client(handle, |wrapper| {
+            wrapper.get_c_response()
+        })).unwrap_or_else(|_| error_response(NET_ERROR_INVALID_HANDLE)),
+        Ok(Err(_)) => manager.block_on(manager.with_client(handle, |wrapper| {
+            wrapper.get_c_response()
+        })).unwrap_or_else(|_| error_response(NET_ERROR_CONNECTION_FAILED)),
+        Err(_) => error_response(NET_ERROR_INVALID_HANDLE),
+    }
 }
 
 #[no_mangle]
 pub extern "C" fn client_delete_request(handle: ClientHandle) -> CNetResponse {
-    client_set_method(handle, "DELETE\0".as_ptr() as *const c_char);
-    client_request(handle);
-    client_get_response(handle)
+    let manager = NetManager::instance();
+    
+    let result = manager.block_on(manager.with_client(handle, |wrapper| {
+        wrapper.delete()
+    }));
+
+    match result {
+        Ok(Ok(_)) => manager.block_on(manager.with_client(handle, |wrapper| {
+            wrapper.get_c_response()
+        })).unwrap_or_else(|_| error_response(NET_ERROR_INVALID_HANDLE)),
+        Ok(Err(_)) => manager.block_on(manager.with_client(handle, |wrapper| {
+            wrapper.get_c_response()
+        })).unwrap_or_else(|_| error_response(NET_ERROR_CONNECTION_FAILED)),
+        Err(_) => error_response(NET_ERROR_INVALID_HANDLE),
+    }
 }
 
 // ============================================================================
-// MEMORY MANAGEMENT FOR C STRINGS
+// WEBRTC CLIENT FUNCTIONS
+// ============================================================================
+
+// ============================================================================
+// WEBRTC FUNCTIONS - Using direct client access
 // ============================================================================
 
 #[no_mangle]
-pub extern "C" fn client_copy_response_body(
-    handle: ClientHandle,
-    buffer: *mut c_char,
-    buffer_len: c_int
-) -> c_int {
-    let response = client_get_response(handle);
-    
-    if response.body_ptr.is_null() || buffer.is_null() {
+pub extern "C" fn webrtc_connect_to_signaling_server(handle: WebRTCHandle, server_url: *const c_char) -> c_int {
+    let _guard = match OperationGuard::new() {
+        Some(guard) => guard,
+        None => return NET_ERROR_INVALID_HANDLE,
+    };
+
+    if handle == 0 || server_url.is_null() {
         return NET_ERROR_INVALID_PARAM;
     }
-    
-    unsafe {
-        if response.body_len < buffer_len {
-            ptr::copy_nonoverlapping(
-                response.body_ptr,
-                buffer,
-                response.body_len as usize
-            );
-            *buffer.add(response.body_len as usize) = 0; // Null terminate
-            response.body_len
-        } else {
-            NET_ERROR_INVALID_PARAM // Buffer too small
+
+    let url = unsafe {
+        match CStr::from_ptr(server_url).to_str() {
+            Ok(s) => s,
+            Err(_) => return NET_ERROR_INVALID_PARAM,
         }
+    };
+
+    let manager = NetManager::instance();
+    let url_owned = url.to_string(); // Move this outside the closure
+    
+    // Use the direct async block approach instead of with_webrtc_client_async
+    match manager.block_on(async {
+        let mut clients = manager.webrtc_clients.lock().await;
+        match clients.get_mut(&handle) {
+            Some(client) => {
+                client.connect_to_signaling_server(&url_owned).await
+            }
+            None => Err("Invalid handle".into()),
+        }
+    }) {
+        Ok(()) => NET_SUCCESS,
+        Err(_) => NET_ERROR_INVALID_HANDLE,
     }
 }
 
 #[no_mangle]
-pub extern "C" fn client_copy_response_error(
-    handle: ClientHandle,
-    buffer: *mut c_char,
-    buffer_len: c_int
+pub extern "C" fn webrtc_create_session(
+    handle: WebRTCHandle,
+    session_id_out: *mut c_char,
+    session_id_len: c_int
 ) -> c_int {
-    let response = client_get_response(handle);
-    
-    if response.error_ptr.is_null() || buffer.is_null() {
-        return 0; // No error
+    let _guard = match OperationGuard::new() {
+        Some(guard) => guard,
+        None => return NET_ERROR_INVALID_HANDLE,
+    };
+
+    if handle == 0 || session_id_out.is_null() {
+        return NET_ERROR_INVALID_PARAM;
     }
-    
-    unsafe {
-        if response.error_len < buffer_len {
-            ptr::copy_nonoverlapping(
-                response.error_ptr,
-                buffer,
-                response.error_len as usize
-            );
-            *buffer.add(response.error_len as usize) = 0; // Null terminate
-            response.error_len
-        } else {
-            NET_ERROR_INVALID_PARAM // Buffer too small
+
+    let manager = NetManager::instance();
+
+    match manager.block_on(async {
+        let mut clients = manager.webrtc_clients.lock().await;
+        match clients.get_mut(&handle) {
+            Some(client) => {
+                match client.create_session().await {
+                    Ok(session_id) => Ok(session_id),
+                    Err(e) => Err(e),
+                }
+            }
+            None => Err("Invalid handle".into()),
         }
+    }) {
+        Ok(session_id) => {
+            let c_session_id = match CString::new(session_id) {
+                Ok(cstr) => cstr,
+                Err(_) => return NET_ERROR_SESSION_FAILED,
+            };
+            let session_bytes = c_session_id.as_bytes_with_nul();
+            
+            if session_bytes.len() <= session_id_len as usize {
+                unsafe {
+                    ptr::copy_nonoverlapping(
+                        session_bytes.as_ptr() as *const c_char,
+                        session_id_out,
+                        session_bytes.len()
+                    );
+                }
+                NET_SUCCESS
+            } else {
+                NET_ERROR_INVALID_PARAM
+            }
+        }
+        Err(_) => NET_ERROR_INVALID_HANDLE,
     }
 }
-// Update the rest of your existing functions (client_set_req_body, client_set_header, etc.)
-// to work with ClientWrapper instead of Client directly...
+
+#[no_mangle]
+pub extern "C" fn webrtc_join_session(handle: WebRTCHandle, session_id: *const c_char) -> c_int {
+    let _guard = match OperationGuard::new() {
+        Some(guard) => guard,
+        None => return NET_ERROR_INVALID_HANDLE,
+    };
+
+    if handle == 0 || session_id.is_null() {
+        return NET_ERROR_INVALID_PARAM;
+    }
+
+    let session = unsafe {
+        match CStr::from_ptr(session_id).to_str() {
+            Ok(s) => s,
+            Err(_) => return NET_ERROR_INVALID_PARAM,
+        }
+    };
+
+    let manager = NetManager::instance();
+    let session_owned = session.to_string();
+    
+    match manager.block_on(async {
+        let mut clients = manager.webrtc_clients.lock().await;
+        match clients.get_mut(&handle) {
+            Some(client) => {
+                client.join_session(&session_owned).await
+            }
+            None => Err("Invalid handle".into()),
+        }
+    }) {
+        Ok(()) => NET_SUCCESS,
+        Err(_) => NET_ERROR_INVALID_HANDLE,
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn webrtc_publish_session(handle: WebRTCHandle, session_id: *const c_char) -> c_int {
+        let _guard = match OperationGuard::new() {
+        Some(guard) => guard,
+        None => return NET_ERROR_INVALID_HANDLE,
+    };
+
+    if handle == 0 || session_id.is_null() {
+        return NET_ERROR_INVALID_PARAM;
+    }
+
+    let session = unsafe {
+        match CStr::from_ptr(session_id).to_str() {
+            Ok(s) => s,
+            Err(_) => return NET_ERROR_INVALID_PARAM,
+        }
+    };
+
+    let manager = NetManager::instance();
+    let session_owned = session.to_string();
+    let mut result_msg: WebRTCMessage = WebRTCMessage::default();
+    
+    match manager.block_on(async {
+        let mut clients = manager.webrtc_clients.lock().await;
+        match clients.get_mut(&handle) {
+            Some(client) => {
+                match client.publish(&session_owned).await {
+                    Ok(msg) => {
+                        result_msg = msg;
+                        Ok(())
+                    },
+                    Err(e) => Err(e),
+                }
+            }
+            None => Err("Invalid handle".into()),
+        }
+    }) {
+        Ok(()) => NET_SUCCESS,
+        Err(_) => NET_ERROR_INVALID_HANDLE,
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn webrtc_start_webcam_stream(handle: WebRTCHandle, camera_index: c_int) -> c_int {
+    let _guard = match OperationGuard::new() {
+        Some(guard) => guard,
+        None => return NET_ERROR_INVALID_HANDLE,
+    };
+
+    if handle == 0 {
+        return NET_ERROR_INVALID_PARAM;
+    }
+
+    let manager = NetManager::instance();
+    
+    match manager.block_on(async {
+        let mut clients = manager.webrtc_clients.lock().await;
+        match clients.get_mut(&handle) {
+            Some(client) => {
+                let source = StreamSource::Webcam(camera_index as u32);
+                client.start_streaming(Some(source)).await
+            }
+            None => Err("Invalid handle".into()),
+        }
+    }) {
+        Ok(()) => NET_SUCCESS,
+        Err(_) => NET_ERROR_INVALID_HANDLE,
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn webrtc_start_file_stream(handle: WebRTCHandle, file_path: *const c_char) -> c_int {
+    let _guard = match OperationGuard::new() {
+        Some(guard) => guard,
+        None => return NET_ERROR_INVALID_HANDLE,
+    };
+
+    if handle == 0 || file_path.is_null() {
+        return NET_ERROR_INVALID_PARAM;
+    }
+
+    let path = unsafe {
+        match CStr::from_ptr(file_path).to_str() {
+            Ok(s) => s,
+            Err(_) => return NET_ERROR_INVALID_PARAM,
+        }
+    };
+
+    let manager = NetManager::instance();
+    let path_owned = path.to_string();
+    
+    match manager.block_on(async {
+        let mut clients = manager.webrtc_clients.lock().await;
+        match clients.get_mut(&handle) {
+            Some(client) => {
+                let source = StreamSource::File(path_owned);
+                client.start_streaming(Some(source)).await
+            }
+            None => Err("Invalid handle".into()),
+        }
+    }) {
+        Ok(()) => NET_SUCCESS,
+        Err(_) => NET_ERROR_STREAM_FAILED,
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn webrtc_stop_stream(handle: WebRTCHandle) -> c_int {
+    let _guard = match OperationGuard::new() {
+        Some(guard) => guard,
+        None => return NET_ERROR_INVALID_HANDLE,
+    };
+
+    if handle == 0 {
+        return NET_ERROR_INVALID_PARAM;
+    }
+
+    let manager = NetManager::instance();
+    
+    match manager.block_on(async {
+        let mut clients = manager.webrtc_clients.lock().await;
+        match clients.get_mut(&handle) {
+            Some(client) => {
+                match client.stop_stream().await {
+                    Ok(_) => Ok(()),
+                    Err(e) => Err(e),
+                }
+            }
+            None => Err("Invalid handle".into()),
+        }
+    }) {
+        Ok(()) => NET_SUCCESS,
+        Err(_) => NET_ERROR_INVALID_HANDLE,
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn webrtc_wait_for_subscriber(handle: WebRTCHandle, timeout_seconds: c_int) -> c_int {
+    let _guard = match OperationGuard::new() {
+        Some(guard) => guard,
+        None => return NET_ERROR_INVALID_HANDLE,
+    };
+
+    if handle == 0 {
+        return NET_ERROR_INVALID_PARAM;
+    }
+
+    let manager = NetManager::instance();
+    
+    match manager.block_on(async {
+        let mut clients = manager.webrtc_clients.lock().await;
+        match clients.get_mut(&handle) {
+            Some(client) => {
+                match client.wait_for_subscriber(timeout_seconds as u64).await {
+                    Ok(_) => Ok(()),
+                    Err(e) => Err(e),
+                }
+            }
+            None => Err("Invalid handle".into()),
+        }
+    }) {
+        Ok(()) => NET_SUCCESS,
+        Err(_) => NET_ERROR_INVALID_HANDLE,
+    }
+}
+
+// ============================================================================
+// RESPONSE ACCESS
+// ============================================================================
+
+#[no_mangle]
+pub extern "C" fn client_get_response(handle: ClientHandle) -> CNetResponse {
+    if handle == 0 {
+        return error_response(NET_ERROR_INVALID_HANDLE);
+    }
+
+    let manager = NetManager::instance();
+    
+    match manager.block_on(manager.with_client(handle, |wrapper| {
+        wrapper.get_c_response()
+    })) {
+        Ok(response) => response,
+        Err(_) => error_response(NET_ERROR_INVALID_HANDLE),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn net_is_shutdown_requested() -> c_int {
+    let manager = NetManager::instance();
+    if manager.is_shutdown_requested() { 1 } else { 0 }
+}
+
+#[no_mangle]
+pub extern "C" fn net_get_active_operations_count() -> c_int {
+    let manager = NetManager::instance();
+    manager.active_operations_count() as c_int
+}
+
+#[no_mangle]
+pub extern "C" fn net_force_shutdown() -> c_int {
+    let manager = NetManager::instance();
+    manager.request_shutdown();
+    
+    std::thread::sleep(Duration::from_millis(100));
+    
+    manager.block_on(async {
+        manager.clients.lock().await.clear();
+        manager.webrtc_clients.lock().await.clear();
+    });
+    
+    NET_SUCCESS
+}
+
+#[no_mangle]
+pub extern "C" fn net_get_error_message(error_code: c_int) -> *const c_char {
+    match error_code {
+        NET_SUCCESS => "Success\0".as_ptr() as *const c_char,
+        NET_ERROR_INVALID_HANDLE => "Invalid handle\0".as_ptr() as *const c_char,
+        NET_ERROR_INVALID_PARAM => "Invalid parameter\0".as_ptr() as *const c_char,
+        NET_ERROR_CONNECTION_FAILED => "Connection failed\0".as_ptr() as *const c_char,
+        NET_ERROR_TIMEOUT => "Operation timed out\0".as_ptr() as *const c_char,
+        NET_ERROR_SESSION_FAILED => "Session operation failed\0".as_ptr() as *const c_char,
+        NET_ERROR_STREAM_FAILED => "Stream operation failed\0".as_ptr() as *const c_char,
+        _ => "Unknown error\0".as_ptr() as *const c_char,
+    }
+}
+
+fn match_protocol_enum(protocol: c_int) -> Option<PROTOCOLS> {
+    match protocol {
+        0 => Some(PROTOCOLS::HTTP),
+        1 => Some(PROTOCOLS::HTTPS),
+        2 => Some(PROTOCOLS::FILE),
+        3 => Some(PROTOCOLS::COAP),
+        4 => Some(PROTOCOLS::MQTT),
+        5 => Some(PROTOCOLS::FTP),
+        6 => Some(PROTOCOLS::SFTP),
+        7 => Some(PROTOCOLS::WS),
+        8 => Some(PROTOCOLS::WSS),
+        9 => Some(PROTOCOLS::WEBRTC),
+        10 => Some(PROTOCOLS::HTTP3),
+        11 => Some(PROTOCOLS::QUIC),
+        _ => None,
+    }
+}
+
+fn error_response(error_code: c_int) -> CNetResponse {
+    CNetResponse {
+        status_code: error_code,
+        body_ptr: ptr::null(),
+        body_len: 0,
+        headers_ptr: ptr::null(),
+        headers_count: 0,
+        error_ptr: ptr::null(),
+        error_len: 0,
+    }
+}

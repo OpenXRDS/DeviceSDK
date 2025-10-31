@@ -124,8 +124,6 @@ impl StreamReaderFactory {
     }
 }
 
-
-
 pub struct WebRTCClient {
     client_id: Option<String>,
     write: Option<Arc<Mutex<SplitSink<WsStream<MaybeTlsStream<TcpStream>>, Message>>>>,
@@ -171,6 +169,9 @@ pub struct WebRTCClient {
     audio_track_callback: Option<AudioTrackCallback>,
     media_track_callback: Option<MediaTrackCallback>,
 }
+
+unsafe impl Send for WebRTCClient {}
+unsafe impl Sync for WebRTCClient {}
 
 #[allow(dead_code)]
 impl WebRTCClient {
