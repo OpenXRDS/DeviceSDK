@@ -1232,15 +1232,28 @@ pub extern "C" fn net_force_shutdown() -> c_int {
 
 #[no_mangle]
 pub extern "C" fn net_get_error_message(error_code: c_int) -> *const c_char {
+    get_error_cstring(error_code).as_ptr()
+}
+
+fn get_error_cstring(error_code: c_int) -> &'static CString {
+    static SUCCESS: OnceLock<CString> = OnceLock::new();
+    static INVALID_HANDLE: OnceLock<CString> = OnceLock::new();
+    static INVALID_PARAM: OnceLock<CString> = OnceLock::new();
+    static CONNECTION_FAILED: OnceLock<CString> = OnceLock::new();
+    static TIMEOUT: OnceLock<CString> = OnceLock::new();
+    static SESSION_FAILED: OnceLock<CString> = OnceLock::new();
+    static STREAM_FAILED: OnceLock<CString> = OnceLock::new();
+    static UNKNOWN_ERROR: OnceLock<CString> = OnceLock::new();
+
     match error_code {
-        NET_SUCCESS => "Success".as_ptr() as *const c_char,
-        NET_ERROR_INVALID_HANDLE => "Invalid handle".as_ptr() as *const c_char,
-        NET_ERROR_INVALID_PARAM => "Invalid parameter".as_ptr() as *const c_char,
-        NET_ERROR_CONNECTION_FAILED => "Connection failed".as_ptr() as *const c_char,
-        NET_ERROR_TIMEOUT => "Operation timed out".as_ptr() as *const c_char,
-        NET_ERROR_SESSION_FAILED => "Session operation failed".as_ptr() as *const c_char,
-        NET_ERROR_STREAM_FAILED => "Stream operation failed".as_ptr() as *const c_char,
-        _ => "Unknown error".as_ptr() as *const c_char,
+        NET_SUCCESS => SUCCESS.get_or_init(|| CString::new("Success").unwrap()),
+        NET_ERROR_INVALID_HANDLE => INVALID_HANDLE.get_or_init(|| CString::new("Invalid handle").unwrap()),
+        NET_ERROR_INVALID_PARAM => INVALID_PARAM.get_or_init(|| CString::new("Invalid parameter").unwrap()),
+        NET_ERROR_CONNECTION_FAILED => CONNECTION_FAILED.get_or_init(|| CString::new("Connection failed").unwrap()),
+        NET_ERROR_TIMEOUT => TIMEOUT.get_or_init(|| CString::new("Operation timed out").unwrap()),
+        NET_ERROR_SESSION_FAILED => SESSION_FAILED.get_or_init(|| CString::new("Session operation failed").unwrap()),
+        NET_ERROR_STREAM_FAILED => STREAM_FAILED.get_or_init(|| CString::new("Stream operation failed").unwrap()),
+        _ => UNKNOWN_ERROR.get_or_init(|| CString::new("Unknown error").unwrap()),
     }
 }
 
