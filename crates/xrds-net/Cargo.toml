@@ -24,16 +24,16 @@ bytes = "1"
 log = "0.4.28"
 pretty_env_logger = "0.5.0"
 
-curl = "0.4.47"                                           # http / https
-coap = "0.19.1"                                           # coap
-coap-lite = "0.11.3"                                      # coap
-websocket = "0.27.1"                                      # websocket / wss
-suppaftp = { version = "^6", features = ["native-tls"] }  # ftp / sftp
-rumqttc = "0.24.0"                                        # mqtt
-quiche = "0.24.6"                                         # quic / http3
-webrtc = "0.12.0"                                         # webRTC
+curl = "0.4.47"                                          # http / https
+coap = "0.19.1"                                          # coap
+coap-lite = "0.11.3"                                     # coap
+websocket = "0.27.1"                                     # websocket / wss
+suppaftp = { version = "^6", features = ["native-tls"] } # ftp / sftp
+rumqttc = "0.24.0"                                       # mqtt
+quiche = "0.24.6"                                        # quic / http3
+webrtc = "0.12.0"                                        # webRTC
 image = { version = "0.25" }
-ffmpeg-next = { version = "8.0.0", features = ["build"] } # video processing
+ffmpeg-next = { version = "8.0.0" }                      # video processing
 
 rustls = { version = "0.23.10", default-features = false, features = [
     "std",
