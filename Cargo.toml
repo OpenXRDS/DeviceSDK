@@ -1,18 +1,5 @@
-[workspace]
-members = [
-    "xrds-audio",
-    "xrds-components",
-    "xrds-core",
-    "xrds-graphics",
-    "xrds-openxr",
-    "xrds-net",
-    "xrds-runtime",
-    "examples",
-    "xrds",
-]
-resolver = "2"
-
-[workspace.package]
+[package]
+name = "xrds"
 edition = "2021"
 version = "0.1.0"
 license = "Apache-2.0"
@@ -21,36 +8,43 @@ repository = "https://github.com/OpenXRDS/DeviceSDK"
 homepage = "https://github.com/OpenXRDS"
 authors = ["OpenXRDS developers"]
 
+[workspace]
+members = ["crates/*"]
+resolver = "2"
+
 [workspace.dependencies.xrds-audio]
 package = "xrds-audio"
-path = "./xrds-audio"
+path = "./crates/xrds-audio"
 
 [workspace.dependencies.xrds-components]
 package = "xrds-components"
-path = "./xrds-components"
+path = "./crates/xrds-components"
 
 [workspace.dependencies.xrds-core]
 package = "xrds-core"
-path = "./xrds-core"
+path = "./crates/xrds-core"
 
 [workspace.dependencies.xrds-graphics]
 package = "xrds-graphics"
-path = "./xrds-graphics"
+path = "./crates/xrds-graphics"
 
 [workspace.dependencies.xrds-net]
 package = "xrds-net"
-path = "./xrds-net"
+path = "./crates/xrds-net"
 
 [workspace.dependencies.xrds-openxr]
 package = "xrds-openxr"
-path = "./xrds-openxr"
+path = "./crates/xrds-openxr"
 
 [workspace.dependencies.xrds-runtime]
 package = "xrds-runtime"
-path = "./xrds-runtime"
+path = "./crates/xrds-runtime"
+
+[workspace.dependencies.xrds-internal]
+package = "xrds-internal"
+path = "./crates/xrds-internal"
 
 [workspace.dependencies]
-xrds = { version = "0.1.0", path = "./xrds" }
 tokio = { version = "1.43.0", features = ["rt-multi-thread", "sync", "macros"] }
 anyhow = "1.0.95"
 env_logger = "0.11.6"
@@ -58,3 +52,6 @@ log = "0.4.25"
 wgpu = { version = "24.0.1", default-features = false, features = ["wgsl"] }
 ash = "0.38.0"
 glam = { version = "0.29.2", features = ["bytemuck"] }
+
+[dependencies]
+xrds-internal = { workspace = true }
