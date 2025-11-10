@@ -1,9 +1,6 @@
 use crate::*;
 
-use std::sync::{Arc, Mutex};
-
 use error::RuntimeError;
-use xrds_graphics::Renderer;
 
 pub trait RuntimeHandler {
     fn on_construct(&mut self);
@@ -16,9 +13,8 @@ pub trait RuntimeHandler {
 }
 
 pub struct Runtime {
-    main_context: tokio::runtime::Runtime,
-    render_context: tokio::runtime::Runtime,
-    renderer: Arc<Mutex<Renderer>>,
+    #[allow(unused)]
+    params: RuntimeParameters,
 }
 
 pub struct RuntimeParameters {
@@ -27,19 +23,7 @@ pub struct RuntimeParameters {
 
 impl Runtime {
     pub fn new(params: RuntimeParameters) -> Self {
-        let main_context = tokio::runtime::Builder::new_current_thread()
-            .thread_name(format!("{}-main", params.app_name))
-            .build()
-            .expect("Could not create main runtime");
-        let render_context = tokio::runtime::Builder::new_multi_thread()
-            .thread_name(format!("{}-render", params.app_name))
-            .build()
-            .expect("Could not create render runtime");
-        Self {
-            main_context,
-            render_context,
-            renderer: Arc::new(Mutex::new(Renderer {})),
-        }
+        Self { params }
     }
 
     pub fn run<A>(self, mut app: A) -> Result<(), RuntimeError>
