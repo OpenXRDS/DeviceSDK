@@ -7842,15 +7842,7 @@ checksum = "3ae8337f8a065cfc972643663ea4279e04e7256de865aa66fe25cec5fb912d3f"
 name = "xrds"
 version = "0.1.0"
 dependencies = [
- "anyhow",
- "cbindgen",
- "tokio",
- "xrds-audio",
- "xrds-components",
- "xrds-core",
- "xrds-graphics",
- "xrds-net",
- "xrds-runtime",
+ "xrds-internal",
 ]
 
 [[package]]
@@ -7874,13 +7866,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "xrds-examples"
-version = "0.0.0"
-dependencies = [
- "xrds",
-]
-
-[[package]]
 name = "xrds-graphics"
 version = "0.1.0"
 dependencies = [
@@ -7891,6 +7876,21 @@ dependencies = [
  "tokio",
  "wgpu",
  "xrds-core",
+]
+
+[[package]]
+name = "xrds-internal"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "cbindgen",
+ "tokio",
+ "xrds-audio",
+ "xrds-components",
+ "xrds-core",
+ "xrds-graphics",
+ "xrds-net",
+ "xrds-runtime",
 ]
 
 [[package]]

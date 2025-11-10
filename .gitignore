@@ -1,6 +1,4 @@
 target
-.vscode
 build
 xrds-net/test_output/received.h264
 xrds-net/test_output
-settings.json

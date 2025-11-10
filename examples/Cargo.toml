@@ -1,6 +1,0 @@
-[package]
-name = "xrds-examples"
-edition = "2021"
-
-[dependencies]
-xrds = { workspace = true }

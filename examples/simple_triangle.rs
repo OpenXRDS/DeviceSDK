@@ -14,7 +14,7 @@ impl RuntimeHandler for App {
     fn on_update(&mut self) {}
 }
 
-pub fn run() {
+pub fn main() {
     let runtime = Runtime::new().expect("Could not create xrds runtime");
     let app = App {};
 
