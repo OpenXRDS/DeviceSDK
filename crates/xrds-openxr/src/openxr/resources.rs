@@ -42,7 +42,7 @@ pub struct OpenXrPrimaryReferenceSpace(pub OpenXrSpace);
 
 #[allow(unused)]
 #[derive(Resource)]
-pub struct OpenXrRefrerenceSpaces(pub Vec<OpenXrReferenceSpace>);
+pub struct OpenXrReferenceSpaces(pub Vec<OpenXrReferenceSpace>);
 
 #[derive(Resource)]
 pub struct OpenXrRenderResources {

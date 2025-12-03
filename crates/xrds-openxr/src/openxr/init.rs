@@ -284,80 +284,80 @@ fn intersects_extensions(entry: &Entry, extensions: ExtensionSet) -> anyhow::Res
     if extensions.ext_win32_appcontainer_compatible
         && !supported_extensions.ext_win32_appcontainer_compatible
     {
-        log::warn!("ext_win32_appcontainer_compatible required. But not suppored");
+        log::warn!("ext_win32_appcontainer_compatible required. But not supported");
         extensions.ext_win32_appcontainer_compatible = false;
     }
     if extensions.ext_dpad_binding && !supported_extensions.ext_dpad_binding {
-        log::warn!("ext_dpad_binding required. But not suppored");
+        log::warn!("ext_dpad_binding required. But not supported");
         extensions.ext_dpad_binding = false;
     }
     if extensions.ext_hand_joints_motion_range && !supported_extensions.ext_hand_joints_motion_range
     {
-        log::warn!("ext_hand_joints_motion_range required. But not suppored");
+        log::warn!("ext_hand_joints_motion_range required. But not supported");
         extensions.ext_hand_joints_motion_range = false;
     }
     if extensions.ext_samsung_odyssey_controller
         && !supported_extensions.ext_samsung_odyssey_controller
     {
-        log::warn!("ext_samsung_odyssey_controller required. But not suppored");
+        log::warn!("ext_samsung_odyssey_controller required. But not supported");
         extensions.ext_samsung_odyssey_controller = false;
     }
     if extensions.ext_hp_mixed_reality_controller
         && !supported_extensions.ext_hp_mixed_reality_controller
     {
-        log::warn!("ext_hp_mixed_reality_controller required. But not suppored");
+        log::warn!("ext_hp_mixed_reality_controller required. But not supported");
         extensions.ext_hp_mixed_reality_controller = false;
     }
     if extensions.ext_palm_pose && !supported_extensions.ext_palm_pose {
-        log::warn!("ext_palm_pose required. But not suppored");
+        log::warn!("ext_palm_pose required. But not supported");
         extensions.ext_palm_pose = false;
     }
     if extensions.ext_uuid && !supported_extensions.ext_uuid {
-        log::warn!("ext_uuid required. But not suppored");
+        log::warn!("ext_uuid required. But not supported");
         extensions.ext_uuid = false;
     }
     if extensions.ext_hand_interaction && !supported_extensions.ext_hand_interaction {
-        log::warn!("ext_hand_interaction required. But not suppored");
+        log::warn!("ext_hand_interaction required. But not supported");
         extensions.ext_hand_interaction = false;
     }
     if extensions.ext_active_action_set_priority
         && !supported_extensions.ext_active_action_set_priority
     {
-        log::warn!("ext_active_action_set_priority required. But not suppored");
+        log::warn!("ext_active_action_set_priority required. But not supported");
         extensions.ext_active_action_set_priority = false;
     }
     if extensions.ext_local_floor && !supported_extensions.ext_local_floor {
-        log::warn!("ext_local_floor required. But not suppored");
+        log::warn!("ext_local_floor required. But not supported");
         extensions.ext_local_floor = false;
     }
     if extensions.ext_hand_tracking_data_source
         && !supported_extensions.ext_hand_tracking_data_source
     {
-        log::warn!("ext_hand_tracking_data_source required. But not suppored");
+        log::warn!("ext_hand_tracking_data_source required. But not supported");
         extensions.ext_hand_tracking_data_source = false;
     }
     if extensions.ext_plane_detection && !supported_extensions.ext_plane_detection {
-        log::warn!("ext_plane_detection required. But not suppored");
+        log::warn!("ext_plane_detection required. But not supported");
         extensions.ext_plane_detection = false;
     }
     if extensions.ext_future && !supported_extensions.ext_future {
-        log::warn!("ext_future required. But not suppored");
+        log::warn!("ext_future required. But not supported");
         extensions.ext_future = false;
     }
     if extensions.ext_user_presence && !supported_extensions.ext_user_presence {
-        log::warn!("ext_user_presence required. But not suppored");
+        log::warn!("ext_user_presence required. But not supported");
         extensions.ext_user_presence = false;
     }
     if extensions.fb_composition_layer_image_layout
         && !supported_extensions.fb_composition_layer_image_layout
     {
-        log::warn!("fb_composition_layer_image_layout required. But not suppored");
+        log::warn!("fb_composition_layer_image_layout required. But not supported");
         extensions.fb_composition_layer_image_layout = false;
     }
     if extensions.fb_composition_layer_alpha_blend
         && !supported_extensions.fb_composition_layer_alpha_blend
     {
-        log::warn!("fb_composition_layer_alpha_blend required. But not suppored");
+        log::warn!("fb_composition_layer_alpha_blend required. But not supported");
         extensions.fb_composition_layer_alpha_blend = false;
     }
     #[cfg(target_os = "android")]

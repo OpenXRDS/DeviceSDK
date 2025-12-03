@@ -448,7 +448,7 @@ fn handle_events(world: &mut World) {
             }
             openxr::Event::InstanceLossPending(instance_loss_pending) => {
                 warn!(
-                    "  intsnace loss pending: {:?}",
+                    "  instance loss pending: {:?}",
                     instance_loss_pending.loss_time()
                 );
             }

@@ -104,7 +104,7 @@ fn create_swapchain(world: &mut World) {
     let view_configuration_view = view_configurations
         .view_configuration_views
         .first()
-        .expect("View configuration views it empty");
+        .expect("View configuration views is empty");
 
     let size = Extent3d {
         width: view_configuration_view.recommended_image_rect_width,

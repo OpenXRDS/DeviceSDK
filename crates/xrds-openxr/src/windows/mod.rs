@@ -53,14 +53,14 @@ fn runtime_library_path_from_registry() -> anyhow::Result<PathBuf> {
             Ok(value) => PathBuf::from(value),
             Err(e) => {
                 return Err(anyhow!(
-                    "Could not found registry value for OpenXR runtime: {}",
+                    "Could not find registry value for OpenXR runtime: {}",
                     e
                 ))
             }
         },
         Err(e) => {
             return Err(anyhow!(
-                "Could not found registry key for OpenXR runtime: {}",
+                "Could not find registry key for OpenXR runtime: {}",
                 e
             ))
         }
