@@ -200,7 +200,7 @@ impl OpenXrSession {
             &self.0;
             inner => {
                 let mut space = openxr::sys::Space::NULL;
-                unsafe {
+                unsafe {cvt(
                     (inner.instance().fp().create_reference_space)(
                         inner.as_raw(), &ReferenceSpaceCreateInfo {
                             ty: StructureType::REFERENCE_SPACE_CREATE_INFO,
@@ -210,7 +210,7 @@ impl OpenXrSession {
                         },
                         &mut space
                     )
-                };
+                )?;}
                 Ok(OpenXrSpace(space.into_raw()))
             }
         )
