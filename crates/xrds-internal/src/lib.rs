@@ -1,3 +1,1 @@
-mod api;
-
-pub use api::*;
+pub use xrds_runtime::*;

@@ -1,84 +1,108 @@
 use crate::*;
+use bevy::{
+    log::{Level, LogPlugin},
+    prelude::*,
+};
 
 use error::RuntimeError;
+use xrds_openxr::OpenXrCamera;
 
 pub trait RuntimeHandler {
-    fn on_construct(&mut self);
-    fn on_begin(&mut self);
-    fn on_resumed(&mut self);
-    fn on_suspended(&mut self);
-    fn on_end(&mut self);
-    fn on_update(&mut self);
-    fn on_deconstruct(&mut self);
+    fn on_construct(&mut self) {}
+    fn on_begin(&mut self) {}
+    fn on_resumed(&mut self) {}
+    fn on_suspended(&mut self) {}
+    fn on_end(&mut self) {}
+    fn on_update(&mut self) {}
+    fn on_deconstruct(&mut self) {}
 }
 
 pub struct Runtime {
-    #[allow(unused)]
-    params: RuntimeParameters,
+    app: App,
 }
 
 pub struct RuntimeParameters {
     pub app_name: String,
+    pub enable_xr: bool,
 }
 
 impl Runtime {
     pub fn new(params: RuntimeParameters) -> Self {
-        Self { params }
+        let mut app = App::new();
+
+        // Add log plugin first for logging in plugin build phase
+        app.add_plugins(LogPlugin {
+            level: Level::INFO,
+            filter: "bevy=info,wgpu=warn,naga=info".to_owned(),
+            ..Default::default()
+        });
+        if params.enable_xr {
+            app.add_plugins(xrds_openxr::add_plugins(
+                DefaultPlugins.build().disable::<LogPlugin>(),
+                if params.app_name.is_empty() {
+                    "OpenXRDS".to_owned()
+                } else {
+                    params.app_name.clone()
+                },
+            ));
+        } else {
+            app.add_plugins(DefaultPlugins.build().disable::<LogPlugin>());
+        }
+
+        app.add_systems(Startup, test_setup);
+        Self { app }
     }
 
-    pub fn run<A>(self, mut app: A) -> Result<(), RuntimeError>
+    pub fn run<A>(mut self, mut app: A) -> Result<(), RuntimeError>
     where
         A: RuntimeHandler + Send + Sync,
     {
-        // let main_context = self.main_context;
-        // let render_context = self.render_context;
-        // let renderer = self.renderer.clone();
         app.on_begin();
-        // let _main_context_future: JoinHandle<anyhow::Result<()>> = main_context.spawn(async move {
-        //     {
-        //         let mut lock = renderer.lock().unwrap();
-        //         let scene = lock.load_scene()?;
-        //         // graphics.load_scene();
-        //     }
-        //     // // Initialize OpenXR
 
-        //     // // Initialize window (Optional)
+        // Pseudo Code
+        // app.on_begin(self.world);
+        // app.world.build_startup(&mut self.app);
 
-        //     // // Initialize graphics
+        self.app.run();
 
-        //     // // Initialize user application
-        //     app.on_construct()?;
-
-        //     // // Begin OpenXR session
-
-        //     // // Begin user application
-        //     // app.on_begin()?;
-
-        //     // // Call on_resumed() on first iteration
-        //     // app.on_resumed()?;
-
-        //     // If system support winit. Use event_loop instead loop{}
-        //     loop {
-        //         app.on_update().unwrap();
-        //         break;
-        //     }
-
-        //     // // Suspend app first
-        //     // self.app.on_suspended()?;
-
-        //     // self.app.on_end()?;
-
-        //     // self.app.on_deconstruct()?;
-        //     Ok(())
-        // });
-
-        // let renderer = self.renderer.clone();
-        // let _render_context_future = render_context.spawn(async move {
-        //     let lock = renderer.lock();
-        // });
-
-        // // Start render thread
+        app.on_end();
 
         Ok(())
     }
+}
+
+fn test_setup(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
+    // circular base
+    commands.spawn((
+        Mesh3d(meshes.add(Circle::new(4.0))),
+        MeshMaterial3d(materials.add(Color::WHITE)),
+        Transform::from_rotation(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2)),
+    ));
+    // cube
+    commands.spawn((
+        Mesh3d(meshes.add(Cuboid::new(1.0, 1.0, 1.0))),
+        MeshMaterial3d(materials.add(Color::srgb_u8(124, 144, 255))),
+        Transform::from_xyz(0.0, 0.5, 0.0),
+    ));
+    // light
+    commands.spawn((
+        PointLight {
+            shadows_enabled: true,
+            ..default()
+        },
+        Transform::from_xyz(4.0, 8.0, 4.0),
+    ));
+    commands.spawn((
+        Camera3d::default(),
+        Camera {
+            clear_color: ClearColorConfig::Custom(Color::srgb_u8(128, 128, 255)),
+            ..Default::default()
+        },
+        OpenXrCamera,
+        Transform::default(),
+    ));
 }
