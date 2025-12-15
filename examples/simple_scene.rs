@@ -1,14 +1,22 @@
 use xrds::*;
 
-struct Handler {}
+struct Handler;
+
+pub fn main() {
+    let runtime = Runtime::new(RuntimeParameters {
+        app_name: "SimpleScene".to_owned(),
+        ..Default::default()
+    });
+    runtime.run(Handler).expect("Could not run application");
+}
 
 impl RuntimeHandler for Handler {
     fn on_construct(&mut self, mut on_construct: OnConstruct) {
-        on_construct.add_systems(spawn_simple_xr_scene);
+        on_construct.add_systems(setup);
     }
 }
 
-fn spawn_simple_xr_scene(
+fn setup(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
@@ -38,14 +46,4 @@ fn spawn_simple_xr_scene(
         Camera3d::default(),
         Transform::from_xyz(-2.5, 4.5, 9.0).looking_at(Vec3::ZERO, Vec3::Y),
     ));
-}
-
-pub fn main() {
-    let runtime = Runtime::new(RuntimeParameters {
-        app_name: "SimpleScene".to_owned(),
-        enable_xr: false,
-    });
-    let app = Handler {};
-
-    runtime.run(app).expect("Could not run application");
 }

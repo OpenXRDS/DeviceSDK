@@ -1,14 +1,22 @@
 use xrds::*;
 
-struct Handler {}
+struct Handler;
+
+pub fn main() {
+    let runtime = Runtime::new(RuntimeParameters {
+        app_name: "SimpleXRScene".to_owned(),
+        enable_xr: true,
+    });
+    runtime.run(Handler).expect("Could not run application");
+}
 
 impl RuntimeHandler for Handler {
     fn on_construct(&mut self, mut on_construct: OnConstruct) {
-        on_construct.add_systems(spawn_simple_xr_scene);
+        on_construct.add_systems(setup);
     }
 }
 
-fn spawn_simple_xr_scene(
+fn setup(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
@@ -39,14 +47,4 @@ fn spawn_simple_xr_scene(
         OpenXrCamera,         // Add OpenXrCamera component for tracking XR device
         Transform::default(), // Initial transform; will be overridden by XR system
     ));
-}
-
-pub fn main() {
-    let runtime = Runtime::new(RuntimeParameters {
-        app_name: "SimpleXRScene".to_owned(),
-        enable_xr: true,
-    });
-    let app = Handler {};
-
-    runtime.run(app).expect("Could not run application");
 }

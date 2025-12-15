@@ -27,7 +27,7 @@ pub struct OnUpdate<'a>(&'a mut App);
 
 impl OnUpdate<'_> {
     pub fn add_systems<M>(&mut self, systems: impl IntoScheduleConfigs<ScheduleSystem, M>) {
-        self.0.add_systems(Update, systems);
+        self.0.add_systems(FixedUpdate, systems);
     }
 }
 
@@ -49,6 +49,15 @@ pub struct Runtime {
 pub struct RuntimeParameters {
     pub app_name: String,
     pub enable_xr: bool,
+}
+
+impl Default for RuntimeParameters {
+    fn default() -> Self {
+        Self {
+            app_name: "OpenXRDS".to_owned(),
+            enable_xr: false,
+        }
+    }
 }
 
 impl Runtime {
