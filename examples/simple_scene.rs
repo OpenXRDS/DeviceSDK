@@ -33,18 +33,17 @@ fn spawn_simple_xr_scene(
         },
         Transform::from_xyz(4.0, 8.0, 4.0),
     ));
-    // Open XR Camera
+    // Camera
     commands.spawn((
         Camera3d::default(),
-        OpenXrCamera,         // Add OpenXrCamera component for tracking XR device
-        Transform::default(), // Initial transform; will be overridden by XR system
+        Transform::from_xyz(-2.5, 4.5, 9.0).looking_at(Vec3::ZERO, Vec3::Y),
     ));
 }
 
 pub fn main() {
     let runtime = Runtime::new(RuntimeParameters {
-        app_name: "SimpleXRScene".to_owned(),
-        enable_xr: true,
+        app_name: "SimpleScene".to_owned(),
+        enable_xr: false,
     });
     let app = Handler {};
 

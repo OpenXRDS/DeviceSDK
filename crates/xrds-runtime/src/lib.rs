@@ -3,3 +3,5 @@ mod runtime;
 
 pub use error::*;
 pub use runtime::*;
+
+pub use bevy::prelude::*;

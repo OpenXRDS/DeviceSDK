@@ -10443,6 +10443,7 @@ dependencies = [
  "xrds-core",
  "xrds-graphics",
  "xrds-net",
+ "xrds-openxr",
  "xrds-runtime",
 ]
 
