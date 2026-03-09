@@ -8,9 +8,9 @@ crate-type = ["lib"]
 
 [dependencies]
 tokio = { version = "^1.32", features = ["full", "test-util"] }
-tokio-tungstenite = "*"
+tokio-tungstenite = { version = "0.28", features = ["native-tls"] }
 url = "2.5.4"
-mio = "1.0.3"
+mio = "1.1.1"
 random-string = "1.1.0"                                         # for scid (QUIC)
 uuid = "1.15.1"                                                 # uuid
 base64 = "0.22.1"
@@ -27,11 +27,10 @@ pretty_env_logger = "0.5.0"
 curl = "0.4.47"                                          # http / https
 coap = "0.19.1"                                          # coap
 coap-lite = "0.11.3"                                     # coap
-websocket = "0.27.1"                                     # websocket / wss
 suppaftp = { version = "^6", features = ["native-tls"] } # ftp / sftp
 rumqttc = "0.24.0"                                       # mqtt
 quiche = "0.24.6"                                        # quic / http3
-webrtc = "0.12.0"                                        # webRTC
+webrtc = "0.17.1"                                        # webRTC
 image = { version = "0.25" }
 ffmpeg-next = { version = "8.0.0" }                      # video processing
 

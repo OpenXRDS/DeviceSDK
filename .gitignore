@@ -1,4 +1,5 @@
 target
 build
-xrds-net/test_output/received.h264
-xrds-net/test_output
+crates/xrds-net/test_output/
+.VSCodeCounter/
+.vscode
