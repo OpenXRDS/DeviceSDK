@@ -7,6 +7,7 @@ pub struct Runtime {
 
 pub struct RuntimeBuilder {
     pub(crate) application_name: String,
+    pub(crate) enable_xr: bool,
 }
 
 impl Runtime {
@@ -22,6 +23,7 @@ impl Runtime {
     pub fn builder() -> RuntimeBuilder {
         RuntimeBuilder {
             application_name: "".to_owned(),
+            enable_xr: false,
         }
     }
 
@@ -38,6 +40,7 @@ impl RuntimeBuilder {
         Ok(Runtime {
             inner: xrds_runtime::Runtime::new(xrds_runtime::RuntimeParameters {
                 app_name: self.application_name,
+                enable_xr: self.enable_xr,
             }),
         })
     }

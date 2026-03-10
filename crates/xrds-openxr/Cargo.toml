@@ -6,5 +6,21 @@ edition = "2021"
 [lib]
 crate-type = ["lib"]
 
+[features]
+preview_window = []
+default = ["preview_window"]
+
 [dependencies]
 openxr = { version = "0.19.0", features = ["linked", "static", "mint"] }
+ash = { workspace = true }
+anyhow = { workspace = true }
+bevy = { workspace = true }
+log = { workspace = true }
+wgpu = { workspace = true }
+wgpu-hal = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+winreg = { version = "0.55.0" }
+serde = { version = "1.0.228" }
+serde_json = { version = "1.0.145" }
+libloading = { version = "0.9.0" }

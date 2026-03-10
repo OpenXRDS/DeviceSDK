@@ -29,6 +29,7 @@ xrds-audio = { workspace = true }
 xrds-graphics = { workspace = true }
 xrds-components = { workspace = true }
 xrds-openxr = { workspace = true }
+bevy = { workspace = true }
 
 [build-dependencies]
 cbindgen = "0.27.0"
