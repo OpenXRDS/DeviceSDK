@@ -6,7 +6,12 @@ edition = "2021"
 [lib]
 crate-type = ["lib"]
 
+[features]
+default = []
+bevy_plugin = ["dep:bevy"]
+
 [dependencies]
+bevy = { workspace = true, optional = true, default-features = true }
 tokio = { version = "^1.32", features = ["full", "test-util"] }
 tokio-tungstenite = "*"
 url = "2.5.4"

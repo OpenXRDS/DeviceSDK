@@ -10399,6 +10399,7 @@ dependencies = [
  "wgpu",
  "winreg",
  "xrds-internal",
+ "xrds-net",
 ]
 
 [[package]]
@@ -10457,6 +10458,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "base64 0.22.1",
+ "bevy",
  "bytes 1.10.1",
  "chrono",
  "coap",

@@ -11,7 +11,7 @@ xrds-audio = { path = "../xrds-audio" }
 xrds-components = { path = "../xrds-components" }
 xrds-core = { path = "../xrds-core" }
 xrds-graphics = { path = "../xrds-graphics" }
-xrds-net = { path = "../xrds-net" }
+xrds-net = { path = "../xrds-net", features = ["bevy_plugin"] }
 xrds-runtime = { path = "../xrds-runtime" }
 xrds-openxr = { path = "../xrds-openxr" }
 anyhow = { workspace = true }
