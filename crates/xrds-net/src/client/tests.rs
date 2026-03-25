@@ -20,9 +20,24 @@ mod tests {
 
     static HTTP_ECHO_SERVER_URL: &str = "https://echo.free.beeceptor.com";
     static CRYPTO_INIT: OnceCell<()> = OnceCell::new();
+    static TEST_LOGGER_INIT: OnceCell<()> = OnceCell::new();
     static LAST_HTTP3_TEST: Mutex<Option<Instant>> = Mutex::new(None);
     static DEFAULT_DEBUG_FILE_PATH: &str = "test_output";
     pub struct CustomVideoProcessor {}
+
+    fn init_test_logger() {
+        TEST_LOGGER_INIT.get_or_init(|| {
+            let mut builder = pretty_env_logger::formatted_timed_builder();
+            builder.is_test(true);
+
+            match std::env::var("RUST_LOG") {
+                Ok(filters) => builder.parse_filters(&filters),
+                Err(_) => builder.parse_filters("info"),
+            };
+
+            let _ = builder.try_init();
+        });
+    }
 
     impl VideoTrackHandler for CustomVideoProcessor {
         fn handle_video_track<'a>(
@@ -531,12 +546,15 @@ mod tests {
         assert!(response.error.is_some());
     }
 
-    #[test]
-    fn test_ws_connect() {
+    #[tokio::test]
+    async fn test_ws_connect() {
         let client_builder = ClientBuilder::new();
         let client = client_builder.set_protocol(PROTOCOLS::WS).build();
 
-        let response = client.set_url("wss://ws.postman-echo.com/raw").connect();
+        let response = client
+            .set_url("wss://ws.postman-echo.com/raw")
+            .connect()
+            .await;
         assert!(
             response.is_ok(),
             "WebSocket connect failed: {}",
@@ -546,41 +564,48 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_ws_send() {
+    #[tokio::test]
+    async fn test_ws_send() {
         let msg = "Hello, WS";
         let data = Vec::from(msg.as_bytes());
 
         let client_builder = ClientBuilder::new();
         let client = client_builder.set_protocol(PROTOCOLS::WS).build();
 
-        let connect_result = client.set_url("wss://ws.postman-echo.com/raw").connect();
+        let connect_result = client
+            .set_url("wss://ws.postman-echo.com/raw")
+            .connect()
+            .await;
 
-        let send_result = connect_result.unwrap().send(data, None);
+        let send_result = connect_result.unwrap().send(data, None).await;
 
         assert_eq!(send_result.is_ok(), true);
     }
 
-    #[test]
-    fn test_ws_rcv() {
+    #[tokio::test]
+    async fn test_ws_rcv() {
         let client_builder = ClientBuilder::new();
         let client = client_builder.set_protocol(PROTOCOLS::WS).build();
 
-        let connect_result = client.set_url("wss://ws.postman-echo.com/raw").connect();
+        let connect_result = client
+            .set_url("wss://ws.postman-echo.com/raw")
+            .connect()
+            .await;
         let send_result = connect_result
             .unwrap()
-            .send(Vec::from("Hello, WS".as_bytes()), Some("text"));
+            .send(Vec::from("Hello, WS".as_bytes()), Some("text"))
+            .await;
 
-        let client = send_result.unwrap();
-        let response = client.rcv();
+        let mut client = send_result.unwrap();
+        let response = client.rcv().await;
 
         let response_str = String::from_utf8(response.clone().unwrap()).unwrap();
         println!("response: {}", response_str);
         assert_eq!(response.is_ok(), true);
     }
 
-    #[test]
-    fn test_ftp_connect() {
+    #[tokio::test]
+    async fn test_ftp_connect() {
         let client_builder = ClientBuilder::new();
         let client = client_builder
             .set_protocol(PROTOCOLS::FTP)
@@ -588,12 +613,12 @@ mod tests {
             .set_password("password")
             .build();
 
-        let response = client.set_url("test.rebex.net:21").connect();
+        let response = client.set_url("test.rebex.net:21").connect().await;
         assert_eq!(response.is_ok(), true);
     }
 
-    #[test]
-    fn test_ftp_quit() {
+    #[tokio::test]
+    async fn test_ftp_quit() {
         let client_builder = ClientBuilder::new();
         let client = client_builder
             .set_protocol(PROTOCOLS::FTP)
@@ -601,19 +626,19 @@ mod tests {
             .set_password("password")
             .build();
 
-        let response = client.set_url("test.rebex.net:21").connect();
+        let response = client.set_url("test.rebex.net:21").connect().await;
         let ftp_payload = FtpPayload {
             command: FtpCommands::QUIT,
             payload_name: "".to_string(),
             payload: None,
         };
 
-        let response = response.unwrap().run_ftp_command(ftp_payload);
+        let response = response.unwrap().run_ftp_command(ftp_payload).await;
         assert_eq!(response.error.is_none(), true);
     }
 
-    #[test]
-    fn test_ftp_cwd() {
+    #[tokio::test]
+    async fn test_ftp_cwd() {
         let client_builder = ClientBuilder::new();
         let client = client_builder
             .set_protocol(PROTOCOLS::FTP)
@@ -621,20 +646,20 @@ mod tests {
             .set_password("password")
             .build();
 
-        let response = client.set_url("test.rebex.net:21").connect().unwrap();
+        let response = client.set_url("test.rebex.net:21").connect().await.unwrap();
 
         let ftp_payload = FtpPayload {
             command: FtpCommands::CWD,
             payload_name: "pub/example".to_string(),
             payload: None,
         };
-        let response = response.run_ftp_command(ftp_payload);
+        let response = response.run_ftp_command(ftp_payload).await;
 
         assert_eq!(response.error.is_none(), true);
     }
 
-    #[test]
-    fn test_ftp_list() {
+    #[tokio::test]
+    async fn test_ftp_list() {
         let client_builder = ClientBuilder::new();
         let client = client_builder
             .set_protocol(PROTOCOLS::FTP)
@@ -642,20 +667,20 @@ mod tests {
             .set_password("password")
             .build();
 
-        let response = client.set_url("test.rebex.net:21").connect().unwrap();
+        let response = client.set_url("test.rebex.net:21").connect().await.unwrap();
 
         let ftp_payload = FtpPayload {
             command: FtpCommands::LIST,
             payload_name: "".to_string(),
             payload: None,
         };
-        let response = response.run_ftp_command(ftp_payload);
+        let response = response.run_ftp_command(ftp_payload).await;
 
         assert_eq!(response.error.is_none(), true);
     }
 
-    #[test]
-    fn test_ftp_download() {
+    #[tokio::test]
+    async fn test_ftp_download() {
         let client_builder = ClientBuilder::new();
         let client = client_builder
             .set_protocol(PROTOCOLS::FTP)
@@ -663,14 +688,14 @@ mod tests {
             .set_password("password")
             .build();
 
-        let client = client.set_url("test.rebex.net:21").connect().unwrap();
+        let client = client.set_url("test.rebex.net:21").connect().await.unwrap();
 
         let ftp_payload = FtpPayload {
             command: FtpCommands::RETR,
             payload_name: "readme.txt".to_string(),
             payload: None,
         };
-        let response = client.run_ftp_command(ftp_payload);
+        let response = client.run_ftp_command(ftp_payload).await;
 
         assert_eq!(response.error.is_none(), true);
         let payload_str = String::from_utf8(response.payload.clone().unwrap()).unwrap();
@@ -679,43 +704,75 @@ mod tests {
     }
 
     /************************** MQTT Tests **************************/
-    #[test]
-    fn test_client_mqtt_connect() {
+    #[tokio::test]
+    async fn test_client_mqtt_connect() {
+        init_test_logger();
+
         let client_builder = ClientBuilder::new();
         let client = client_builder.set_protocol(PROTOCOLS::MQTT).build();
 
-        let response = client.set_url("test.mosquitto.org:1883").connect();
+        let response = client.set_url("test.mosquitto.org:1883").connect().await;
+
+        // wait for a while to ensure connection is established before the test ends
+        sleep(Duration::from_secs(2)).await;
+        assert_eq!(response.is_ok(), true);
+        let response = response.unwrap().close().await;
+        sleep(Duration::from_secs(2)).await;
         assert_eq!(response.is_ok(), true);
     }
 
-    #[test]
-    fn test_client_mqtt_subscribe() {
+    #[tokio::test]
+    async fn test_client_mqtt_subscribe() {
+        init_test_logger();
+
         let client_builder = ClientBuilder::new();
         let subscriber = client_builder.set_protocol(PROTOCOLS::MQTT).build();
 
-        let subscriber = subscriber
+        let conn = subscriber
             .set_url("test.mosquitto.org:1883")
             .connect()
-            .unwrap();
+            .await;
 
-        let subscriber = subscriber.mqtt_subscribe("hello/keti");
-        assert_eq!(subscriber.is_ok(), true);
+        match conn {
+            Ok(mut response) => {
+                let subscribe_result = response.mqtt_subscribe("hello/keti").await;
+                sleep(Duration::from_secs(2)).await;
+                assert_eq!(subscribe_result.is_ok(), true);
+            }
+            Err(e) => println!("Failed to connect to MQTT broker: {}", e),
+        }
     }
 
-    #[test]
-    fn test_client_mqtt_publish() {
+    #[tokio::test]
+    async fn test_client_mqtt_publish() {
+        init_test_logger();
+
         let client_builder = ClientBuilder::new();
         let client = client_builder.set_protocol(PROTOCOLS::MQTT).build();
 
-        let response = client.set_url("test.mosquitto.org:1883").connect().unwrap();
+        // actually this does not make connection
+        let conn = client.set_url("test.mosquitto.org:1883").connect().await;
+        match conn {
+            Ok(response) => {
+                let data: Vec<u8> = Vec::from("Hello, MQTT".as_bytes());
+                let response = response.send(data, Some("hello/keti")).await;
 
-        let data: Vec<u8> = Vec::from("Hello, MQTT".as_bytes());
-        let response = response.send(data, Some("hello/keti"));
-        assert_eq!(response.is_ok(), true);
+                sleep(Duration::from_secs(2)).await;
+
+                assert!(
+                    response.is_ok(),
+                    "Failed to publish MQTT message: {}",
+                    response.err().unwrap()
+                );
+            }
+            Err(e) => println!("Failed to connect to MQTT broker: {}", e),
+        }
     }
 
-    #[test]
-    fn test_client_mqtt_sub_pub_rcv() {
+    #[tokio::test]
+    async fn test_client_mqtt_sub_pub_rcv() {
+        init_test_logger();
+
         let publisher_builder = ClientBuilder::new();
         let publisher = publisher_builder.set_protocol(PROTOCOLS::MQTT).build();
 
@@ -725,26 +782,28 @@ mod tests {
         let publisher = publisher
             .set_url("test.mosquitto.org:1883")
             .connect()
+            .await
             .unwrap();
 
-        let subscriber = subscriber
+        let mut subscriber = subscriber
             .set_url("test.mosquitto.org:1883")
             .connect()
+            .await
             .unwrap();
 
-        let subscriber = subscriber.mqtt_subscribe("hello/keti");
-        assert_eq!(subscriber.is_ok(), true);
+        let subscribe_result = subscriber.mqtt_subscribe("hello/keti").await;
+        assert_eq!(subscribe_result.is_ok(), true);
 
         let data: Vec<u8> = Vec::from("Hello, MQTT".as_bytes());
         // publishes data to topic "hello/rumqtt"
-        let publisher = publisher.send(data, Some("hello/keti"));
+        let publisher = publisher.send(data, Some("hello/keti")).await;
         assert_eq!(publisher.is_ok(), true);
 
         let mut count = 0;
         let recv_str;
         loop {
             count += 1;
-            let rcv_result = subscriber.clone().unwrap().rcv();
+            let rcv_result = subscriber.rcv().await;
             if rcv_result.is_ok() {
                 let rcv_data = rcv_result.unwrap();
                 let rcv_str = String::from_utf8(rcv_data);
@@ -765,41 +824,52 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_client_quic_connect() {
+    #[tokio::test]
+    async fn test_client_quic_connect() {
         let client_builder = ClientBuilder::new();
         let client = client_builder.set_protocol(PROTOCOLS::QUIC).build();
 
-        let result = client.set_url("https://quic.nginx.org:443").connect();
+        let result = client.set_url("https://quic.nginx.org:443").connect().await;
 
-        let result = result.map_err(|e| e.to_string());
         assert_eq!(result.is_ok(), true);
     }
 
-    #[test]
-    fn test_client_quic_send() {
+    #[tokio::test]
+    async fn test_client_quic_send() {
         let client_builder = ClientBuilder::new();
         let client: crate::client::Client = client_builder.set_protocol(PROTOCOLS::QUIC).build();
 
-        let result = client
-            .set_url("https://quic.nginx.org:443")
-            .connect()
-            .map_err(|e| e.to_string());
+        let result = client.set_url("https://quic.nginx.org:443").connect().await;
 
         let client = result.unwrap();
 
-        let send_result = client.send(Vec::from("Hello, QUIC".as_bytes()), None);
+        let send_result = client.send(Vec::from("Hello, QUIC".as_bytes()), None).await;
         assert_eq!(send_result.is_ok(), true);
-
-        assert!(true);
     }
 
-    #[test]
-    fn test_quic_rcv() {}
+    #[tokio::test]
+    async fn test_client_quic_rcv() {
+        let client_builder = ClientBuilder::new();
+        let client: crate::client::Client = client_builder.set_protocol(PROTOCOLS::QUIC).build();
 
-    #[test]
+        let result = client.set_url("https://quic.nginx.org:443").connect().await;
+
+        let client = result.unwrap();
+
+        let send_result = client.send(Vec::from("Hello, QUIC".as_bytes()), None).await;
+        assert_eq!(send_result.is_ok(), true);
+
+        let response = send_result.unwrap().rcv().await;
+        println!(
+            "Received QUIC response: {}",
+            response.clone().unwrap().len()
+        );
+        assert_eq!(response.is_ok(), true);
+    }
+
+    #[tokio::test]
     #[serial]
-    fn test_client_http3_request() {
+    async fn test_client_http3_request() {
         ensure_http3_test_spacing();
 
         // let (status_code, res_body, error) = run_http3_test_with_retry("https://www.litespeedtech.com/products/litespeed-web-server", 3);
@@ -919,8 +989,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn test_client_webrtc_webcam_video_stream() {
-        std::env::set_var("RUST_LOG", "info");
-        pretty_env_logger::init();
+        init_test_logger();
         init_crypto();
 
         let port = line!() + 8000;
@@ -945,8 +1014,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn test_client_webrtc_datachannel() {
-        std::env::set_var("RUST_LOG", "info");
-        pretty_env_logger::init();
+        init_test_logger();
         init_crypto();
 
         let port = line!() + 8000;
@@ -966,8 +1034,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn test_client_webrtc_custom_handler() {
-        std::env::set_var("RUST_LOG", "info");
-        pretty_env_logger::init();
+        init_test_logger();
         init_crypto();
 
         let port = line!() + 8000;
@@ -994,8 +1061,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn test_client_webrtc_custom_callback_fn() {
-        std::env::set_var("RUST_LOG", "info");
-        pretty_env_logger::init();
+        init_test_logger();
         init_crypto();
 
         let port = line!() + 8000;

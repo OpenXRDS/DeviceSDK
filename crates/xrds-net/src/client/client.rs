@@ -1,41 +1,45 @@
 /*
- Copyright 2025 KETI
+Copyright 2025 KETI
 
- Licensed under the Apache License, Version 2.0 (the "License");
- you may not use this file except in compliance with the License.
- You may obtain a copy of the License at
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
 
-      https://www.apache.org/licenses/LICENSE-2.0
+     https://www.apache.org/licenses/LICENSE-2.0
 
- Unless required by applicable law or agreed to in writing, software
- distributed under the License is distributed on an "AS IS" BASIS,
- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- See the License for the specific language governing permissions and
- limitations under the License.
- */
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
 
-use std::{fmt};
+use log::{debug, info, trace, warn};
 use std::clone::Clone;
+use std::fmt;
 use std::io::Cursor;
 use std::sync::{Arc, Mutex};
-use std::{thread, vec};
 use std::time::Duration;
+use std::{thread, vec};
+use tokio::sync::mpsc;
+use tokio::sync::oneshot;
+use tokio::sync::Mutex as AsyncMutex;
 use tokio::time::Instant;
 
 use mio::net::UdpSocket;
 use mio::{Events, Poll};
 
 // Internal dependencies
-use crate::common::enums::{PROTOCOLS, FtpCommands};
 use crate::common::data_structure::{FtpPayload, FtpResponse, NetResponse, XrUrl};
-use crate::common::{parse_url, fill_mandatory_http_headers, generate_random_string};
+use crate::common::enums::{FtpCommands, PROTOCOLS};
+use crate::common::{fill_mandatory_http_headers, generate_random_string, parse_url};
 
 // HTTP
 use curl::easy::{Easy2, Handler, List, WriteError};
 
 // CoAP
-use coap_lite::CoapResponse;
 use coap::UdpCoAPClient;
+use coap_lite::CoapResponse;
 
 // Websocket
 use crate::client::xrds_websocket::XrdsWebsocket;
@@ -44,17 +48,15 @@ use crate::client::xrds_websocket::XrdsWebsocket;
 use suppaftp::FtpStream;
 
 // Mqtt
-use rumqttc::Client as MqttClient;
-use rumqttc::Connection as MqttConnection;
-use rumqttc::{MqttOptions, QoS, Event, Incoming};
+use rumqttc::AsyncClient as MqttAsyncClient;
+use rumqttc::EventLoop;
+use rumqttc::{Event, Incoming, MqttOptions, Outgoing, QoS};
 
 // QUIC / HTTP3
-use quiche::{Connection, RecvInfo};
 use quiche::h3::NameValue;
-
+use quiche::{Connection, RecvInfo};
 
 const MAX_DATAGRAM_SIZE: usize = 1350;
-
 
 /**
  * ResponseCollector is a struct to collect response from the server
@@ -63,12 +65,26 @@ const MAX_DATAGRAM_SIZE: usize = 1350;
  */
 struct ResponseCollector(Vec<u8>, Vec<u8>);
 
+pub enum MqttPollResult {
+    Publish { topic: String, payload: Vec<u8> },
+    Other,
+}
+
+#[derive(Clone)]
+pub struct MqttState {
+    pub client: MqttAsyncClient,
+    pub eventloop: Arc<AsyncMutex<EventLoop>>,
+    pub incoming_rx: Arc<AsyncMutex<mpsc::UnboundedReceiver<MqttPollResult>>>,
+    pub pending_subscribe: Arc<AsyncMutex<Option<oneshot::Sender<Result<(), String>>>>>,
+    pub subscribed_topic: Option<String>,
+}
+
 impl Handler for ResponseCollector {
     fn header(&mut self, data: &[u8]) -> bool {
         self.0.extend_from_slice(data);
         true
     }
-    
+
     fn write(&mut self, data: &[u8]) -> Result<usize, WriteError> {
         self.1.extend_from_slice(data);
         Ok(data.len())
@@ -141,20 +157,19 @@ impl ClientBuilder {
 
             ws_client: None,
             ftp_stream: None,
-            mqtt_client: None,
-            mqtt_connection: None,
+            mqtt: None,
             quic_connection: None,
             udp_socket: None,
-            event_poll: None,
+            quic_event_poll: None,
         }
     }
 }
 
 #[derive(Clone)]
- pub struct Client {
+pub struct Client {
     pub protocol: PROTOCOLS,
     pub raw_url: String, // url given by the user. This is used for connection and request
-    pub id: String, // unique id for the client
+    pub id: String,      // unique id for the client
 
     // parsed url. these fields are extracted from the url string
     // Not directly used for connection or request. Just for information
@@ -174,20 +189,17 @@ impl ClientBuilder {
 
     pub ws_client: Option<XrdsWebsocket>,
     pub ftp_stream: Option<Arc<Mutex<FtpStream>>>,
-    pub mqtt_client: Option<MqttClient>,
-    pub mqtt_connection: Option<Arc<Mutex<MqttConnection>>>,
+    pub mqtt: Option<MqttState>,
 
     /* QUIC */
     pub quic_connection: Option<Arc<Mutex<quiche::Connection>>>,
     pub udp_socket: Option<Arc<Mutex<mio::net::UdpSocket>>>,
-    pub event_poll: Option<Arc<Mutex<mio::Poll>>>,
+    pub quic_event_poll: Option<Arc<Mutex<mio::Poll>>>,
+}
 
-
- }
-
- impl fmt::Debug for Client {
+impl fmt::Debug for Client {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Client.Deubg: To Be Implemented")
+        write!(f, "Client.Debug: To Be Implemented")
     }
 }
 
@@ -237,8 +249,8 @@ impl Client {
         self
     }
 
-    pub fn get_mqtt_connection(&self) -> Option<Arc<Mutex<MqttConnection>>> {
-        self.mqtt_connection.clone()
+    pub fn get_mqtt_eventloop(&self) -> Option<Arc<AsyncMutex<EventLoop>>> {
+        self.mqtt.as_ref().map(|mqtt| mqtt.eventloop.clone())
     }
 
     pub fn get_protocol(&self) -> PROTOCOLS {
@@ -266,7 +278,7 @@ impl Client {
      * Since it is not possible to clarify the type of the client in advance,
      * the function returns Result<Self, String> instead of Result<T, String>
      */
-    pub fn connect(mut self) -> Result<Self, String> {
+    pub async fn connect(mut self) -> Result<Self, String> {
         if self.raw_url.is_empty() {
             return Err("URL is required for connection.".to_string());
         }
@@ -281,16 +293,20 @@ impl Client {
         self.port = Some(parse_result.as_ref().unwrap().port);
         self.path = Some(parse_result.as_ref().unwrap().path.clone());
         if parse_result.as_ref().unwrap().query.is_some() {
-            self.path = Some(self.path.as_ref().unwrap().to_string() + "?" + parse_result.as_ref().unwrap().query.as_ref().unwrap());
+            self.path = Some(
+                self.path.as_ref().unwrap().to_string()
+                    + "?"
+                    + parse_result.as_ref().unwrap().query.as_ref().unwrap(),
+            );
         }
-        
+
         // check the protocol
         match self.protocol {
-            PROTOCOLS::WS | PROTOCOLS::WSS => self.connect_ws(),
-            PROTOCOLS::FTP => self.connect_ftp(),
-            PROTOCOLS::SFTP => self.connect_sftp(),
-            PROTOCOLS::MQTT => self.connect_mqtt(),
-            PROTOCOLS::QUIC => self.connect_quic(),
+            PROTOCOLS::WS | PROTOCOLS::WSS => self.connect_ws().await,
+            PROTOCOLS::FTP => self.connect_ftp().await,
+            PROTOCOLS::SFTP => self.connect_sftp().await,
+            PROTOCOLS::MQTT => self.connect_mqtt().await,
+            PROTOCOLS::QUIC => self.connect_quic().await,
             _ => Err("The protocol does not support 'Connect'. Use 'Request' instead.".to_string()),
         }
     }
@@ -303,199 +319,352 @@ impl Client {
      * topic is optional for WS, and indicates the message type (binary, text, etc.)
      * if no message type is given for WS, it will be considered as binary
      */
-    pub fn send(self, data: Vec<u8>, topic: Option<&str>) -> Result<Self, String> {
+    pub async fn send(self, data: Vec<u8>, topic: Option<&str>) -> Result<Self, String> {
         // check the protocol
         match self.protocol {
-            PROTOCOLS::WS | PROTOCOLS::WSS => self.send_ws(topic, data),
-            PROTOCOLS::MQTT => self.send_mqtt(topic, data),
-            PROTOCOLS::QUIC => self.send_quic(data),
-            _ => Err("The protocol does not support 'Send'. Use another method instead.".to_string()),
+            PROTOCOLS::WS | PROTOCOLS::WSS => self.send_ws(topic, data).await,
+            PROTOCOLS::MQTT => self.send_mqtt(topic, data).await,
+            PROTOCOLS::QUIC => self.send_quic(data).await,
+            _ => {
+                Err("The protocol does not support 'Send'. Use another method instead.".to_string())
+            }
         }
     }
 
     /******************************************** */
     /*************       RECEIVE        ********* */
     /******************************************** */
-    pub fn rcv(&self) -> Result<Vec<u8>, String> {
+    pub async fn rcv(&mut self) -> Result<Vec<u8>, String> {
         // check the protocol
         match self.protocol {
-            PROTOCOLS::WS | PROTOCOLS::WSS => self.rcv_ws(),
-            PROTOCOLS::MQTT => self.rcv_mqtt(),
-            PROTOCOLS::QUIC => self.rcv_quic(),
-             _ => Err("The protocol does not support 'Send'. Use another method instead.".to_string()),
-         }
+            PROTOCOLS::WS | PROTOCOLS::WSS => self.rcv_ws().await,
+            PROTOCOLS::MQTT => self.rcv_mqtt().await,
+            PROTOCOLS::QUIC => self.clone().rcv_quic().await,
+            _ => Err(
+                "The protocol does not support 'Receive'. Use another method instead.".to_string(),
+            ),
+        }
     }
 
-    pub fn close(&self) -> Result<(), String> {
+    pub async fn close(&self) -> Result<(), String> {
         // check the protocol
         match self.protocol {
-            PROTOCOLS::WS | PROTOCOLS::WSS => self.close_ws(),
-            // PROTOCOLS::MQTT => self.close_mqtt(),
+            PROTOCOLS::WS | PROTOCOLS::WSS => self.close_ws().await,
+            PROTOCOLS::MQTT => self.close_mqtt().await,
             // PROTOCOLS::WEBRTC => self.close_webrtc(),
             // PROTOCOLS::QUIC => self.close_quic(),
-            _ => Err("The protocol does not support 'Close'. Use another method instead".to_string()),
+            _ => {
+                Err("The protocol does not support 'Close'. Use another method instead".to_string())
+            }
         }
     }
 
     /*************************** */
     /* MQTT PROTOCOLS */
     /*************************** */
+    // both publish and subscirbe hides 'connect' process internally (rumqttc)
+
     /**
      * Invokes 'publish' method of the mqtt client
      */
-    fn send_mqtt(self, topic: Option<&str>, message: Vec<u8>) -> Result<Self, String> {
-        if self.mqtt_client.is_none() {
-            return Err("MQTT client is not initialized.".to_string());
-        }
+    async fn send_mqtt(self, topic: Option<&str>, _message: Vec<u8>) -> Result<Self, String> {
+        let mqtt = self
+            .mqtt
+            .as_ref()
+            .ok_or("MQTT state is not initialized.".to_string())?;
 
-        if self.mqtt_connection.is_none() {
-            return Err("MQTT connection is not initialized.".to_string());
-        }
+        let topic = topic.ok_or("MQTT topic is required.")?;
 
-        let publish_result = self.mqtt_client.as_ref().unwrap()
-            .publish(topic.unwrap(), QoS::AtLeastOnce, true, message);
-        if publish_result.is_err() {
-            Err(publish_result.err().unwrap().to_string())
-        } else {
-            // wait for puback confirmation in timeout
-            let start_time = Instant::now();
+        let pub_result = mqtt
+            .client
+            .publish(topic, QoS::AtMostOnce, false, _message)
+            .await;
+
+        match pub_result {
+            Ok(_) => Ok(self),
+            Err(e) => Err(format!("Failed to publish MQTT message: {}", e)),
+        }
+    }
+
+    async fn rcv_mqtt(&mut self) -> Result<Vec<u8>, String> {
+        let incoming_rx = self
+            .mqtt
+            .as_ref()
+            .ok_or("MQTT state is not initialized.")?
+            .incoming_rx
+            .clone();
+
+        let timeout_secs = self.timeout.unwrap_or(30);
+        let receive_result = tokio::time::timeout(Duration::from_secs(timeout_secs), async {
             loop {
-                if start_time.elapsed() > Duration::from_secs(5) {
-                    return Err("Publish confirmation timed out.".to_string());
-                }
+                let incoming = {
+                    let mut rx_guard = incoming_rx.lock().await;
+                    rx_guard.recv().await
+                };
 
-                let message = self.rcv_mqtt();
-                if message.is_err() {
-                    return Err(message.err().unwrap().to_string());
-                } else if let Ok(msg) = message {
-                    if msg == b"PUBACK_CONFIRMED".to_vec() {
-                        return Ok(self); // Publish confirmed
-                    } else {
-                        continue; // keep waiting for confirmation
-                    }
-                } else {
-                        return Err("Failed to receive publish confirmation.".to_string());
+                match incoming {
+                    Some(MqttPollResult::Publish { payload, .. }) => return Ok(payload),
+                    Some(_) => continue,
+                    None => return Err("MQTT receive channel is closed.".to_string()),
                 }
             }
+        })
+        .await;
+
+        match receive_result {
+            Ok(result) => result,
+            Err(_) => Err(format!(
+                "Timed out waiting for MQTT message after {} seconds.",
+                timeout_secs
+            )),
         }
     }
 
-    /**
-     * Receives the 'Publish' event only from the connection
-     * if the received event is not 'Publish', it will return the empty Vec<u8>
-     */
-    fn rcv_mqtt(&self) -> Result<Vec<u8>, String> {
-        let mqtt_connection = self.mqtt_connection.as_ref().unwrap();
-        let notification = mqtt_connection.lock().unwrap().recv();
-        match notification {
-            Err(recv_err) => {
-                let err_msg = format!("Error occurred while receiving the message: {:?}", recv_err);
-                Err(err_msg)
+    pub async fn mqtt_subscribe(&mut self, topic: &str) -> Result<(), String> {
+        let (mqtt_client, pending_subscribe) = {
+            let mqtt = self.mqtt.as_ref().ok_or("MQTT state is not initialized.")?;
+
+            (mqtt.client.clone(), mqtt.pending_subscribe.clone())
+        };
+
+        let (suback_tx, suback_rx) = oneshot::channel::<Result<(), String>>();
+
+        {
+            let mut pending_guard = pending_subscribe.lock().await;
+            if pending_guard.is_some() {
+                return Err("Another MQTT subscribe operation is already pending.".to_string());
             }
-            Ok(inner_result) => {
-                match inner_result {
-                    Ok(event) => {
-                        match event {
-                            Event::Incoming(incoming) => {
-                                match incoming {
-                                    Incoming::Publish(message) => {
-                                        let result_vec = Vec::from(message.payload);
-                                        println!("Received MQTT Publish message: {:?}", result_vec);
-                                        Ok(result_vec)
-                                    }
-                                    Incoming::Subscribe(message) => {
-                                        println!("Subscription success: {:?}", message);
-                                        Ok(Vec::new())
-                                    }
-                                    Incoming::SubAck(message) => {
-                                        println!("SubAck received: {:?}", message.return_codes);
-                                        // Return a special marker for SUBACK instead of empty Vec
-                                        Ok(b"SUBACK_CONFIRMED".to_vec())
-                                    }
-                                    Incoming::PubAck(message) => {
-                                        println!("PubAck received: {:?}", message);
-                                        Ok(b"PUBACK_CONFIRMED".to_vec())
-                                    }
-                                    _ => {
-                                        println!("Received other MQTT event: {:?}", incoming);
-                                        Ok(Vec::new()) // Still return empty for other events
-                                    }
-                                }
-                            }
-                            Event::Outgoing(_outgoing) => {
-                                Ok(Vec::new())
-                            }
-                        }
-                    }
-                    Err(conn_err) => {
-                        let err_msg = format!("Error occurred while receiving the message: {:?}", conn_err);
-                        Err(err_msg)
-                    }
+
+            *pending_guard = Some(suback_tx);
+        }
+
+        let subscribe_result = mqtt_client.subscribe(topic, QoS::AtMostOnce).await;
+
+        if let Err(e) = subscribe_result {
+            let mut pending_guard = pending_subscribe.lock().await;
+            pending_guard.take();
+
+            return Err(format!(
+                "Failed to enqueue MQTT subscribe for topic '{}': {}",
+                topic, e
+            ));
+        }
+
+        let timeout_secs = self.timeout.unwrap_or(10);
+        let wait_suback_result =
+            tokio::time::timeout(Duration::from_secs(timeout_secs), suback_rx).await;
+
+        match wait_suback_result {
+            Ok(Ok(Ok(()))) => {
+                if let Some(mqtt) = self.mqtt.as_mut() {
+                    mqtt.subscribed_topic = Some(topic.to_string());
                 }
+
+                Ok(())
             }
+            Ok(Ok(Err(err))) => Err(err),
+            Ok(Err(_)) => {
+                Err("MQTT subscribe waiter was dropped before acknowledgement.".to_string())
+            }
+            Err(_) => Err(format!(
+                "Timed out waiting for MQTT SubAck after {} seconds for topic '{}'.",
+                timeout_secs, topic
+            )),
         }
     }
 
-    pub fn mqtt_subscribe(self, topic: &str) -> Result<Self, String> {
-        if self.mqtt_client.is_none() {
-            return Err("MQTT client is not initialized.".to_string());
-        }
-
-        if self.mqtt_connection.is_none() {
-            return Err("MQTT connection is not initialized.".to_string());
-        }
-
-        let subscription_result = 
-            self.mqtt_client.as_ref().unwrap().subscribe(topic, QoS::AtMostOnce);
-        if subscription_result.is_err() {
-            Err(subscription_result.err().unwrap().to_string())
-        } else {
-            // wait til subscription is confirmed with SUBACK in timeout
-            let start_time = Instant::now();
-            loop {
-                if start_time.elapsed() > Duration::from_secs(5) {
-                    return Err("Subscription confirmation timed out.".to_string());
-                }
-
-                let message = self.rcv_mqtt();
-                if message.is_err() {
-                    return Err(message.err().unwrap().to_string());
-                } else if let Ok(msg) = message {
-                    if msg.is_empty() {
-                        continue; // not a SUBACK message, keep waiting
-                    }
-                    // check if it is SUBACK_CONFIRMED
-                    if msg == b"SUBACK_CONFIRMED".to_vec() {
-                        let mst_str = String::from_utf8(msg.clone());
-                        println!("Subscription message string: {:?}", mst_str);
-                        return Ok(self); // Subscription confirmed
-                    } else {
-                        continue; // keep waiting for confirmation
-                    }
-                } else {
-                    return Err("Failed to receive subscription confirmation.".to_string());
-                }
-            }
-        }
-    }
-
-    fn connect_mqtt(mut self) -> Result<Self, String> {
-        let mut mqtt_options = MqttOptions::new(self.id.as_str(), 
-                self.host.as_ref().unwrap(), self.port.unwrap().try_into().unwrap());
+    async fn connect_mqtt(mut self) -> Result<Self, String> {
+        let mut mqtt_options = MqttOptions::new(
+            self.id.as_str(),
+            self.host.as_ref().unwrap(),
+            self.port.unwrap().try_into().unwrap(),
+        );
         mqtt_options.set_keep_alive(Duration::from_secs(5));
 
-        let (client, connection) = MqttClient::new(mqtt_options, 10);
-        self.mqtt_client = Some(client);
-        self.mqtt_connection = Some(Arc::new(Mutex::new(connection)));
+        let (client, eventloop) = MqttAsyncClient::new(mqtt_options, 10);
+        let (incoming_tx, incoming_rx) = mpsc::unbounded_channel::<MqttPollResult>();
+        let pending_subscribe = Arc::new(AsyncMutex::new(None));
 
+        self.mqtt = Some(MqttState {
+            client,
+            eventloop: Arc::new(AsyncMutex::new(eventloop)),
+            incoming_rx: Arc::new(AsyncMutex::new(incoming_rx)),
+            pending_subscribe: pending_subscribe.clone(),
+            subscribed_topic: None,
+        });
+
+        let eventloop = self
+            .mqtt
+            .as_ref()
+            .ok_or("MQTT state is not initialized.")?
+            .eventloop
+            .clone();
+
+        // spawn background task to continuously poll the event loop
+        tokio::spawn(async move {
+            let mut consecutive_errors = 0_u8;
+            let mut idle_poll_count = 0_u32;
+
+            debug!("MQTT poll task started");
+
+            loop {
+                let poll_result = tokio::time::timeout(Duration::from_secs(2), async {
+                    let mut eventloop_guard = eventloop.lock().await;
+                    eventloop_guard.poll().await
+                })
+                .await;
+
+                let poll_result = match poll_result {
+                    Ok(result) => {
+                        idle_poll_count = 0;
+                        result
+                    }
+                    Err(_) => {
+                        idle_poll_count = idle_poll_count.saturating_add(1);
+
+                        // Keep this sparse so long idle periods don't flood test logs.
+                        if idle_poll_count % 5 == 0 {
+                            trace!(
+                                "MQTT poll task is alive ({} consecutive idle polls)",
+                                idle_poll_count
+                            );
+                        }
+
+                        continue;
+                    }
+                };
+
+                match poll_result {
+                    Ok(Event::Incoming(Incoming::ConnAck(con))) => {
+                        consecutive_errors = 0;
+                        info!(
+                            "Received MQTT ConnAck event with return code {:?}",
+                            con.code
+                        );
+                    }
+                    Ok(Event::Incoming(Incoming::Publish(publish))) => {
+                        consecutive_errors = 0;
+                        let _ = incoming_tx.send(MqttPollResult::Publish {
+                            topic: publish.topic.clone(),
+                            payload: publish.payload.to_vec(),
+                        });
+                        debug!("Received MQTT Publish event on topic '{}'", publish.topic);
+                    }
+                    Ok(Event::Incoming(Incoming::PubAck(puback))) => {
+                        consecutive_errors = 0;
+                        debug!("Received MQTT PubAck event for packet id {}", puback.pkid);
+                    }
+                    Ok(Event::Incoming(Incoming::SubAck(_))) => {
+                        consecutive_errors = 0;
+                        let subscribe_waiter = {
+                            let mut pending_guard = pending_subscribe.lock().await;
+                            pending_guard.take()
+                        };
+
+                        if let Some(waiter) = subscribe_waiter {
+                            let _ = waiter.send(Ok(()));
+                        }
+
+                        debug!("Received MQTT SubAck event");
+                    }
+                    Ok(Event::Incoming(incoming)) => {
+                        consecutive_errors = 0;
+                        let _ = incoming_tx.send(MqttPollResult::Other);
+                        trace!("Received other MQTT incoming event: {:?}", incoming);
+                    }
+                    Ok(Event::Outgoing(Outgoing::Disconnect)) => {
+                        let subscribe_waiter = {
+                            let mut pending_guard = pending_subscribe.lock().await;
+                            pending_guard.take()
+                        };
+
+                        if let Some(waiter) = subscribe_waiter {
+                            let _ = waiter.send(Err(
+                                "MQTT disconnect requested before subscription acknowledgement."
+                                    .to_string(),
+                            ));
+                        }
+
+                        info!("MQTT disconnect requested. Stopping MQTT poll task.");
+                        break;
+                    }
+                    Ok(Event::Outgoing(outgoing)) => {
+                        consecutive_errors = 0;
+                        trace!("MQTT outgoing event: {:?}", outgoing);
+                    }
+                    Err(e) => {
+                        let err_text = e.to_string();
+
+                        // Public brokers can close idle connections without this being fatal for connect tests.
+                        if err_text.contains("os error 10054") {
+                            let subscribe_waiter = {
+                                let mut pending_guard = pending_subscribe.lock().await;
+                                pending_guard.take()
+                            };
+
+                            if let Some(waiter) = subscribe_waiter {
+                                let _ = waiter.send(Err(
+                                    "MQTT broker closed the connection before subscription acknowledgement."
+                                        .to_string(),
+                                ));
+                            }
+
+                            warn!("MQTT broker closed the connection. Stopping MQTT poll task.");
+                            break;
+                        }
+
+                        consecutive_errors = consecutive_errors.saturating_add(1);
+
+                        if consecutive_errors >= 5 {
+                            let subscribe_waiter = {
+                                let mut pending_guard = pending_subscribe.lock().await;
+                                pending_guard.take()
+                            };
+
+                            if let Some(waiter) = subscribe_waiter {
+                                let _ = waiter.send(Err(format!(
+                                    "MQTT event loop failed before subscription acknowledgement: {}",
+                                    err_text
+                                )));
+                            }
+
+                            warn!(
+                                "MQTT event loop had repeated failures (last error: {}). Exiting MQTT poll task.",
+                                err_text
+                            );
+                            break;
+                        }
+
+                        tokio::time::sleep(Duration::from_secs(1)).await;
+                    }
+                }
+            }
+        });
         Ok(self)
+    }
+
+    async fn close_mqtt(&self) -> Result<(), String> {
+        let mqtt = self
+            .mqtt
+            .as_ref()
+            .ok_or("MQTT state is not initialized.".to_string())?;
+
+        let disconnect_result = mqtt.client.disconnect().await;
+        if disconnect_result.is_err() {
+            Err(format!(
+                "Failed to disconnect MQTT client: {}",
+                disconnect_result.err().unwrap()
+            ))
+        } else {
+            Ok(())
+        }
     }
 
     /************************** */
     /* WEBSOCKET PROTOCOLS */
     /************************** */
-    fn connect_ws(mut self) -> Result<Self, String> {
-        let client_result = XrdsWebsocket::new().connect(self.raw_url.as_str());
+    async fn connect_ws(mut self) -> Result<Self, String> {
+        let client_result = XrdsWebsocket::new().connect(self.raw_url.as_str()).await;
 
         if let Ok(client) = client_result {
             self.ws_client = Some(client);
@@ -505,10 +674,10 @@ impl Client {
         }
     }
 
-    fn send_ws(self, msg_type: Option<&str>, message: Vec<u8>) -> Result<Self, String> {
+    async fn send_ws(self, msg_type: Option<&str>, message: Vec<u8>) -> Result<Self, String> {
         let ws_client = self.ws_client.as_ref().unwrap();
 
-        let send_result = ws_client.send_ws(msg_type, message);
+        let send_result = ws_client.send_ws(msg_type, message).await;
         if send_result.is_err() {
             Err(send_result.err().unwrap().to_string())
         } else {
@@ -516,9 +685,9 @@ impl Client {
         }
     }
 
-    fn rcv_ws(&self) -> Result<Vec<u8>, String> {
+    async fn rcv_ws(&self) -> Result<Vec<u8>, String> {
         let ws_client = self.ws_client.as_ref().unwrap();
-        let message = ws_client.rcv_ws();
+        let message = ws_client.rcv_ws().await;
 
         if let Ok(msg) = &message {
             Ok(msg.clone())
@@ -527,9 +696,9 @@ impl Client {
         }
     }
 
-    fn close_ws(&self) -> Result<(), String> {
+    async fn close_ws(&self) -> Result<(), String> {
         let ws_client = self.ws_client.as_ref().unwrap();
-        let close_result = ws_client.close_ws();
+        let close_result = ws_client.close_ws().await;
 
         if close_result.is_err() {
             Err(close_result.err().unwrap().to_string())
@@ -554,7 +723,7 @@ impl Client {
                 headers: vec![],
                 body: Vec::new(),
                 error: Some(err_message),
-            }
+            };
         } else if let Ok(url) = &parsed_url {
             self.url = Some(url.clone());
             self.host = Some(url.host.clone());
@@ -562,7 +731,9 @@ impl Client {
             self.path = Some(url.path.clone());
             if url.query.is_some() {
                 // add query to the path
-                self.path = Some(self.path.as_ref().unwrap().to_string() + "?" + url.query.as_ref().unwrap());
+                self.path = Some(
+                    self.path.as_ref().unwrap().to_string() + "?" + url.query.as_ref().unwrap(),
+                );
             }
         }
 
@@ -578,7 +749,9 @@ impl Client {
                 status_code: 0,
                 headers: vec![],
                 body: Vec::new(),
-                error: Some("The protocol does not support 'Request'. Use 'Connect' instead.".to_string()),
+                error: Some(
+                    "The protocol does not support 'Request'. Use 'Connect' instead.".to_string(),
+                ),
             },
         }
     }
@@ -607,10 +780,12 @@ impl Client {
         }
 
         if self.method == Some("POST".to_string()) {
-            easy.post(true).unwrap();    // POST method
-            
-            if self.req_body.is_some() {    // fill body field if there is any in request
-                easy.post_fields_copy(self.req_body.as_ref().unwrap().as_bytes()).unwrap();
+            easy.post(true).unwrap(); // POST method
+
+            if self.req_body.is_some() {
+                // fill body field if there is any in request
+                easy.post_fields_copy(self.req_body.as_ref().unwrap().as_bytes())
+                    .unwrap();
             }
         }
 
@@ -678,8 +853,7 @@ impl Client {
             body: response_body,
             error: None,
         }
-    }    
-
+    }
 
     /******************************** ****************/
     /* *****************    COAP    ******************/
@@ -707,8 +881,14 @@ impl Client {
 
         let headers: Vec<(String, String)> = vec![
             ("Code".to_string(), coap_res_header.code.to_string()),
-            ("Message ID".to_string(), coap_res_header.message_id.to_string()),
-            ("Version".to_string(), coap_res_header.get_version().to_string()),
+            (
+                "Message ID".to_string(),
+                coap_res_header.message_id.to_string(),
+            ),
+            (
+                "Version".to_string(),
+                coap_res_header.get_version().to_string(),
+            ),
         ];
 
         let body_result = String::from_utf8(coap_res_payload);
@@ -733,74 +913,76 @@ impl Client {
     }
 
     async fn run_coap(&self) -> Result<CoapResponse, String> {
-
         let response = UdpCoAPClient::get(&self.raw_url).await;
-        
+
         if let Ok(res) = response {
             Ok(res)
         } else {
-            Err(format!("Failed to get CoAP response: {:?}", response.err().unwrap()))
+            Err(format!(
+                "Failed to get CoAP response: {:?}",
+                response.err().unwrap()
+            ))
         }
     }
 
     /******************************** ****************/
     /* ***************** FTP & FTPS ******************/
     /******************************** ****************/
-    fn connect_ftp(mut self) -> Result<Self, String> {
-        let ftp_stream = FtpStream::connect(self.raw_url.as_str());
-        if ftp_stream.is_err() {
-            return Err(ftp_stream.err().unwrap().to_string());
-        }
+    async fn connect_ftp(mut self) -> Result<Self, String> {
+        let result = tokio::task::spawn_blocking(move || -> Result<Self, String> {
+            let mut ftp_stream =
+                FtpStream::connect(self.raw_url.as_str()).map_err(|e| e.to_string())?;
 
-        let mut ftp_stream = ftp_stream.unwrap();
-
-        if self.user.is_some() && self.password.is_some() {
-            let user = self.user.as_ref().unwrap();
-            let password = self.password.as_ref().unwrap();
-            let login_result = ftp_stream.login(user, password);
-            if login_result.is_err() {
-                Err(login_result.err().unwrap().to_string())
-            } else {
-                // store the ftp_stream in the client
-                self.ftp_stream = Some(Arc::new(Mutex::new(ftp_stream)));
-                Ok(self)
+            // Login is optional. If credentials are provided, authenticate explicitly.
+            if let (Some(user), Some(password)) = (self.user.as_ref(), self.password.as_ref()) {
+                ftp_stream
+                    .login(user, password)
+                    .map_err(|e| e.to_string())?;
             }
-        } else {
-            Err("User and password are required for FTP connection.".to_string())
-        }
+
+            self.ftp_stream = Some(Arc::new(Mutex::new(ftp_stream)));
+            Ok(self)
+        })
+        .await
+        .map_err(|e| format!("FTP connection task failed: {}", e))?;
+
+        result
     }
 
     /*
-        Need to test first
-     */
-    fn connect_sftp(self) -> Result<Self, String> {
-        Ok(self)  // temporal return
+       Need to test first
+    */
+    async fn connect_sftp(self) -> Result<Self, String> {
+        Ok(self) // temporal return
     }
 
-
-    pub fn run_ftp_command(&self, ftp_payload: FtpPayload) -> FtpResponse {
+    pub async fn run_ftp_command(&self, ftp_payload: FtpPayload) -> FtpResponse {
         match ftp_payload.command {
             FtpCommands::CWD => self.clone().run_ftp_cwd(ftp_payload),
             FtpCommands::CDUP => self.clone().run_ftp_cdup(),
             FtpCommands::QUIT => self.clone().run_ftp_quit(),
             FtpCommands::RETR => self.clone().run_ftp_retr(ftp_payload),
-            FtpCommands::STOR => self.clone().run_ftp_stor(ftp_payload),    
-            FtpCommands::APPE => self.clone().run_ftp_appe(ftp_payload),    
+            FtpCommands::STOR => self.clone().run_ftp_stor(ftp_payload),
+            FtpCommands::APPE => self.clone().run_ftp_appe(ftp_payload),
             FtpCommands::DELE => self.clone().run_ftp_dele(ftp_payload),
             FtpCommands::RMD => self.clone().run_ftp_rmd(ftp_payload),
             FtpCommands::MKD => self.clone().run_ftp_mkd(ftp_payload),
-            FtpCommands::PWD => self.clone().run_ftp_pwd(),                 
+            FtpCommands::PWD => self.clone().run_ftp_pwd(),
             FtpCommands::LIST => self.clone().run_ftp_list(ftp_payload),
             FtpCommands::NOOP => self.clone().run_ftp_noop(),
         }
-        
     }
 
     /**
      * FTP commands
      */
     fn run_ftp_cwd(self, ftp_payload: FtpPayload) -> FtpResponse {
-        let response = self.ftp_stream.unwrap().lock().unwrap().cwd(ftp_payload.payload_name.as_str());
+        let response = self
+            .ftp_stream
+            .unwrap()
+            .lock()
+            .unwrap()
+            .cwd(ftp_payload.payload_name.as_str());
         if response.is_err() {
             FtpResponse {
                 payload: None,
@@ -845,7 +1027,12 @@ impl Client {
     }
 
     fn run_ftp_retr(self, ftp_payload: FtpPayload) -> FtpResponse {
-        let data = self.ftp_stream.unwrap().lock().unwrap().retr_as_buffer(ftp_payload.payload_name.as_str());
+        let data = self
+            .ftp_stream
+            .unwrap()
+            .lock()
+            .unwrap()
+            .retr_as_buffer(ftp_payload.payload_name.as_str());
         if data.is_err() {
             FtpResponse {
                 payload: None,
@@ -865,7 +1052,7 @@ impl Client {
         }
     }
 
-    fn run_ftp_stor(self, ftp_payload: FtpPayload ) -> FtpResponse {
+    fn run_ftp_stor(self, ftp_payload: FtpPayload) -> FtpResponse {
         if ftp_payload.payload.is_none() {
             return FtpResponse {
                 payload: None,
@@ -874,7 +1061,12 @@ impl Client {
         }
 
         let mut reader = Cursor::new(ftp_payload.payload.unwrap());
-        let response = self.ftp_stream.unwrap().lock().unwrap().put_file(ftp_payload.payload_name, &mut reader);
+        let response = self
+            .ftp_stream
+            .unwrap()
+            .lock()
+            .unwrap()
+            .put_file(ftp_payload.payload_name, &mut reader);
         if response.is_err() {
             FtpResponse {
                 payload: None,
@@ -890,7 +1082,12 @@ impl Client {
 
     fn run_ftp_appe(self, ftp_payload: FtpPayload) -> FtpResponse {
         let mut reader = Cursor::new(ftp_payload.payload.unwrap());
-        let response = self.ftp_stream.unwrap().lock().unwrap().append_file(ftp_payload.payload_name.as_str(),  &mut reader);
+        let response = self
+            .ftp_stream
+            .unwrap()
+            .lock()
+            .unwrap()
+            .append_file(ftp_payload.payload_name.as_str(), &mut reader);
         if response.is_err() {
             FtpResponse {
                 payload: None,
@@ -905,7 +1102,12 @@ impl Client {
     }
 
     fn run_ftp_dele(self, ftp_payload: FtpPayload) -> FtpResponse {
-        let response = self.ftp_stream.unwrap().lock().unwrap().rm(ftp_payload.payload_name.as_str());
+        let response = self
+            .ftp_stream
+            .unwrap()
+            .lock()
+            .unwrap()
+            .rm(ftp_payload.payload_name.as_str());
         if response.is_err() {
             FtpResponse {
                 payload: None,
@@ -924,7 +1126,12 @@ impl Client {
      * Only empty directory can be removed
      */
     fn run_ftp_rmd(self, ftp_payload: FtpPayload) -> FtpResponse {
-        let response = self.ftp_stream.unwrap().lock().unwrap().rmdir(ftp_payload.payload_name.as_str());
+        let response = self
+            .ftp_stream
+            .unwrap()
+            .lock()
+            .unwrap()
+            .rmdir(ftp_payload.payload_name.as_str());
         if response.is_err() {
             FtpResponse {
                 payload: None,
@@ -939,7 +1146,12 @@ impl Client {
     }
 
     fn run_ftp_mkd(self, ftp_payload: FtpPayload) -> FtpResponse {
-        let response = self.ftp_stream.unwrap().lock().unwrap().mkdir(ftp_payload.payload_name.as_str());
+        let response = self
+            .ftp_stream
+            .unwrap()
+            .lock()
+            .unwrap()
+            .mkdir(ftp_payload.payload_name.as_str());
         if response.is_err() {
             FtpResponse {
                 payload: None,
@@ -990,7 +1202,12 @@ impl Client {
                 }
             }
         } else {
-            let list_result = self.ftp_stream.unwrap().lock().unwrap().list(Some(ftp_payload.payload_name.as_str()));
+            let list_result = self
+                .ftp_stream
+                .unwrap()
+                .lock()
+                .unwrap()
+                .list(Some(ftp_payload.payload_name.as_str()));
             if list_result.is_err() {
                 FtpResponse {
                     payload: None,
@@ -1006,7 +1223,7 @@ impl Client {
                 FtpResponse {
                     payload: None,
                     error: Some("Unknown error occurred in LIST command.".to_string()),
-                }                
+                }
             }
         }
     }
@@ -1027,77 +1244,148 @@ impl Client {
     }
     // ***************** End of Ftp Command Functons ***************//
 
-
     /********************************** */
     /********* QUIC PROTOCOL ************/
     /********************************** */
-    fn connect_quic(mut self) -> Result<Self, String> {
-        let url = self.url.as_ref().ok_or("URL not set")?;
+    async fn connect_quic(mut self) -> Result<Self, String> {
+        let url = self.url.clone().ok_or("URL not set")?;
         let peer_addr = url.socket_addrs().map_err(|e| e.to_string())?;
-        let bind_addr = "0.0.0.0:0".to_string();
-
-        let mut socket: mio::net::UdpSocket = mio::net::UdpSocket::bind(bind_addr.parse().unwrap()).unwrap();
-        let local_addr = socket.local_addr().unwrap();
-
+        let host = self.host.clone().ok_or("Host not set")?;
         let mut quic_config = self.create_quic_config();
 
-        // scid MUST be 20 bytes long
-        let scid = generate_random_string(20);
-        let scid = quiche::ConnectionId::from_ref(scid.as_bytes());
+        let (conn, socket, poll) = tokio::task::spawn_blocking(
+            move || -> Result<(Connection, mio::net::UdpSocket, mio::Poll), String> {
+                let bind_addr = "0.0.0.0:0";
+                let bind_addr = bind_addr
+                    .parse()
+                    .map_err(|e: std::net::AddrParseError| e.to_string())?;
 
-        let mut poll = mio::Poll::new().unwrap();
-        let poll_result = poll.registry().register(&mut socket, mio::Token(0), mio::Interest::READABLE);
-        if poll_result.is_err() {
-            return Err(poll_result.err().unwrap().to_string());
-        }
+                let mut socket = mio::net::UdpSocket::bind(bind_addr).map_err(|e| e.to_string())?;
+                let local_addr = socket.local_addr().map_err(|e| e.to_string())?;
 
-        let mut conn = quiche::connect(Some(self.host.clone().unwrap().as_str()), &scid, 
-            local_addr, peer_addr, &mut quic_config).map_err(|e| e.to_string())?;
+                // scid MUST be 20 bytes long
+                let scid = generate_random_string(20);
+                let scid = quiche::ConnectionId::from_ref(scid.as_bytes());
 
-        // Start the QUIC connection
-        Self::send_initial_packet(&mut socket, &mut conn)?;
+                let mut poll = mio::Poll::new().map_err(|e| e.to_string())?;
+                poll.registry()
+                    .register(&mut socket, mio::Token(0), mio::Interest::READABLE)
+                    .map_err(|e| e.to_string())?;
 
-        // Condition of breaking the loop: Connection is closed or established
-        Self::event_loop(&mut socket, &mut conn, &mut poll)?;
+                let mut conn = quiche::connect(
+                    Some(host.as_str()),
+                    &scid,
+                    local_addr,
+                    peer_addr,
+                    &mut quic_config,
+                )
+                .map_err(|e| e.to_string())?;
 
-        if conn.is_closed() {
-            return Err("Connection closed.".to_string());
-        }
+                // Start the QUIC connection
+                Self::send_initial_packet(&mut socket, &mut conn)?;
+
+                // Condition of breaking the loop: Connection is closed or established
+                Self::event_loop(&mut socket, &mut conn, &mut poll)?;
+
+                if conn.is_closed() {
+                    return Err("Connection closed.".to_string());
+                }
+
+                Ok((conn, socket, poll))
+            },
+        )
+        .await
+        .map_err(|e| format!("QUIC connection task failed: {}", e))??;
 
         self.quic_connection = Some(Arc::new(Mutex::new(conn)));
         self.udp_socket = Some(Arc::new(Mutex::new(socket)));
-        self.event_poll = Some(Arc::new(Mutex::new(poll)));
-
-        Ok(self)
-
-    }
-
-    // TODO: unit test
-    fn send_quic(mut self, mut data: Vec<u8>) -> Result<Self, String> {
-        let conn = self.quic_connection.as_mut().ok_or("QUIC connection is not initialized")?;
-
-        Self::handle_write( &mut self.udp_socket.as_mut().unwrap().lock().unwrap(),
-             &mut conn.lock().unwrap(), &mut data)?;
+        self.quic_event_poll = Some(Arc::new(Mutex::new(poll)));
 
         Ok(self)
     }
 
-    fn rcv_quic(&self) -> Result<Vec<u8>, String> {
-        let conn = self.quic_connection.as_ref().ok_or("QUIC connection is not initialized")?;
+    async fn send_quic(self, data: Vec<u8>) -> Result<Self, String> {
+        let conn = self
+            .quic_connection
+            .as_ref()
+            .ok_or("QUIC connection is not initialized")?
+            .clone();
+        let socket = self
+            .udp_socket
+            .as_ref()
+            .ok_or("QUIC socket is not initialized")?
+            .clone();
+
+        tokio::task::spawn_blocking(move || -> Result<(), String> {
+            let mut payload = data;
+            let mut socket = socket.lock().unwrap();
+            let mut conn = conn.lock().unwrap();
+            Self::handle_write(&mut socket, &mut conn, &mut payload)
+        })
+        .await
+        .map_err(|e| format!("QUIC send task failed: {}", e))??;
+
+        Ok(self)
+    }
+
+    async fn rcv_quic(self) -> Result<Vec<u8>, String> {
+        let conn = self
+            .quic_connection
+            .as_ref()
+            .ok_or("QUIC connection is not initialized")?
+            .clone();
         let mut buf = [0; 65535];
-        let mut socket = self.udp_socket.as_ref().unwrap().lock().unwrap();
-        let mut conn = conn.lock().unwrap();
+        let socket = self
+            .udp_socket
+            .as_ref()
+            .ok_or("QUIC socket is not initialized")?
+            .clone();
 
-        Self::handle_read(&mut socket, &mut conn, &mut buf)?;
+        tokio::task::spawn_blocking(move || -> Result<(), String> {
+            let mut socket = socket.lock().unwrap();
+            let mut conn = conn.lock().unwrap();
+            Self::handle_read(&mut socket, &mut conn, &mut buf)
+        })
+        .await
+        .map_err(|e| format!("QUIC receive task failed: {}", e))??;
 
-        Ok(buf.to_vec())
+        // After handling the read event, check if there is any readable stream
+        let mut conn = self
+            .quic_connection
+            .as_ref()
+            .ok_or("QUIC connection is not initialized")?
+            .lock()
+            .unwrap();
+
+        let mut received_data = Vec::new();
+        for stream_id in conn.readable() {
+            let mut buf = [0; 65535];
+            match conn.stream_recv(stream_id, &mut buf) {
+                Ok((read, _)) => {
+                    println!("Received {} bytes on stream {}", read, stream_id);
+                    received_data.extend_from_slice(&buf[..read]);
+                }
+                Err(quiche::Error::Done) => {
+                    // No more data to read on this stream
+                    continue;
+                }
+                Err(e) => {
+                    conn.close(false, 0x1, b"fail").ok();
+                    return Err(format!("stream_recv failed: {:?}", e));
+                }
+            }
+        }
+
+        Ok(received_data)
     }
 
     fn create_quic_config(&self) -> quiche::Config {
         let mut config = quiche::Config::new(quiche::PROTOCOL_VERSION).unwrap();
         config.verify_peer(false);
 
-        config.set_application_protos(quiche::h3::APPLICATION_PROTOCOL).unwrap();
+        config
+            .set_application_protos(quiche::h3::APPLICATION_PROTOCOL)
+            .unwrap();
         config.set_max_idle_timeout(30_000);
         config.set_max_recv_udp_payload_size(MAX_DATAGRAM_SIZE);
         config.set_max_send_udp_payload_size(MAX_DATAGRAM_SIZE);
@@ -1112,6 +1400,10 @@ impl Client {
         config
     }
 
+    /*
+        For QUIC only
+        Send the initial packet to start the connection (invokes handshake process)
+    */
     fn send_initial_packet(socket: &mut UdpSocket, conn: &mut Connection) -> Result<(), String> {
         let mut out = [0; MAX_DATAGRAM_SIZE];
         let (write, send_info) = conn.send(&mut out).expect("initial send failed");
@@ -1124,12 +1416,17 @@ impl Client {
         Ok(())
     }
 
-    /**
-     * For QUIC only
-     */
-    pub fn start_event_loop(&self, socket: Arc<Mutex<UdpSocket>>, 
-            conn: Arc<Mutex<Connection>>, poll: Arc<Mutex<Poll>>) {
-                println!("[start_event_loop] Start the event loop");
+    /*
+        For QUIC only
+        Start the event loop to handle incoming and outgoing packets
+    */
+    pub fn start_event_loop(
+        &self,
+        socket: Arc<Mutex<UdpSocket>>,
+        conn: Arc<Mutex<Connection>>,
+        poll: Arc<Mutex<Poll>>,
+    ) {
+        println!("[start_event_loop] Start the event loop");
         thread::spawn(move || {
             let mut events = Events::with_capacity(1024);
             let mut buf = [0; 65535];
@@ -1147,7 +1444,7 @@ impl Client {
                         break;
                     }
                 }
-                
+
                 {
                     let mut poll = poll.lock().unwrap();
                     poll.poll(&mut events, None).unwrap();
@@ -1159,21 +1456,24 @@ impl Client {
                     let _ = Self::handle_read(&mut socket, &mut conn, &mut buf);
                     let _ = Self::handle_write(&mut socket, &mut conn, &mut out);
                 }
-            }   // end of loop
+            } // end of loop
             println!("[start_event_loop] Event loop is finished.");
         });
-
-        
     }
 
     /* Used for initial handshake */
-    fn event_loop(socket: &mut UdpSocket, conn: &mut Connection, poll: &mut Poll) -> Result<(), String> {
+    fn event_loop(
+        socket: &mut UdpSocket,
+        conn: &mut Connection,
+        poll: &mut Poll,
+    ) -> Result<(), String> {
         let mut events = Events::with_capacity(1024);
         let mut buf = [0; 65535];
         let mut out = [0; MAX_DATAGRAM_SIZE];
 
         loop {
-            poll.poll(&mut events, conn.timeout()).map_err(|e| e.to_string())?;
+            poll.poll(&mut events, conn.timeout())
+                .map_err(|e| e.to_string())?;
             if conn.is_closed() {
                 println!("Connection closed.");
                 break;
@@ -1187,24 +1487,36 @@ impl Client {
             Self::handle_read(socket, conn, &mut buf)?;
             Self::handle_write(socket, conn, &mut out)?;
         }
-        
+
         Ok(())
     }
 
-    fn handle_read(socket: &mut UdpSocket, conn: &mut Connection, buf: &mut [u8]) -> Result<(), String> {
+    fn handle_read(
+        socket: &mut UdpSocket,
+        conn: &mut Connection,
+        buf: &mut [u8],
+    ) -> Result<(), String> {
         let (len, from) = match socket.recv_from(buf) {
             Ok(v) => v,
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => return Ok(()),
             Err(e) => return Err(format!("recv() failed: {:?}", e)),
         };
 
-        let recv_info = RecvInfo { to: socket.local_addr().unwrap(), from };
+        let recv_info = RecvInfo {
+            to: socket.local_addr().unwrap(),
+            from,
+        };
 
-        conn.recv(&mut buf[..len], recv_info).map_err(|e| format!("recv failed: {:?}", e))?;
+        conn.recv(&mut buf[..len], recv_info)
+            .map_err(|e| format!("recv failed: {:?}", e))?;
         Ok(())
     }
 
-    fn handle_write(socket: &mut UdpSocket, conn: &mut Connection, out: &mut [u8]) -> Result<(), String> {
+    fn handle_write(
+        socket: &mut UdpSocket,
+        conn: &mut Connection,
+        out: &mut [u8],
+    ) -> Result<(), String> {
         loop {
             let (write, send_info) = match conn.send(out) {
                 Ok(v) => v,
@@ -1239,7 +1551,7 @@ impl Client {
     fn request_http3(&self) -> NetResponse {
         let start_time = Instant::now();
         let max_duration = Duration::from_secs(30);
-        
+
         let mut response = NetResponse {
             protocol: PROTOCOLS::HTTP3,
             status_code: 0,
@@ -1256,9 +1568,11 @@ impl Client {
             std::net::SocketAddr::V6(_) => "[::]:0",
         };
 
-        // Need improvement on header setting. in case of using .set_method() method or not 
+        // Need improvement on header setting. in case of using .set_method() method or not
         let req_headers = match self.req_headers.clone() {
-            Some(headers) => fill_mandatory_http_headers(url.clone(), Some(headers), self.method.clone()),
+            Some(headers) => {
+                fill_mandatory_http_headers(url.clone(), Some(headers), self.method.clone())
+            }
             None => fill_mandatory_http_headers(url.clone(), None, self.method.clone()),
         };
 
@@ -1274,8 +1588,14 @@ impl Client {
         let mut quic_config = self.create_quic_config();
 
         let local_addr = socket.local_addr().unwrap();
-        let mut conn = quiche::connect(Some(url.host.as_str())
-            , &scid, local_addr, peer_addr, &mut quic_config).unwrap();
+        let mut conn = quiche::connect(
+            Some(url.host.as_str()),
+            &scid,
+            local_addr,
+            peer_addr,
+            &mut quic_config,
+        )
+        .unwrap();
 
         // QUIC Initialization
         let mut out = [0; MAX_DATAGRAM_SIZE];
@@ -1287,10 +1607,10 @@ impl Client {
         let mut events = mio::Events::with_capacity(1024);
         let mut is_exit = false;
 
-        let handshake_timeout = Duration::from_secs(20);    // New: QUIC handshake timeout
-        let connection_timeout = Duration::from_secs(25);   // HTTP/3 connection timeout
-        let response_timeout = Duration::from_secs(30);     // Response timeout (increased)
-        
+        let handshake_timeout = Duration::from_secs(20); // New: QUIC handshake timeout
+        let connection_timeout = Duration::from_secs(25); // HTTP/3 connection timeout
+        let response_timeout = Duration::from_secs(30); // Response timeout (increased)
+
         let handshake_start = Instant::now();
         let connection_start = Instant::now();
         let mut handshake_completed = false;
@@ -1301,7 +1621,10 @@ impl Client {
         loop {
             // Overall timeout check
             if start_time.elapsed() > max_duration {
-                response.error = Some(format!("Request timed out after {} seconds", max_duration.as_secs()));
+                response.error = Some(format!(
+                    "Request timed out after {} seconds",
+                    max_duration.as_secs()
+                ));
                 break;
             }
 
@@ -1311,12 +1634,16 @@ impl Client {
 
             // Handshake timeout check
             if !handshake_completed && handshake_start.elapsed() > handshake_timeout {
-                response.error = Some("QUIC handshake timeout - check server availability".to_string());
+                response.error =
+                    Some("QUIC handshake timeout - check server availability".to_string());
                 break;
             }
 
             // Connection timeout check
-            if handshake_completed && !connection_established && connection_start.elapsed() > connection_timeout {
+            if handshake_completed
+                && !connection_established
+                && connection_start.elapsed() > connection_timeout
+            {
                 response.error = Some("HTTP/3 connection establishment timeout".to_string());
                 break;
             }
@@ -1325,7 +1652,7 @@ impl Client {
             let poll_timeout = if !handshake_completed {
                 Some(Duration::from_millis(100)) // More frequent during handshake
             } else if !connection_established || request_sent_time.is_none() {
-                Some(Duration::from_millis(50))  // Frequent during HTTP/3 setup
+                Some(Duration::from_millis(50)) // Frequent during HTTP/3 setup
             } else {
                 // After request sent, use longer timeouts to avoid missing data
                 Some(Duration::from_millis(500)) // Less frequent during response wait
@@ -1339,11 +1666,21 @@ impl Client {
             // Check QUIC handshake completion
             if !handshake_completed && conn.is_established() {
                 handshake_completed = true;
-                println!("QUIC handshake completed in {:?}", handshake_start.elapsed());
+                println!(
+                    "QUIC handshake completed in {:?}",
+                    handshake_start.elapsed()
+                );
             }
 
             // Handle packet reception with better error handling
-            if let Err(e) = Self::receive_packets(&mut socket, &mut conn, &mut buf, local_addr, &mut http3_conn, &h3_config) {
+            if let Err(e) = Self::receive_packets(
+                &mut socket,
+                &mut conn,
+                &mut buf,
+                local_addr,
+                &mut http3_conn,
+                &h3_config,
+            ) {
                 // Don't fail on recoverable errors
                 if !e.contains("would block") && !e.contains("Done") {
                     response.error = Some(e);
@@ -1354,7 +1691,10 @@ impl Client {
             if let Some(h3) = http3_conn.as_mut() {
                 if !connection_established {
                     connection_established = true;
-                    println!("HTTP/3 connection established in {:?}", connection_start.elapsed());
+                    println!(
+                        "HTTP/3 connection established in {:?}",
+                        connection_start.elapsed()
+                    );
                 }
 
                 if !req_sent {
@@ -1379,7 +1719,10 @@ impl Client {
                 // Response timeout check (only after request sent)
                 if let Some(sent_time) = request_sent_time {
                     if sent_time.elapsed() > response_timeout {
-                        response.error = Some(format!("Response timeout after {} seconds", response_timeout.as_secs()));
+                        response.error = Some(format!(
+                            "Response timeout after {} seconds",
+                            response_timeout.as_secs()
+                        ));
                         break;
                     }
                 }
@@ -1403,7 +1746,8 @@ impl Client {
 
             if conn.is_closed() {
                 if response.status_code == 0 && response.body.is_empty() {
-                    response.error = Some("Connection closed without receiving response".to_string());
+                    response.error =
+                        Some("Connection closed without receiving response".to_string());
                 } else {
                     println!("Connection closed after receiving partial response");
                 }
@@ -1428,7 +1772,9 @@ impl Client {
         out: &mut [u8],
     ) -> Result<(), String> {
         while let Ok((write, send_info)) = conn.send(out) {
-            socket.send_to(&out[..write], send_info.to).map_err(|e| e.to_string())?;
+            socket
+                .send_to(&out[..write], send_info.to)
+                .map_err(|e| e.to_string())?;
         }
         Ok(())
     }
@@ -1442,17 +1788,23 @@ impl Client {
         h3_config: &quiche::h3::Config,
     ) -> Result<(), String> {
         while let Ok((len, from)) = socket.recv_from(buf) {
-            let recv_info = quiche::RecvInfo { to: local_addr, from };
+            let recv_info = quiche::RecvInfo {
+                to: local_addr,
+                from,
+            };
             if let Err(e) = conn.recv(&mut buf[..len], recv_info) {
                 return Err(format!("QUIC recv failed: {:?}", e));
             }
             if conn.is_established() && http3_conn.is_none() {
-                *http3_conn = Some(quiche::h3::Connection::with_transport(conn, h3_config).map_err(|e| format!("HTTP3 connection failed: {:?}", e))?);
+                *http3_conn = Some(
+                    quiche::h3::Connection::with_transport(conn, h3_config)
+                        .map_err(|e| format!("HTTP3 connection failed: {:?}", e))?,
+                );
             }
         }
         Ok(())
     }
-    
+
     fn send_http3_request(
         h3: &mut quiche::h3::Connection,
         conn: &mut quiche::Connection,
@@ -1464,42 +1816,45 @@ impl Client {
         } else {
             Ok(())
         }
-        
     }
 
     fn handle_http3_events(
         h3: &mut quiche::h3::Connection,
         conn: &mut quiche::Connection,
         buf: &mut [u8],
-        response: &mut NetResponse
+        response: &mut NetResponse,
     ) -> Result<bool, String> {
         let mut events_processed = 0;
         let max_events_per_iteration = 100;
-        
+
         while events_processed < max_events_per_iteration {
             match h3.poll(conn) {
                 Ok((stream_id, event)) => {
                     events_processed += 1;
                     println!("HTTP/3 event on stream {}: {:?}", stream_id, event);
-                    
+
                     match event {
                         quiche::h3::Event::Headers { list, more_frames } => {
-                            println!("Received headers (count: {}, more_frames: {})", list.len(), more_frames);
+                            println!(
+                                "Received headers (count: {}, more_frames: {})",
+                                list.len(),
+                                more_frames
+                            );
                             for header in list {
                                 let name = String::from_utf8_lossy(header.name());
                                 let value = String::from_utf8_lossy(header.value());
                                 println!("  {}: {}", name, value);
-                                
+
                                 if name == ":status" {
                                     if let Ok(status_code) = value.parse::<u16>() {
                                         response.status_code = status_code as u32;
                                         println!("Status code set to: {}", status_code);
                                     }
                                 }
-                                
+
                                 response.headers.push((name.to_string(), value.to_string()));
                             }
-                            
+
                             // If there's no body and no more frames, we might be done
                             if !more_frames && response.status_code > 0 {
                                 println!("Response complete (headers only)");
@@ -1514,7 +1869,10 @@ impl Client {
                                         if read > 0 {
                                             response.body.extend_from_slice(&buf[..read]);
                                             total_read += read;
-                                            println!("Received {} bytes of data (total this event: {})", read, total_read);
+                                            println!(
+                                                "Received {} bytes of data (total this event: {})",
+                                                read, total_read
+                                            );
                                         } else {
                                             break;
                                         }
@@ -1526,14 +1884,18 @@ impl Client {
                                     }
                                 }
                             }
-                            
+
                             if total_read > 0 {
                                 println!("Total response body size: {} bytes", response.body.len());
                             }
                         }
                         quiche::h3::Event::Finished => {
-                            println!("Stream {} finished. Final response - Status: {}, Body size: {}", 
-                                stream_id, response.status_code, response.body.len());
+                            println!(
+                                "Stream {} finished. Final response - Status: {}, Body size: {}",
+                                stream_id,
+                                response.status_code,
+                                response.body.len()
+                            );
                             return Ok(true);
                         }
                         quiche::h3::Event::Reset(error_code) => {
@@ -1561,8 +1923,7 @@ impl Client {
                 }
             }
         }
-        
+
         Ok(false)
     }
-
- }
+}

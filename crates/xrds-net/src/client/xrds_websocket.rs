@@ -14,11 +14,11 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use futures_util::{SinkExt, StreamExt};
 use tokio::net::TcpStream;
-use tokio::runtime::Runtime;
+use tokio::sync::Mutex;
 // Websocket
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
@@ -29,7 +29,6 @@ type XrdsClient = Option<Arc<Mutex<WebSocketStream<MaybeTlsStream<TcpStream>>>>>
 pub struct XrdsWebsocket {
     raw_url: Option<String>,
     ws_client: XrdsClient,
-    rt: Option<Arc<Runtime>>,
 }
 
 impl Default for XrdsWebsocket {
@@ -43,33 +42,30 @@ impl XrdsWebsocket {
         XrdsWebsocket {
             raw_url: None,
             ws_client: None,
-            rt: None,
         }
     }
 
-    pub fn connect(mut self, raw_url: &str) -> Result<Self, String> {
+    pub async fn connect(mut self, raw_url: &str) -> Result<Self, String> {
         self.raw_url = Some(raw_url.to_string());
-        let rt = Arc::new(Runtime::new().map_err(|e| e.to_string())?);
-        let client_result = rt.block_on(connect_async(raw_url));
+        let client_result = connect_async(raw_url).await;
 
         if client_result.is_err() {
             Err(client_result.err().unwrap().to_string())
         } else if let Ok((client, _)) = client_result {
             self.ws_client = Some(Arc::new(Mutex::new(client)));
-            self.rt = Some(rt);
             Ok(self)
         } else {
             Err("Failed to connect to the WebSocket server.".to_string())
         }
     }
 
-    pub fn send_ws(&self, msg_type: Option<&str>, message: Vec<u8>) -> Result<Self, String> {
-        let mut ws_client = self.ws_client.clone();
-        let mut client = ws_client.as_mut().unwrap().lock().unwrap();
-        let rt = self
-            .rt
+    pub async fn send_ws(&self, msg_type: Option<&str>, message: Vec<u8>) -> Result<Self, String> {
+        let ws_client = self
+            .ws_client
             .as_ref()
-            .ok_or("WebSocket runtime is not initialized.".to_string())?;
+            .ok_or("WebSocket client is not initialized.".to_string())?
+            .clone();
+        let mut client = ws_client.lock().await;
 
         let message_type = msg_type.unwrap_or("binary");
         let binding = message_type.to_lowercase().clone();
@@ -85,7 +81,7 @@ impl XrdsWebsocket {
             _ => return Err("Invalid message type".to_string()),
         };
 
-        let send_result = rt.block_on(async { client.send(message).await });
+        let send_result = client.send(message).await;
 
         if send_result.is_err() {
             Err(send_result.err().unwrap().to_string())
@@ -94,14 +90,14 @@ impl XrdsWebsocket {
         }
     }
 
-    pub fn rcv_ws(&self) -> Result<Vec<u8>, String> {
-        let ws_client = self.ws_client.as_ref().unwrap();
-        let mut ws_client = ws_client.lock().unwrap();
-        let rt = self
-            .rt
+    pub async fn rcv_ws(&self) -> Result<Vec<u8>, String> {
+        let ws_client = self
+            .ws_client
             .as_ref()
-            .ok_or("WebSocket runtime is not initialized.".to_string())?;
-        let message = rt.block_on(async { ws_client.next().await });
+            .ok_or("WebSocket client is not initialized.".to_string())?
+            .clone();
+        let mut ws_client = ws_client.lock().await;
+        let message = ws_client.next().await;
 
         if let Some(Ok(message)) = message {
             match message {
@@ -116,14 +112,14 @@ impl XrdsWebsocket {
         }
     }
 
-    pub fn close_ws(&self) -> Result<(), String> {
-        let ws_client = self.ws_client.as_ref().unwrap();
-        let mut ws_client = ws_client.lock().unwrap();
-        let rt = self
-            .rt
+    pub async fn close_ws(&self) -> Result<(), String> {
+        let ws_client = self
+            .ws_client
             .as_ref()
-            .ok_or("WebSocket runtime is not initialized.".to_string())?;
-        let close_result = rt.block_on(async { ws_client.send(Message::Close(None)).await });
+            .ok_or("WebSocket client is not initialized.".to_string())?
+            .clone();
+        let mut ws_client = ws_client.lock().await;
+        let close_result = ws_client.send(Message::Close(None)).await;
         if close_result.is_err() {
             Err(close_result.err().unwrap().to_string())
         } else {
