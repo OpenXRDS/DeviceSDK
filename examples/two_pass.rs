@@ -1,5 +1,5 @@
+use bevy::prelude::*;
 use xrds::*;
-
 struct Handler;
 
 pub fn main() {

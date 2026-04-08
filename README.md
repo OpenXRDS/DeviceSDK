@@ -6,6 +6,41 @@
 
 To ensure compatibility with the majority of XR devices for XR applications.
 
+## Design principles
+
+This project targets non-experts first.
+
+- The default path should provide the simplest way to build XR applications without requiring Bevy knowledge.
+- XRDS concepts should be the primary public surface for common tasks such as spawning scene objects, updating transforms, handling input, and loading assets.
+- The expert path must remain available for developers who need lower-level control, but it should not shape the default mental model of the SDK.
+- New features should first be evaluated against a simple question: can a non-expert use this through XRDS concepts alone?
+- Bevy should remain an implementation engine and an escape hatch for advanced users, not the required interface for routine application development.
+
+In practice, this means the repo follows a two-layer model:
+
+- `XrdsApp`, `XrdsAPI`, and `XrdsUpdateContext` are the default application-facing layer.
+- `RuntimeHandler` and direct Bevy systems are the expert layer for engine-level control.
+
+For strict layering, the `xrds` crate does not re-export Bevy. If you intentionally drop to the expert layer, import `bevy` explicitly instead of reaching it through XRDS.
+
+Editor-focused planning notes are tracked in [docs/editor-readiness-checklist.md](docs/editor-readiness-checklist.md).
+
+## Which Type Do I Use?
+
+Use this rule first:
+
+- If you are building or editing live runtime content through `XrdsAPI`, use runtime-facing XRDS types such as `XrdsCamera`, `XrdsCube`, and `XrdsPointLight`.
+- If you are building, saving, loading, importing, or exporting an authored scene document, use scene-document types such as `XrdsSceneDocument` and `XrdsSceneNode`.
+
+In short:
+
+- `XrdsCamera` means "live runtime object I spawn or edit through XRDS".
+- `XrdsSceneNode` means "authored scene data that should survive save/load and import/export".
+
+Typical SDK app code should usually start from the runtime-facing layer and keep the typed handles returned by `XrdsAPI::spawn(...)`.
+
+Use `xrds-scene-graph` only when you need a durable document model with stable ids, hierarchy, editor metadata, and round-trip persistence. See [crates/xrds-scene-graph/README.md](crates/xrds-scene-graph/README.md) for the document-layer boundary.
+
 ## Usage
 
 ## How to build

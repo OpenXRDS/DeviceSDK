@@ -20,13 +20,9 @@ path = "./crates/xrds-audio"
 package = "xrds-components"
 path = "./crates/xrds-components"
 
-[workspace.dependencies.xrds-core]
-package = "xrds-core"
-path = "./crates/xrds-core"
-
-[workspace.dependencies.xrds-graphics]
-package = "xrds-graphics"
-path = "./crates/xrds-graphics"
+# [workspace.dependencies.xrds-graphics]
+# package = "xrds-graphics"
+# path = "./crates/xrds-graphics"
 
 [workspace.dependencies.xrds-net]
 package = "xrds-net"
@@ -39,6 +35,10 @@ path = "./crates/xrds-openxr"
 [workspace.dependencies.xrds-runtime]
 package = "xrds-runtime"
 path = "./crates/xrds-runtime"
+
+[workspace.dependencies.xrds-scene-graph]
+package = "xrds-scene-graph"
+path = "./crates/xrds-scene-graph"
 
 [workspace.dependencies.xrds-internal]
 package = "xrds-internal"
@@ -60,6 +60,7 @@ winreg = { version = "0.55.0" }
 
 [dependencies]
 xrds-internal = { workspace = true }
+xrds-scene-graph = { workspace = true }
 
 [dev-dependencies]
 bevy = { workspace = true }

@@ -1,49 +1,64 @@
-use xrds::*;
+use xrds::sdk::{
+    primitives::{XrdsCube, XrdsPlane3D},
+    world::{
+        lights::{XrdsAmbientLight, XrdsPointLight},
+        XrdsCamera,
+    },
+    XrdsColor,
+};
+use xrds::{Runtime, RuntimeParameters, XrdsAPI, XrdsApp};
 
-struct Handler;
+struct SimpleSceneApp;
 
 pub fn main() {
     let runtime = Runtime::new(RuntimeParameters {
         app_name: "SimpleScene".to_owned(),
         ..Default::default()
     });
-    runtime.run(Handler).expect("Could not run application");
+    runtime
+        .run_xrds(SimpleSceneApp)
+        .expect("Could not run application");
 }
 
-impl RuntimeHandler for Handler {
-    fn on_construct(&mut self, mut on_construct: OnConstruct) {
-        on_construct.add_systems(setup);
+impl XrdsApp for SimpleSceneApp {
+    fn setup(&mut self, api: &mut XrdsAPI<'_>) {
+        let _camera = api.spawn(&{
+            XrdsCamera::perspective(50.0)
+                .with_name("SimpleSceneCamera")
+                .near(0.1)
+                .far(200.0)
+                .at([-2.5, 4.5, 9.0])
+                .looking_at([0.0, 0.5, 0.0])
+        });
+
+        let _ambient = api.spawn(&{
+            let mut light = XrdsAmbientLight::new().with_name("SimpleSceneAmbient");
+            light.brightness = 80.0;
+            light
+        });
+
+        let _point_light = api.spawn(&{
+            let mut light = XrdsPointLight::new().with_name("SimpleSceneLight");
+            light.transform.translation = [4.0, 8.0, 4.0];
+            light.intensity = 1_200_000.0;
+            light.range = 30.0;
+            light.shadows = true;
+            light
+        });
+
+        let floor = api.spawn(&{
+            let mut plane = XrdsPlane3D::new().with_name("SimpleSceneFloor");
+            plane.transform.rotation_quat_xyzw = [-0.70710677, 0.0, 0.0, 0.70710677];
+            plane.size = [8.0, 8.0];
+            plane
+        });
+        api.set_material_base_color(&floor, XrdsColor::WHITE);
+
+        let cube = api.spawn(&{
+            let mut cube = XrdsCube::new().with_name("SimpleSceneCube");
+            cube.transform.translation = [0.0, 0.5, 0.0];
+            cube
+        });
+        api.set_material_base_color(&cube, XrdsColor::srgb(124.0 / 255.0, 144.0 / 255.0, 1.0));
     }
-}
-
-fn setup(
-    mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-) {
-    // circular base
-    commands.spawn((
-        Mesh3d(meshes.add(Circle::new(4.0))),
-        MeshMaterial3d(materials.add(Color::WHITE)),
-        Transform::from_rotation(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2)),
-    ));
-    // cube
-    commands.spawn((
-        Mesh3d(meshes.add(Cuboid::new(1.0, 1.0, 1.0))),
-        MeshMaterial3d(materials.add(Color::srgb_u8(124, 144, 255))),
-        Transform::from_xyz(0.0, 0.5, 0.0),
-    ));
-    // light
-    commands.spawn((
-        PointLight {
-            shadows_enabled: true,
-            ..default()
-        },
-        Transform::from_xyz(4.0, 8.0, 4.0),
-    ));
-    // Camera
-    commands.spawn((
-        Camera3d::default(),
-        Transform::from_xyz(-2.5, 4.5, 9.0).looking_at(Vec3::ZERO, Vec3::Y),
-    ));
 }

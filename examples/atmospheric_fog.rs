@@ -1,4 +1,5 @@
 use bevy::light::{CascadeShadowConfigBuilder, NotShadowCaster};
+use bevy::prelude::*;
 use xrds::*;
 
 struct Handler;
@@ -8,12 +9,14 @@ pub fn main() {
         app_name: "AtmosphericFog".to_owned(),
         ..Default::default()
     });
-    runtime.run(Handler).expect("Could not run application");
+    runtime
+        .run_xrds(Handler)
+        .expect("Could not run application");
 }
 
-impl RuntimeHandler for Handler {
-    fn on_construct(&mut self, mut on_construct: OnConstruct) {
-        on_construct.add_systems(setup);
+impl XrdsApp for Handler {
+    fn setup(&mut self, api: &mut XrdsAPI<'_>) {
+        api.add_startup_system(setup);
     }
 }
 

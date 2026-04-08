@@ -1,41 +1,59 @@
-use xrds::{bevy::light::CascadeShadowConfigBuilder, *};
+use xrds::*;
 
-struct Handler;
+use xrds::sdk::world::XrdsCamera;
+use xrds::sdk::world::XrdsGltfAsset;
 
 pub fn main() {
-    let runtime = Runtime::new(RuntimeParameters {
+    Runtime::new(RuntimeParameters {
         app_name: "LoadGltf".to_owned(),
         ..Default::default()
-    });
-    runtime.run(Handler).expect("Could not run application");
+    })
+    .run_xrds(LoadGltfApp::default())
+    .expect("Failed to run LoadGltfApp");
 }
 
-impl RuntimeHandler for Handler {
-    fn on_construct(&mut self, mut on_construct: OnConstruct) {
-        on_construct.add_systems(setup);
+#[derive(Default)]
+struct LoadGltfApp {
+    gltf_object_handle: Option<Handle<XrdsGltfAsset>>,
+    last_status: Option<XrdsGltfLoadStatus>,
+    rotation_radians: f32,
+}
+
+impl XrdsApp for LoadGltfApp {
+    fn setup(&mut self, api: &mut XrdsAPI<'_>) {
+        let gltf_object_handle = api.spawn(&{
+            let mut gltf_object =
+                XrdsGltfAsset::new("models/StainedGlassLamp/StainedGlassLamp.gltf")
+                    .with_name("StainedGlassLamp");
+            gltf_object.transform.translation = [0.0, 0.0, -2.0];
+            gltf_object
+        });
+        self.gltf_object_handle = Some(gltf_object_handle);
+
+        let _camera = api.spawn(&{
+            XrdsCamera::perspective(50.0)
+                .with_name("GltfCamera")
+                .near(0.1)
+                .far(200.0)
+                .order(0)
+                .at([0.0, 0.0, 3.0])
+                .looking_at([0.0, 1.0, 0.0])
+        });
     }
-}
 
-fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
-    // light
-    commands.spawn((
-        DirectionalLight {
-            shadows_enabled: true,
-            ..default()
-        },
-        CascadeShadowConfigBuilder {
-            num_cascades: 1,
-            maximum_distance: 1.6,
-            ..Default::default()
+    fn update(&mut self, ctx: &mut XrdsUpdateContext<'_>) {
+        if let Some(handle) = &self.gltf_object_handle {
+            let status = ctx.gltf_load_status(handle);
+            if status != self.last_status {
+                println!("StainedGlassLamp load status: {:?}", status);
+                self.last_status = status.clone();
+            }
+
+            if matches!(status, Some(XrdsGltfLoadStatus::Loaded)) {
+                self.rotation_radians += ctx.delta_secs() * 0.6;
+                let half_yaw = self.rotation_radians * 0.5;
+                ctx.set_rotation(handle, [0.0, half_yaw.sin(), 0.0, half_yaw.cos()]);
+            }
         }
-        .build(),
-    ));
-    // Camera
-    commands.spawn((
-        Camera3d::default(),
-        Transform::from_xyz(0.5, 0.8, 0.5).looking_at(Vec3::new(0.0, 0.3, 0.0), Vec3::Y),
-    ));
-    commands.spawn((SceneRoot(asset_server.load(
-        GltfAssetLabel::Scene(0).from_asset("models/StainedGlassLamp/StainedGlassLamp.gltf"),
-    )),));
+    }
 }

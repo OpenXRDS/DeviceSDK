@@ -7,6 +7,5 @@ edition = "2021"
 crate-type = ["lib"]
 
 [dependencies]
-xrds-core = { workspace = true }
-xrds-graphics = { workspace = true }
 glam = { workspace = true }
+bevy = { workspace = true }

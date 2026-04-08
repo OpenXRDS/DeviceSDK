@@ -1,4 +1,5 @@
 use bevy::camera::ScalingMode;
+use bevy::prelude::*;
 use xrds::*;
 
 struct Handler;
@@ -8,16 +9,15 @@ pub fn main() {
         app_name: "PhysicalBasedRendering".to_owned(),
         ..Default::default()
     });
-    runtime.run(Handler).expect("Could not run application");
+    runtime
+        .run_xrds(Handler)
+        .expect("Could not run application");
 }
 
-impl RuntimeHandler for Handler {
-    fn on_construct(&mut self, mut on_construct: OnConstruct) {
-        on_construct.add_systems(setup);
-    }
-
-    fn on_update(&mut self, mut on_update: OnUpdate) {
-        on_update.add_systems(environment_map_load_finish);
+impl XrdsApp for Handler {
+    fn setup(&mut self, api: &mut XrdsAPI<'_>) {
+        api.add_startup_system(setup);
+        api.add_update_system(environment_map_load_finish);
     }
 }
 

@@ -1,5 +1,6 @@
 use std::f32::consts::FRAC_PI_2;
 
+use bevy::prelude::*;
 use bevy::{
     asset::RenderAssetUsages,
     mesh::{
@@ -18,16 +19,15 @@ pub fn main() {
         app_name: "CustomSkinnedMesh".to_owned(),
         ..Default::default()
     });
-    runtime.run(Handler).expect("Could not run application");
+    runtime
+        .run_xrds(Handler)
+        .expect("Could not run application");
 }
 
-impl RuntimeHandler for Handler {
-    fn on_construct(&mut self, mut on_construct: OnConstruct) {
-        on_construct.add_systems(setup);
-    }
-
-    fn on_update(&mut self, mut on_update: OnUpdate) {
-        on_update.add_systems(joint_animation);
+impl XrdsApp for Handler {
+    fn setup(&mut self, api: &mut XrdsAPI<'_>) {
+        api.add_startup_system(setup);
+        api.add_update_system(joint_animation);
     }
 }
 

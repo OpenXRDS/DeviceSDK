@@ -1,64 +1,70 @@
-use xrds::*;
+use xrds::sdk::{
+    primitives::{XrdsCube, XrdsPlane3D},
+    world::{lights::XrdsPointLight, XrdsCamera},
+    XrdsColor,
+};
+use xrds::{Handle, Runtime, RuntimeParameters, XrdsAPI, XrdsApp, XrdsUpdateContext};
 
-struct Handler;
+#[derive(Default)]
+struct SimpleUpdateApp {
+    light_handle: Option<Handle<XrdsPointLight>>,
+}
 
 pub fn main() {
     let runtime = Runtime::new(RuntimeParameters {
         app_name: "SimpleUpdate".to_owned(),
         ..Default::default()
     });
-    runtime.run(Handler).expect("Could not run application");
+    runtime
+        .run_xrds(SimpleUpdateApp::default())
+        .expect("Could not run application");
 }
 
-impl RuntimeHandler for Handler {
-    fn on_construct(&mut self, mut on_construct: OnConstruct) {
-        on_construct.add_systems(setup);
+impl XrdsApp for SimpleUpdateApp {
+    fn setup(&mut self, api: &mut XrdsAPI<'_>) {
+        let _camera = api.spawn(&{
+            XrdsCamera::perspective(50.0)
+                .with_name("SimpleUpdateCamera")
+                .near(0.1)
+                .far(200.0)
+                .at([-2.5, 4.5, 9.0])
+                .looking_at([0.0, 0.5, 0.0])
+        });
+
+        let floor = api.spawn(&{
+            let mut plane = XrdsPlane3D::new().with_name("SimpleUpdateFloor");
+            plane.transform.rotation_quat_xyzw = [-0.70710677, 0.0, 0.0, 0.70710677];
+            plane.size = [8.0, 8.0];
+            plane
+        });
+        api.set_material_base_color(&floor, XrdsColor::WHITE);
+
+        let cube = api.spawn(&{
+            let mut cube = XrdsCube::new().with_name("SimpleUpdateCube");
+            cube.transform.translation = [0.0, 0.5, 0.0];
+            cube
+        });
+        api.set_material_base_color(&cube, XrdsColor::srgb(124.0 / 255.0, 144.0 / 255.0, 1.0));
+
+        let light = api.spawn(&{
+            let mut light = XrdsPointLight::new().with_name("SimpleUpdateLight");
+            light.transform.translation = [0.0, 3.0, 5.0];
+            light.intensity = 1_200_000.0;
+            light.range = 30.0;
+            light.shadows = true;
+            light
+        });
+
+        self.light_handle = Some(light);
     }
 
-    fn on_update(&mut self, mut on_update: OnUpdate) {
-        on_update.add_systems(update);
-    }
-}
+    fn update(&mut self, ctx: &mut XrdsUpdateContext<'_>) {
+        let light = self
+            .light_handle
+            .as_ref()
+            .expect("light handle should be initialized during setup");
 
-fn setup(
-    mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-) {
-    // circular base
-    commands.spawn((
-        Mesh3d(meshes.add(Circle::new(4.0))),
-        MeshMaterial3d(materials.add(Color::WHITE)),
-        Transform::from_rotation(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2)),
-    ));
-    // cube
-    commands.spawn((
-        Mesh3d(meshes.add(Cuboid::new(1.0, 1.0, 1.0))),
-        MeshMaterial3d(materials.add(Color::srgb_u8(124, 144, 255))),
-        Transform::from_xyz(0.0, 0.5, 0.0),
-    ));
-
-    // light
-    commands.spawn((
-        PointLight {
-            shadows_enabled: true,
-            ..default()
-        },
-        Transform::from_xyz(0.0, 1.0, 5.0),
-    ));
-    // Camera
-    commands.spawn((
-        Camera3d::default(),
-        Transform::from_xyz(-2.5, 4.5, 9.0).looking_at(Vec3::ZERO, Vec3::Y),
-    ));
-}
-
-fn update(time: Res<Time>, mut query: Query<&mut Transform, With<PointLight>>) {
-    for mut transform in query.iter_mut() {
-        transform.translation = Vec3::new(
-            5.0 * time.elapsed_secs().cos(),
-            3.0,
-            5.0 * time.elapsed_secs().sin(),
-        );
+        let t = ctx.elapsed_secs();
+        ctx.set_translation(light, [5.0 * t.cos(), 3.0, 5.0 * t.sin()]);
     }
 }

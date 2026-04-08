@@ -1,101 +1,59 @@
-use std::f32::consts::PI;
+use xrds::sdk::world::{
+    lights::{XrdsAmbientLight, XrdsDirectionalLight},
+    XrdsCamera, XrdsGltfAsset,
+};
+use xrds::{
+    Runtime, RuntimeParameters, XrdsAPI, XrdsApp, XrdsGltfAnimationPlaybackOptions,
+    XrdsGltfAnimationSelector,
+};
 
-use bevy::scene::SceneInstanceReady;
-use xrds::*;
+const MORPH_STRESS_TEST_PATH: &str = "models/animated/morphOriginal/MorphStressTest.gltf";
+const MORPH_STRESS_TEST_ANIMATION_INDEX: usize = 2;
 
-struct Handler;
+#[derive(Default)]
+struct MorphTargetsApp;
 
 pub fn main() {
     let runtime = Runtime::new(RuntimeParameters {
         app_name: "MorphTargets".to_owned(),
         ..Default::default()
     });
-    runtime.run(Handler).expect("Could not run application");
+    runtime
+        .run_xrds(MorphTargetsApp::default())
+        .expect("Could not run application");
 }
 
-#[derive(Component)]
-struct AnimationToPlay {
-    graph_handle: Handle<AnimationGraph>,
-    index: AnimationNodeIndex,
-}
+impl XrdsApp for MorphTargetsApp {
+    fn setup(&mut self, api: &mut XrdsAPI<'_>) {
+        let _ambient = api.spawn(&{
+            let mut light = XrdsAmbientLight::new().with_name("MorphTargetsAmbient");
+            light.brightness = 150.0;
+            light
+        });
 
-impl RuntimeHandler for Handler {
-    fn on_construct(&mut self, mut on_construct: OnConstruct) {
-        on_construct.add_systems(setup);
-        on_construct.add_systems(name_morphs);
-    }
-}
+        let gltf_handle =
+            api.spawn(&XrdsGltfAsset::new(MORPH_STRESS_TEST_PATH).with_name("MorphStressTest"));
+        api.play_gltf_animation(
+            &gltf_handle,
+            XrdsGltfAnimationSelector::Index(MORPH_STRESS_TEST_ANIMATION_INDEX),
+            XrdsGltfAnimationPlaybackOptions::default(),
+        )
+        .expect("MorphStressTest animation request should queue until the scene is ready");
 
-fn setup(
-    mut commands: Commands,
-    asset_server: Res<AssetServer>,
-    mut graphs: ResMut<Assets<AnimationGraph>>,
-) {
-    let (graph, index) = AnimationGraph::from_clip(asset_server.load(
-        GltfAssetLabel::Animation(2).from_asset("models/MorphStressTest/MorphStressTest.gltf"),
-    ));
+        let _sun = api.spawn(&{
+            let mut light = XrdsDirectionalLight::new().with_name("MorphTargetsSun");
+            light.transform.rotation_euler_xyz_deg = [0.0, 0.0, 90.0];
+            light
+        });
 
-    commands
-        .spawn((
-            AnimationToPlay {
-                graph_handle: graphs.add(graph),
-                index,
-            },
-            SceneRoot(asset_server.load(
-                GltfAssetLabel::Scene(0).from_asset("models/MorphStressTest/MorphStressTest.gltf"),
-            )),
-        ))
-        .observe(play_animation_when_ready);
-
-    commands.spawn((
-        DirectionalLight::default(),
-        Transform::from_rotation(Quat::from_rotation_z(PI / 2.0)),
-    ));
-
-    commands.spawn((
-        Camera3d::default(),
-        Transform::from_xyz(3.0, 2.1, 10.2).looking_at(Vec3::ZERO, Vec3::Y),
-    ));
-}
-
-fn play_animation_when_ready(
-    scene_ready: On<SceneInstanceReady>,
-    mut commands: Commands,
-    children: Query<&Children>,
-    animations_to_play: Query<&AnimationToPlay>,
-    mut players: Query<&mut AnimationPlayer>,
-) {
-    if let Ok(animation_to_play) = animations_to_play.get(scene_ready.entity) {
-        for child in children.iter_descendants(scene_ready.entity) {
-            if let Ok(mut player) = players.get_mut(child) {
-                player.play(animation_to_play.index).repeat();
-
-                commands
-                    .entity(child)
-                    .insert(AnimationGraphHandle(animation_to_play.graph_handle.clone()));
-            }
-        }
-    }
-}
-
-fn name_morphs(
-    asset_server: Res<AssetServer>,
-    mut events: MessageReader<AssetEvent<Mesh>>,
-    meshes: Res<Assets<Mesh>>,
-) {
-    for event in events.read() {
-        if let AssetEvent::<Mesh>::Added { id } = event {
-            if let Some(path) = asset_server.get_path(*id) {
-                if let Some(mesh) = meshes.get(*id) {
-                    if let Some(names) = mesh.morph_target_names() {
-                        info!("Morph target names for {path:?}:");
-
-                        for name in names {
-                            info!("  {name}");
-                        }
-                    }
-                }
-            }
-        }
+        let _camera = api.spawn(&{
+            XrdsCamera::perspective(50.0)
+                .with_name("MorphTargetsCamera")
+                .near(0.1)
+                .far(200.0)
+                .order(0)
+                .at([3.0, 2.1, 10.2])
+                .looking_at([0.0, 0.0, 0.0])
+        });
     }
 }

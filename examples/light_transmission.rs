@@ -1,6 +1,7 @@
 use std::f32::consts::PI;
 
 use bevy::anti_alias::taa::TemporalAntiAliasing;
+use bevy::prelude::*;
 use bevy::{
     camera::Exposure,
     color::palettes::css::{ANTIQUE_WHITE, BLUE, LIME, ORANGE_RED, RED},
@@ -18,16 +19,15 @@ pub fn main() {
         app_name: "LightTransmission".to_owned(),
         ..Default::default()
     });
-    runtime.run(Handler).expect("Could not run application");
+    runtime
+        .run_xrds(Handler)
+        .expect("Could not run application");
 }
 
-impl RuntimeHandler for Handler {
-    fn on_construct(&mut self, mut on_construct: OnConstruct) {
-        on_construct.add_systems(setup);
-    }
-
-    fn on_update(&mut self, mut on_update: OnUpdate) {
-        on_update.add_systems((rotate_camera, flicker_system));
+impl XrdsApp for Handler {
+    fn setup(&mut self, api: &mut XrdsAPI<'_>) {
+        api.add_startup_system(setup);
+        api.add_update_system((rotate_camera, flicker_system));
     }
 }
 

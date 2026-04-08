@@ -1,5 +1,7 @@
 use bevy::camera::Viewport;
-use xrds::{bevy::window::WindowResized, *};
+use bevy::prelude::*;
+use bevy::window::WindowResized;
+use xrds::*;
 
 struct Handler;
 
@@ -8,16 +10,15 @@ pub fn main() {
         app_name: "SplitScreen".to_owned(),
         ..Default::default()
     });
-    runtime.run(Handler).expect("Could not run application");
+    runtime
+        .run_xrds(Handler)
+        .expect("Could not run application");
 }
 
-impl RuntimeHandler for Handler {
-    fn on_construct(&mut self, mut on_construct: OnConstruct) {
-        on_construct.add_systems(setup);
-    }
-
-    fn on_update(&mut self, mut on_update: OnUpdate) {
-        on_update.add_systems(update_camera_viewport);
+impl XrdsApp for Handler {
+    fn setup(&mut self, api: &mut XrdsAPI<'_>) {
+        api.add_startup_system(setup);
+        api.add_update_system(update_camera_viewport);
     }
 }
 

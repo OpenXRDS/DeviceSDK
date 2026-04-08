@@ -12,6 +12,7 @@ env_logger.workspace = true
 anyhow.workspace = true
 tokio.workspace = true
 
+petgraph="0.8.3"
 mint = "0.5.9"
 winit = { version = "0.30.5", default-features = false, features = [
     "ahash",
@@ -23,13 +24,13 @@ winit = { version = "0.30.5", default-features = false, features = [
     "sctk-adwaita",
     "mint",
 ] }
-xrds-core = { workspace = true }
 xrds-net = { workspace = true }
 xrds-audio = { workspace = true }
-xrds-graphics = { workspace = true }
 xrds-components = { workspace = true }
 xrds-openxr = { workspace = true }
+xrds-scene-graph = { workspace = true }
 bevy = { workspace = true }
+gltf = "1.4.1"
 
 [build-dependencies]
 cbindgen = "0.27.0"
