@@ -125,7 +125,11 @@ impl XrdsSceneDocument {
             .asset(asset_id)
             .cloned()
             .ok_or_else(|| XrdsSceneAssetWorkflowError::AssetNotFound(asset_id.to_string()))?;
-        let referenced_node_ids = self.gltf_asset_reference_node_ids(&asset.id);
+        let referenced_node_ids = match asset.kind {
+            XrdsSceneAssetKind::Gltf => self.gltf_asset_reference_node_ids(&asset.id),
+            XrdsSceneAssetKind::Texture => self.material_texture_reference_node_ids(&asset.id),
+            XrdsSceneAssetKind::EnvironmentMap => Vec::new(),
+        };
 
         Ok(XrdsSceneAssetUsage {
             asset,
@@ -138,17 +142,27 @@ impl XrdsSceneDocument {
             .iter()
             .cloned()
             .map(|asset| XrdsSceneAssetUsage {
-                referenced_node_ids: self.gltf_asset_reference_node_ids(&asset.id),
+                referenced_node_ids: match asset.kind {
+                    XrdsSceneAssetKind::Gltf => self.gltf_asset_reference_node_ids(&asset.id),
+                    XrdsSceneAssetKind::Texture => {
+                        self.material_texture_reference_node_ids(&asset.id)
+                    }
+                    XrdsSceneAssetKind::EnvironmentMap => Vec::new(),
+                },
                 asset,
             })
             .collect()
     }
 
+    pub fn asset_diagnostic_entries(&self) -> Vec<XrdsSceneAssetDiagnosticEntry> {
+        self.asset_diagnostics().ui_entries()
+    }
+
     pub fn asset_diagnostics(&self) -> XrdsSceneAssetDiagnostics {
         let node_healths = self.gltf_node_healths();
         let source_diagnostics = self.gltf_source_diagnostics();
-        let image_source_diagnostics = self.image_source_diagnostics();
         let texture_source_diagnostics = self.texture_source_diagnostics();
+        let environment_map_source_diagnostics = self.environment_map_source_diagnostics();
         let asset_usages = self.asset_usages();
 
         let catalog_resolved_node_ids = node_healths
@@ -181,15 +195,15 @@ impl XrdsSceneDocument {
             .filter(|diagnostic| diagnostic.status != XrdsSceneGltfSourceDiagnosticStatus::Valid)
             .map(|diagnostic| diagnostic.node_id)
             .collect();
-        let valid_image_asset_ids = image_source_diagnostics
+        let valid_environment_map_asset_ids = environment_map_source_diagnostics
             .iter()
-            .filter(|diagnostic| diagnostic.status == XrdsSceneAssetSourceDiagnosticStatus::Valid)
-            .map(|diagnostic| diagnostic.asset_id.clone())
+            .filter(|d| d.status == XrdsSceneAssetSourceDiagnosticStatus::Valid)
+            .map(|d| d.asset_id.clone())
             .collect();
-        let invalid_image_asset_ids = image_source_diagnostics
+        let invalid_environment_map_asset_ids = environment_map_source_diagnostics
             .iter()
-            .filter(|diagnostic| diagnostic.status != XrdsSceneAssetSourceDiagnosticStatus::Valid)
-            .map(|diagnostic| diagnostic.asset_id.clone())
+            .filter(|d| d.status != XrdsSceneAssetSourceDiagnosticStatus::Valid)
+            .map(|d| d.asset_id.clone())
             .collect();
         let valid_texture_asset_ids = texture_source_diagnostics
             .iter()
@@ -205,18 +219,18 @@ impl XrdsSceneDocument {
         XrdsSceneAssetDiagnostics {
             node_healths,
             source_diagnostics,
-            image_source_diagnostics,
             texture_source_diagnostics,
+            environment_map_source_diagnostics,
             asset_usages,
             catalog_resolved_node_ids,
             missing_catalog_node_ids,
             detached_fallback_node_ids,
             valid_source_node_ids,
             invalid_source_node_ids,
-            valid_image_asset_ids,
-            invalid_image_asset_ids,
             valid_texture_asset_ids,
             invalid_texture_asset_ids,
+            valid_environment_map_asset_ids,
+            invalid_environment_map_asset_ids,
             unused_asset_ids,
         }
     }
@@ -684,19 +698,120 @@ pub struct XrdsSceneAssetUsage {
 pub struct XrdsSceneAssetDiagnostics {
     pub node_healths: Vec<XrdsSceneGltfNodeHealth>,
     pub source_diagnostics: Vec<XrdsSceneGltfSourceDiagnostic>,
-    pub image_source_diagnostics: Vec<XrdsSceneAssetSourceDiagnostic>,
     pub texture_source_diagnostics: Vec<XrdsSceneAssetSourceDiagnostic>,
+    pub environment_map_source_diagnostics: Vec<XrdsSceneAssetSourceDiagnostic>,
     pub asset_usages: Vec<XrdsSceneAssetUsage>,
     pub catalog_resolved_node_ids: Vec<XrdsSceneNodeId>,
     pub missing_catalog_node_ids: Vec<XrdsSceneNodeId>,
     pub detached_fallback_node_ids: Vec<XrdsSceneNodeId>,
     pub valid_source_node_ids: Vec<XrdsSceneNodeId>,
     pub invalid_source_node_ids: Vec<XrdsSceneNodeId>,
-    pub valid_image_asset_ids: Vec<String>,
-    pub invalid_image_asset_ids: Vec<String>,
     pub valid_texture_asset_ids: Vec<String>,
     pub invalid_texture_asset_ids: Vec<String>,
+    pub valid_environment_map_asset_ids: Vec<String>,
+    pub invalid_environment_map_asset_ids: Vec<String>,
     pub unused_asset_ids: Vec<String>,
+}
+
+impl XrdsSceneAssetDiagnostics {
+    pub fn ui_entries(&self) -> Vec<XrdsSceneAssetDiagnosticEntry> {
+        let mut entries = Vec::new();
+
+        for diagnostic in &self.source_diagnostics {
+            if diagnostic.status == XrdsSceneGltfSourceDiagnosticStatus::Valid {
+                continue;
+            }
+
+            entries.push(XrdsSceneAssetDiagnosticEntry {
+                subject: XrdsSceneAssetDiagnosticSubject::Node(diagnostic.node_id),
+                severity: XrdsSceneAssetDiagnosticSeverity::Error,
+                title: "glTF source issue".to_string(),
+                detail: diagnostic
+                    .message
+                    .clone()
+                    .unwrap_or_else(|| format!("glTF node {:?} has an invalid source", diagnostic.node_id)),
+            });
+        }
+
+        for diagnostic in &self.environment_map_source_diagnostics {
+            if diagnostic.status == XrdsSceneAssetSourceDiagnosticStatus::Valid {
+                continue;
+            }
+
+            entries.push(XrdsSceneAssetDiagnosticEntry {
+                subject: XrdsSceneAssetDiagnosticSubject::Asset {
+                    asset_id: diagnostic.asset_id.clone(),
+                    kind: diagnostic.asset_kind,
+                },
+                severity: XrdsSceneAssetDiagnosticSeverity::Error,
+                title: "Environment map source issue".to_string(),
+                detail: diagnostic.message.clone().unwrap_or_else(|| {
+                    format!(
+                        "Environment map asset '{}' has an invalid source",
+                        diagnostic.asset_id
+                    )
+                }),
+            });
+        }
+
+        for diagnostic in &self.texture_source_diagnostics {
+            if diagnostic.status == XrdsSceneAssetSourceDiagnosticStatus::Valid {
+                continue;
+            }
+
+            entries.push(XrdsSceneAssetDiagnosticEntry {
+                subject: XrdsSceneAssetDiagnosticSubject::Asset {
+                    asset_id: diagnostic.asset_id.clone(),
+                    kind: diagnostic.asset_kind,
+                },
+                severity: XrdsSceneAssetDiagnosticSeverity::Error,
+                title: "Texture source issue".to_string(),
+                detail: diagnostic.message.clone().unwrap_or_else(|| {
+                    format!("Texture asset '{}' has an invalid source", diagnostic.asset_id)
+                }),
+            });
+        }
+
+        for asset_id in &self.unused_asset_ids {
+            entries.push(XrdsSceneAssetDiagnosticEntry {
+                subject: XrdsSceneAssetDiagnosticSubject::Asset {
+                    asset_id: asset_id.clone(),
+                    kind: self
+                        .asset_usages
+                        .iter()
+                        .find(|usage| usage.asset.id == *asset_id)
+                        .map(|usage| usage.asset.kind)
+                        .unwrap_or(XrdsSceneAssetKind::Gltf),
+                },
+                severity: XrdsSceneAssetDiagnosticSeverity::Info,
+                title: "Unused asset".to_string(),
+                detail: format!("Asset '{}' is not referenced by authored scene content", asset_id),
+            });
+        }
+
+        entries
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct XrdsSceneAssetDiagnosticEntry {
+    pub subject: XrdsSceneAssetDiagnosticSubject,
+    pub severity: XrdsSceneAssetDiagnosticSeverity,
+    pub title: String,
+    pub detail: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum XrdsSceneAssetDiagnosticSubject {
+    Node(XrdsSceneNodeId),
+    Asset { asset_id: String, kind: XrdsSceneAssetKind },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum XrdsSceneAssetDiagnosticSeverity {
+    Info,
+    Warning,
+    Error,
 }
 
 #[derive(Debug, Clone, PartialEq)]

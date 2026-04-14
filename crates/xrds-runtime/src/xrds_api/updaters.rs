@@ -54,7 +54,7 @@ fn register_stored_cylinder_updaters(registry: &mut SurfaceUpdateRegistry) {
     });
 
     registry.register::<XrdsCylinder, XrdsMaterialParams, _>(|world, entity, params| {
-        apply_authored_material_to_entity(world, entity, *params);
+        apply_authored_material_to_entity(world, entity, params.clone());
     });
 
     registry.register::<XrdsCylinder, CylinderGeometryParams, _>(|world, entity, params| {
@@ -87,7 +87,7 @@ fn register_stored_cube_updaters(registry: &mut SurfaceUpdateRegistry) {
     });
 
     registry.register::<XrdsCube, XrdsMaterialParams, _>(|world, entity, params| {
-        apply_authored_material_to_entity(world, entity, *params);
+        apply_authored_material_to_entity(world, entity, params.clone());
     });
 
     registry.register::<XrdsCube, CubeGeometryParams, _>(|world, entity, params| {
@@ -119,7 +119,7 @@ fn register_stored_sphere_updaters(registry: &mut SurfaceUpdateRegistry) {
     });
 
     registry.register::<XrdsSphere, XrdsMaterialParams, _>(|world, entity, params| {
-        apply_authored_material_to_entity(world, entity, *params);
+        apply_authored_material_to_entity(world, entity, params.clone());
     });
 
     registry.register::<XrdsSphere, SphereGeometryParams, _>(|world, entity, params| {
@@ -151,7 +151,7 @@ fn register_stored_plane_updaters(registry: &mut SurfaceUpdateRegistry) {
     });
 
     registry.register::<XrdsPlane3D, XrdsMaterialParams, _>(|world, entity, params| {
-        apply_authored_material_to_entity(world, entity, *params);
+        apply_authored_material_to_entity(world, entity, params.clone());
     });
 
     registry.register::<XrdsPlane3D, Plane3DGeometryParams, _>(|world, entity, params| {
@@ -183,7 +183,7 @@ fn register_stored_tetrahedron_updaters(registry: &mut SurfaceUpdateRegistry) {
     });
 
     registry.register::<XrdsTetrahedron, XrdsMaterialParams, _>(|world, entity, params| {
-        apply_authored_material_to_entity(world, entity, *params);
+        apply_authored_material_to_entity(world, entity, params.clone());
     });
 
     registry.register::<XrdsTetrahedron, TetrahedronGeometryParams, _>(|world, entity, params| {

@@ -1,9 +1,9 @@
-pub mod enums;
 pub mod data_structure;
+pub mod enums;
 
+use std::io::Read;
 use std::path;
 use std::path::PathBuf;
-use std::io::Read;
 
 use quiche::h3::NameValue;
 
@@ -11,10 +11,10 @@ use random_string::generate;
 
 use crate::common::data_structure::XrUrl;
 
-const RANDOM_STRING_CHARSET: &str = "1234567890abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+const RANDOM_STRING_CHARSET: &str =
+    "1234567890abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
 pub fn parse_url(url: &str) -> Result<XrUrl, String> {
-    
     // 1. separate scheme if it exists
     let scheme_tokens = url.split("://").collect::<Vec<&str>>(); // ["https", "www.google.com/search"]
     if scheme_tokens.len() > 2 {
@@ -31,7 +31,7 @@ pub fn parse_url(url: &str) -> Result<XrUrl, String> {
     };
 
     // 2. separate query param if exists
-    let mut host  = scheme_tokens[scheme_tokens.len() - 1];  // host:port / path (?query)
+    let mut host = scheme_tokens[scheme_tokens.len() - 1]; // host:port / path (?query)
     let host_tokens = host.split("?").collect::<Vec<&str>>();
     if host_tokens.len() > 2 {
         return Err("Invalid query structure".to_string());
@@ -43,11 +43,10 @@ pub fn parse_url(url: &str) -> Result<XrUrl, String> {
     } else {
         None
     };
-    
 
     // 3. separate host
-    let mut host_tokens = host.split("/").collect::<Vec<&str>>();   // host / path
-    
+    let mut host_tokens = host.split("/").collect::<Vec<&str>>(); // host / path
+
     host = host_tokens[0];
     let path = if host_tokens.len() > 1 {
         // path starts with "/"
@@ -55,7 +54,7 @@ pub fn parse_url(url: &str) -> Result<XrUrl, String> {
     } else {
         "/".to_string()
     };
-    
+
     // 4. separate port if exists
     let mut port = 80;
     host_tokens = host.split(":").collect::<Vec<&str>>();
@@ -75,13 +74,14 @@ pub fn parse_url(url: &str) -> Result<XrUrl, String> {
         return Err("Invalid port range".to_string());
     }
 
-    Ok(XrUrl {   // temporal return value
+    Ok(XrUrl {
+        // temporal return value
         scheme: scheme.to_string(),
         host: host.to_string(),
         port,
         path: path.to_string(),
         raw_url: url.to_string(),
-        
+
         query: query_params,
         username: None,
         password: None,
@@ -142,14 +142,18 @@ fn convert_header_to_h3_header(headers: Vec<(String, String)>) -> Vec<quiche::h3
  * - :scheme
  * - :authority
  * - :path
- * 
+ *
  * Some sites may block requests without user-agent header.
  * So, user-agent header is also added.
- * 
+ *
  * Default Method: GET
  * If method is not provided by either set_method or header, GET method is used.
  */
-pub fn fill_mandatory_http_headers(url: XrUrl, headers: Option<Vec<(String, String)>>, method: Option<String>) -> Vec<quiche::h3::Header> {
+pub fn fill_mandatory_http_headers(
+    url: XrUrl,
+    headers: Option<Vec<(String, String)>>,
+    method: Option<String>,
+) -> Vec<quiche::h3::Header> {
     let mut h3_headers = match headers {
         Some(h) => convert_header_to_h3_header(h),
         None => Vec::new(),
@@ -161,7 +165,7 @@ pub fn fill_mandatory_http_headers(url: XrUrl, headers: Option<Vec<(String, Stri
     let mut has_scheme = false;
     let mut has_authority = false;
     let mut has_path = false;
-    let mut has_useragent = false;  // optional. some sites may block requests without user-agent
+    let mut has_useragent = false; // optional. some sites may block requests without user-agent
 
     for header in h3_headers.iter() {
         if header.name() == b":method" {
@@ -206,9 +210,7 @@ pub fn fill_mandatory_http_headers(url: XrUrl, headers: Option<Vec<(String, Stri
 
     h3_headers.extend(mandatory_headers);
     h3_headers
-
 }
-
 
 pub fn read_file_from_disk(path: &str) -> Result<Vec<u8>, String> {
     let p = path::Path::new(path);
@@ -232,8 +234,7 @@ pub fn payload_str_to_vector_str(payload: &str) -> Vec<String> {
     let payload_tokens = payload.split(",").collect::<Vec<&str>>();
     let mut payload_vector = Vec::new();
     for token in payload_tokens {
-        let token = token.trim()
-            .replace(['\"', '[', ']'], "");
+        let token = token.trim().replace(['\"', '[', ']'], "");
         if !token.is_empty() {
             payload_vector.push(token.to_string());
         }

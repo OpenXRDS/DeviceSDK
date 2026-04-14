@@ -1,6 +1,6 @@
-use ffmpeg_next::{self as ffmpeg, Rational};
-use ffmpeg::{codec, format, util::error::Error, encoder, Packet};
 use crate::client::xrds_webrtc::media::transcoding::jpeg2h264::H264Packet;
+use ffmpeg::{codec, encoder, format, util::error::Error, Packet};
+use ffmpeg_next::{self as ffmpeg, Rational};
 
 /**
  * This class is to verify streaming MP4 writing from H.264 packets.
@@ -39,14 +39,17 @@ impl StreamingMP4Writer {
                 den: 1,
             };
         }
-        
+
         octx.write_header()?;
 
         let stream = octx.stream(0).unwrap();
         let stream_time_base = stream.time_base();
         let encoder_time_base = Rational::new(1, fps as i32);
 
-        println!("🎬 Streaming MP4 writer ready: {}x{} @ {}fps", width, height, fps);
+        println!(
+            "🎬 Streaming MP4 writer ready: {}x{} @ {}fps",
+            width, height, fps
+        );
 
         Ok(StreamingMP4Writer {
             octx,
@@ -59,13 +62,15 @@ impl StreamingMP4Writer {
     /// Write H.264 packets immediately as they arrive
     pub fn write_packets(&mut self, h264_packets: &[H264Packet]) -> Result<(), Error> {
         for h264_pkt in h264_packets {
-            if h264_pkt.data.is_empty() { continue; }
+            if h264_pkt.data.is_empty() {
+                continue;
+            }
 
             let mut packet = Packet::new(h264_pkt.data.len());
             if let Some(data) = packet.data_mut() {
                 data.copy_from_slice(&h264_pkt.data);
             }
-        
+
             packet.set_stream(0);
             packet.set_pts(Some(h264_pkt.pts));
             packet.set_dts(Some(h264_pkt.dts));
@@ -78,7 +83,7 @@ impl StreamingMP4Writer {
             // CRITICAL: Rescale timestamps
             packet.rescale_ts(self.encoder_time_base, self.stream_time_base);
             packet.write_interleaved(&mut self.octx)?;
-            
+
             self.packet_count += 1;
 
             if self.packet_count.is_multiple_of(100) {
@@ -91,7 +96,10 @@ impl StreamingMP4Writer {
     /// Finalize the MP4 file (call when stream ends)
     pub fn finalize(mut self) -> Result<(), Error> {
         self.octx.write_trailer()?;
-        println!("✅ Streaming MP4 finalized: {} packets written", self.packet_count);
+        println!(
+            "✅ Streaming MP4 finalized: {} packets written",
+            self.packet_count
+        );
         Ok(())
     }
 }

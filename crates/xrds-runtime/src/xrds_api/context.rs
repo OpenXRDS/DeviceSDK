@@ -1,4 +1,5 @@
 use super::*;
+use xrds_scene_graph::XrdsSceneEnvironment;
 
 ///
 /// Build this inside an exclusive Bevy system with [`XrdsUpdateContext::new`] to access
@@ -20,6 +21,31 @@ impl XrdsUpdateContext<'_> {
     /// Seconds elapsed since the last frame.
     pub fn delta_secs(&self) -> f32 {
         self.world.resource::<Time>().delta_secs()
+    }
+
+    /// Merge authored scene assets into the runtime asset catalog.
+    pub fn merge_scene_assets(&mut self, assets: &[XrdsSceneAsset]) -> &mut Self {
+        merge_imported_asset_catalog(self.world, assets);
+        self
+    }
+
+    /// Read the currently active runtime scene environment policy.
+    pub fn scene_environment(&self) -> Option<XrdsSceneEnvironment> {
+        imported_scene_environment_in_world(self.world)
+    }
+
+    /// Set the active runtime scene environment policy.
+    pub fn set_scene_environment(&mut self, environment: XrdsSceneEnvironment) -> &mut Self {
+        store_imported_scene_environment_in_world(self.world, Some(environment));
+        apply_imported_scene_environment_policy_in_world(self.world);
+        self
+    }
+
+    /// Clear the active runtime scene environment policy.
+    pub fn clear_scene_environment(&mut self) -> &mut Self {
+        store_imported_scene_environment_in_world(self.world, None);
+        apply_imported_scene_environment_policy_in_world(self.world);
+        self
     }
 
     /// Returns true on the frame where `key` transitions from up -> down.
@@ -150,6 +176,35 @@ impl XrdsUpdateContext<'_> {
         C: XrdsComponent + Send + Sync + 'static,
     {
         set_visibility_in_world(self.world, handle, visible);
+    }
+
+    /// Read current point light parameters.
+    pub fn point_light_params(
+        &self,
+        handle: &Handle<XrdsPointLight>,
+    ) -> Option<PointLightParams> {
+        point_light_params_in_world(self.world, handle)
+    }
+
+    /// Read current directional light parameters.
+    pub fn directional_light_params(
+        &self,
+        handle: &Handle<XrdsDirectionalLight>,
+    ) -> Option<DirectionalLightParams> {
+        directional_light_params_in_world(self.world, handle)
+    }
+
+    /// Read current spot light parameters.
+    pub fn spot_light_params(&self, handle: &Handle<XrdsSpotLight>) -> Option<SpotLightParams> {
+        spot_light_params_in_world(self.world, handle)
+    }
+
+    /// Read current ambient light parameters.
+    pub fn ambient_light_params(
+        &self,
+        handle: &Handle<XrdsAmbientLight>,
+    ) -> Option<AmbientLightParams> {
+        ambient_light_params_in_world(self.world, handle)
     }
 
     /// Read current point light intensity.
@@ -292,6 +347,19 @@ impl XrdsUpdateContext<'_> {
         queue_update_in_world(self.world, handle, patch);
     }
 
+    /// Read current camera projection settings.
+    pub fn camera_projection(&self, handle: &Handle<XrdsCamera>) -> Option<CameraProjectionParams> {
+        camera_projection_in_world(self.world, handle)
+    }
+
+    /// Read current camera look-at target.
+    ///
+    /// Returns `None` if the entity does not exist.
+    /// Returns `Some(None)` if the camera exists but look-at is not active.
+    pub fn camera_look_at(&self, handle: &Handle<XrdsCamera>) -> Option<Option<[f32; 3]>> {
+        camera_look_at_in_world(self.world, handle)
+    }
+
     /// Queue a camera projection update.
     pub fn set_camera_projection(
         &mut self,
@@ -322,6 +390,11 @@ impl XrdsUpdateContext<'_> {
     /// Queue a camera look-at update.
     pub fn set_camera_look_at(&mut self, handle: &Handle<XrdsCamera>, target: Option<[f32; 3]>) {
         self.queue_update(handle, CameraLookAtPatch { look_at: target });
+    }
+
+    /// Read current glTF asset source path and scene index.
+    pub fn gltf_source(&self, handle: &Handle<XrdsGltfAsset>) -> Option<GltfAssetSourcePatch> {
+        gltf_source_in_world(self.world, handle)
     }
 
     /// Queue a glTF source update.

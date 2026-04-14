@@ -66,6 +66,36 @@ impl XrdsSceneDocument {
             .find(|asset| asset.kind == kind && asset.uri == uri)
     }
 
+    pub fn material_texture_reference_node_ids(&self, asset_id: &str) -> Vec<XrdsSceneNodeId> {
+        let asset_id = asset_id.trim();
+        if asset_id.is_empty() {
+            return Vec::new();
+        }
+
+        self.nodes
+            .iter()
+            .filter_map(|node| {
+                let material = crate::document::material::node_material_ref(node)?;
+                let is_referenced = [
+                    XrdsSceneMaterialTextureSlotKind::BaseColor,
+                    XrdsSceneMaterialTextureSlotKind::MetallicRoughness,
+                    XrdsSceneMaterialTextureSlotKind::Normal,
+                    XrdsSceneMaterialTextureSlotKind::Occlusion,
+                    XrdsSceneMaterialTextureSlotKind::Emissive,
+                ]
+                .into_iter()
+                .any(|slot| {
+                    material
+                        .textures
+                        .get(slot)
+                        .is_some_and(|texture| texture.texture_asset_id == asset_id)
+                });
+
+                is_referenced.then_some(node.id)
+            })
+            .collect()
+    }
+
     pub fn node(&self, id: XrdsSceneNodeId) -> Option<&XrdsSceneNode> {
         self.nodes.iter().find(|node| node.id == id)
     }

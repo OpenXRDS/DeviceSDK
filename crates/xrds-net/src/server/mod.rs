@@ -1,6 +1,6 @@
 mod server;
-mod ws_server;
 mod webrtc_server;
+mod ws_server;
 
 pub use server::*;
 

@@ -49,6 +49,22 @@ The normal boundary is:
 
 That means policy that affects saved scene meaning should generally live here, while policy that affects live engine application should generally live in `xrds-runtime`.
 
+Scene environment follows that same split:
+
+- use `xrds-scene-graph` when IBL or future environment settings are part of durable authored scene data
+- use `xrds-runtime` runtime APIs when the live app owns environment policy directly
+
+## Texture UV Authoring Semantics
+
+Texture UV metadata stored in scene documents is author-facing, not raw shader-matrix input.
+
+- `rotation_deg` is interpreted as a rotation around the center of the UV rectangle by default.
+- `offset` and `scale` still behave as direct UV translation and scaling terms.
+- `transform_mode: Centered` is the default and is omitted from serialized JSON when left at that default.
+- `transform_mode: Raw` is the escape hatch for exact low-level transforms when you intentionally want origin-based behavior.
+
+In short, scene documents use the behavior artists usually expect by default, while still preserving a precise opt-out for tooling and advanced import paths.
+
 ## Current Scope
 
 Today, the crate supports:

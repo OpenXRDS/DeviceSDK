@@ -1,4 +1,5 @@
 use super::*;
+use xrds_scene_graph::XrdsSceneEnvironment;
 
 impl XrdsAPI<'_> {
     pub fn attach(app: &mut App) -> XrdsAPI<'_> {
@@ -372,15 +373,67 @@ impl XrdsAPI<'_> {
         document: &XrdsSceneDocument,
     ) -> Result<Vec<XrdsId>, XrdsSceneImportError> {
         let runtime_nodes = document.to_runtime_nodes()?;
-        self.import_runtime_nodes(runtime_nodes)
+        merge_imported_asset_catalog(self.app.world_mut(), &document.assets);
+        store_imported_scene_environment_in_world(
+            self.app.world_mut(),
+            document.environment().cloned(),
+        );
+        let imported_ids = self.import_runtime_nodes(runtime_nodes)?;
+        apply_imported_scene_environment_policy_in_world(self.app.world_mut());
+        Ok(imported_ids)
+    }
+
+    /// Load a saved XRDS scene document from JSON and import it into runtime state.
+    ///
+    /// This is the end-to-end document path for editor or tool flows that persist authored scene
+    /// data to disk and later realize that saved scene in a live XRDS runtime.
+    pub fn import_scene_document_json(
+        &mut self,
+        path: impl AsRef<std::path::Path>,
+    ) -> Result<Vec<XrdsId>, XrdsSceneImportError> {
+        let document = XrdsSceneDocument::load_json(path)
+            .map_err(|error| XrdsSceneImportError::InvalidDocument(format!("{error:?}")))?;
+        self.import_scene_document(&document)
+    }
+
+    /// Merge authored scene assets into the runtime asset catalog.
+    ///
+    /// Use this when runtime-authored scene policies, such as scene environment IBL, need to
+    /// reference durable scene asset ids without going through full document import.
+    pub fn merge_scene_assets(&mut self, assets: &[XrdsSceneAsset]) -> &mut Self {
+        merge_imported_asset_catalog(self.app.world_mut(), assets);
+        self
+    }
+
+    /// Read the currently active runtime scene environment policy.
+    pub fn scene_environment(&self) -> Option<XrdsSceneEnvironment> {
+        imported_scene_environment_in_world(self.app.world())
+    }
+
+    /// Set the active runtime scene environment policy.
+    ///
+    /// The environment refers to scene asset ids from the runtime asset catalog. If the
+    /// referenced texture assets are not present there, the policy remains stored and exportable,
+    /// but runtime camera environment maps cannot be resolved until those assets are merged.
+    pub fn set_scene_environment(&mut self, environment: XrdsSceneEnvironment) -> &mut Self {
+        store_imported_scene_environment_in_world(self.app.world_mut(), Some(environment));
+        apply_imported_scene_environment_policy_in_world(self.app.world_mut());
+        self
+    }
+
+    /// Clear the active runtime scene environment policy.
+    pub fn clear_scene_environment(&mut self) -> &mut Self {
+        store_imported_scene_environment_in_world(self.app.world_mut(), None);
+        apply_imported_scene_environment_policy_in_world(self.app.world_mut());
+        self
     }
 
     /// Export the current XRDS-authored runtime state to a scene document.
     ///
     /// This exports built-in XRDS descriptors, stable ids, parent links, authored materials,
     /// preserved editor metadata, and glTF references from XRDS-owned runtime state. The document
-    /// asset table is reconstructed for built-in glTF asset references, reusing preserved editor
-    /// asset ids when available and generating deterministic ids otherwise.
+    /// asset table is reconstructed for built-in glTF asset references, and preserved imported
+    /// asset catalog entries are merged back in for authored non-glTF references such as textures.
     pub fn export_scene_document(&self) -> Result<XrdsSceneDocument, XrdsSceneExportError> {
         self.export_scene_document_with_metadata(XrdsSceneMetadata {
             name: "XRDS Runtime Scene".to_string(),
@@ -489,6 +542,19 @@ impl XrdsAPI<'_> {
         self
     }
 
+    /// Read current camera projection settings.
+    pub fn camera_projection(&self, handle: &Handle<XrdsCamera>) -> Option<CameraProjectionParams> {
+        camera_projection_in_world(self.app.world(), handle)
+    }
+
+    /// Read current camera look-at target.
+    ///
+    /// Returns `None` if the entity does not exist.
+    /// Returns `Some(None)` if the camera exists but look-at is not active.
+    pub fn camera_look_at(&self, handle: &Handle<XrdsCamera>) -> Option<Option<[f32; 3]>> {
+        camera_look_at_in_world(self.app.world(), handle)
+    }
+
     /// Queue a camera projection update.
     pub fn set_camera_projection(
         &mut self,
@@ -525,6 +591,11 @@ impl XrdsAPI<'_> {
         self.queue_update(handle, CameraLookAtPatch { look_at: target })
     }
 
+    /// Read current glTF asset source path and scene index.
+    pub fn gltf_source(&self, handle: &Handle<XrdsGltfAsset>) -> Option<GltfAssetSourcePatch> {
+        gltf_source_in_world(self.app.world(), handle)
+    }
+
     /// Queue a glTF source update.
     pub fn set_gltf_source(
         &mut self,
@@ -539,6 +610,35 @@ impl XrdsAPI<'_> {
                 scene_index,
             },
         )
+    }
+
+    /// Read current point light parameters.
+    pub fn point_light_params(
+        &self,
+        handle: &Handle<XrdsPointLight>,
+    ) -> Option<PointLightParams> {
+        point_light_params_in_world(self.app.world(), handle)
+    }
+
+    /// Read current directional light parameters.
+    pub fn directional_light_params(
+        &self,
+        handle: &Handle<XrdsDirectionalLight>,
+    ) -> Option<DirectionalLightParams> {
+        directional_light_params_in_world(self.app.world(), handle)
+    }
+
+    /// Read current spot light parameters.
+    pub fn spot_light_params(&self, handle: &Handle<XrdsSpotLight>) -> Option<SpotLightParams> {
+        spot_light_params_in_world(self.app.world(), handle)
+    }
+
+    /// Read current ambient light parameters.
+    pub fn ambient_light_params(
+        &self,
+        handle: &Handle<XrdsAmbientLight>,
+    ) -> Option<AmbientLightParams> {
+        ambient_light_params_in_world(self.app.world(), handle)
     }
 
     /// Queue a point light parameter update.

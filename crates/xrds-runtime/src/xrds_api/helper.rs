@@ -135,6 +135,31 @@ fn reconstruct_asset_catalog(nodes: &[XrdsSceneNode]) -> Vec<XrdsSceneAsset> {
     assets
 }
 
+fn merge_asset_catalogs(
+    preserved_assets: &[XrdsSceneAsset],
+    reconstructed_assets: Vec<XrdsSceneAsset>,
+) -> Vec<XrdsSceneAsset> {
+    let mut assets = reconstructed_assets;
+    let mut used_ids: HashSet<String> = assets.iter().map(|asset| asset.id.clone()).collect();
+
+    for asset in preserved_assets {
+        if used_ids.contains(&asset.id) {
+            continue;
+        }
+
+        used_ids.insert(asset.id.clone());
+        assets.push(asset.clone());
+    }
+
+    assets
+}
+
+pub(super) fn merge_imported_asset_catalog(world: &mut World, assets: &[XrdsSceneAsset]) {
+    let existing_assets = world.resource::<XrdsImportedAssetCatalog>().assets.clone();
+    let merged = merge_asset_catalogs(assets, existing_assets);
+    world.resource_mut::<XrdsImportedAssetCatalog>().assets = merged;
+}
+
 pub(super) fn id_of_in_world<C>(world: &World, handle: &Handle<C>) -> Option<XrdsId> {
     world.resource::<XrdsIdIndex>().id_of(handle.entity())
 }
@@ -298,8 +323,12 @@ pub(super) fn export_scene_node_in_world(
 
 pub(super) fn export_scene_document_in_world(
     world: &World,
-    metadata: XrdsSceneMetadata,
+    mut metadata: XrdsSceneMetadata,
 ) -> Result<XrdsSceneDocument, XrdsSceneExportError> {
+    if metadata.environment.is_none() {
+        metadata.environment = imported_scene_environment_in_world(world);
+    }
+
     let hierarchy = world.resource::<XrdsHierarchyIndex>();
     let ids = world.resource::<XrdsIdIndex>();
 
@@ -340,7 +369,10 @@ pub(super) fn export_scene_document_in_world(
         nodes.push(node);
     }
 
-    let assets = reconstruct_asset_catalog(&nodes);
+    let assets = merge_asset_catalogs(
+        &world.resource::<XrdsImportedAssetCatalog>().assets,
+        reconstruct_asset_catalog(&nodes),
+    );
 
     let document = XrdsSceneDocument {
         metadata,
@@ -444,7 +476,7 @@ pub(super) fn material_params_for_entity_in_world(
 ) -> Option<XrdsMaterialParams> {
     world
         .get::<XrdsStoredMaterial>(entity)
-        .map(|material| material.0)
+        .map(|material| material.0.clone())
 }
 
 pub(super) fn set_material_params_for_entity_in_world(
@@ -509,6 +541,95 @@ pub(super) fn material_emissive_in_world<C>(
     handle: &Handle<C>,
 ) -> Option<XrdsLinearRgba> {
     material_params_in_world(world, handle).map(|params| params.emissive)
+}
+
+pub(super) fn camera_projection_in_world(
+    world: &World,
+    handle: &Handle<XrdsCamera>,
+) -> Option<CameraProjectionParams> {
+    world
+        .get::<XrdsStored<XrdsCamera>>(handle.entity())
+        .map(|stored| stored.0.projection)
+}
+
+/// Returns `None` if the camera entity does not exist.
+/// Returns `Some(None)` if the camera exists but look-at is not active.
+pub(super) fn camera_look_at_in_world(
+    world: &World,
+    handle: &Handle<XrdsCamera>,
+) -> Option<Option<[f32; 3]>> {
+    world
+        .get::<XrdsStored<XrdsCamera>>(handle.entity())
+        .map(|stored| stored.0.look_at)
+}
+
+pub(super) fn gltf_source_in_world(
+    world: &World,
+    handle: &Handle<XrdsGltfAsset>,
+) -> Option<GltfAssetSourcePatch> {
+    world
+        .get::<XrdsStored<XrdsGltfAsset>>(handle.entity())
+        .map(|stored| GltfAssetSourcePatch {
+            gltf_asset_path: stored.0.gltf_asset_path.clone(),
+            scene_index: stored.0.scene_index,
+        })
+}
+
+pub(super) fn point_light_params_in_world(
+    world: &World,
+    handle: &Handle<XrdsPointLight>,
+) -> Option<PointLightParams> {
+    world
+        .get::<XrdsStored<XrdsPointLight>>(handle.entity())
+        .map(|stored| PointLightParams {
+            color: stored.0.color,
+            intensity: stored.0.intensity,
+            range: stored.0.range,
+            radius: stored.0.radius,
+            shadows: stored.0.shadows,
+        })
+}
+
+pub(super) fn directional_light_params_in_world(
+    world: &World,
+    handle: &Handle<XrdsDirectionalLight>,
+) -> Option<DirectionalLightParams> {
+    world
+        .get::<XrdsStored<XrdsDirectionalLight>>(handle.entity())
+        .map(|stored| DirectionalLightParams {
+            color: stored.0.color,
+            illuminance: stored.0.illuminance,
+            shadows: stored.0.shadows,
+        })
+}
+
+pub(super) fn spot_light_params_in_world(
+    world: &World,
+    handle: &Handle<XrdsSpotLight>,
+) -> Option<SpotLightParams> {
+    world
+        .get::<XrdsStored<XrdsSpotLight>>(handle.entity())
+        .map(|stored| SpotLightParams {
+            color: stored.0.color,
+            intensity: stored.0.intensity,
+            range: stored.0.range,
+            inner_angle: stored.0.inner_angle,
+            outer_angle: stored.0.outer_angle,
+            shadows: stored.0.shadows,
+        })
+}
+
+pub(super) fn ambient_light_params_in_world(
+    world: &World,
+    handle: &Handle<XrdsAmbientLight>,
+) -> Option<AmbientLightParams> {
+    world
+        .get::<XrdsStored<XrdsAmbientLight>>(handle.entity())
+        .map(|stored| AmbientLightParams {
+            color: stored.0.color,
+            brightness: stored.0.brightness,
+            affects_lightmapped_meshes: stored.0.affects_lightmapped_meshes,
+        })
 }
 
 pub(super) fn gltf_load_status_from_error(

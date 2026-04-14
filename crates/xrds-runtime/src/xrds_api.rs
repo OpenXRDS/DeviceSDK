@@ -6,12 +6,24 @@
 mod api;
 #[path = "xrds_api/context.rs"]
 mod context;
+#[path = "xrds_api/environment.rs"]
+mod environment;
+#[path = "xrds_api/gltf.rs"]
+mod gltf;
 #[path = "xrds_api/helper.rs"]
 mod helper;
 #[path = "xrds_api/hierarchy.rs"]
 mod hierarchy;
 #[path = "xrds_api/install.rs"]
 mod install;
+#[path = "xrds_api/material.rs"]
+mod material;
+#[path = "xrds_api/recipes.rs"]
+mod recipes;
+#[path = "xrds_api/registry.rs"]
+mod registry;
+#[path = "xrds_api/spawn.rs"]
+mod spawn;
 #[path = "xrds_api/state.rs"]
 mod state;
 #[cfg(test)]
@@ -39,8 +51,8 @@ use xrds_components::{
     PerspectiveCameraParams, Plane3DGeometryParams, PointLightParams, SphereGeometryParams,
     SpotLightParams, TetrahedronGeometryParams, TransformParams, VisibilityPatch,
     XrdsAssetComponent, XrdsColor, XrdsComponent, XrdsComponentsPlugin, XrdsId, XrdsLinearRgba,
-    XrdsMaterialAlphaMode, XrdsMaterialParams, XrdsMaterialPbrParams, XrdsMutableComponent,
-    XrdsRegistry,
+    XrdsMaterialAlphaMode, XrdsMaterialParams, XrdsMaterialPbrParams, XrdsMaterialTextureRef,
+    XrdsMutableComponent, XrdsRegistry,
 };
 use xrds_scene_graph::{
     XrdsEditorMetadata, XrdsSceneAnimationRepeatMode, XrdsSceneAsset, XrdsSceneAssetKind,
@@ -50,9 +62,15 @@ use xrds_scene_graph::{
 };
 
 pub use context::XrdsUpdateContext;
+use environment::*;
+use gltf::*;
 use helper::*;
 use hierarchy::*;
 use install::*;
+use material::*;
+use recipes::*;
+use registry::*;
+use spawn::*;
 use state::*;
 use updaters::*;
 

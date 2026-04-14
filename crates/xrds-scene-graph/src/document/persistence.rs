@@ -22,7 +22,7 @@ impl XrdsSceneDocument {
 
             if matches!(
                 asset.kind,
-                XrdsSceneAssetKind::Image | XrdsSceneAssetKind::Texture
+                XrdsSceneAssetKind::Texture | XrdsSceneAssetKind::EnvironmentMap
             ) && !has_supported_binary_asset_extension(&asset.uri, asset.kind)
             {
                 return Err(XrdsSceneValidationError::InvalidAssetExtension {
@@ -31,6 +31,8 @@ impl XrdsSceneDocument {
                 });
             }
         }
+
+        validate_scene_environment(self)?;
 
         let mut seen = HashSet::new();
         let ids: HashMap<_, _> = self.nodes.iter().map(|node| (node.id, node)).collect();
@@ -189,6 +191,35 @@ pub enum XrdsSceneValidationError {
         asset_id: String,
         found: XrdsSceneAssetKind,
     },
+    EmptySceneIblAssetId {
+        slot: XrdsSceneIblAssetSlot,
+    },
+    MissingSceneIblAsset {
+        slot: XrdsSceneIblAssetSlot,
+        asset_id: String,
+    },
+    SceneIblAssetKindMismatch {
+        slot: XrdsSceneIblAssetSlot,
+        asset_id: String,
+        found: XrdsSceneAssetKind,
+    },
+    InvalidSceneIblIntensity,
+    EmptySceneSkyboxAssetId {
+        slot: XrdsSceneSkyboxAssetSlot,
+    },
+    MissingSceneSkyboxAsset {
+        slot: XrdsSceneSkyboxAssetSlot,
+        asset_id: String,
+    },
+    SceneSkyboxAssetKindMismatch {
+        slot: XrdsSceneSkyboxAssetSlot,
+        asset_id: String,
+        found: XrdsSceneAssetKind,
+    },
+    InvalidSceneSkyboxBrightness,
+    InvalidSceneExposureEv100,
+    InvalidSceneFogColor,
+    InvalidSceneFogRange,
     MissingGltfAuthoringNode(XrdsSceneNodeId),
     GltfAuthoringTargetIsNotGltf(XrdsSceneNodeId),
     InvalidGltfAuthoring {
@@ -253,6 +284,117 @@ fn validate_material_texture_slots(
     Ok(())
 }
 
+fn validate_scene_environment(
+    document: &XrdsSceneDocument,
+) -> Result<(), XrdsSceneValidationError> {
+    let Some(environment) = document.metadata.environment.as_ref() else {
+        return Ok(());
+    };
+
+    if let Some(ibl) = environment.ibl.as_ref() {
+        validate_scene_ibl_asset(
+            document,
+            XrdsSceneIblAssetSlot::Diffuse,
+            &ibl.diffuse_asset_id,
+        )?;
+        validate_scene_ibl_asset(
+            document,
+            XrdsSceneIblAssetSlot::Specular,
+            &ibl.specular_asset_id,
+        )?;
+
+        if !ibl.intensity.is_finite() || ibl.intensity < 0.0 {
+            return Err(XrdsSceneValidationError::InvalidSceneIblIntensity);
+        }
+    }
+
+    if let Some(skybox) = environment.skybox.as_ref() {
+        validate_scene_skybox_asset(
+            document,
+            XrdsSceneSkyboxAssetSlot::Texture,
+            &skybox.texture_asset_id,
+        )?;
+
+        if !skybox.brightness.is_finite() || skybox.brightness < 0.0 {
+            return Err(XrdsSceneValidationError::InvalidSceneSkyboxBrightness);
+        }
+    }
+
+    if let Some(exposure) = environment.exposure.as_ref() {
+        if !exposure.ev100.is_finite() {
+            return Err(XrdsSceneValidationError::InvalidSceneExposureEv100);
+        }
+    }
+
+    if let Some(fog) = environment.fog.as_ref() {
+        if fog.color.iter().any(|channel| !channel.is_finite()) {
+            return Err(XrdsSceneValidationError::InvalidSceneFogColor);
+        }
+        if !fog.start.is_finite() || !fog.end.is_finite() || fog.start < 0.0 || fog.end < fog.start
+        {
+            return Err(XrdsSceneValidationError::InvalidSceneFogRange);
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_scene_ibl_asset(
+    document: &XrdsSceneDocument,
+    slot: XrdsSceneIblAssetSlot,
+    asset_id: &str,
+) -> Result<(), XrdsSceneValidationError> {
+    let asset_id = asset_id.trim();
+    if asset_id.is_empty() {
+        return Err(XrdsSceneValidationError::EmptySceneIblAssetId { slot });
+    }
+
+    let Some(asset) = document.asset(asset_id) else {
+        return Err(XrdsSceneValidationError::MissingSceneIblAsset {
+            slot,
+            asset_id: asset_id.to_string(),
+        });
+    };
+
+    if asset.kind != XrdsSceneAssetKind::EnvironmentMap {
+        return Err(XrdsSceneValidationError::SceneIblAssetKindMismatch {
+            slot,
+            asset_id: asset.id.clone(),
+            found: asset.kind,
+        });
+    }
+
+    Ok(())
+}
+
+fn validate_scene_skybox_asset(
+    document: &XrdsSceneDocument,
+    slot: XrdsSceneSkyboxAssetSlot,
+    asset_id: &str,
+) -> Result<(), XrdsSceneValidationError> {
+    let asset_id = asset_id.trim();
+    if asset_id.is_empty() {
+        return Err(XrdsSceneValidationError::EmptySceneSkyboxAssetId { slot });
+    }
+
+    let Some(asset) = document.asset(asset_id) else {
+        return Err(XrdsSceneValidationError::MissingSceneSkyboxAsset {
+            slot,
+            asset_id: asset_id.to_string(),
+        });
+    };
+
+    if asset.kind != XrdsSceneAssetKind::EnvironmentMap {
+        return Err(XrdsSceneValidationError::SceneSkyboxAssetKindMismatch {
+            slot,
+            asset_id: asset.id.clone(),
+            found: asset.kind,
+        });
+    }
+
+    Ok(())
+}
+
 fn has_supported_binary_asset_extension(uri: &str, kind: XrdsSceneAssetKind) -> bool {
     let Some(extension) = Path::new(uri).extension().and_then(|ext| ext.to_str()) else {
         return false;
@@ -260,7 +402,7 @@ fn has_supported_binary_asset_extension(uri: &str, kind: XrdsSceneAssetKind) -> 
 
     let extension = extension.to_ascii_lowercase();
     match kind {
-        XrdsSceneAssetKind::Image | XrdsSceneAssetKind::Texture => matches!(
+        XrdsSceneAssetKind::Texture => matches!(
             extension.as_str(),
             "png"
                 | "jpg"
@@ -275,6 +417,9 @@ fn has_supported_binary_asset_extension(uri: &str, kind: XrdsSceneAssetKind) -> 
                 | "basis"
                 | "dds"
         ),
+        XrdsSceneAssetKind::EnvironmentMap => {
+            matches!(extension.as_str(), "hdr" | "exr" | "ktx2" | "dds")
+        }
         XrdsSceneAssetKind::Gltf => matches!(extension.as_str(), "gltf" | "glb"),
     }
 }

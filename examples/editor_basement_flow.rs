@@ -196,6 +196,7 @@ fn authored_scene_document() -> XrdsSceneDocument {
                         opacity: 1.0,
                         unlit: false,
                         pbr: Default::default(),
+                        textures: Default::default(),
                     },
                 }),
                 editor: XrdsEditorMetadata::default(),

@@ -1,29 +1,45 @@
 use super::*;
 
 impl XrdsSceneDocument {
-    pub fn image_assets(&self) -> impl Iterator<Item = &XrdsSceneAsset> {
+    pub fn environment_map_assets(&self) -> impl Iterator<Item = &XrdsSceneAsset> {
         self.assets
             .iter()
-            .filter(|asset| asset.kind == XrdsSceneAssetKind::Image)
+            .filter(|asset| asset.kind == XrdsSceneAssetKind::EnvironmentMap)
+    }
+
+    pub fn environment_map_source_diagnostic(
+        &self,
+        asset_id: &str,
+    ) -> Result<XrdsSceneAssetSourceDiagnostic, XrdsSceneAssetWorkflowError> {
+        self.asset_source_diagnostic_with_kind(asset_id, XrdsSceneAssetKind::EnvironmentMap)
+    }
+
+    pub fn environment_map_source_diagnostics(&self) -> Vec<XrdsSceneAssetSourceDiagnostic> {
+        self.environment_map_assets()
+            .filter_map(|asset| self.environment_map_source_diagnostic(&asset.id).ok())
+            .collect()
+    }
+
+    pub fn register_environment_map_asset(
+        &mut self,
+        asset_id: impl Into<String>,
+        uri: impl Into<String>,
+    ) -> Result<XrdsSceneAsset, XrdsSceneAssetWorkflowError> {
+        self.register_asset_with_kind(asset_id, uri, XrdsSceneAssetKind::EnvironmentMap)
+    }
+
+    pub fn ensure_environment_map_asset(
+        &mut self,
+        preferred_asset_id: Option<String>,
+        uri: impl Into<String>,
+    ) -> Result<XrdsSceneAssetEnsureResult, XrdsSceneAssetWorkflowError> {
+        self.ensure_asset_with_kind(preferred_asset_id, uri, XrdsSceneAssetKind::EnvironmentMap)
     }
 
     pub fn texture_assets(&self) -> impl Iterator<Item = &XrdsSceneAsset> {
         self.assets
             .iter()
             .filter(|asset| asset.kind == XrdsSceneAssetKind::Texture)
-    }
-
-    pub fn image_source_diagnostic(
-        &self,
-        asset_id: &str,
-    ) -> Result<XrdsSceneAssetSourceDiagnostic, XrdsSceneAssetWorkflowError> {
-        self.asset_source_diagnostic_with_kind(asset_id, XrdsSceneAssetKind::Image)
-    }
-
-    pub fn image_source_diagnostics(&self) -> Vec<XrdsSceneAssetSourceDiagnostic> {
-        self.image_assets()
-            .filter_map(|asset| self.image_source_diagnostic(&asset.id).ok())
-            .collect()
     }
 
     pub fn texture_source_diagnostic(
@@ -39,28 +55,12 @@ impl XrdsSceneDocument {
             .collect()
     }
 
-    pub fn register_image_asset(
-        &mut self,
-        asset_id: impl Into<String>,
-        uri: impl Into<String>,
-    ) -> Result<XrdsSceneAsset, XrdsSceneAssetWorkflowError> {
-        self.register_asset_with_kind(asset_id, uri, XrdsSceneAssetKind::Image)
-    }
-
     pub fn register_texture_asset(
         &mut self,
         asset_id: impl Into<String>,
         uri: impl Into<String>,
     ) -> Result<XrdsSceneAsset, XrdsSceneAssetWorkflowError> {
         self.register_asset_with_kind(asset_id, uri, XrdsSceneAssetKind::Texture)
-    }
-
-    pub fn ensure_image_asset(
-        &mut self,
-        preferred_asset_id: Option<String>,
-        uri: impl Into<String>,
-    ) -> Result<XrdsSceneAssetEnsureResult, XrdsSceneAssetWorkflowError> {
-        self.ensure_asset_with_kind(preferred_asset_id, uri, XrdsSceneAssetKind::Image)
     }
 
     pub fn ensure_texture_asset(
@@ -83,19 +83,10 @@ impl XrdsSceneDocument {
 
         let new_uri = normalize_asset_uri(new_uri.into())?;
 
-        let (kind, current_id) = self
+        let kind = self
             .asset(asset_id)
-            .map(|asset| (asset.kind, asset.id.clone()))
+            .map(|asset| asset.kind)
             .ok_or_else(|| XrdsSceneAssetWorkflowError::AssetNotFound(asset_id.to_string()))?;
-
-        if let Some(existing) = self.asset_by_uri_and_kind(&new_uri, kind) {
-            if existing.id != current_id {
-                return Err(XrdsSceneAssetWorkflowError::DuplicateAssetUri {
-                    uri: new_uri,
-                    asset_id: existing.id.clone(),
-                });
-            }
-        }
 
         let asset = self
             .asset_mut(asset_id)
@@ -129,13 +120,6 @@ impl XrdsSceneDocument {
 
         if self.asset(&asset_id).is_some() {
             return Err(XrdsSceneAssetWorkflowError::DuplicateAssetId(asset_id));
-        }
-
-        if let Some(existing) = self.asset_by_uri_and_kind(&uri, kind) {
-            return Err(XrdsSceneAssetWorkflowError::DuplicateAssetUri {
-                uri,
-                asset_id: existing.id.clone(),
-            });
         }
 
         let asset = XrdsSceneAsset {
@@ -217,8 +201,8 @@ fn asset_id_seed_from_uri(kind: XrdsSceneAssetKind, uri: &str) -> String {
         .and_then(|stem| stem.to_str())
         .unwrap_or(match kind {
             XrdsSceneAssetKind::Gltf => "gltf",
-            XrdsSceneAssetKind::Image => "image",
             XrdsSceneAssetKind::Texture => "texture",
+            XrdsSceneAssetKind::EnvironmentMap => "envmap",
         });
 
     let mut slug = String::new();
@@ -240,8 +224,8 @@ fn asset_id_seed_from_uri(kind: XrdsSceneAssetKind, uri: &str) -> String {
 
     let kind_label = match kind {
         XrdsSceneAssetKind::Gltf => "gltf",
-        XrdsSceneAssetKind::Image => "image",
         XrdsSceneAssetKind::Texture => "texture",
+        XrdsSceneAssetKind::EnvironmentMap => "envmap",
     };
     let slug = slug.trim_matches('-');
     if slug.is_empty() {
@@ -362,16 +346,17 @@ fn validate_binary_asset_source(
 fn asset_kind_label(kind: XrdsSceneAssetKind) -> &'static str {
     match kind {
         XrdsSceneAssetKind::Gltf => "glTF",
-        XrdsSceneAssetKind::Image => "image",
         XrdsSceneAssetKind::Texture => "texture",
+        XrdsSceneAssetKind::EnvironmentMap => "environment map",
     }
 }
 
 fn supported_binary_asset_extensions(kind: XrdsSceneAssetKind) -> &'static [&'static str] {
     match kind {
-        XrdsSceneAssetKind::Image | XrdsSceneAssetKind::Texture => &[
+        XrdsSceneAssetKind::Texture => &[
             "png", "jpg", "jpeg", "webp", "bmp", "tga", "gif", "hdr", "exr", "ktx2", "basis", "dds",
         ],
+        XrdsSceneAssetKind::EnvironmentMap => &["hdr", "exr", "ktx2", "dds"],
         XrdsSceneAssetKind::Gltf => &["gltf", "glb"],
     }
 }

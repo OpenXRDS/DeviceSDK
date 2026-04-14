@@ -9,7 +9,7 @@ type SurfaceDescriptorCloner =
 #[derive(Component, Debug, Clone)]
 pub(super) struct XrdsStored<C>(pub(super) C);
 
-#[derive(Component, Debug, Clone, Copy)]
+#[derive(Component, Debug, Clone)]
 pub(super) struct XrdsStoredMaterial(pub(super) XrdsMaterialParams);
 
 #[derive(Component, Debug, Clone, PartialEq, Eq)]
@@ -24,6 +24,11 @@ pub(super) struct XrdsDescriptorType(pub(super) TypeId);
 #[derive(Resource)]
 pub(super) struct XrdsIdAllocator {
     pub(super) next: u64,
+}
+
+#[derive(Resource, Debug, Clone, Default)]
+pub(super) struct XrdsImportedAssetCatalog {
+    pub(super) assets: Vec<XrdsSceneAsset>,
 }
 
 impl Default for XrdsIdAllocator {

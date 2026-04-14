@@ -4,19 +4,23 @@ use std::sync::Arc;
 use crate::common::enums::PROTOCOLS;
 use crate::common::{validate_path, validate_path_write_permission};
 
-use crate::server::ws_server::WebSocketServer;
 use crate::server::webrtc_server::WebRTCServer;
+use crate::server::ws_server::WebSocketServer;
 
-use std::pin::Pin;
-use std::future::Future;
 use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
 
 use unftp_sbe_fs::ServerExt;
 
-
 // const MAX_DATAGRAM_SIZE: usize = 1350;
 
-type WsHandler = Arc<dyn Fn(Vec<u8>) -> Pin<Box<dyn Future<Output = Option<Vec<u8>>> + Send + Sync + 'static>> + Send + Sync + 'static>;
+type WsHandler = Arc<
+    dyn Fn(Vec<u8>) -> Pin<Box<dyn Future<Output = Option<Vec<u8>>> + Send + Sync + 'static>>
+        + Send
+        + Sync
+        + 'static,
+>;
 type WsHandlers = HashMap<String, WsHandler>;
 
 #[derive(Clone)]
@@ -28,7 +32,7 @@ pub struct XRNetServer {
     pub greeting: Option<String>,
     pub root_dir: Option<String>,
 
-    ws_handlers: WsHandlers,   //TODO: will be changed for generic handlers
+    ws_handlers: WsHandlers, //TODO: will be changed for generic handlers
 }
 
 impl XRNetServer {
@@ -57,12 +61,12 @@ impl XRNetServer {
         F: Fn(Vec<u8>) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Option<Vec<u8>>> + Send + Sync + 'static,
     {
-        let handler_arc: WsHandler =
-            Arc::new(move |data| {
-                let fut: Fut = handler(data);
-                Box::pin(fut) as Pin<Box<dyn Future<Output = Option<Vec<u8>>> + Send + Sync + 'static>>
-            });
-        self.ws_handlers.insert(msg_type.to_lowercase(), handler_arc);
+        let handler_arc: WsHandler = Arc::new(move |data| {
+            let fut: Fut = handler(data);
+            Box::pin(fut) as Pin<Box<dyn Future<Output = Option<Vec<u8>>> + Send + Sync + 'static>>
+        });
+        self.ws_handlers
+            .insert(msg_type.to_lowercase(), handler_arc);
     }
 
     pub async fn start(&self) {
@@ -88,7 +92,7 @@ impl XRNetServer {
 
         if validate_path_write_permission(self.root_dir.clone().unwrap().as_str()).is_err() {
             panic!("No write permission to the root directory");
-        }   
+        }
 
         for i in 0..self.protocol.len() {
             match self.protocol[i] {
@@ -141,22 +145,19 @@ impl XRNetServer {
 
     async fn run_ftp_server(&self, port: u32) {
         println!("FTP server started");
-        
+
         // set root directory as designated dir if the given directory is invalid or not provided
         let root_dir_val_result = validate_path(self.root_dir.as_ref().unwrap());
         let ftp_home = if (self.root_dir.is_none()) || (root_dir_val_result.is_err()) {
             println!("Given root directory is invalid. Setting to default test directory");
             std::env::temp_dir()
-            
         } else {
             let target_dir = self.root_dir.as_ref().unwrap();
             PathBuf::from(target_dir.as_str())
         };
         println!("ftp server home: {:?}", ftp_home);
 
-        let server = libunftp::Server::with_fs(ftp_home)
-        .build()
-        .unwrap();
+        let server = libunftp::Server::with_fs(ftp_home).build().unwrap();
 
         let host_addr = ["127.0.0.1", port.to_string().as_str()].join(":");
         let listen_result = server.listen(host_addr.as_str()).await;
@@ -169,11 +170,10 @@ impl XRNetServer {
     }
 
     async fn run_quic_server(&self, port: u32) {
-        println!("QUIC server started {:?}" , port);
+        println!("QUIC server started {:?}", port);
 
         // quic server starts from udp socket
         // server requires certificate and private key
-        
     }
 
     /**
@@ -204,7 +204,6 @@ impl XRNetServer {
      * This is an websocket-based WebRTC Signaling server
      */
     async fn run_webrtc_server(&self, port: u32) {
-        
         println!("WebRTC server started");
 
         let webrtc_signaling_server = WebRTCServer::new();

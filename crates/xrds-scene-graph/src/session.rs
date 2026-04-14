@@ -118,20 +118,6 @@ impl XrdsSceneDocumentSession {
         })
     }
 
-    pub fn register_image_asset(
-        &mut self,
-        asset_id: impl Into<String>,
-        uri: impl Into<String>,
-    ) -> Result<XrdsSceneAsset, XrdsSceneDocumentEditError> {
-        let asset_id = asset_id.into();
-        let uri = uri.into();
-        self.apply_operation(|document| {
-            document
-                .register_image_asset(asset_id, uri)
-                .map_err(XrdsSceneDocumentEditError::AssetWorkflow)
-        })
-    }
-
     pub fn register_texture_asset(
         &mut self,
         asset_id: impl Into<String>,
@@ -142,6 +128,20 @@ impl XrdsSceneDocumentSession {
         self.apply_operation(|document| {
             document
                 .register_texture_asset(asset_id, uri)
+                .map_err(XrdsSceneDocumentEditError::AssetWorkflow)
+        })
+    }
+
+    pub fn register_environment_map_asset(
+        &mut self,
+        asset_id: impl Into<String>,
+        uri: impl Into<String>,
+    ) -> Result<XrdsSceneAsset, XrdsSceneDocumentEditError> {
+        let asset_id = asset_id.into();
+        let uri = uri.into();
+        self.apply_operation(|document| {
+            document
+                .register_environment_map_asset(asset_id, uri)
                 .map_err(XrdsSceneDocumentEditError::AssetWorkflow)
         })
     }
@@ -160,20 +160,6 @@ impl XrdsSceneDocumentSession {
         })
     }
 
-    pub fn ensure_image_asset(
-        &mut self,
-        preferred_asset_id: Option<impl Into<String>>,
-        uri: impl Into<String>,
-    ) -> Result<XrdsSceneAssetEnsureResult, XrdsSceneDocumentEditError> {
-        let preferred_asset_id = preferred_asset_id.map(Into::into);
-        let uri = uri.into();
-        self.apply_operation(|document| {
-            document
-                .ensure_image_asset(preferred_asset_id, uri)
-                .map_err(XrdsSceneDocumentEditError::AssetWorkflow)
-        })
-    }
-
     pub fn ensure_texture_asset(
         &mut self,
         preferred_asset_id: Option<impl Into<String>>,
@@ -184,6 +170,20 @@ impl XrdsSceneDocumentSession {
         self.apply_operation(|document| {
             document
                 .ensure_texture_asset(preferred_asset_id, uri)
+                .map_err(XrdsSceneDocumentEditError::AssetWorkflow)
+        })
+    }
+
+    pub fn ensure_environment_map_asset(
+        &mut self,
+        preferred_asset_id: Option<impl Into<String>>,
+        uri: impl Into<String>,
+    ) -> Result<XrdsSceneAssetEnsureResult, XrdsSceneDocumentEditError> {
+        let preferred_asset_id = preferred_asset_id.map(Into::into);
+        let uri = uri.into();
+        self.apply_operation(|document| {
+            document
+                .ensure_environment_map_asset(preferred_asset_id, uri)
                 .map_err(XrdsSceneDocumentEditError::AssetWorkflow)
         })
     }

@@ -1,25 +1,25 @@
 /*
- Copyright 2025 KETI
+Copyright 2025 KETI
 
- Licensed under the Apache License, Version 2.0 (the "License");
- you may not use this file except in compliance with the License.
- You may obtain a copy of the License at
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
 
-      https://www.apache.org/licenses/LICENSE-2.0
+     https://www.apache.org/licenses/LICENSE-2.0
 
- Unless required by applicable law or agreed to in writing, software
- distributed under the License is distributed on an "AS IS" BASIS,
- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- See the License for the specific language governing permissions and
- limitations under the License.
- */
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
 
 use std::sync::{Arc, Mutex};
 
 // Websocket
 use websocket::client::sync::Client as WS_Client;
-use websocket::stream::sync::NetworkStream;
 use websocket::message::OwnedMessage;
+use websocket::stream::sync::NetworkStream;
 
 type XrdsClient = Option<Arc<Mutex<WS_Client<Box<dyn NetworkStream + Send>>>>>;
 
@@ -39,19 +39,21 @@ impl XrdsWebsocket {
     pub fn new() -> Self {
         XrdsWebsocket {
             raw_url: None,
-            ws_client: None,        
+            ws_client: None,
         }
     }
-    
+
     pub fn connect(mut self, raw_url: &str) -> Result<Self, String> {
         self.raw_url = Some(raw_url.to_string());
-        let client_result = websocket::ClientBuilder::new(raw_url).unwrap().connect(None);
-        
+        let client_result = websocket::ClientBuilder::new(raw_url)
+            .unwrap()
+            .connect(None);
+
         if client_result.is_err() {
             Err(client_result.err().unwrap().to_string())
-        } else if let Ok(client)= client_result {
+        } else if let Ok(client) = client_result {
             self.ws_client = Some(Arc::new(Mutex::new(client)));
-             Ok(self)
+            Ok(self)
         } else {
             Err("Failed to connect to the WebSocket server.".to_string())
         }
@@ -82,21 +84,13 @@ impl XrdsWebsocket {
 
     pub fn rcv_ws(&self) -> Result<Vec<u8>, String> {
         let ws_client = self.ws_client.as_ref().unwrap();
-        let message = ws_client
-            .lock().unwrap()
-            .recv_message();
+        let message = ws_client.lock().unwrap().recv_message();
 
         if let Ok(message) = message {
             match message {
-                OwnedMessage::Binary(data) => {
-                    Ok(data)
-                },
-                OwnedMessage::Text(data) => {
-                    Ok(data.into_bytes())
-                },
-                _ => {
-                    Err("The received message is not binary.".to_string())
-                }
+                OwnedMessage::Binary(data) => Ok(data),
+                OwnedMessage::Text(data) => Ok(data.into_bytes()),
+                _ => Err("The received message is not binary.".to_string()),
             }
         } else {
             Err(message.err().unwrap().to_string())

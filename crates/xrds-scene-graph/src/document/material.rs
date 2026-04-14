@@ -254,7 +254,29 @@ fn normalize_scene_texture_ref(
         return Err(XrdsSceneMaterialWorkflowError::EmptyTextureAssetId(slot));
     }
     texture.texture_asset_id = texture_asset_id.to_string();
+    texture.uv = normalize_scene_texture_uv(texture.uv);
     Ok(texture)
+}
+
+fn normalize_scene_texture_uv(
+    mut uv: XrdsSceneTextureUvParams,
+) -> XrdsSceneTextureUvParams {
+    if !uv.offset[0].is_finite() {
+        uv.offset[0] = 0.0;
+    }
+    if !uv.offset[1].is_finite() {
+        uv.offset[1] = 0.0;
+    }
+    if !uv.scale[0].is_finite() {
+        uv.scale[0] = 1.0;
+    }
+    if !uv.scale[1].is_finite() {
+        uv.scale[1] = 1.0;
+    }
+    if !uv.rotation_deg.is_finite() {
+        uv.rotation_deg = 0.0;
+    }
+    uv
 }
 
 fn normalize_scene_material_pbr(mut pbr: XrdsSceneMaterialPbrParams) -> XrdsSceneMaterialPbrParams {

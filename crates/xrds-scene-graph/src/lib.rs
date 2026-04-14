@@ -23,7 +23,10 @@ use xrds_components::world::{XrdsCamera, XrdsGltfAsset, XrdsNode};
 use xrds_components::{
     CameraProjectionParams, OrthographicCameraParams, PerspectiveCameraParams, TransformParams,
     XrdsColor, XrdsId, XrdsLinearRgba, XrdsMaterialAlphaMode, XrdsMaterialParams,
-    XrdsMaterialPbrParams,
+    XrdsMaterialPbrParams, XrdsMaterialTextureFilterMode, XrdsMaterialTextureRef,
+    XrdsMaterialTextureSamplerParams, XrdsMaterialTextureSlots, XrdsMaterialTextureUvParams,
+    XrdsMaterialTextureUvTransformMode,
+    XrdsMaterialTextureWrapMode,
 };
 
 mod scene;

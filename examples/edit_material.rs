@@ -49,6 +49,7 @@ impl XrdsApp for EditMaterialApp {
                 opacity: 1.0,
                 unlit: false,
                 pbr: Default::default(),
+                textures: Default::default(),
             },
         );
 
@@ -67,6 +68,7 @@ impl XrdsApp for EditMaterialApp {
                 opacity: 1.0,
                 unlit: false,
                 pbr: Default::default(),
+                textures: Default::default(),
             },
         );
 
@@ -91,6 +93,7 @@ impl XrdsApp for EditMaterialApp {
                     alpha_mode: XrdsMaterialAlphaMode::Opaque,
                     alpha_cutoff: 0.5,
                 },
+                textures: Default::default(),
             },
         );
 

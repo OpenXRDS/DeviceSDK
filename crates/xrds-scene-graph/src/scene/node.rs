@@ -20,6 +20,8 @@ pub struct XrdsSceneMetadata {
     pub name: String,
     pub authored_by: Option<String>,
     pub default_scene_label: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub environment: Option<XrdsSceneEnvironment>,
     pub extras: BTreeMap<String, String>,
 }
 
@@ -29,6 +31,7 @@ impl Default for XrdsSceneMetadata {
             name: "Untitled Scene".to_string(),
             authored_by: None,
             default_scene_label: None,
+            environment: None,
             extras: BTreeMap::new(),
         }
     }

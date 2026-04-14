@@ -171,9 +171,94 @@ impl Default for XrdsSceneMaterial {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct XrdsSceneTextureRef {
     pub texture_asset_id: String,
+    #[serde(default, skip_serializing_if = "XrdsSceneTextureUvParams::is_default")]
+    pub uv: XrdsSceneTextureUvParams,
+    #[serde(default, skip_serializing_if = "XrdsSceneTextureSamplerParams::is_default")]
+    pub sampler: XrdsSceneTextureSamplerParams,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct XrdsSceneTextureUvParams {
+    pub set: u32,
+    pub offset: [f32; 2],
+    pub scale: [f32; 2],
+    pub rotation_deg: f32,
+    #[serde(default, skip_serializing_if = "XrdsSceneTextureUvTransformMode::is_default")]
+    pub transform_mode: XrdsSceneTextureUvTransformMode,
+}
+
+impl Default for XrdsSceneTextureUvParams {
+    fn default() -> Self {
+        Self {
+            set: 0,
+            offset: [0.0, 0.0],
+            scale: [1.0, 1.0],
+            rotation_deg: 0.0,
+            transform_mode: XrdsSceneTextureUvTransformMode::Centered,
+        }
+    }
+}
+
+impl XrdsSceneTextureUvParams {
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum XrdsSceneTextureUvTransformMode {
+    #[default]
+    Centered,
+    Raw,
+}
+
+impl XrdsSceneTextureUvTransformMode {
+    pub fn is_default(&self) -> bool {
+        matches!(self, Self::Centered)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct XrdsSceneTextureSamplerParams {
+    pub wrap_u: XrdsSceneTextureWrapMode,
+    pub wrap_v: XrdsSceneTextureWrapMode,
+    pub min_filter: XrdsSceneTextureFilterMode,
+    pub mag_filter: XrdsSceneTextureFilterMode,
+    pub mipmap_filter: XrdsSceneTextureFilterMode,
+}
+
+impl Default for XrdsSceneTextureSamplerParams {
+    fn default() -> Self {
+        Self {
+            wrap_u: XrdsSceneTextureWrapMode::Repeat,
+            wrap_v: XrdsSceneTextureWrapMode::Repeat,
+            min_filter: XrdsSceneTextureFilterMode::Linear,
+            mag_filter: XrdsSceneTextureFilterMode::Linear,
+            mipmap_filter: XrdsSceneTextureFilterMode::Linear,
+        }
+    }
+}
+
+impl XrdsSceneTextureSamplerParams {
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum XrdsSceneTextureWrapMode {
+    Repeat,
+    MirroredRepeat,
+    ClampToEdge,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum XrdsSceneTextureFilterMode {
+    Linear,
+    Nearest,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -185,7 +270,7 @@ pub enum XrdsSceneMaterialTextureSlotKind {
     Emissive,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct XrdsSceneMaterialTextureSlots {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_color: Option<XrdsSceneTextureRef>,
@@ -280,7 +365,7 @@ impl From<XrdsMaterialParams> for XrdsSceneMaterial {
             opacity: value.opacity,
             unlit: value.unlit,
             pbr: value.pbr.into(),
-            textures: XrdsSceneMaterialTextureSlots::default(),
+            textures: value.textures.into(),
         }
     }
 }
@@ -297,6 +382,155 @@ impl From<XrdsSceneMaterial> for XrdsMaterialParams {
             opacity: value.opacity,
             unlit: value.unlit,
             pbr: value.pbr.into(),
+            textures: value.textures.into(),
+        }
+    }
+}
+
+impl From<XrdsMaterialTextureSlots> for XrdsSceneMaterialTextureSlots {
+    fn from(value: XrdsMaterialTextureSlots) -> Self {
+        Self {
+            base_color: value.base_color.map(Into::into),
+            metallic_roughness: value.metallic_roughness.map(Into::into),
+            normal: value.normal.map(Into::into),
+            occlusion: value.occlusion.map(Into::into),
+            emissive: value.emissive.map(Into::into),
+        }
+    }
+}
+
+impl From<XrdsSceneMaterialTextureSlots> for XrdsMaterialTextureSlots {
+    fn from(value: XrdsSceneMaterialTextureSlots) -> Self {
+        Self {
+            base_color: value.base_color.map(Into::into),
+            metallic_roughness: value.metallic_roughness.map(Into::into),
+            normal: value.normal.map(Into::into),
+            occlusion: value.occlusion.map(Into::into),
+            emissive: value.emissive.map(Into::into),
+        }
+    }
+}
+
+impl From<XrdsMaterialTextureRef> for XrdsSceneTextureRef {
+    fn from(value: XrdsMaterialTextureRef) -> Self {
+        Self {
+            texture_asset_id: value.texture_asset_id,
+            uv: value.uv.into(),
+            sampler: value.sampler.into(),
+        }
+    }
+}
+
+impl From<XrdsSceneTextureRef> for XrdsMaterialTextureRef {
+    fn from(value: XrdsSceneTextureRef) -> Self {
+        Self {
+            texture_asset_id: value.texture_asset_id,
+            uv: value.uv.into(),
+            sampler: value.sampler.into(),
+        }
+    }
+}
+
+impl From<XrdsMaterialTextureUvParams> for XrdsSceneTextureUvParams {
+    fn from(value: XrdsMaterialTextureUvParams) -> Self {
+        Self {
+            set: value.set,
+            offset: value.offset,
+            scale: value.scale,
+            rotation_deg: value.rotation_deg,
+            transform_mode: value.transform_mode.into(),
+        }
+    }
+}
+
+impl From<XrdsSceneTextureUvParams> for XrdsMaterialTextureUvParams {
+    fn from(value: XrdsSceneTextureUvParams) -> Self {
+        Self {
+            set: value.set,
+            offset: value.offset,
+            scale: value.scale,
+            rotation_deg: value.rotation_deg,
+            transform_mode: value.transform_mode.into(),
+        }
+    }
+}
+
+impl From<XrdsMaterialTextureUvTransformMode> for XrdsSceneTextureUvTransformMode {
+    fn from(value: XrdsMaterialTextureUvTransformMode) -> Self {
+        match value {
+            XrdsMaterialTextureUvTransformMode::Centered => Self::Centered,
+            XrdsMaterialTextureUvTransformMode::Raw => Self::Raw,
+        }
+    }
+}
+
+impl From<XrdsSceneTextureUvTransformMode> for XrdsMaterialTextureUvTransformMode {
+    fn from(value: XrdsSceneTextureUvTransformMode) -> Self {
+        match value {
+            XrdsSceneTextureUvTransformMode::Centered => Self::Centered,
+            XrdsSceneTextureUvTransformMode::Raw => Self::Raw,
+        }
+    }
+}
+
+impl From<XrdsMaterialTextureSamplerParams> for XrdsSceneTextureSamplerParams {
+    fn from(value: XrdsMaterialTextureSamplerParams) -> Self {
+        Self {
+            wrap_u: value.wrap_u.into(),
+            wrap_v: value.wrap_v.into(),
+            min_filter: value.min_filter.into(),
+            mag_filter: value.mag_filter.into(),
+            mipmap_filter: value.mipmap_filter.into(),
+        }
+    }
+}
+
+impl From<XrdsSceneTextureSamplerParams> for XrdsMaterialTextureSamplerParams {
+    fn from(value: XrdsSceneTextureSamplerParams) -> Self {
+        Self {
+            wrap_u: value.wrap_u.into(),
+            wrap_v: value.wrap_v.into(),
+            min_filter: value.min_filter.into(),
+            mag_filter: value.mag_filter.into(),
+            mipmap_filter: value.mipmap_filter.into(),
+        }
+    }
+}
+
+impl From<XrdsMaterialTextureWrapMode> for XrdsSceneTextureWrapMode {
+    fn from(value: XrdsMaterialTextureWrapMode) -> Self {
+        match value {
+            XrdsMaterialTextureWrapMode::Repeat => Self::Repeat,
+            XrdsMaterialTextureWrapMode::MirroredRepeat => Self::MirroredRepeat,
+            XrdsMaterialTextureWrapMode::ClampToEdge => Self::ClampToEdge,
+        }
+    }
+}
+
+impl From<XrdsSceneTextureWrapMode> for XrdsMaterialTextureWrapMode {
+    fn from(value: XrdsSceneTextureWrapMode) -> Self {
+        match value {
+            XrdsSceneTextureWrapMode::Repeat => Self::Repeat,
+            XrdsSceneTextureWrapMode::MirroredRepeat => Self::MirroredRepeat,
+            XrdsSceneTextureWrapMode::ClampToEdge => Self::ClampToEdge,
+        }
+    }
+}
+
+impl From<XrdsMaterialTextureFilterMode> for XrdsSceneTextureFilterMode {
+    fn from(value: XrdsMaterialTextureFilterMode) -> Self {
+        match value {
+            XrdsMaterialTextureFilterMode::Linear => Self::Linear,
+            XrdsMaterialTextureFilterMode::Nearest => Self::Nearest,
+        }
+    }
+}
+
+impl From<XrdsSceneTextureFilterMode> for XrdsMaterialTextureFilterMode {
+    fn from(value: XrdsSceneTextureFilterMode) -> Self {
+        match value {
+            XrdsSceneTextureFilterMode::Linear => Self::Linear,
+            XrdsSceneTextureFilterMode::Nearest => Self::Nearest,
         }
     }
 }

@@ -1,34 +1,34 @@
 /*
- Copyright 2025 KETI
+Copyright 2025 KETI
 
- Licensed under the Apache License, Version 2.0 (the "License");
- you may not use this file except in compliance with the License.
- You may obtain a copy of the License at
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
 
-      https://www.apache.org/licenses/LICENSE-2.0
+     https://www.apache.org/licenses/LICENSE-2.0
 
- Unless required by applicable law or agreed to in writing, software
- distributed under the License is distributed on an "AS IS" BASIS,
- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- See the License for the specific language governing permissions and
- limitations under the License.
- */
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
 
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
-use crate::common::enums::{PROTOCOLS, FtpCommands};
+use crate::common::enums::{FtpCommands, PROTOCOLS};
 
 use url::Url;
 
 pub const CREATE_SESSION: &str = "create_session"; // publisher to server
-pub const LIST_SESSIONS: &str = "list_sessions";   // subscriber to server
-pub const JOIN_SESSION: &str = "join_session";     // subscriber to server
-pub const LEAVE_SESSION: &str = "leave_session";   // subscriber to server
-pub const CLOSE_SESSION: &str = "close_session";   // publisher to server
+pub const LIST_SESSIONS: &str = "list_sessions"; // subscriber to server
+pub const JOIN_SESSION: &str = "join_session"; // subscriber to server
+pub const LEAVE_SESSION: &str = "leave_session"; // subscriber to server
+pub const CLOSE_SESSION: &str = "close_session"; // publisher to server
 pub const LIST_PARTICIPANTS: &str = "list_participants"; // server to client (publisher or subscriber)
-pub const OFFER: &str = "offer";                   // publisher to server, server to subscriber
-pub const ANSWER: &str = "answer";                 // subscriber to server
-pub const WELCOME: &str = "welcome";               // server to client (publisher or subscriber)
+pub const OFFER: &str = "offer"; // publisher to server, server to subscriber
+pub const ANSWER: &str = "answer"; // subscriber to server
+pub const WELCOME: &str = "welcome"; // server to client (publisher or subscriber)
 pub const ICE_CANDIDATE: &str = "ice_candidate"; // publisher to server, server to subscriber
 pub const ICE_CANDIDATE_ACK: &str = "ice_candidate_ack"; // subscriber to server
 
@@ -53,16 +53,19 @@ impl std::fmt::Display for NetResponse {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         let body_str = String::from_utf8(self.body.clone()).unwrap();
 
-        write!(f, "Protocol: {:?}\nStatus Code: {}\nHeaders: {:?}\nBody: {:?}\nError: {:?}",
-            self.protocol, self.status_code, self.headers, body_str, self.error)
+        write!(
+            f,
+            "Protocol: {:?}\nStatus Code: {}\nHeaders: {:?}\nBody: {:?}\nError: {:?}",
+            self.protocol, self.status_code, self.headers, body_str, self.error
+        )
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct FtpPayload {
     pub command: FtpCommands,
-    pub payload_name: String,    // file / directory name, etc.
-    pub payload: Option<Vec<u8>>,   // file content, etc.
+    pub payload_name: String,     // file / directory name, etc.
+    pub payload: Option<Vec<u8>>, // file content, etc.
 }
 
 #[derive(Debug, Clone)]
@@ -96,14 +99,14 @@ impl XrUrl {
 
         let url = url.unwrap();
         let sock_addr_result = url.socket_addrs(|| None);
-        
+
         if sock_addr_result.is_err() {
             Err("Invalid URL".to_string())
         } else if let Ok(addr) = sock_addr_result {
-                if addr.is_empty() {
-                    return Err("Empty URL".to_string());
-                }
-                Ok(addr[0]) 
+            if addr.is_empty() {
+                return Err("Empty URL".to_string());
+            }
+            Ok(addr[0])
         } else {
             Err("Invalid URL".to_string())
         }
@@ -116,6 +119,6 @@ pub struct WebRTCMessage {
     pub session_id: String,
     pub message_type: String,
     pub ice_candidates: Option<String>, // ICE candidates, participants, etc.
-    pub sdp: Option<String>,    // Session Description Protocol. base64 encoded
+    pub sdp: Option<String>,            // Session Description Protocol. base64 encoded
     pub error: Option<String>,
 }

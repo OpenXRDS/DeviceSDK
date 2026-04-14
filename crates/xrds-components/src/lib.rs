@@ -26,5 +26,7 @@ pub use patches::{
 pub use values::{
     CubeGeometryParams, CylinderGeometryParams, Plane3DGeometryParams, SphereGeometryParams,
     TetrahedronGeometryParams, TransformParams, XrdsMaterialAlphaMode, XrdsMaterialParams,
-    XrdsMaterialPbrParams,
+    XrdsMaterialPbrParams, XrdsMaterialTextureFilterMode, XrdsMaterialTextureRef,
+    XrdsMaterialTextureSamplerParams, XrdsMaterialTextureSlotKind, XrdsMaterialTextureSlots,
+    XrdsMaterialTextureUvParams, XrdsMaterialTextureUvTransformMode, XrdsMaterialTextureWrapMode,
 };

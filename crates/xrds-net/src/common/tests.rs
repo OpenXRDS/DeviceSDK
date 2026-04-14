@@ -5,9 +5,9 @@ mod tests {
     fn url_validation_test1() {
         let http_url_1 = "http://www.rust-lang.org";
         let parsed_url_1 = parse_url(http_url_1);
-        
+
         assert_eq!(parsed_url_1.is_ok(), true);
-        
+
         let parsed_url_1 = parsed_url_1.unwrap();
 
         assert_eq!(parsed_url_1.scheme, "http");
@@ -91,12 +91,12 @@ mod tests {
     }
 
     #[test]
-    fn url_validation_test8() { // port range check
+    fn url_validation_test8() {
+        // port range check
         let http_url_9 = "http://www.rust-lang.org:65536";
         let parsed_url_9 = parse_url(http_url_9);
         // let parsed_url_9 = parsed_url_9.unwrap();
         // println!("parsed_url_9.port: {}", parsed_url_9.port);
         assert_eq!(parsed_url_9.is_err(), true);
     }
-
 }
