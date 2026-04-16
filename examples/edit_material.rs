@@ -87,7 +87,7 @@ impl XrdsApp for EditMaterialApp {
                 unlit: false,
                 pbr: xrds::sdk::XrdsMaterialPbrParams {
                     metallic: 0.0,
-                    perceptual_roughness: 0.92,
+                    roughness: 0.92,
                     reflectance: 0.35,
                     double_sided: false,
                     alpha_mode: XrdsMaterialAlphaMode::Opaque,
@@ -144,7 +144,7 @@ impl XrdsApp for EditMaterialApp {
         material.opacity = 1.0;
         material.unlit = false;
         material.pbr.metallic = sweep;
-        material.pbr.perceptual_roughness = 0.04 + (1.0 - sweep) * 0.9;
+        material.pbr.roughness = 0.04 + (1.0 - sweep) * 0.9;
         material.pbr.reflectance = 0.25 + glow * 0.55;
         material.pbr.double_sided = false;
         material.pbr.alpha_mode = XrdsMaterialAlphaMode::Opaque;

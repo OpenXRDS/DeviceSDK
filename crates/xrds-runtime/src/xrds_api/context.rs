@@ -319,6 +319,36 @@ impl XrdsUpdateContext<'_> {
         set_material_params_in_world(self.world, handle, params);
     }
 
+    /// Read all texture slots for mesh-based entities.
+    pub fn material_textures<C>(&self, handle: &Handle<C>) -> Option<XrdsMaterialTextureSlots> {
+        material_textures_in_world(self.world, handle)
+    }
+
+    /// Set a single texture slot on mesh-based entities.
+    ///
+    /// Pass `None` to clear the slot.  This is the immediate preview path for
+    /// inspector-driven texture assignment without touching other material fields.
+    pub fn set_material_texture_slot<C>(
+        &mut self,
+        handle: &Handle<C>,
+        slot: XrdsMaterialTextureSlotKind,
+        texture: Option<XrdsMaterialTextureRef>,
+    ) {
+        set_material_texture_slot_in_world(self.world, handle, slot, texture);
+    }
+
+    /// Replace all texture slots at once for mesh-based entities.
+    ///
+    /// This is the immediate preview path for inspector panels that operate on the full
+    /// texture set (e.g. when importing a material preset).
+    pub fn set_material_textures<C>(
+        &mut self,
+        handle: &Handle<C>,
+        textures: XrdsMaterialTextureSlots,
+    ) {
+        set_material_textures_in_world(self.world, handle, textures);
+    }
+
     /// Resolve XRDS id from a typed handle.
     pub fn id_of<C>(&self, handle: &Handle<C>) -> Option<XrdsId> {
         id_of_in_world(self.world, handle)

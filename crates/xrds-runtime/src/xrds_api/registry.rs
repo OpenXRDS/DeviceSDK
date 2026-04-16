@@ -58,6 +58,9 @@ pub(super) fn register_default_interpreters(registry: &mut SurfaceInterpreterReg
             material: XrdsMaterialParams::default(),
         }
     });
+    registry.register_entity::<XrdsAudioClip, _>(|audio, commands, _asset_server| {
+        spawn_audio_clip_descriptor(commands, audio)
+    });
     registry.register_entity::<XrdsTetrahedron, _>(|tetrahedron, commands, _asset_server| {
         let entity = execute_spawn_recipe(
             commands,
@@ -89,4 +92,5 @@ pub(super) fn register_default_descriptor_cloners(registry: &mut SurfaceDescript
     registry.register_clone::<XrdsDirectionalLight>();
     registry.register_clone::<XrdsSpotLight>();
     registry.register_clone::<XrdsAmbientLight>();
+    registry.register_clone::<XrdsAudioClip>();
 }

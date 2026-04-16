@@ -19,6 +19,7 @@ pub use core::{
 pub use light_params::{
     AmbientLightParams, DirectionalLightParams, LightKind, PointLightParams, SpotLightParams,
 };
+pub use world::audio::XrdsAudioClip;
 pub use patches::{
     CameraLookAtPatch, CameraProjectionPatch, GltfAssetSourcePatch, NamePatch, ParentPatch,
     VisibilityPatch,

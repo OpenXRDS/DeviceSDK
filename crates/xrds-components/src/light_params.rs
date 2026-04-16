@@ -14,7 +14,7 @@ pub trait LightKind: Send + 'static {
 pub struct AmbientLightParams {
     pub color: XrdsColor,
     pub brightness: f32,
-    pub affects_lightmapped_meshes: bool,
+    pub affects_baked_lighting: bool,
 }
 
 impl Default for AmbientLightParams {
@@ -22,7 +22,7 @@ impl Default for AmbientLightParams {
         Self {
             color: XrdsColor::WHITE,
             brightness: 1.0,
-            affects_lightmapped_meshes: true,
+            affects_baked_lighting: true,
         }
     }
 }
@@ -33,7 +33,7 @@ impl LightKind for AmbientLightParams {
             world.insert_resource(AmbientLight {
                 color: self.color.into(),
                 brightness: self.brightness,
-                affects_lightmapped_meshes: self.affects_lightmapped_meshes,
+                affects_lightmapped_meshes: self.affects_baked_lighting,
             });
         });
     }

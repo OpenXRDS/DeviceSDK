@@ -1079,3 +1079,278 @@ fn document_validation_rejects_gltf_authoring_on_non_gltf_node() {
         ))
     );
 }
+
+#[test]
+fn environment_map_assets_referenced_by_environment_policy_are_not_flagged_unused() {
+    let document = XrdsSceneDocument {
+        metadata: XrdsSceneMetadata {
+            environment: Some(XrdsSceneEnvironment {
+                ibl: Some(XrdsSceneIblEnvironment {
+                    diffuse_asset_id: "asset:ibl-diffuse".to_string(),
+                    specular_asset_id: "asset:ibl-specular".to_string(),
+                    intensity: 500.0,
+                }),
+                skybox: Some(XrdsSceneSkyboxEnvironment {
+                    texture_asset_id: "asset:skybox".to_string(),
+                    brightness: 1.0,
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+        assets: vec![
+            XrdsSceneAsset {
+                id: "asset:ibl-diffuse".to_string(),
+                uri: asset_fixture_path("environment_maps/diffuse.ktx2"),
+                kind: XrdsSceneAssetKind::EnvironmentMap,
+            },
+            XrdsSceneAsset {
+                id: "asset:ibl-specular".to_string(),
+                uri: asset_fixture_path("environment_maps/specular.ktx2"),
+                kind: XrdsSceneAssetKind::EnvironmentMap,
+            },
+            XrdsSceneAsset {
+                id: "asset:skybox".to_string(),
+                uri: asset_fixture_path("environment_maps/specular.ktx2"),
+                kind: XrdsSceneAssetKind::EnvironmentMap,
+            },
+            XrdsSceneAsset {
+                id: "asset:unreferenced-envmap".to_string(),
+                uri: asset_fixture_path("environment_maps/diffuse.ktx2"),
+                kind: XrdsSceneAssetKind::EnvironmentMap,
+            },
+        ],
+        ..Default::default()
+    };
+
+    let diagnostics = document.asset_diagnostics();
+
+    assert!(
+        !diagnostics.unused_asset_ids.contains(&"asset:ibl-diffuse".to_string()),
+        "IBL diffuse asset should not be flagged as unused"
+    );
+    assert!(
+        !diagnostics.unused_asset_ids.contains(&"asset:ibl-specular".to_string()),
+        "IBL specular asset should not be flagged as unused"
+    );
+    assert!(
+        !diagnostics.unused_asset_ids.contains(&"asset:skybox".to_string()),
+        "skybox asset should not be flagged as unused"
+    );
+    assert!(
+        diagnostics.unused_asset_ids.contains(&"asset:unreferenced-envmap".to_string()),
+        "environment map with no policy reference should still be flagged unused"
+    );
+}
+
+#[test]
+fn register_and_validate_audio_assets() {
+    let mut document = XrdsSceneDocument::default();
+
+    let clip = document
+        .register_audio_asset("asset:audio-music", "audio/background_music.ogg")
+        .expect("registering an audio asset should succeed");
+    assert_eq!(clip.kind, XrdsSceneAssetKind::Audio);
+    assert_eq!(clip.id, "asset:audio-music");
+    assert_eq!(document.assets.len(), 1);
+
+    let ensured = document
+        .ensure_audio_asset(None::<String>, "audio/footstep.wav")
+        .expect("ensuring a new audio asset should succeed");
+    assert!(ensured.created);
+    assert_eq!(ensured.asset.kind, XrdsSceneAssetKind::Audio);
+    assert_eq!(document.assets.len(), 2);
+
+    let reused = document
+        .ensure_audio_asset(None::<String>, "audio/background_music.ogg")
+        .expect("ensure should reuse an existing same-kind asset");
+    assert!(!reused.created);
+    assert_eq!(reused.asset.id, "asset:audio-music");
+    assert_eq!(document.assets.len(), 2);
+}
+
+#[test]
+fn audio_asset_validation_rejects_wrong_extensions() {
+    let err = XrdsSceneDocument {
+        assets: vec![XrdsSceneAsset {
+            id: "asset:audio-bad".to_string(),
+            uri: "audio/clip.jpg".to_string(),
+            kind: XrdsSceneAssetKind::Audio,
+        }],
+        ..Default::default()
+    }
+    .validate()
+    .expect_err("audio asset with unsupported extension should fail validation");
+
+    assert!(
+        matches!(err, XrdsSceneValidationError::InvalidAssetExtension { .. }),
+        "expected InvalidAssetExtension error, got {err:?}"
+    );
+}
+
+#[test]
+fn audio_asset_validates_all_supported_extensions() {
+    for ext in &["mp3", "ogg", "wav", "flac"] {
+        let result = XrdsSceneDocument {
+            assets: vec![XrdsSceneAsset {
+                id: format!("asset:audio-{ext}"),
+                uri: format!("audio/clip.{ext}"),
+                kind: XrdsSceneAssetKind::Audio,
+            }],
+            ..Default::default()
+        }
+        .validate();
+        assert!(result.is_ok(), "audio asset with .{ext} extension should pass validation");
+    }
+}
+
+#[test]
+fn audio_assets_appear_in_unused_ids_when_unreferenced() {
+    let document = XrdsSceneDocument {
+        assets: vec![
+            XrdsSceneAsset {
+                id: "asset:audio-ambient".to_string(),
+                uri: "audio/ambient.ogg".to_string(),
+                kind: XrdsSceneAssetKind::Audio,
+            },
+            XrdsSceneAsset {
+                id: "asset:texture-floor".to_string(),
+                uri: "textures/floor.png".to_string(),
+                kind: XrdsSceneAssetKind::Texture,
+            },
+        ],
+        ..Default::default()
+    };
+
+    let diagnostics = document.asset_diagnostics();
+    assert!(
+        diagnostics.unused_asset_ids.contains(&"asset:audio-ambient".to_string()),
+        "unreferenced audio asset should appear in unused_asset_ids"
+    );
+}
+
+#[test]
+fn audio_clip_node_references_audio_catalog_asset_and_drives_usage_tracking() {
+    let document = XrdsSceneDocument {
+        assets: vec![
+            XrdsSceneAsset {
+                id: "asset:audio-footstep".to_string(),
+                uri: "audio/footstep.wav".to_string(),
+                kind: XrdsSceneAssetKind::Audio,
+            },
+            XrdsSceneAsset {
+                id: "asset:audio-unused".to_string(),
+                uri: "audio/ambient.ogg".to_string(),
+                kind: XrdsSceneAssetKind::Audio,
+            },
+        ],
+        nodes: vec![
+            XrdsSceneNode {
+                id: XrdsSceneNodeId(50),
+                parent_id: None,
+                name: "FootstepSource".to_string(),
+                enabled: true,
+                visible: true,
+                transform: XrdsSceneTransform::default(),
+                payload: XrdsSceneNodePayload::AudioClip(XrdsSceneAudioClip {
+                    asset_id: "asset:audio-footstep".to_string(),
+                    volume: 0.8,
+                    looped: false,
+                    spatial: true,
+                    autoplay: false,
+                }),
+                editor: XrdsEditorMetadata::default(),
+            },
+        ],
+        ..Default::default()
+    };
+
+    document.validate().expect("document with valid audio clip node should pass validation");
+
+    let diagnostics = document.asset_diagnostics();
+
+    let footstep_usage = diagnostics
+        .asset_usages
+        .iter()
+        .find(|u| u.asset.id == "asset:audio-footstep")
+        .expect("footstep asset usage should be tracked");
+    assert_eq!(
+        footstep_usage.referenced_node_ids,
+        vec![XrdsSceneNodeId(50)],
+        "footstep asset should be referenced by the audio clip node"
+    );
+
+    assert!(
+        !diagnostics.unused_asset_ids.contains(&"asset:audio-footstep".to_string()),
+        "referenced audio asset should not be in unused_asset_ids"
+    );
+    assert!(
+        diagnostics.unused_asset_ids.contains(&"asset:audio-unused".to_string()),
+        "unreferenced audio asset should be in unused_asset_ids"
+    );
+}
+
+#[test]
+fn audio_clip_node_validation_rejects_missing_and_wrong_kind_assets() {
+    // Missing asset
+    let err = XrdsSceneDocument {
+        assets: vec![],
+        nodes: vec![XrdsSceneNode {
+            id: XrdsSceneNodeId(60),
+            parent_id: None,
+            name: "Source".to_string(),
+            enabled: true,
+            visible: true,
+            transform: XrdsSceneTransform::default(),
+            payload: XrdsSceneNodePayload::AudioClip(XrdsSceneAudioClip {
+                asset_id: "asset:missing".to_string(),
+                ..Default::default()
+            }),
+            editor: XrdsEditorMetadata::default(),
+        }],
+        ..Default::default()
+    }
+    .validate()
+    .expect_err("audio clip referencing missing asset should fail validation");
+
+    assert!(
+        matches!(
+            err,
+            XrdsSceneValidationError::MissingAudioClipAsset { .. }
+        ),
+        "expected MissingAudioClipAsset, got {err:?}"
+    );
+
+    // Wrong kind
+    let err = XrdsSceneDocument {
+        assets: vec![XrdsSceneAsset {
+            id: "asset:texture".to_string(),
+            uri: "textures/floor.png".to_string(),
+            kind: XrdsSceneAssetKind::Texture,
+        }],
+        nodes: vec![XrdsSceneNode {
+            id: XrdsSceneNodeId(61),
+            parent_id: None,
+            name: "Source".to_string(),
+            enabled: true,
+            visible: true,
+            transform: XrdsSceneTransform::default(),
+            payload: XrdsSceneNodePayload::AudioClip(XrdsSceneAudioClip {
+                asset_id: "asset:texture".to_string(),
+                ..Default::default()
+            }),
+            editor: XrdsEditorMetadata::default(),
+        }],
+        ..Default::default()
+    }
+    .validate()
+    .expect_err("audio clip pointing to non-audio asset should fail validation");
+
+    assert!(
+        matches!(
+            err,
+            XrdsSceneValidationError::AudioClipAssetKindMismatch { .. }
+        ),
+        "expected AudioClipAssetKindMismatch, got {err:?}"
+    );
+}

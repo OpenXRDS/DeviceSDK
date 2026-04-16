@@ -22,7 +22,9 @@ impl XrdsSceneDocument {
 
             if matches!(
                 asset.kind,
-                XrdsSceneAssetKind::Texture | XrdsSceneAssetKind::EnvironmentMap
+                XrdsSceneAssetKind::Texture
+                    | XrdsSceneAssetKind::EnvironmentMap
+                    | XrdsSceneAssetKind::Audio
             ) && !has_supported_binary_asset_extension(&asset.uri, asset.kind)
             {
                 return Err(XrdsSceneValidationError::InvalidAssetExtension {
@@ -76,6 +78,10 @@ impl XrdsSceneDocument {
 
             if let Some(material) = node_material_ref(node) {
                 validate_material_texture_slots(self, node.id, &material.textures)?;
+            }
+
+            if let XrdsSceneNodePayload::AudioClip(clip) = &node.payload {
+                validate_audio_clip_asset(self, node.id, &clip.asset_id)?;
             }
         }
 
@@ -220,6 +226,16 @@ pub enum XrdsSceneValidationError {
     InvalidSceneExposureEv100,
     InvalidSceneFogColor,
     InvalidSceneFogRange,
+    EmptyAudioClipAssetId(XrdsSceneNodeId),
+    MissingAudioClipAsset {
+        node_id: XrdsSceneNodeId,
+        asset_id: String,
+    },
+    AudioClipAssetKindMismatch {
+        node_id: XrdsSceneNodeId,
+        asset_id: String,
+        found: XrdsSceneAssetKind,
+    },
     MissingGltfAuthoringNode(XrdsSceneNodeId),
     GltfAuthoringTargetIsNotGltf(XrdsSceneNodeId),
     InvalidGltfAuthoring {
@@ -279,6 +295,34 @@ fn validate_material_texture_slots(
                 found: asset.kind,
             });
         }
+    }
+
+    Ok(())
+}
+
+fn validate_audio_clip_asset(
+    document: &XrdsSceneDocument,
+    node_id: XrdsSceneNodeId,
+    asset_id: &str,
+) -> Result<(), XrdsSceneValidationError> {
+    let asset_id = asset_id.trim();
+    if asset_id.is_empty() {
+        return Err(XrdsSceneValidationError::EmptyAudioClipAssetId(node_id));
+    }
+
+    let Some(asset) = document.asset(asset_id) else {
+        return Err(XrdsSceneValidationError::MissingAudioClipAsset {
+            node_id,
+            asset_id: asset_id.to_string(),
+        });
+    };
+
+    if asset.kind != XrdsSceneAssetKind::Audio {
+        return Err(XrdsSceneValidationError::AudioClipAssetKindMismatch {
+            node_id,
+            asset_id: asset.id.clone(),
+            found: asset.kind,
+        });
     }
 
     Ok(())
@@ -419,6 +463,9 @@ fn has_supported_binary_asset_extension(uri: &str, kind: XrdsSceneAssetKind) -> 
         ),
         XrdsSceneAssetKind::EnvironmentMap => {
             matches!(extension.as_str(), "hdr" | "exr" | "ktx2" | "dds")
+        }
+        XrdsSceneAssetKind::Audio => {
+            matches!(extension.as_str(), "mp3" | "ogg" | "wav" | "flac")
         }
         XrdsSceneAssetKind::Gltf => matches!(extension.as_str(), "gltf" | "glb"),
     }

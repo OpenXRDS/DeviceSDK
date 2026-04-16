@@ -1,4 +1,5 @@
 use super::*;
+use bevy::audio::{AudioSource, PlaybackMode, PlaybackSettings, Volume};
 use bevy::core_pipeline::core_3d::graph::Core3d;
 use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::post_process::bloom::Bloom;
@@ -79,6 +80,13 @@ pub(super) fn spawn_camera_descriptor(commands: &mut Commands, camera: &XrdsCame
             && !entity_mut.contains::<Camera3d>()
         {
             entity_mut.insert((CameraRenderGraph::new(Core3d), Camera3d::default()));
+        }
+
+        // Every XRDS camera acts as the spatial audio listener by default.
+        // This matches the convention in Unity, Godot, and Unreal: the active camera
+        // defines where the "ears" are. Expert code can remove or replace this component.
+        if !entity_mut.contains::<bevy::audio::SpatialListener>() {
+            entity_mut.insert(bevy::audio::SpatialListener::default());
         }
     });
 
@@ -249,14 +257,14 @@ pub(super) fn spawn_ambient_light_descriptor(
     let visible = light.visible;
     let color = light.color;
     let brightness = light.brightness;
-    let affects_lightmapped_meshes = light.affects_lightmapped_meshes;
+    let affects_baked_lighting = light.affects_baked_lighting;
 
     commands.queue(move |world: &mut World| {
         let visibility = build_visibility(visible);
         world.insert_resource(AmbientLight {
             color: color.into(),
             brightness,
-            affects_lightmapped_meshes,
+            affects_lightmapped_meshes: affects_baked_lighting,
         });
         world.entity_mut(entity).insert((
             Name::new(name),
@@ -367,6 +375,69 @@ pub(super) fn spawn_spot_light_descriptor(
             },
             XrdsStored(descriptor),
         ));
+    });
+
+    entity
+}
+
+pub(super) fn spawn_audio_clip_descriptor(commands: &mut Commands, audio: &XrdsAudioClip) -> Entity {
+    let entity = commands.spawn_empty().id();
+    let descriptor = audio.clone();
+    let name = audio.name.clone();
+    let transform = audio.transform;
+    let visible = audio.visible;
+    let asset_id = audio.audio_asset_id.clone();
+    let volume = audio.volume;
+    let looped = audio.looped;
+    let spatial = audio.spatial;
+    let autoplay = audio.autoplay;
+
+    commands.queue(move |world: &mut World| {
+        // Resolve catalog asset id → URI, then load the audio source.
+        let audio_uri = world
+            .get_resource::<XrdsImportedAssetCatalog>()
+            .and_then(|catalog| {
+                catalog
+                    .assets
+                    .iter()
+                    .find(|a| a.id == asset_id && a.kind == XrdsSceneAssetKind::Audio)
+                    .map(|a| a.uri.clone())
+            });
+
+        let playback = PlaybackSettings {
+            mode: if looped { PlaybackMode::Loop } else { PlaybackMode::Once },
+            volume: Volume::Linear(volume.clamp(0.0, 1.0)),
+            paused: !autoplay,
+            spatial,
+            ..PlaybackSettings::ONCE
+        };
+
+        let mut entity_mut = world.entity_mut(entity);
+        entity_mut.insert((
+            Name::new(name),
+            build_transform(&transform),
+            GlobalTransform::default(),
+            build_visibility(visible),
+            XrdsStored(descriptor),
+        ));
+
+        // Only attempt to load audio if AudioSource has been registered with the asset
+        // server (i.e. AudioPlugin is present). In test environments that use minimal
+        // plugins this guard avoids a panic from an unregistered asset type.
+        let audio_registered = world.contains_resource::<Assets<AudioSource>>();
+        if let (Some(uri), true) = (audio_uri, audio_registered) {
+            let handle = world.resource::<AssetServer>().load::<AudioSource>(uri.clone());
+            // AudioPlayer is intentionally NOT inserted here.
+            // `pre_validate_audio_decoders_system` will insert it once the asset has
+            // loaded and the decoder has been verified with catch_unwind. This prevents
+            // Bevy's observer-based audio system from panicking on unrecognised formats
+            // before we can intercept.
+            world.entity_mut(entity).insert(XrdsStoredAudioHandle {
+                handle,
+                uri,
+                playback,
+            });
+        }
     });
 
     entity

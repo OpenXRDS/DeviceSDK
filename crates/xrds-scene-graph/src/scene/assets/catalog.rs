@@ -12,4 +12,5 @@ pub enum XrdsSceneAssetKind {
     Gltf,
     Texture,
     EnvironmentMap,
+    Audio,
 }

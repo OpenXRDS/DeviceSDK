@@ -40,7 +40,7 @@ fn import_scene_document_preserves_ids_hierarchy_and_material() {
     assert_eq!(material.opacity, 0.8);
     assert!(material.unlit);
     assert_eq!(material.pbr.metallic, 0.7);
-    assert_eq!(material.pbr.perceptual_roughness, 0.25);
+    assert_eq!(material.pbr.roughness, 0.25);
     assert_eq!(material.pbr.reflectance, 0.6);
     assert!(material.pbr.double_sided);
     assert_eq!(material.pbr.alpha_mode, XrdsMaterialAlphaMode::Mask);
@@ -315,7 +315,7 @@ fn export_scene_document_round_trips_built_in_runtime_state() {
     assert_eq!(cube_payload.material.opacity, 0.8);
     assert!(cube_payload.material.unlit);
     assert_eq!(cube_payload.material.pbr.metallic, 0.7);
-    assert_eq!(cube_payload.material.pbr.perceptual_roughness, 0.25);
+    assert_eq!(cube_payload.material.pbr.roughness, 0.25);
     assert_eq!(cube_payload.material.pbr.reflectance, 0.6);
     assert!(cube_payload.material.pbr.double_sided);
     assert_eq!(
@@ -375,6 +375,236 @@ fn runtime_texture_uv_transform_raw_mode_preserves_origin_rotation() {
         transform,
         Mat3::from_cols_array(&[0.0, 1.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, 1.0]),
     );
+}
+
+#[test]
+fn audio_clip_node_survives_import_export_round_trip() {
+    let mut app = xrds_test_app();
+
+    let document = XrdsSceneDocument {
+        assets: vec![XrdsSceneAsset {
+            id: "asset:audio-theme".to_string(),
+            uri: "audio/theme.ogg".to_string(),
+            kind: XrdsSceneAssetKind::Audio,
+        }],
+        nodes: vec![XrdsSceneNode {
+            id: XrdsSceneNodeId(800),
+            parent_id: None,
+            name: "ThemeSource".to_string(),
+            enabled: true,
+            visible: true,
+            transform: XrdsSceneTransform {
+                translation: [2.0, 0.0, 0.0],
+                ..Default::default()
+            },
+            payload: XrdsSceneNodePayload::AudioClip(XrdsSceneAudioClip {
+                asset_id: "asset:audio-theme".to_string(),
+                volume: 0.75,
+                looped: true,
+                spatial: false,
+                autoplay: true,
+            }),
+            editor: XrdsEditorMetadata::default(),
+        }],
+        ..Default::default()
+    };
+
+    let imported_ids = {
+        let mut xrds = XrdsAPI::attach(&mut app);
+        xrds.import_scene_document(&document)
+            .expect("audio clip document import should succeed")
+    };
+
+    assert_eq!(imported_ids, vec![XrdsId(800)]);
+
+    app.update();
+
+    let exported = {
+        let xrds = XrdsAPI::attach(&mut app);
+        xrds.export_scene_document()
+            .expect("export after audio clip import should succeed")
+    };
+
+    assert_eq!(exported.assets.len(), 1);
+    assert_eq!(exported.assets[0].kind, XrdsSceneAssetKind::Audio);
+    assert_eq!(exported.assets[0].id, "asset:audio-theme");
+
+    let node = exported
+        .node(XrdsSceneNodeId(800))
+        .expect("audio clip node should be in exported document");
+    assert_eq!(node.transform.translation, [2.0, 0.0, 0.0]);
+
+    let XrdsSceneNodePayload::AudioClip(clip) = &node.payload else {
+        panic!("expected AudioClip payload, got {:?}", node.payload);
+    };
+    assert_eq!(clip.asset_id, "asset:audio-theme");
+    assert_eq!(clip.volume, 0.75);
+    assert!(clip.looped);
+    assert!(!clip.spatial);
+    assert!(clip.autoplay);
+}
+
+#[test]
+fn environment_map_assets_survive_import_export_round_trip() {
+    let mut app = xrds_test_app();
+
+    let document = XrdsSceneDocument {
+        metadata: XrdsSceneMetadata {
+            environment: Some(XrdsSceneEnvironment {
+                ibl: Some(XrdsSceneIblEnvironment {
+                    diffuse_asset_id: "asset:ibl-diffuse".to_string(),
+                    specular_asset_id: "asset:ibl-specular".to_string(),
+                    intensity: 750.0,
+                }),
+                skybox: Some(XrdsSceneSkyboxEnvironment {
+                    texture_asset_id: "asset:skybox".to_string(),
+                    brightness: 1.2,
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+        assets: vec![
+            XrdsSceneAsset {
+                id: "asset:ibl-diffuse".to_string(),
+                uri: "environment_maps/diffuse.ktx2".to_string(),
+                kind: XrdsSceneAssetKind::EnvironmentMap,
+            },
+            XrdsSceneAsset {
+                id: "asset:ibl-specular".to_string(),
+                uri: "environment_maps/specular.ktx2".to_string(),
+                kind: XrdsSceneAssetKind::EnvironmentMap,
+            },
+            XrdsSceneAsset {
+                id: "asset:skybox".to_string(),
+                uri: "environment_maps/specular.ktx2".to_string(),
+                kind: XrdsSceneAssetKind::EnvironmentMap,
+            },
+        ],
+        ..Default::default()
+    };
+
+    {
+        let mut xrds = XrdsAPI::attach(&mut app);
+        xrds.import_scene_document(&document)
+            .expect("environment map document import should succeed");
+    }
+
+    let exported = {
+        let xrds = XrdsAPI::attach(&mut app);
+        xrds.export_scene_document()
+            .expect("export after environment map import should succeed")
+    };
+
+    assert_eq!(exported.assets.len(), 3);
+    for asset in &exported.assets {
+        assert_eq!(
+            asset.kind,
+            XrdsSceneAssetKind::EnvironmentMap,
+            "asset '{}' should round-trip as EnvironmentMap",
+            asset.id
+        );
+    }
+
+    let ibl = exported
+        .ibl_environment()
+        .expect("IBL environment should be preserved after round-trip");
+    assert_eq!(ibl.diffuse_asset_id, "asset:ibl-diffuse");
+    assert_eq!(ibl.specular_asset_id, "asset:ibl-specular");
+    assert_eq!(ibl.intensity, 750.0);
+
+    let skybox = exported
+        .skybox_environment()
+        .expect("skybox should be preserved after round-trip");
+    assert_eq!(skybox.texture_asset_id, "asset:skybox");
+    assert_eq!(skybox.brightness, 1.2);
+}
+
+#[test]
+fn live_material_edit_appears_in_exported_document() {
+    let mut app = xrds_test_app();
+
+    {
+        let mut xrds = XrdsAPI::attach(&mut app);
+        xrds.import_scene_document(&imported_test_document())
+            .expect("import should succeed");
+    }
+
+    app.update();
+
+    {
+        let mut xrds = XrdsAPI::attach(&mut app);
+        let cube = xrds
+            .handle_of::<XrdsCube>(XrdsId(101))
+            .expect("cube should be indexed");
+
+        xrds.set_material_base_color(&cube, XrdsColor { rgba: [1.0, 0.0, 0.0, 1.0] });
+        xrds.set_material_pbr_params(
+            &cube,
+            XrdsMaterialPbrParams {
+                metallic: 0.0,
+                roughness: 1.0,
+                ..Default::default()
+            },
+        );
+    }
+
+    app.update();
+
+    let exported = {
+        let xrds = XrdsAPI::attach(&mut app);
+        xrds.export_scene_document()
+            .expect("export after material edit should succeed")
+    };
+
+    let XrdsSceneNodePayload::Cube(cube) = &exported
+        .node(XrdsSceneNodeId(101))
+        .expect("cube node should be in export")
+        .payload
+    else {
+        panic!("expected cube payload");
+    };
+
+    assert_eq!(cube.material.base_color, [1.0, 0.0, 0.0, 1.0]);
+    assert_eq!(cube.material.pbr.metallic, 0.0);
+    assert_eq!(cube.material.pbr.roughness, 1.0);
+}
+
+#[test]
+fn live_rename_appears_in_exported_document() {
+    let mut app = xrds_test_app();
+
+    {
+        let mut xrds = XrdsAPI::attach(&mut app);
+        xrds.import_scene_document(&imported_test_document())
+            .expect("import should succeed");
+    }
+
+    app.update();
+
+    {
+        let mut xrds = XrdsAPI::attach(&mut app);
+        let root = xrds
+            .handle_of::<XrdsNode>(XrdsId(100))
+            .expect("root node should be indexed");
+
+        xrds.queue_update(&root, NamePatch {
+            name: "Renamed Root".to_string(),
+        });
+    }
+
+    app.update();
+
+    let exported = {
+        let xrds = XrdsAPI::attach(&mut app);
+        xrds.export_scene_document()
+            .expect("export after rename should succeed")
+    };
+
+    let root = exported
+        .node(XrdsSceneNodeId(100))
+        .expect("root node should be in export");
+    assert_eq!(root.name, "Renamed Root");
 }
 
 

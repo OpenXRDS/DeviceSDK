@@ -98,6 +98,10 @@ impl XrdsAPI<'_> {
     }
 
     /// Resolve a Bevy entity from an XRDS id.
+    ///
+    /// **Expert escape hatch.** Returns the raw Bevy `Entity` for this id. Use this only when
+    /// direct ECS access is required and no XRDS-level API covers the operation. Normal app and
+    /// editor code should use `handle_of` instead and stay within XRDS APIs.
     pub fn entity_of_id(&self, id: XrdsId) -> Option<Entity> {
         self.app.world().resource::<XrdsIdIndex>().entity_of(id)
     }
@@ -291,6 +295,9 @@ impl XrdsAPI<'_> {
                     self.spawn_with_id(id, &component)?.entity()
                 }
                 XrdsSceneRuntimeComponent::SpotLight(component) => {
+                    self.spawn_with_id(id, &component)?.entity()
+                }
+                XrdsSceneRuntimeComponent::AudioClip(component) => {
                     self.spawn_with_id(id, &component)?.entity()
                 }
             };
@@ -980,6 +987,40 @@ impl XrdsAPI<'_> {
         C: XrdsComponent + Send + Sync + 'static,
     {
         set_material_params_in_world(self.app.world_mut(), handle, params);
+    }
+
+    /// Read all texture slots for mesh-based entities.
+    pub fn material_textures<C>(&self, handle: &Handle<C>) -> Option<XrdsMaterialTextureSlots> {
+        material_textures_in_world(self.app.world(), handle)
+    }
+
+    /// Set a single texture slot on mesh-based entities.
+    ///
+    /// Pass `None` to clear the slot.  This is the immediate preview path for
+    /// inspector-driven texture assignment without touching other material fields.
+    pub fn set_material_texture_slot<C>(
+        &mut self,
+        handle: &Handle<C>,
+        slot: XrdsMaterialTextureSlotKind,
+        texture: Option<XrdsMaterialTextureRef>,
+    ) where
+        C: XrdsComponent + Send + Sync + 'static,
+    {
+        set_material_texture_slot_in_world(self.app.world_mut(), handle, slot, texture);
+    }
+
+    /// Replace all texture slots at once for mesh-based entities.
+    ///
+    /// This is the immediate preview path for inspector panels that operate on the full
+    /// texture set (e.g. when importing a material preset).
+    pub fn set_material_textures<C>(
+        &mut self,
+        handle: &Handle<C>,
+        textures: XrdsMaterialTextureSlots,
+    ) where
+        C: XrdsComponent + Send + Sync + 'static,
+    {
+        set_material_textures_in_world(self.app.world_mut(), handle, textures);
     }
 
     pub fn gltf_load_status(&self, handle: &Handle<XrdsGltfAsset>) -> Option<XrdsGltfLoadStatus> {

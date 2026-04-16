@@ -60,9 +60,89 @@ pub(super) fn install_xrds(app: &mut App) {
         sync_imported_scene_environment_policy_system
             .after(apply_pending_gltf_morph_target_override_requests_system),
     );
+    // Runs in PreUpdate — before Bevy's audio sink creation — so that entities whose
+    // rodio decoder would panic are removed before Bevy ever tries to play them.
+    app.add_systems(PreUpdate, pre_validate_audio_decoders_system);
     app.add_observer(apply_pending_gltf_animation_requests_on_scene_ready);
     app.init_resource::<XrdsInstalled>();
 }
+
+/// Gate that runs every `PreUpdate` frame.
+///
+/// For each audio entity with a pending `XrdsStoredAudioHandle` (no `AudioPlayer` yet):
+/// - If the asset has loaded, attempts `rodio::Decoder` construction inside `catch_unwind`.
+/// - On success: inserts `AudioPlayer` + `PlaybackSettings` so Bevy starts playback.
+/// - On failure: logs the URI and extension and removes the handle so the entity stays
+///   silent but the app keeps running.
+///
+/// Because `AudioPlayer` is never present until this system grants it, Bevy's
+/// observer-based audio sink creation never fires on a bad file.
+fn pre_validate_audio_decoders_system(
+    mut commands: Commands,
+    query: Query<(Entity, &Name, &XrdsStoredAudioHandle), Without<bevy::audio::AudioPlayer<bevy::audio::AudioSource>>>,
+    audio_sources: Option<Res<bevy::asset::Assets<bevy::audio::AudioSource>>>,
+    asset_server: Res<AssetServer>,
+) {
+    use bevy::audio::Decodable;
+
+    let Some(audio_sources) = audio_sources else {
+        return; // AudioPlugin not present (test environments)
+    };
+
+    for (entity, name, stored) in query.iter() {
+        match asset_server.load_state(stored.handle.id()) {
+            bevy::asset::LoadState::Loaded => {}
+            bevy::asset::LoadState::Failed(ref err) => {
+                let extension = std::path::Path::new(&stored.uri)
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or("unknown");
+                error!(
+                    "[XrdsAudioClip] Failed to load audio for entity '{name}': \
+                     uri='{}' extension='.{extension}' error={err}",
+                    stored.uri,
+                );
+                commands.entity(entity).remove::<XrdsStoredAudioHandle>();
+                continue;
+            }
+            _ => continue, // still loading — check again next frame
+        }
+
+        let Some(source) = audio_sources.get(&stored.handle) else {
+            continue;
+        };
+
+        let extension = std::path::Path::new(&stored.uri)
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("unknown")
+            .to_string();
+
+        let source_clone = source.clone();
+        let decode_ok = std::panic::catch_unwind(move || {
+            let _ = source_clone.decoder();
+        })
+        .is_ok();
+
+        if decode_ok {
+            let playback = stored.playback;
+            commands.entity(entity).insert((
+                bevy::audio::AudioPlayer(stored.handle.clone()),
+                playback,
+            ));
+        } else {
+            error!(
+                "[XrdsAudioClip] Cannot decode audio for entity '{name}': \
+                 uri='{}' extension='.{extension}' — rodio returned UnrecognizedFormat. \
+                 The file may be corrupt, misnamed, or require a Bevy audio feature \
+                 that is not enabled (e.g. 'mp3', 'vorbis', 'symphonia-wav').",
+                stored.uri,
+            );
+            commands.entity(entity).remove::<XrdsStoredAudioHandle>();
+        }
+    }
+}
+
 
 fn ensure_visibility_hierarchy_components_system(world: &mut World) {
     let mut query = world.query::<&ChildOf>();

@@ -117,6 +117,34 @@ impl XrdsSceneDocument {
             .collect()
     }
 
+    pub fn audio_asset_reference_node_ids(&self, asset_id: &str) -> Vec<XrdsSceneNodeId> {
+        self.nodes
+            .iter()
+            .filter(|node| {
+                if let XrdsSceneNodePayload::AudioClip(clip) = &node.payload {
+                    clip.asset_id == asset_id
+                } else {
+                    false
+                }
+            })
+            .map(|node| node.id)
+            .collect()
+    }
+
+    pub fn environment_referenced_asset_ids(&self) -> std::collections::HashSet<String> {
+        let mut ids = std::collections::HashSet::new();
+        if let Some(env) = self.metadata.environment.as_ref() {
+            if let Some(ibl) = env.ibl.as_ref() {
+                ids.insert(ibl.diffuse_asset_id.clone());
+                ids.insert(ibl.specular_asset_id.clone());
+            }
+            if let Some(skybox) = env.skybox.as_ref() {
+                ids.insert(skybox.texture_asset_id.clone());
+            }
+        }
+        ids
+    }
+
     pub fn asset_usage(
         &self,
         asset_id: &str,
@@ -129,6 +157,7 @@ impl XrdsSceneDocument {
             XrdsSceneAssetKind::Gltf => self.gltf_asset_reference_node_ids(&asset.id),
             XrdsSceneAssetKind::Texture => self.material_texture_reference_node_ids(&asset.id),
             XrdsSceneAssetKind::EnvironmentMap => Vec::new(),
+            XrdsSceneAssetKind::Audio => self.audio_asset_reference_node_ids(&asset.id),
         };
 
         Ok(XrdsSceneAssetUsage {
@@ -148,6 +177,9 @@ impl XrdsSceneDocument {
                         self.material_texture_reference_node_ids(&asset.id)
                     }
                     XrdsSceneAssetKind::EnvironmentMap => Vec::new(),
+                    XrdsSceneAssetKind::Audio => {
+                        self.audio_asset_reference_node_ids(&asset.id)
+                    }
                 },
                 asset,
             })
@@ -163,6 +195,7 @@ impl XrdsSceneDocument {
         let source_diagnostics = self.gltf_source_diagnostics();
         let texture_source_diagnostics = self.texture_source_diagnostics();
         let environment_map_source_diagnostics = self.environment_map_source_diagnostics();
+        let audio_source_diagnostics = self.audio_source_diagnostics();
         let asset_usages = self.asset_usages();
 
         let catalog_resolved_node_ids = node_healths
@@ -180,9 +213,13 @@ impl XrdsSceneDocument {
             .filter(|health| health.status == XrdsSceneGltfNodeHealthStatus::DetachedFallback)
             .map(|health| health.node_id)
             .collect();
+        let environment_referenced_asset_ids = self.environment_referenced_asset_ids();
         let unused_asset_ids = asset_usages
             .iter()
-            .filter(|usage| usage.referenced_node_ids.is_empty())
+            .filter(|usage| {
+                usage.referenced_node_ids.is_empty()
+                    && !environment_referenced_asset_ids.contains(&usage.asset.id)
+            })
             .map(|usage| usage.asset.id.clone())
             .collect();
         let valid_source_node_ids = source_diagnostics
@@ -205,6 +242,16 @@ impl XrdsSceneDocument {
             .filter(|d| d.status != XrdsSceneAssetSourceDiagnosticStatus::Valid)
             .map(|d| d.asset_id.clone())
             .collect();
+        let valid_audio_asset_ids = audio_source_diagnostics
+            .iter()
+            .filter(|d| d.status == XrdsSceneAssetSourceDiagnosticStatus::Valid)
+            .map(|d| d.asset_id.clone())
+            .collect();
+        let invalid_audio_asset_ids = audio_source_diagnostics
+            .iter()
+            .filter(|d| d.status != XrdsSceneAssetSourceDiagnosticStatus::Valid)
+            .map(|d| d.asset_id.clone())
+            .collect();
         let valid_texture_asset_ids = texture_source_diagnostics
             .iter()
             .filter(|diagnostic| diagnostic.status == XrdsSceneAssetSourceDiagnosticStatus::Valid)
@@ -221,6 +268,7 @@ impl XrdsSceneDocument {
             source_diagnostics,
             texture_source_diagnostics,
             environment_map_source_diagnostics,
+            audio_source_diagnostics,
             asset_usages,
             catalog_resolved_node_ids,
             missing_catalog_node_ids,
@@ -231,6 +279,8 @@ impl XrdsSceneDocument {
             invalid_texture_asset_ids,
             valid_environment_map_asset_ids,
             invalid_environment_map_asset_ids,
+            valid_audio_asset_ids,
+            invalid_audio_asset_ids,
             unused_asset_ids,
         }
     }
@@ -700,6 +750,7 @@ pub struct XrdsSceneAssetDiagnostics {
     pub source_diagnostics: Vec<XrdsSceneGltfSourceDiagnostic>,
     pub texture_source_diagnostics: Vec<XrdsSceneAssetSourceDiagnostic>,
     pub environment_map_source_diagnostics: Vec<XrdsSceneAssetSourceDiagnostic>,
+    pub audio_source_diagnostics: Vec<XrdsSceneAssetSourceDiagnostic>,
     pub asset_usages: Vec<XrdsSceneAssetUsage>,
     pub catalog_resolved_node_ids: Vec<XrdsSceneNodeId>,
     pub missing_catalog_node_ids: Vec<XrdsSceneNodeId>,
@@ -710,6 +761,8 @@ pub struct XrdsSceneAssetDiagnostics {
     pub invalid_texture_asset_ids: Vec<String>,
     pub valid_environment_map_asset_ids: Vec<String>,
     pub invalid_environment_map_asset_ids: Vec<String>,
+    pub valid_audio_asset_ids: Vec<String>,
+    pub invalid_audio_asset_ids: Vec<String>,
     pub unused_asset_ids: Vec<String>,
 }
 
@@ -748,6 +801,27 @@ impl XrdsSceneAssetDiagnostics {
                 detail: diagnostic.message.clone().unwrap_or_else(|| {
                     format!(
                         "Environment map asset '{}' has an invalid source",
+                        diagnostic.asset_id
+                    )
+                }),
+            });
+        }
+
+        for diagnostic in &self.audio_source_diagnostics {
+            if diagnostic.status == XrdsSceneAssetSourceDiagnosticStatus::Valid {
+                continue;
+            }
+
+            entries.push(XrdsSceneAssetDiagnosticEntry {
+                subject: XrdsSceneAssetDiagnosticSubject::Asset {
+                    asset_id: diagnostic.asset_id.clone(),
+                    kind: diagnostic.asset_kind,
+                },
+                severity: XrdsSceneAssetDiagnosticSeverity::Error,
+                title: "Audio source issue".to_string(),
+                detail: diagnostic.message.clone().unwrap_or_else(|| {
+                    format!(
+                        "Audio asset '{}' has an invalid source",
                         diagnostic.asset_id
                     )
                 }),

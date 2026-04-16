@@ -103,7 +103,7 @@ pub(crate) fn build_bevy_app(params: &RuntimeParameters) -> App {
     // Add log plugin first for logging in plugin build phase
     app.add_plugins(LogPlugin {
         level: Level::INFO,
-        filter: "bevy=info,wgpu=warn,naga=info".to_owned(),
+        filter: "bevy=info,wgpu=warn,naga=info,symphonia_bundle_mp3=error,symphonia_core=error".to_owned(),
         ..Default::default()
     });
 

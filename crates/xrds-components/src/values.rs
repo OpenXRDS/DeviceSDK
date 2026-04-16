@@ -215,7 +215,7 @@ impl Default for XrdsMaterialAlphaMode {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct XrdsMaterialPbrParams {
     pub metallic: f32,
-    pub perceptual_roughness: f32,
+    pub roughness: f32,
     pub reflectance: f32,
     pub double_sided: bool,
     pub alpha_mode: XrdsMaterialAlphaMode,
@@ -226,7 +226,7 @@ impl Default for XrdsMaterialPbrParams {
     fn default() -> Self {
         Self {
             metallic: 0.0,
-            perceptual_roughness: 0.5,
+            roughness: 0.5,
             reflectance: 0.5,
             double_sided: false,
             alpha_mode: XrdsMaterialAlphaMode::Auto,
@@ -248,6 +248,13 @@ impl Default for XrdsMaterialParams {
     }
 }
 
+/// Transform parameters for XRDS scene objects.
+///
+/// **Authoritative rotation field**: `rotation_quat_xyzw`. The runtime reads only this field
+/// when projecting transforms into the engine. `rotation_euler_xyz_deg` is provided as an
+/// authoring convenience and is kept in sync during export, but is never read by the runtime.
+/// When constructing or editing a transform, set `rotation_quat_xyzw` directly, or use the
+/// typed helpers on the spawn and edit APIs (`set_rotation`, `looking_at`, etc.).
 #[derive(Debug, Clone, Copy)]
 pub struct TransformParams {
     pub translation: [f32; 3],

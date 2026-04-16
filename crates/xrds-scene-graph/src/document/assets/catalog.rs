@@ -36,6 +36,41 @@ impl XrdsSceneDocument {
         self.ensure_asset_with_kind(preferred_asset_id, uri, XrdsSceneAssetKind::EnvironmentMap)
     }
 
+    pub fn audio_assets(&self) -> impl Iterator<Item = &XrdsSceneAsset> {
+        self.assets
+            .iter()
+            .filter(|asset| asset.kind == XrdsSceneAssetKind::Audio)
+    }
+
+    pub fn audio_source_diagnostic(
+        &self,
+        asset_id: &str,
+    ) -> Result<XrdsSceneAssetSourceDiagnostic, XrdsSceneAssetWorkflowError> {
+        self.asset_source_diagnostic_with_kind(asset_id, XrdsSceneAssetKind::Audio)
+    }
+
+    pub fn audio_source_diagnostics(&self) -> Vec<XrdsSceneAssetSourceDiagnostic> {
+        self.audio_assets()
+            .filter_map(|asset| self.audio_source_diagnostic(&asset.id).ok())
+            .collect()
+    }
+
+    pub fn register_audio_asset(
+        &mut self,
+        asset_id: impl Into<String>,
+        uri: impl Into<String>,
+    ) -> Result<XrdsSceneAsset, XrdsSceneAssetWorkflowError> {
+        self.register_asset_with_kind(asset_id, uri, XrdsSceneAssetKind::Audio)
+    }
+
+    pub fn ensure_audio_asset(
+        &mut self,
+        preferred_asset_id: Option<String>,
+        uri: impl Into<String>,
+    ) -> Result<XrdsSceneAssetEnsureResult, XrdsSceneAssetWorkflowError> {
+        self.ensure_asset_with_kind(preferred_asset_id, uri, XrdsSceneAssetKind::Audio)
+    }
+
     pub fn texture_assets(&self) -> impl Iterator<Item = &XrdsSceneAsset> {
         self.assets
             .iter()
@@ -203,6 +238,7 @@ fn asset_id_seed_from_uri(kind: XrdsSceneAssetKind, uri: &str) -> String {
             XrdsSceneAssetKind::Gltf => "gltf",
             XrdsSceneAssetKind::Texture => "texture",
             XrdsSceneAssetKind::EnvironmentMap => "envmap",
+            XrdsSceneAssetKind::Audio => "audio",
         });
 
     let mut slug = String::new();
@@ -226,6 +262,7 @@ fn asset_id_seed_from_uri(kind: XrdsSceneAssetKind, uri: &str) -> String {
         XrdsSceneAssetKind::Gltf => "gltf",
         XrdsSceneAssetKind::Texture => "texture",
         XrdsSceneAssetKind::EnvironmentMap => "envmap",
+        XrdsSceneAssetKind::Audio => "audio",
     };
     let slug = slug.trim_matches('-');
     if slug.is_empty() {
@@ -348,6 +385,7 @@ fn asset_kind_label(kind: XrdsSceneAssetKind) -> &'static str {
         XrdsSceneAssetKind::Gltf => "glTF",
         XrdsSceneAssetKind::Texture => "texture",
         XrdsSceneAssetKind::EnvironmentMap => "environment map",
+        XrdsSceneAssetKind::Audio => "audio",
     }
 }
 
@@ -357,6 +395,7 @@ fn supported_binary_asset_extensions(kind: XrdsSceneAssetKind) -> &'static [&'st
             "png", "jpg", "jpeg", "webp", "bmp", "tga", "gif", "hdr", "exr", "ktx2", "basis", "dds",
         ],
         XrdsSceneAssetKind::EnvironmentMap => &["hdr", "exr", "ktx2", "dds"],
+        XrdsSceneAssetKind::Audio => &["mp3", "ogg", "wav", "flac"],
         XrdsSceneAssetKind::Gltf => &["gltf", "glb"],
     }
 }

@@ -19,7 +19,7 @@ use xrds_components::primitives::{
 use xrds_components::world::lights::{
     XrdsAmbientLight, XrdsDirectionalLight, XrdsPointLight, XrdsSpotLight,
 };
-use xrds_components::world::{XrdsCamera, XrdsGltfAsset, XrdsNode};
+use xrds_components::world::{XrdsAudioClip, XrdsCamera, XrdsGltfAsset, XrdsNode};
 use xrds_components::{
     CameraProjectionParams, OrthographicCameraParams, PerspectiveCameraParams, TransformParams,
     XrdsColor, XrdsId, XrdsLinearRgba, XrdsMaterialAlphaMode, XrdsMaterialParams,

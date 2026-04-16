@@ -158,7 +158,7 @@ fn built_in_light_commit_helpers_update_runtime_and_exported_document() {
             AmbientLightParams {
                 color: XrdsColor::srgb(0.2, 0.3, 0.4),
                 brightness: 2.5,
-                affects_lightmapped_meshes: true,
+                affects_baked_lighting: true,
             },
         );
 
@@ -213,7 +213,7 @@ fn built_in_light_commit_helpers_update_runtime_and_exported_document() {
         .get_resource::<AmbientLight>()
         .expect("ambient light resource should exist");
     assert_eq!(ambient_runtime.brightness, 2.5);
-    assert!(ambient_runtime.affects_lightmapped_meshes);
+    assert!(ambient_runtime.affects_lightmapped_meshes); // Bevy field name
 
     let exported = xrds
         .export_scene_document()
@@ -262,7 +262,7 @@ fn built_in_light_commit_helpers_update_runtime_and_exported_document() {
         panic!("expected ambient light payload");
     };
     assert_eq!(ambient.brightness, 2.5);
-    assert!(ambient.affects_lightmapped_meshes);
+    assert!(ambient.affects_baked_lighting);
 }
 
 #[test]
@@ -377,7 +377,7 @@ fn light_params_are_readable_after_spawn_and_update() {
             AmbientLightParams {
                 color: XrdsColor::srgb(0.3, 0.3, 0.3),
                 brightness: 0.8,
-                affects_lightmapped_meshes: true,
+                affects_baked_lighting: true,
             },
         );
 
@@ -415,7 +415,7 @@ fn light_params_are_readable_after_spawn_and_update() {
 
     let ambient = xrds.ambient_light_params(&ambient_h).expect("ambient light params should be readable");
     assert_eq!(ambient.brightness, 0.8);
-    assert!(ambient.affects_lightmapped_meshes);
+    assert!(ambient.affects_baked_lighting);
 }
 
 #[test]
@@ -467,5 +467,133 @@ fn gltf_source_is_readable_after_import() {
         .expect("gltf_source should return Some after import");
     assert_eq!(source.gltf_asset_path, fixture_uri);
     assert_eq!(source.scene_index, 0);
+}
+
+#[test]
+fn material_texture_slot_read_write_and_clear_work_on_mesh_entity() {
+    let mut app = xrds_test_app();
+
+    let cube_id = {
+        let mut xrds = XrdsAPI::attach(&mut app);
+        let cube = xrds.spawn(&XrdsCube::new().with_name("TexturedCube"));
+        xrds.id_of(&cube).expect("cube should have an id")
+    };
+
+    app.update();
+
+    // Initially all texture slots are empty.
+    {
+        let xrds = XrdsAPI::attach(&mut app);
+        let cube = xrds.handle_of::<XrdsCube>(cube_id).unwrap();
+        let slots = xrds
+            .material_textures(&cube)
+            .expect("material_textures should return Some for a spawned cube");
+        assert!(slots.is_empty(), "all texture slots should start empty");
+    }
+
+    // Set the base-color slot.
+    {
+        let mut xrds = XrdsAPI::attach(&mut app);
+        let cube = xrds.handle_of::<XrdsCube>(cube_id).unwrap();
+        xrds.set_material_texture_slot(
+            &cube,
+            XrdsMaterialTextureSlotKind::BaseColor,
+            Some(XrdsMaterialTextureRef {
+                texture_asset_id: "asset:texture-floor".to_string(),
+                uv: XrdsMaterialTextureUvParams::default(),
+                sampler: XrdsMaterialTextureSamplerParams::default(),
+            }),
+        );
+    }
+
+    app.update();
+
+    // Read it back — slot should be set, others still empty.
+    {
+        let xrds = XrdsAPI::attach(&mut app);
+        let cube = xrds.handle_of::<XrdsCube>(cube_id).unwrap();
+        let slots = xrds.material_textures(&cube).unwrap();
+        let base = slots
+            .base_color
+            .as_ref()
+            .expect("base-color slot should now be set");
+        assert_eq!(base.texture_asset_id, "asset:texture-floor");
+        assert!(slots.normal.is_none());
+        assert!(slots.metallic_roughness.is_none());
+    }
+
+    // Clear the slot.
+    {
+        let mut xrds = XrdsAPI::attach(&mut app);
+        let cube = xrds.handle_of::<XrdsCube>(cube_id).unwrap();
+        xrds.set_material_texture_slot(
+            &cube,
+            XrdsMaterialTextureSlotKind::BaseColor,
+            None,
+        );
+    }
+
+    app.update();
+
+    {
+        let xrds = XrdsAPI::attach(&mut app);
+        let cube = xrds.handle_of::<XrdsCube>(cube_id).unwrap();
+        let slots = xrds.material_textures(&cube).unwrap();
+        assert!(
+            slots.is_empty(),
+            "all texture slots should be empty after clearing"
+        );
+    }
+}
+
+#[test]
+fn set_material_textures_replaces_all_slots_at_once() {
+    let mut app = xrds_test_app();
+
+    let sphere_id = {
+        let mut xrds = XrdsAPI::attach(&mut app);
+        let sphere = xrds.spawn(&XrdsSphere::new().with_name("TexturedSphere"));
+        xrds.id_of(&sphere).unwrap()
+    };
+
+    app.update();
+
+    let full_slots = XrdsMaterialTextureSlots {
+        base_color: Some(XrdsMaterialTextureRef {
+            texture_asset_id: "asset:albedo".to_string(),
+            uv: XrdsMaterialTextureUvParams::default(),
+            sampler: XrdsMaterialTextureSamplerParams::default(),
+        }),
+        normal: Some(XrdsMaterialTextureRef {
+            texture_asset_id: "asset:normal".to_string(),
+            uv: XrdsMaterialTextureUvParams::default(),
+            sampler: XrdsMaterialTextureSamplerParams::default(),
+        }),
+        ..Default::default()
+    };
+
+    {
+        let mut xrds = XrdsAPI::attach(&mut app);
+        let sphere = xrds.handle_of::<XrdsSphere>(sphere_id).unwrap();
+        xrds.set_material_textures(&sphere, full_slots.clone());
+    }
+
+    app.update();
+
+    {
+        let xrds = XrdsAPI::attach(&mut app);
+        let sphere = xrds.handle_of::<XrdsSphere>(sphere_id).unwrap();
+        let slots = xrds.material_textures(&sphere).unwrap();
+        assert_eq!(
+            slots.base_color.as_ref().map(|t| t.texture_asset_id.as_str()),
+            Some("asset:albedo")
+        );
+        assert_eq!(
+            slots.normal.as_ref().map(|t| t.texture_asset_id.as_str()),
+            Some("asset:normal")
+        );
+        assert!(slots.metallic_roughness.is_none());
+        assert!(slots.emissive.is_none());
+    }
 }
 

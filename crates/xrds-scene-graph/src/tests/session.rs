@@ -232,7 +232,7 @@ fn session_material_operations_participate_in_undo_redo() {
             XrdsSceneNodeId(12),
             XrdsSceneMaterialPbrParams {
                 metallic: 0.9,
-                perceptual_roughness: 0.15,
+                roughness: 0.15,
                 reflectance: 0.8,
                 double_sided: true,
                 alpha_mode: XrdsSceneMaterialAlphaMode::Blend,

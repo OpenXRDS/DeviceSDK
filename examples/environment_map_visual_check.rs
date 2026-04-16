@@ -108,7 +108,7 @@ impl XrdsApp for EnvironmentMapVisualCheckApp {
                 unlit: false,
                 pbr: XrdsMaterialPbrParams {
                     metallic: 0.0,
-                    perceptual_roughness: 0.94,
+                    roughness: 0.94,
                     reflectance: 0.18,
                     double_sided: true,
                     alpha_mode: XrdsMaterialAlphaMode::Opaque,
@@ -195,7 +195,7 @@ fn spawn_sphere(
     translation: [f32; 3],
     color: [f32; 3],
     metallic: f32,
-    perceptual_roughness: f32,
+    roughness: f32,
     reflectance: f32,
 ) -> Handle<XrdsSphere> {
     let sphere = api.spawn(&{
@@ -213,7 +213,7 @@ fn spawn_sphere(
             unlit: false,
             pbr: XrdsMaterialPbrParams {
                 metallic,
-                perceptual_roughness,
+                roughness,
                 reflectance,
                 double_sided: false,
                 alpha_mode: XrdsMaterialAlphaMode::Opaque,

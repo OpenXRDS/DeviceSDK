@@ -53,7 +53,7 @@ Scene graph contract:
 
 ### 2. Core scene components
 
-- [ ] Keep camera, light, glTF asset, and basic mesh components stable and inspector-friendly
+- [X] Keep camera, light, glTF asset, and basic mesh components stable and inspector-friendly
 - [X] Add at least `XrdsSphere` and `XrdsPlane3D`
 - [ ] Consider `XrdsCapsule` if character/editor workflows are expected
 - [X] Define a minimal “empty/group” object story for folders, pivots, and scene organization
@@ -136,16 +136,18 @@ Current metadata baseline now includes:
 - [X] Make glTF asset usage solid enough for editor-driven asset placement and inspector editing
 - [X] Decide how asset references are represented in document data
 - [X] Define fallback behavior for missing assets and invalid scene indices
-- [ ] Plan for future non-glTF asset types if needed
+- [X] Plan for future non-glTF asset types if needed
 
 Current asset workflow baseline now includes:
 
 - a document-side asset catalog through `XrdsSceneAsset` and `XrdsSceneAssetKind`
+- three first-class asset kinds: `Gltf` (scene models), `Texture` (material slots), `EnvironmentMap` (IBL/skybox, HDR/EXR/KTX2/DDS only)
 - catalog-backed glTF references on scene nodes through `asset_id`, embedded fallback `asset_uri`, `scene_index`, and export policy
-- document/session helpers for registering, ensuring, placing, retargeting, rebinding, renaming, and removing glTF assets
+- document/session helpers for registering, ensuring, placing, retargeting, rebinding, renaming, and removing assets of all three kinds
 - explicit fallback behavior for missing catalog entries, detached nodes, missing files, parse failures, and invalid scene indices
 - usage and health diagnostics for editor UI consumption, including unresolved references and unused assets
-- runtime import/export that preserves catalog-backed glTF references and round-trips them through XRDS scene documents
+- environment-referenced assets (IBL, skybox) are excluded from `unused_asset_ids` in diagnostics
+- runtime import/export that preserves catalog-backed glTF and environment map references and round-trips them through XRDS scene documents
 
 ### 8. Serialization and document model
 
@@ -185,21 +187,22 @@ If the answer is no, the feature should either:
 
 ## Current highest-value next step
 
-The next basement-level gap to address is planning the first non-glTF asset types that XRDS scene documents should support.
+The minimum milestone for a first editor prototype is **fully met**. The remaining open checklist items are:
 
-Why this is next:
+1. `[ ]` Consider `XrdsCapsule` — deferred until character/editor workflows require it
+2. `[ ]` Review naming — partially done (`roughness`, `affects_baked_lighting`, `UvParams`, `SamplerParams`, `entity_of_id` expert label); `TransformParams` dual-rotation and `*Patch` names remain
 
-- The glTF asset workflow is now strong enough for document placement, fallback handling, inspector editing, diagnostics, and runtime round-tripping.
-- The remaining asset-workflow gap is not glTF policy but deciding which additional asset classes deserve first-class XRDS document support.
-- That decision will shape future material, environment, audio, and media workflows more than another round of generic naming cleanup.
+The basement is ready to start GUI editor work. The two remaining substantive SDK gaps before the GUI layer are:
 
-Recommended next concrete milestone:
+### 1. Texture slot inspector helpers in the runtime API
 
-- define the first non-glTF asset-kind expansion plan and keep it intentionally narrow:
-	- textures or images for material-driven authoring and future texture slots
-	- environment assets for skyboxes, HDRI lighting, and reflection environments
-	- audio assets for ambient, trigger, and spatial sound references
-	- video assets only if near-term scene/media workflows require them
-	- reusable material assets or presets only if shared-material reuse pressure appears in real editor flows
+`XrdsAPI` and `XrdsUpdateContext` have `material_params()` / `set_material_params()` for the full material, but no focused read/write for individual texture slots. An editor inspector needs:
 
-- audit public XRDS names, example descriptions, and top-level wording so application-facing flows read naturally to non-experts and engine-shaped terminology is pushed to explicitly expert contexts
+- `material_textures(handle)` → `Option<XrdsMaterialTextureSlots>` (read)
+- `set_material_texture_slot(handle, slot, texture_ref)` (write, immediate preview)
+
+Without these, editing a texture slot in the inspector requires reading the full `XrdsMaterialParams`, patching one field, and writing the whole struct back — verbose and error-prone in editor code.
+
+### 2. Video asset kind
+
+Deferred — add only when a concrete media workflow requires it. Pattern is established by `EnvironmentMap` and `Audio`.

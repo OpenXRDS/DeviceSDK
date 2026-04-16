@@ -73,6 +73,7 @@ pub enum XrdsSceneRuntimeComponent {
     DirectionalLight(XrdsDirectionalLight),
     PointLight(XrdsPointLight),
     SpotLight(XrdsSpotLight),
+    AudioClip(XrdsAudioClip),
 }
 
 impl XrdsSceneNode {
@@ -222,7 +223,7 @@ impl XrdsSceneNode {
                     transform,
                     color: XrdsColor { rgba: light.color },
                     brightness: light.brightness,
-                    affects_lightmapped_meshes: light.affects_lightmapped_meshes,
+                    affects_baked_lighting: light.affects_baked_lighting,
                 }),
                 material: None,
                 editor,
@@ -281,6 +282,23 @@ impl XrdsSceneNode {
                 editor,
                 gltf_node_authoring: None,
             },
+            XrdsSceneNodePayload::AudioClip(clip) => XrdsSceneRuntimeNode {
+                id: self.id.into(),
+                parent_id: self.parent_id.map(Into::into),
+                component: XrdsSceneRuntimeComponent::AudioClip(XrdsAudioClip {
+                    name: self.name.clone(),
+                    transform,
+                    visible: self.visible,
+                    audio_asset_id: clip.asset_id.clone(),
+                    volume: clip.volume,
+                    looped: clip.looped,
+                    spatial: clip.spatial,
+                    autoplay: clip.autoplay,
+                }),
+                material: None,
+                editor,
+                gltf_node_authoring: None,
+            },
         }
     }
 
@@ -334,6 +352,22 @@ impl XrdsSceneNode {
             camera.visible,
             camera.transform,
             XrdsSceneNodePayload::Camera(camera.into()),
+        )
+    }
+
+    pub fn from_xrds_audio_clip(
+        id: XrdsSceneNodeId,
+        parent_id: Option<XrdsSceneNodeId>,
+        audio: &XrdsAudioClip,
+    ) -> Self {
+        Self::from_parts(
+            id,
+            parent_id,
+            &audio.name,
+            true,
+            audio.visible,
+            audio.transform,
+            XrdsSceneNodePayload::AudioClip(audio.into()),
         )
     }
 

@@ -318,6 +318,14 @@ pub(super) fn export_scene_node_in_world(
         ));
     }
 
+    if let Some(descriptor) = world.get::<XrdsStored<XrdsAudioClip>>(entity) {
+        return Ok(apply_editor_metadata_to_node(
+            world,
+            entity,
+            XrdsSceneNode::from_xrds_audio_clip(node_id, parent_node_id, &descriptor.0),
+        ));
+    }
+
     Err(XrdsSceneExportError::UnsupportedRuntimeDescriptor(id))
 }
 
@@ -543,6 +551,34 @@ pub(super) fn material_emissive_in_world<C>(
     material_params_in_world(world, handle).map(|params| params.emissive)
 }
 
+pub(super) fn material_textures_in_world<C>(
+    world: &World,
+    handle: &Handle<C>,
+) -> Option<XrdsMaterialTextureSlots> {
+    material_params_in_world(world, handle).map(|params| params.textures)
+}
+
+pub(super) fn set_material_texture_slot_in_world<C>(
+    world: &mut World,
+    handle: &Handle<C>,
+    slot: XrdsMaterialTextureSlotKind,
+    texture: Option<XrdsMaterialTextureRef>,
+) {
+    let mut params = material_params_in_world(world, handle).unwrap_or_default();
+    params.textures.set(slot, texture);
+    set_material_params_in_world(world, handle, params);
+}
+
+pub(super) fn set_material_textures_in_world<C>(
+    world: &mut World,
+    handle: &Handle<C>,
+    textures: XrdsMaterialTextureSlots,
+) {
+    let mut params = material_params_in_world(world, handle).unwrap_or_default();
+    params.textures = textures;
+    set_material_params_in_world(world, handle, params);
+}
+
 pub(super) fn camera_projection_in_world(
     world: &World,
     handle: &Handle<XrdsCamera>,
@@ -628,7 +664,7 @@ pub(super) fn ambient_light_params_in_world(
         .map(|stored| AmbientLightParams {
             color: stored.0.color,
             brightness: stored.0.brightness,
-            affects_lightmapped_meshes: stored.0.affects_lightmapped_meshes,
+            affects_baked_lighting: stored.0.affects_baked_lighting,
         })
 }
 

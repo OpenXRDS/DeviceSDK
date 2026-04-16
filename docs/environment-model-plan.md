@@ -5,11 +5,34 @@ This document tracks the scene-environment basement and the remaining expansion 
 ## Progress Snapshot
 
 - Implemented and validated: scene-level IBL, skybox, manual exposure, and linear fog
+- Asset kind separation complete: `XrdsSceneAssetKind::EnvironmentMap` is now distinct from `Texture`
 - Supported control paths: document-driven authoring and runtime-driven policy
 - Verified with focused examples:
 	- `runtime_scene_environment.rs` for the full runtime policy surface
 	- `scene_document_environment_import.rs` for authored import behavior
 	- `environment_map_visual_check.rs` for a quick visual check that environment maps are landing on the runtime material path
+
+## Implemented: EnvironmentMap Asset Kind
+
+Goal: a first-class catalog asset kind for HDR/cubemap environment sources, separate from material-slot textures.
+
+Delivered shape:
+
+- `XrdsSceneAssetKind::EnvironmentMap` — distinct from `XrdsSceneAssetKind::Texture`
+- accepted file extensions: `hdr`, `exr`, `ktx2`, `dds` (HDR and compressed formats only; no LDR formats)
+- document catalog API: `register_environment_map_asset`, `ensure_environment_map_asset`, `environment_map_assets`, `environment_map_source_diagnostic`, `environment_map_source_diagnostics`
+- session API mirrors document API with full undo/redo support
+- validation: IBL diffuse/specular and skybox asset slots now require `EnvironmentMap` kind; using `Texture` for those slots is a validation error
+- runtime resolver in `environment.rs` looks up `EnvironmentMap` kind; resolver in `material.rs` continues to look up `Texture` kind — cleanly separated
+- diagnostics: `environment_map_source_diagnostics`, `valid_environment_map_asset_ids`, `invalid_environment_map_asset_ids` in `XrdsSceneAssetDiagnostics`
+- unused-asset tracking: environment map assets referenced by the scene environment policy (IBL, skybox) are excluded from `unused_asset_ids`
+
+Why EnvironmentMap is separate from Texture:
+
+- different file format contract (HDR/EXR for physical correctness; LDR formats are not appropriate for IBL)
+- different rendering role (lighting pipeline, not material slot)
+- editor needs to filter and browse them separately
+- matches the Unreal `TextureCube` / Godot `Cubemap` convention of separating lighting sources from material inputs
 
 ## Current Basement
 

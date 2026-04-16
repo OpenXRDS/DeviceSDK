@@ -43,7 +43,7 @@ use xrds_components::primitives::{
 use xrds_components::world::lights::{
     XrdsAmbientLight, XrdsDirectionalLight, XrdsPointLight, XrdsSpotLight,
 };
-use xrds_components::world::{XrdsCamera, XrdsGltfAsset, XrdsNode};
+use xrds_components::world::{XrdsAudioClip, XrdsCamera, XrdsGltfAsset, XrdsNode};
 use xrds_components::{
     AmbientLightParams, CameraKind, CameraLookAtPatch, CameraProjectionParams,
     CameraProjectionPatch, CubeGeometryParams, CylinderGeometryParams, DirectionalLightParams,
@@ -52,6 +52,7 @@ use xrds_components::{
     SpotLightParams, TetrahedronGeometryParams, TransformParams, VisibilityPatch,
     XrdsAssetComponent, XrdsColor, XrdsComponent, XrdsComponentsPlugin, XrdsId, XrdsLinearRgba,
     XrdsMaterialAlphaMode, XrdsMaterialParams, XrdsMaterialPbrParams, XrdsMaterialTextureRef,
+    XrdsMaterialTextureSlotKind, XrdsMaterialTextureSlots,
     XrdsMutableComponent, XrdsRegistry,
 };
 use xrds_scene_graph::{

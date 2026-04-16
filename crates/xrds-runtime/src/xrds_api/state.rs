@@ -12,6 +12,16 @@ pub(super) struct XrdsStored<C>(pub(super) C);
 #[derive(Component, Debug, Clone)]
 pub(super) struct XrdsStoredMaterial(pub(super) XrdsMaterialParams);
 
+/// Holds a pending audio load. `AudioPlayer` is NOT inserted until this component's
+/// asset has loaded and its decoder has been validated. This prevents Bevy's observer
+/// from panicking on unrecognised formats before we can intercept.
+#[derive(Component, Debug, Clone)]
+pub(super) struct XrdsStoredAudioHandle {
+    pub(super) handle: bevy::asset::Handle<bevy::audio::AudioSource>,
+    pub(super) uri: String,
+    pub(super) playback: bevy::audio::PlaybackSettings,
+}
+
 #[derive(Component, Debug, Clone, PartialEq, Eq)]
 pub(super) struct XrdsStoredEditorMetadata(pub(super) XrdsEditorMetadata);
 

@@ -291,14 +291,18 @@ fn register_stored_ambient_light_updaters(registry: &mut SurfaceUpdateRegistry) 
         if let Some(mut ambient) = world.get_resource_mut::<AmbientLight>() {
             ambient.color = params.color.into();
             ambient.brightness = params.brightness;
-            ambient.affects_lightmapped_meshes = params.affects_lightmapped_meshes;
+            ambient.affects_lightmapped_meshes = params.affects_baked_lighting;
         }
         let _ = with_stored_descriptor_mut::<XrdsAmbientLight, _>(world, entity, |descriptor| {
             descriptor.color = params.color;
             descriptor.brightness = params.brightness;
-            descriptor.affects_lightmapped_meshes = params.affects_lightmapped_meshes;
+            descriptor.affects_baked_lighting = params.affects_baked_lighting;
         });
     });
+}
+
+fn register_stored_audio_clip_updaters(registry: &mut SurfaceUpdateRegistry) {
+    register_common_stored_updaters::<XrdsAudioClip>(registry);
 }
 
 fn register_default_mutable_updaters(registry: &mut SurfaceUpdateRegistry) {
@@ -314,6 +318,7 @@ fn register_default_mutable_updaters(registry: &mut SurfaceUpdateRegistry) {
     register_stored_directional_light_updaters(registry);
     register_stored_spot_light_updaters(registry);
     register_stored_ambient_light_updaters(registry);
+    register_stored_audio_clip_updaters(registry);
 }
 
 fn register_default_primitive_updaters(registry: &mut SurfaceUpdateRegistry) {

@@ -119,7 +119,7 @@ impl XrdsApp for RuntimeSceneEnvironmentApp {
                 unlit: false,
                 pbr: XrdsMaterialPbrParams {
                     metallic: 0.0,
-                    perceptual_roughness: 0.92,
+                    roughness: 0.92,
                     reflectance: 0.2,
                     double_sided: true,
                     alpha_mode: XrdsMaterialAlphaMode::Opaque,
@@ -144,7 +144,7 @@ impl XrdsApp for RuntimeSceneEnvironmentApp {
                 unlit: false,
                 pbr: XrdsMaterialPbrParams {
                     metallic: 1.0,
-                    perceptual_roughness: 0.08,
+                    roughness: 0.08,
                     reflectance: 0.95,
                     double_sided: false,
                     alpha_mode: XrdsMaterialAlphaMode::Opaque,
@@ -169,7 +169,7 @@ impl XrdsApp for RuntimeSceneEnvironmentApp {
                 unlit: false,
                 pbr: XrdsMaterialPbrParams {
                     metallic: 1.0,
-                    perceptual_roughness: 0.72,
+                    roughness: 0.72,
                     reflectance: 0.9,
                     double_sided: false,
                     alpha_mode: XrdsMaterialAlphaMode::Opaque,

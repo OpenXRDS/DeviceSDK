@@ -14,6 +14,7 @@ pub enum XrdsSceneNodePayload {
     DirectionalLight(XrdsSceneDirectionalLight),
     PointLight(XrdsScenePointLight),
     SpotLight(XrdsSceneSpotLight),
+    AudioClip(XrdsSceneAudioClip),
 }
 
 impl XrdsSceneNodePayload {
@@ -31,6 +32,7 @@ impl XrdsSceneNodePayload {
             | Self::DirectionalLight(_)
             | Self::PointLight(_)
             | Self::SpotLight(_) => XrdsGltfExportClass::Light,
+            Self::AudioClip(_) => XrdsGltfExportClass::NodeOnly,
         }
     }
 }
@@ -337,7 +339,7 @@ impl Default for XrdsSceneMaterialAlphaMode {
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct XrdsSceneMaterialPbrParams {
     pub metallic: f32,
-    pub perceptual_roughness: f32,
+    pub roughness: f32,
     pub reflectance: f32,
     pub double_sided: bool,
     pub alpha_mode: XrdsSceneMaterialAlphaMode,
@@ -348,7 +350,7 @@ impl Default for XrdsSceneMaterialPbrParams {
     fn default() -> Self {
         Self {
             metallic: 0.0,
-            perceptual_roughness: 0.5,
+            roughness: 0.5,
             reflectance: 0.5,
             double_sided: false,
             alpha_mode: XrdsSceneMaterialAlphaMode::Auto,
@@ -561,7 +563,7 @@ impl From<XrdsMaterialPbrParams> for XrdsSceneMaterialPbrParams {
     fn from(value: XrdsMaterialPbrParams) -> Self {
         Self {
             metallic: value.metallic,
-            perceptual_roughness: value.perceptual_roughness,
+            roughness: value.roughness,
             reflectance: value.reflectance,
             double_sided: value.double_sided,
             alpha_mode: value.alpha_mode.into(),
@@ -574,7 +576,7 @@ impl From<XrdsSceneMaterialPbrParams> for XrdsMaterialPbrParams {
     fn from(value: XrdsSceneMaterialPbrParams) -> Self {
         Self {
             metallic: value.metallic,
-            perceptual_roughness: value.perceptual_roughness,
+            roughness: value.roughness,
             reflectance: value.reflectance,
             double_sided: value.double_sided,
             alpha_mode: value.alpha_mode.into(),
@@ -588,7 +590,7 @@ impl From<&XrdsAmbientLight> for XrdsSceneAmbientLight {
         Self {
             color: value.color.rgba,
             brightness: value.brightness,
-            affects_lightmapped_meshes: value.affects_lightmapped_meshes,
+            affects_baked_lighting: value.affects_baked_lighting,
         }
     }
 }
@@ -714,7 +716,7 @@ impl Default for XrdsSceneTetrahedron {
 pub struct XrdsSceneAmbientLight {
     pub color: [f32; 4],
     pub brightness: f32,
-    pub affects_lightmapped_meshes: bool,
+    pub affects_baked_lighting: bool,
 }
 
 impl Default for XrdsSceneAmbientLight {
@@ -722,7 +724,7 @@ impl Default for XrdsSceneAmbientLight {
         Self {
             color: [1.0, 1.0, 1.0, 1.0],
             brightness: 1.0,
-            affects_lightmapped_meshes: false,
+            affects_baked_lighting: false,
         }
     }
 }
@@ -784,6 +786,54 @@ impl Default for XrdsSceneSpotLight {
             inner_angle: 0.0,
             outer_angle: std::f32::consts::FRAC_PI_4,
             shadows: false,
+        }
+    }
+}
+
+/// Authored audio clip node referencing a catalog `Audio` asset.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct XrdsSceneAudioClip {
+    /// Catalog asset id. Must reference an `XrdsSceneAssetKind::Audio` asset.
+    pub asset_id: String,
+    #[serde(default = "default_audio_volume")]
+    pub volume: f32,
+    #[serde(default)]
+    pub looped: bool,
+    /// `true` = 3-D positional audio, `false` = scene-wide ambient.
+    #[serde(default = "default_audio_spatial")]
+    pub spatial: bool,
+    #[serde(default)]
+    pub autoplay: bool,
+}
+
+fn default_audio_volume() -> f32 {
+    1.0
+}
+
+fn default_audio_spatial() -> bool {
+    true
+}
+
+impl Default for XrdsSceneAudioClip {
+    fn default() -> Self {
+        Self {
+            asset_id: String::new(),
+            volume: 1.0,
+            looped: false,
+            spatial: true,
+            autoplay: false,
+        }
+    }
+}
+
+impl From<&XrdsAudioClip> for XrdsSceneAudioClip {
+    fn from(value: &XrdsAudioClip) -> Self {
+        Self {
+            asset_id: value.audio_asset_id.clone(),
+            volume: value.volume,
+            looped: value.looped,
+            spatial: value.spatial,
+            autoplay: value.autoplay,
         }
     }
 }

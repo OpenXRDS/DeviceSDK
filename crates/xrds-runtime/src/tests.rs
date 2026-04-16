@@ -29,7 +29,8 @@ use xrds_scene_graph::{
     XrdsSceneMaterialPbrParams, XrdsSceneMaterialTextureSlots, XrdsSceneMetadata, XrdsSceneNode,
     XrdsSceneNodeId, XrdsSceneNodePayload, XrdsSceneSkyboxEnvironment, XrdsSceneTextureFilterMode,
     XrdsSceneTextureRef, XrdsSceneTextureSamplerParams, XrdsSceneTextureUvParams,
-    XrdsSceneTextureUvTransformMode, XrdsSceneTextureWrapMode, XrdsSceneTransform, XrdsSourceLink,
+    XrdsSceneAudioClip, XrdsSceneTextureUvTransformMode, XrdsSceneTextureWrapMode,
+    XrdsSceneTransform, XrdsSourceLink,
 };
 
 const VALID_GLTF_PATH: &str = "models/TestStatus/EmbeddedTriangle.gltf";
@@ -269,7 +270,7 @@ fn imported_test_document() -> XrdsSceneDocument {
                         },
                         pbr: XrdsSceneMaterialPbrParams {
                             metallic: 0.7,
-                            perceptual_roughness: 0.25,
+                            roughness: 0.25,
                             reflectance: 0.6,
                             double_sided: true,
                             alpha_mode: XrdsSceneMaterialAlphaMode::Mask,

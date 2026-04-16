@@ -110,13 +110,13 @@ impl XrdsSceneDocument {
         })
     }
 
-    pub fn set_node_material_perceptual_roughness(
+    pub fn set_node_material_roughness(
         &mut self,
         node_id: XrdsSceneNodeId,
-        perceptual_roughness: f32,
+        roughness: f32,
     ) -> Result<(), XrdsSceneMaterialWorkflowError> {
         self.update_node_material(node_id, |material| {
-            material.pbr.perceptual_roughness = perceptual_roughness.clamp(0.0, 1.0)
+            material.pbr.roughness = roughness.clamp(0.0, 1.0)
         })
     }
 
@@ -281,7 +281,7 @@ fn normalize_scene_texture_uv(
 
 fn normalize_scene_material_pbr(mut pbr: XrdsSceneMaterialPbrParams) -> XrdsSceneMaterialPbrParams {
     pbr.metallic = pbr.metallic.clamp(0.0, 1.0);
-    pbr.perceptual_roughness = pbr.perceptual_roughness.clamp(0.0, 1.0);
+    pbr.roughness = pbr.roughness.clamp(0.0, 1.0);
     pbr.reflectance = pbr.reflectance.clamp(0.0, 1.0);
     pbr.alpha_cutoff = pbr.alpha_cutoff.clamp(0.0, 1.0);
     pbr

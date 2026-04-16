@@ -137,7 +137,7 @@ fn document_material_workflow_updates_mesh_nodes_and_rejects_materialless_nodes(
                 unlit: false,
                 pbr: XrdsSceneMaterialPbrParams {
                     metallic: 1.4,
-                    perceptual_roughness: -0.2,
+                    roughness: -0.2,
                     reflectance: 1.3,
                     double_sided: false,
                     alpha_mode: XrdsSceneMaterialAlphaMode::Opaque,
@@ -163,7 +163,7 @@ fn document_material_workflow_updates_mesh_nodes_and_rejects_materialless_nodes(
         .set_node_material_metallic(XrdsSceneNodeId(8), 0.85)
         .expect("setting metallic should succeed");
     document
-        .set_node_material_perceptual_roughness(XrdsSceneNodeId(8), 0.18)
+        .set_node_material_roughness(XrdsSceneNodeId(8), 0.18)
         .expect("setting roughness should succeed");
     document
         .set_node_material_reflectance(XrdsSceneNodeId(8), 0.72)
@@ -186,7 +186,7 @@ fn document_material_workflow_updates_mesh_nodes_and_rejects_materialless_nodes(
     assert_eq!(material.opacity, 0.0);
     assert!(material.unlit);
     assert_eq!(material.pbr.metallic, 0.85);
-    assert_eq!(material.pbr.perceptual_roughness, 0.18);
+    assert_eq!(material.pbr.roughness, 0.18);
     assert_eq!(material.pbr.reflectance, 0.72);
     assert!(material.pbr.double_sided);
     assert_eq!(material.pbr.alpha_mode, XrdsSceneMaterialAlphaMode::Mask);

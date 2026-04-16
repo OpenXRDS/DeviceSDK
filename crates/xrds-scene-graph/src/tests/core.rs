@@ -56,7 +56,7 @@ fn cube_descriptor_conversion_preserves_material_override() {
         unlit: true,
         pbr: XrdsMaterialPbrParams {
             metallic: 0.8,
-            perceptual_roughness: 0.2,
+            roughness: 0.2,
             reflectance: 0.65,
             double_sided: true,
             alpha_mode: XrdsMaterialAlphaMode::Mask,
@@ -84,7 +84,7 @@ fn cube_descriptor_conversion_preserves_material_override() {
     assert!(cube_payload.material.unlit);
     assert_eq!(cube_payload.material.base_color, [0.2, 0.4, 0.6, 1.0]);
     assert_eq!(cube_payload.material.pbr.metallic, 0.8);
-    assert_eq!(cube_payload.material.pbr.perceptual_roughness, 0.2);
+    assert_eq!(cube_payload.material.pbr.roughness, 0.2);
     assert_eq!(cube_payload.material.pbr.reflectance, 0.65);
     assert!(cube_payload.material.pbr.double_sided);
     assert_eq!(
@@ -164,7 +164,7 @@ fn runtime_projection_preserves_material_for_mesh_nodes() {
                 unlit: true,
                 pbr: XrdsSceneMaterialPbrParams {
                     metallic: 0.6,
-                    perceptual_roughness: 0.3,
+                    roughness: 0.3,
                     reflectance: 0.7,
                     double_sided: true,
                     alpha_mode: XrdsSceneMaterialAlphaMode::Blend,
@@ -193,7 +193,7 @@ fn runtime_projection_preserves_material_for_mesh_nodes() {
     assert_eq!(material.opacity, 0.7);
     assert!(material.unlit);
     assert_eq!(material.pbr.metallic, 0.6);
-    assert_eq!(material.pbr.perceptual_roughness, 0.3);
+    assert_eq!(material.pbr.roughness, 0.3);
     assert_eq!(material.pbr.reflectance, 0.7);
     assert!(material.pbr.double_sided);
     assert_eq!(material.pbr.alpha_mode, XrdsMaterialAlphaMode::Blend);

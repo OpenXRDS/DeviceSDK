@@ -174,6 +174,34 @@ impl XrdsSceneDocumentSession {
         })
     }
 
+    pub fn register_audio_asset(
+        &mut self,
+        asset_id: impl Into<String>,
+        uri: impl Into<String>,
+    ) -> Result<XrdsSceneAsset, XrdsSceneDocumentEditError> {
+        let asset_id = asset_id.into();
+        let uri = uri.into();
+        self.apply_operation(|document| {
+            document
+                .register_audio_asset(asset_id, uri)
+                .map_err(XrdsSceneDocumentEditError::AssetWorkflow)
+        })
+    }
+
+    pub fn ensure_audio_asset(
+        &mut self,
+        preferred_asset_id: Option<impl Into<String>>,
+        uri: impl Into<String>,
+    ) -> Result<XrdsSceneAssetEnsureResult, XrdsSceneDocumentEditError> {
+        let preferred_asset_id = preferred_asset_id.map(Into::into);
+        let uri = uri.into();
+        self.apply_operation(|document| {
+            document
+                .ensure_audio_asset(preferred_asset_id, uri)
+                .map_err(XrdsSceneDocumentEditError::AssetWorkflow)
+        })
+    }
+
     pub fn ensure_environment_map_asset(
         &mut self,
         preferred_asset_id: Option<impl Into<String>>,
@@ -454,14 +482,14 @@ impl XrdsSceneDocumentSession {
         })
     }
 
-    pub fn set_node_material_perceptual_roughness(
+    pub fn set_node_material_roughness(
         &mut self,
         node_id: XrdsSceneNodeId,
-        perceptual_roughness: f32,
+        roughness: f32,
     ) -> Result<(), XrdsSceneDocumentEditError> {
         self.apply_operation(|document| {
             document
-                .set_node_material_perceptual_roughness(node_id, perceptual_roughness)
+                .set_node_material_roughness(node_id, roughness)
                 .map_err(XrdsSceneDocumentEditError::MaterialWorkflow)
         })
     }

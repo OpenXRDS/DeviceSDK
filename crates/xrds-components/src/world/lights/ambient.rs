@@ -11,7 +11,7 @@ pub struct XrdsAmbientLight {
     pub transform: TransformParams,
     pub color: XrdsColor,
     pub brightness: f32,
-    pub affects_lightmapped_meshes: bool,
+    pub affects_baked_lighting: bool,
 }
 
 impl XrdsAmbientLight {
@@ -23,7 +23,7 @@ impl XrdsAmbientLight {
             transform: TransformParams::default(),
             color: XrdsColor::WHITE,
             brightness: 1.0,
-            affects_lightmapped_meshes: false,
+            affects_baked_lighting: false,
         }
     }
 

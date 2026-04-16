@@ -131,7 +131,7 @@ pub(super) fn runtime_material_from_authored_in_world(
         base: StandardMaterial {
             base_color: base_color.into(),
             emissive: params.emissive.into(),
-            perceptual_roughness: params.pbr.perceptual_roughness.clamp(0.0, 1.0),
+            perceptual_roughness: params.pbr.roughness.clamp(0.0, 1.0),
             metallic: params.pbr.metallic.clamp(0.0, 1.0),
             reflectance: params.pbr.reflectance.clamp(0.0, 1.0),
             double_sided: params.pbr.double_sided,
