@@ -28,24 +28,22 @@ pub(super) type XrdsRuntimeMaterial =
 pub(super) struct XrdsRuntimeMaterialExtension {
     #[uniform(100)]
     pub(super) material_uniform: XrdsRuntimeMaterialExtensionUniform,
+    // All five textures share binding 102 as their sampler to stay within
+    // Metal's hard per-stage limit of 16 samplers (view=6, StandardMaterial=6, here=1 → 13 total).
     #[texture(101)]
     #[sampler(102)]
     #[dependency]
     pub(super) base_color_texture: Option<bevy::asset::Handle<Image>>,
     #[texture(103)]
-    #[sampler(104)]
     #[dependency]
     pub(super) metallic_roughness_texture: Option<bevy::asset::Handle<Image>>,
-    #[texture(105)]
-    #[sampler(106)]
+    #[texture(104)]
     #[dependency]
     pub(super) normal_texture: Option<bevy::asset::Handle<Image>>,
-    #[texture(107)]
-    #[sampler(108)]
+    #[texture(105)]
     #[dependency]
     pub(super) occlusion_texture: Option<bevy::asset::Handle<Image>>,
-    #[texture(109)]
-    #[sampler(110)]
+    #[texture(106)]
     #[dependency]
     pub(super) emissive_texture: Option<bevy::asset::Handle<Image>>,
 }

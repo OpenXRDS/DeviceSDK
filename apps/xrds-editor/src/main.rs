@@ -53,10 +53,10 @@ use xrds::editor::{
 
 
 use xrds::scene_graph::{
-    XrdsEditorMetadata, XrdsSceneDirectionalLight, XrdsSceneDocument, XrdsSceneEnvironment,
-    XrdsSceneMaterial, XrdsSceneMaterialPbrParams, XrdsSceneMetadata, XrdsSceneNode,
-    XrdsPlayerLocomotionMode, XrdsSceneNodeId, XrdsSceneNodePayload, XrdsSceneSphere,
-    XrdsSceneTransform,
+    XrdsEditorMetadata, XrdsSceneDirectionalLight, XrdsSceneDocument, XrdsSceneDocumentSession,
+    XrdsSceneEnvironment, XrdsSceneMaterial, XrdsSceneMaterialPbrParams, XrdsSceneMetadata,
+    XrdsSceneNode, XrdsPlayerLocomotionMode, XrdsSceneNodeId, XrdsSceneNodePayload,
+    XrdsSceneSphere, XrdsSceneTransform, XrdsSceneMaterialTextureSlotKind,
 };
 use xrds::sdk::world::XrdsGltfAsset; // needed for handle_of::<XrdsGltfAsset> turbofish
 use xrds::{
@@ -227,6 +227,296 @@ impl XrdsApp for XrdsEditorApp {
                         Err(_) => {
                             state.status_message = Some("Build thread panicked".into());
                         }
+                    }
+                }
+            }
+        }
+
+        // ── Poll export-app folder picker (non-blocking channel check) ───────
+        // The folder dialog runs on a background thread; we try_recv each frame.
+        // When a path arrives we call do_export_app and kick off the cargo build.
+        let pending_result: Option<(std::path::PathBuf, xrds::scene_graph::XrdsSceneDocument, Option<std::path::PathBuf>)> = {
+            let mut took = None;
+            if let Some(mut state) = ctx.resource_mut::<EditorState>() {
+                if state.export_app_pending.is_some() {
+                    let result = state.export_app_pending.as_ref().unwrap().rx.lock().unwrap().try_recv();
+                    match result {
+                        Ok(Some(out_dir)) => {
+                            if let Some(p) = state.export_app_pending.take() {
+                                took = Some((out_dir, p.doc, p.save_path));
+                            }
+                        }
+                        Ok(None) => {
+                            state.export_app_pending = None;
+                            state.status_message = Some("Export cancelled.".into());
+                        }
+                        Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                        Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                            state.export_app_pending = None;
+                            state.status_message = Some("Folder picker closed unexpectedly.".into());
+                        }
+                    }
+                }
+            }
+            took
+        };
+        if let Some((out_dir, doc, save_path)) = pending_result {
+            match crate::io::do_export_app(&doc, save_path.as_deref(), &out_dir) {
+                Ok(()) => {
+                    let build_dir = out_dir.clone();
+                    let handle = std::thread::spawn(move || {
+                        std::process::Command::new("cargo")
+                            .args(["build", "--release"])
+                            .current_dir(&build_dir)
+                            .status()
+                            .map_err(|e| format!("Could not start cargo: {e}"))
+                            .and_then(|s| {
+                                if s.success() {
+                                    Ok(())
+                                } else {
+                                    Err(format!("cargo build --release failed (exit {:?})", s.code()))
+                                }
+                            })
+                    });
+                    if let Some(mut state) = ctx.resource_mut::<EditorState>() {
+                        state.build_job = Some(crate::state::BuildJob { handle, out_dir });
+                        state.status_message = Some(
+                            "Building… (first build takes a few minutes — status updates when done)".into(),
+                        );
+                    }
+                }
+                Err(e) => {
+                    if let Some(mut state) = ctx.resource_mut::<EditorState>() {
+                        state.status_message = Some(format!("App export failed: {e}"));
+                    }
+                }
+            }
+        }
+
+        // ── Poll general file dialog (import / save / load / export-glb) ────────
+        {
+            use crate::state::PendingFileOpKind;
+            use xrds::scene_graph::XrdsSceneAssetKind;
+
+            // Step 1: try_recv without holding the state borrow longer than needed.
+            let dialog_result: Option<(Option<std::path::PathBuf>, PendingFileOpKind)> = {
+                let mut took = None;
+                if let Some(mut state) = ctx.resource_mut::<EditorState>() {
+                    if state.pending_file_dialog.is_some() {
+                        let recv = state.pending_file_dialog.as_ref().unwrap()
+                            .rx.lock().unwrap().try_recv();
+                        match recv {
+                            Ok(path_opt) => {
+                                if let Some(pending) = state.pending_file_dialog.take() {
+                                    took = Some((path_opt, pending.op));
+                                }
+                            }
+                            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                                state.pending_file_dialog = None;
+                                state.status_message = Some("File picker closed unexpectedly.".into());
+                            }
+                        }
+                    }
+                }
+                took
+            };
+
+            if let Some((Some(path), op)) = dialog_result {
+                match op {
+                    // ── ImportAsset ─────────────────────────────────────────────
+                    PendingFileOpKind::ImportAsset => {
+                        let ext = path.extension()
+                            .and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+                        let stem = path.file_stem()
+                            .and_then(|s| s.to_str()).unwrap_or("asset").to_owned();
+                        let preferred_id = format!("asset:{stem}");
+                        let kind = crate::io::detect_kind(&ext);
+
+                        let result = ctx.resource_mut::<EditorSession>().map(|mut session| {
+                            let save_path = session.session.save_path().map(|p| p.to_path_buf());
+                            let uri = crate::io::scene_relative_uri(&path, save_path.as_deref());
+                            let save_note = if save_path.is_none() {
+                                "  (save the scene to make URIs relative)"
+                            } else { "" };
+                            let r = match kind {
+                                XrdsSceneAssetKind::Gltf =>
+                                    session.session.ensure_gltf_asset(Some(&preferred_id), &uri)
+                                        .map(|r| (r.asset.id.clone(), r.created)),
+                                XrdsSceneAssetKind::Texture =>
+                                    session.session.ensure_texture_asset(Some(&preferred_id), &uri)
+                                        .map(|r| (r.asset.id.clone(), r.created)),
+                                XrdsSceneAssetKind::EnvironmentMap =>
+                                    session.session.ensure_environment_map_asset(Some(&preferred_id), &uri)
+                                        .map(|r| (r.asset.id.clone(), r.created)),
+                                XrdsSceneAssetKind::Audio =>
+                                    session.session.ensure_audio_asset(Some(&preferred_id), &uri)
+                                        .map(|r| (r.asset.id.clone(), r.created)),
+                            };
+                            (r, uri, save_note)
+                        });
+                        if let Some((r, uri, save_note)) = result {
+                            if let Some(mut state) = ctx.resource_mut::<EditorState>() {
+                                match r {
+                                    Ok((id, true)) => {
+                                        state.status_message = Some(format!("Imported: {id}  ({uri}){save_note}"));
+                                        state.palette_tab = 1;
+                                    }
+                                    Ok((id, false)) => {
+                                        state.status_message = Some(format!("Already in catalog: {id}  ({uri})"));
+                                        state.palette_tab = 1;
+                                    }
+                                    Err(e) => {
+                                        state.status_message = Some(format!("Import failed: {e:?}"));
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // ── OpenScene ───────────────────────────────────────────────
+                    PendingFileOpKind::OpenScene => {
+                        let filename = path.file_name()
+                            .map(|n| n.to_string_lossy().into_owned())
+                            .unwrap_or_default();
+                        let load_result = XrdsSceneDocumentSession::load_json(&path);
+                        let msg = match load_result {
+                            Ok(new_session) => {
+                                ctx.resource_mut::<EditorSession>()
+                                    .map(|mut s| s.session = new_session);
+                                format!("Loaded: {filename}")
+                            }
+                            Err(e) => format!("Load failed: {e:?}"),
+                        };
+                        if let Some(mut state) = ctx.resource_mut::<EditorState>() {
+                            state.selection.clear();
+                            state.editing_name = None;
+                            state.clear_pending_translations();
+                            state.clear_pending_rotations();
+                            state.pending_scale = None;
+                            state.pending_material = None;
+                            state.pending_visible = None;
+                            state.gizmo_drag = None;
+                            state.needs_runtime_sync = true;
+                            state.status_message = Some(msg);
+                        }
+                    }
+
+                    // ── SaveSceneAs ─────────────────────────────────────────────
+                    PendingFileOpKind::SaveSceneAs => {
+                        let filename = path.file_name()
+                            .map(|n| n.to_string_lossy().into_owned())
+                            .unwrap_or_default();
+                        let msg = ctx.resource_mut::<EditorSession>()
+                            .map(|mut s| match s.session.save_as(&path) {
+                                Ok(_) => format!("Saved: {filename}"),
+                                Err(e) => format!("Save failed: {e:?}"),
+                            })
+                            .unwrap_or_else(|| "Save failed: no session".into());
+                        if let Some(mut state) = ctx.resource_mut::<EditorState>() {
+                            state.status_message = Some(msg);
+                        }
+                    }
+
+                    // ── ExportGlb ───────────────────────────────────────────────
+                    PendingFileOpKind::ExportGlb => {
+                        let doc = ctx.resource::<EditorSession>().map(|s| s.document().clone());
+                        let msg = if let Some(doc) = doc {
+                            match xrds_gltf::export_glb(&doc) {
+                                Ok(bytes) => match std::fs::write(&path, &bytes) {
+                                    Ok(_) => format!(
+                                        "Exported: {}  ({} KB)",
+                                        path.file_name().unwrap_or_default().to_string_lossy(),
+                                        bytes.len() / 1024
+                                    ),
+                                    Err(e) => format!("Write failed: {e}"),
+                                },
+                                Err(e) => format!("GLB export failed: {e}"),
+                            }
+                        } else {
+                            "Export failed: no session".into()
+                        };
+                        if let Some(mut state) = ctx.resource_mut::<EditorState>() {
+                            state.status_message = Some(msg);
+                        }
+                    }
+
+                    // ── ExportGlbSelectionCopy ──────────────────────────────────
+                    PendingFileOpKind::ExportGlbSelectionCopy { source } => {
+                        let msg = match std::fs::copy(&source, &path) {
+                            Ok(bytes) => format!(
+                                "Exported: {}  ({} KB)",
+                                path.file_name().unwrap_or_default().to_string_lossy(),
+                                bytes / 1024
+                            ),
+                            Err(e) => format!("Export failed: {e}"),
+                        };
+                        if let Some(mut state) = ctx.resource_mut::<EditorState>() {
+                            state.status_message = Some(msg);
+                        }
+                    }
+
+                    // ── PickTexture (inspector material slot) ───────────────────
+                    PendingFileOpKind::PickTexture { node_id, slot_kind } => {
+                        use xrds::scene_graph::XrdsSceneTextureRef;
+                        let stem = path.file_stem()
+                            .and_then(|s| s.to_str()).unwrap_or("texture").to_owned();
+                        let preferred_id = format!("asset:{stem}");
+                        let result = ctx.resource_mut::<EditorSession>().map(|mut session| {
+                            let save_path = session.session.save_path().map(|p| p.to_path_buf());
+                            let uri = crate::io::scene_relative_uri(&path, save_path.as_deref());
+                            session.session
+                                .ensure_texture_asset(Some(&preferred_id), &uri)
+                                .ok()
+                                .map(|r| {
+                                    let asset_id = r.asset.id.clone();
+                                    let _ = session.session.set_node_material_texture(
+                                        node_id,
+                                        slot_kind,
+                                        Some(XrdsSceneTextureRef {
+                                            texture_asset_id: asset_id,
+                                            uv: Default::default(),
+                                            sampler: Default::default(),
+                                        }),
+                                    );
+                                })
+                        });
+                        if result.is_some() {
+                            if let Some(mut state) = ctx.resource_mut::<EditorState>() {
+                                state.needs_full_reimport = true;
+                            }
+                        }
+                    }
+
+                    // ── ExportGlbSelectionExport ────────────────────────────────
+                    PendingFileOpKind::ExportGlbSelectionExport { node_id } => {
+                        let subtree = ctx.resource::<EditorSession>()
+                            .and_then(|s| s.document().subtree_document(node_id));
+                        let msg = if let Some(subtree) = subtree {
+                            match xrds_gltf::export_glb(&subtree) {
+                                Ok(bytes) => match std::fs::write(&path, &bytes) {
+                                    Ok(_) => format!(
+                                        "Exported selection: {}  ({} KB)",
+                                        path.file_name().unwrap_or_default().to_string_lossy(),
+                                        bytes.len() / 1024
+                                    ),
+                                    Err(e) => format!("Write failed: {e}"),
+                                },
+                                Err(e) => format!("GLB export failed: {e}"),
+                            }
+                        } else {
+                            "Export failed: node not found".into()
+                        };
+                        if let Some(mut state) = ctx.resource_mut::<EditorState>() {
+                            state.status_message = Some(msg);
+                        }
+                    }
+                }
+            } else if let Some((None, _op)) = dialog_result {
+                // User cancelled — clear any "Choose a file…" status message.
+                if let Some(mut state) = ctx.resource_mut::<EditorState>() {
+                    if matches!(state.status_message.as_deref(), Some("Choose an asset file…") | Some("Choose a file…")) {
+                        state.status_message = None;
                     }
                 }
             }

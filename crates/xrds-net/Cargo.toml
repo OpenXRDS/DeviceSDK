@@ -38,7 +38,7 @@ rumqttc = "0.24.0"                                       # mqtt
 quiche = "0.24.6"                                        # quic / http3
 webrtc = "0.12.0"                                        # webRTC
 image = { version = "0.25" }
-ffmpeg-next = { version = "8.0.0" }                      # video processing
+ffmpeg-next = { version = "8.1.0" }                      # video processing
 
 rustls = { version = "0.23.10", default-features = false, features = [
     "std",

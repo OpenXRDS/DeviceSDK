@@ -33,11 +33,9 @@ var<uniform> xrds_runtime_material: XrdsRuntimeMaterialExtensionUniform;
 @group(#{MATERIAL_BIND_GROUP}) @binding(101)
 var base_color_texture: texture_2d<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(102)
-var base_color_sampler: sampler;
-@group(#{MATERIAL_BIND_GROUP}) @binding(105)
+var textures_sampler: sampler;
+@group(#{MATERIAL_BIND_GROUP}) @binding(104)
 var normal_texture: texture_2d<f32>;
-@group(#{MATERIAL_BIND_GROUP}) @binding(106)
-var normal_sampler: sampler;
 
 fn xrds_has_texture(flag: u32) -> bool {
     return (xrds_runtime_material.flags & flag) != 0u;
@@ -74,7 +72,7 @@ fn xrds_apply_extension(
     if xrds_has_texture(XRDS_TEXTURE_FLAG_BASE_COLOR) {
         pbr_input.material.base_color *= textureSampleBias(
             base_color_texture,
-            base_color_sampler,
+            textures_sampler,
             xrds_slot_uv(xrds_runtime_material.base_color, in),
             bias.mip_bias,
         );
@@ -90,7 +88,7 @@ fn xrds_apply_extension(
         );
         let sampled_normal = textureSampleBias(
             normal_texture,
-            normal_sampler,
+            textures_sampler,
             xrds_slot_uv(xrds_runtime_material.normal, in),
             bias.mip_bias,
         ).rgb;

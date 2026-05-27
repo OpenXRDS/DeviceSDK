@@ -1,7 +1,10 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use xrds::editor::{bevy_ecs, Entity, Resource};
-use xrds::scene_graph::{XrdsSceneDocument, XrdsSceneDocumentSession, XrdsSceneNode, XrdsSceneNodeId};
+use xrds::scene_graph::{
+    XrdsSceneDocument, XrdsSceneDocumentSession, XrdsSceneMaterialTextureSlotKind,
+    XrdsSceneNode, XrdsSceneNodeId,
+};
 use xrds::sdk::XrdsMaterialParams;
 pub use xrds::{XrdsAnimationRepeatMode, XrdsGltfAnimationState};
 
@@ -11,6 +14,45 @@ pub use xrds::{XrdsAnimationRepeatMode, XrdsGltfAnimationState};
 pub struct BuildJob {
     pub handle: std::thread::JoinHandle<Result<(), String>>,
     pub out_dir: PathBuf,
+}
+
+// ── PendingFileDialog ─────────────────────────────────────────────────────────
+
+/// All `rfd::FileDialog` calls from within Bevy ECS systems use a background
+/// thread + channel to avoid the `dispatch_sync` deadlock on macOS (the dialog
+/// posts work to the main queue, which is blocked waiting for ECS to finish).
+///
+/// One dialog may be in-flight at a time.  The `op` field records what to do
+/// when the path arrives; all processing happens in `XrdsEditorApp::update`.
+
+#[derive(Debug)]
+pub enum PendingFileOpKind {
+    ImportAsset,
+    OpenScene,
+    SaveSceneAs,
+    ExportGlb,
+    ExportGlbSelectionCopy { source: PathBuf },
+    ExportGlbSelectionExport { node_id: XrdsSceneNodeId },
+    /// Inspector material panel — "…" pick-texture button.
+    PickTexture { node_id: XrdsSceneNodeId, slot_kind: XrdsSceneMaterialTextureSlotKind },
+}
+
+pub struct PendingFileDialog {
+    /// Receiver is `Send` but not `Sync`; Mutex satisfies `Resource: Sync`.
+    pub rx: std::sync::Mutex<std::sync::mpsc::Receiver<Option<PathBuf>>>,
+    pub op: PendingFileOpKind,
+}
+
+// ── ExportAppPending ──────────────────────────────────────────────────────────
+
+/// Holds the folder-picker channel and a snapshot of the scene taken at click
+/// time.  Separate from `PendingFileDialog` because `pick_folder` is a
+/// folder-only dialog and carries additional state (doc + save_path).
+pub struct ExportAppPending {
+    /// Receiver is `Send` but not `Sync`; the Mutex satisfies `Resource: Sync`.
+    pub rx: std::sync::Mutex<std::sync::mpsc::Receiver<Option<PathBuf>>>,
+    pub doc: XrdsSceneDocument,
+    pub save_path: Option<PathBuf>,
 }
 
 // ── GltfClipInfo ──────────────────────────────────────────────────────────────
@@ -254,8 +296,12 @@ pub struct EditorState {
     // ── SVG icon cache ────────────────────────────────────────────────────────
     pub icon_cache: crate::icon::SvgIconCache,
 
+    // ── Pending file dialog (import / save / load / export) ──────────────────
+    pub pending_file_dialog: Option<PendingFileDialog>,
+
     // ── Background build job (Export as Application) ──────────────────────────
     pub build_job: Option<BuildJob>,
+    pub export_app_pending: Option<ExportAppPending>,
 
     // ── Template picker (New Scene dialog) ───────────────────────────────────
     pub show_template_picker: bool,
@@ -313,7 +359,9 @@ impl Default for EditorState {
             perf_stats: PerfStats::default(),
             show_perf_stats: false,
             icon_cache: crate::icon::SvgIconCache::new(),
+            pending_file_dialog: None,
             build_job: None,
+            export_app_pending: None,
             show_template_picker: false,
             template_picker_selection: "empty",
         }

@@ -9,8 +9,8 @@ use xrds::scene_graph::{
 use xrds::sdk::{XrdsMaterialAlphaMode as SdkAlphaMode, XrdsMaterialParams, XrdsMaterialPbrParams};
 use xrds::XrdsAnimationRepeatMode;
 
-use crate::io::scene_relative_uri;
-use crate::state::{EditorSession, EditorState};
+use crate::io::{scene_relative_uri, spawn_file_dialog};
+use crate::state::{EditorSession, EditorState, PendingFileOpKind};
 
 pub fn inspector_panel(
     ctx: &mut egui::Context,
@@ -1228,34 +1228,18 @@ fn texture_slots_section(
                         editor_state.needs_full_reimport = true;
                     }
                 }
-                // Pick button.
+                // Pick button — queues a background dialog to avoid dispatch_sync deadlock on macOS.
                 if ui.small_button("…").on_hover_text("Pick texture file").clicked() {
-                    if let Some(path) = rfd::FileDialog::new()
-                        .add_filter("Textures", &["png", "jpg", "jpeg", "ktx2", "dds"])
-                        .set_title(format!("Pick texture — {slot_label}"))
-                        .pick_file()
-                    {
-                        let uri = scene_relative_uri(&path, session.session.save_path());
-                        let stem = path.file_stem()
-                            .and_then(|s| s.to_str())
-                            .unwrap_or("texture");
-                        let preferred_id = format!("asset:{stem}");
-                        if let Ok(result) = session.session
-                            .ensure_texture_asset(Some(&preferred_id), &uri)
-                        {
-                            let asset_id = result.asset.id.clone();
-                            let _ = session.session.set_node_material_texture(
-                                node_id,
-                                *slot_kind,
-                                Some(XrdsSceneTextureRef {
-                                    texture_asset_id: asset_id,
-                                    uv: Default::default(),
-                                    sampler: Default::default(),
-                                }),
-                            );
-                            editor_state.needs_full_reimport = true;
-                        }
-                    }
+                    let title = format!("Pick texture — {slot_label}");
+                    spawn_file_dialog(editor_state, PendingFileOpKind::PickTexture {
+                        node_id,
+                        slot_kind: *slot_kind,
+                    }, move || {
+                        rfd::FileDialog::new()
+                            .add_filter("Textures", &["png", "jpg", "jpeg", "ktx2", "dds"])
+                            .set_title(title)
+                            .pick_file()
+                    });
                 }
                 // Current assignment label — filename from URI, or dash.
                 let label = current_ref.as_ref()

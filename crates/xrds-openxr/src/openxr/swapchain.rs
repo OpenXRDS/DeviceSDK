@@ -124,7 +124,17 @@ fn create_swapchain(world: &mut World) {
                 .collect();
             info!("Available swapchain formats: {:?}", swapchain_formats);
 
-            let swapchain_format = wgpu::TextureFormat::Rgba8UnormSrgb;  // TODO: Select format from list. Prior Srgb
+            let preferred = [
+                wgpu::TextureFormat::Rgba8UnormSrgb,
+                wgpu::TextureFormat::Bgra8UnormSrgb,
+                wgpu::TextureFormat::Rgba8Unorm,
+                wgpu::TextureFormat::Bgra8Unorm,
+            ];
+            let swapchain_format = preferred
+                .iter()
+                .find(|f| swapchain_formats.contains(f))
+                .copied()
+                .unwrap_or(swapchain_formats[0]);
             info!("Selected swapchain format: {:?}", swapchain_format);
             let swapchain_create_info = graphics_backends.get_swapchain_create_info(swapchain_format, size, sample_count)
                 .expect("Could not get swapchain create info");

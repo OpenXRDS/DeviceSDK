@@ -42,23 +42,15 @@ var<uniform> xrds_runtime_material: XrdsRuntimeMaterialExtensionUniform;
 @group(#{MATERIAL_BIND_GROUP}) @binding(101)
 var base_color_texture: texture_2d<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(102)
-var base_color_sampler: sampler;
+var textures_sampler: sampler;
 @group(#{MATERIAL_BIND_GROUP}) @binding(103)
 var metallic_roughness_texture: texture_2d<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(104)
-var metallic_roughness_sampler: sampler;
-@group(#{MATERIAL_BIND_GROUP}) @binding(105)
 var normal_texture: texture_2d<f32>;
-@group(#{MATERIAL_BIND_GROUP}) @binding(106)
-var normal_sampler: sampler;
-@group(#{MATERIAL_BIND_GROUP}) @binding(107)
+@group(#{MATERIAL_BIND_GROUP}) @binding(105)
 var occlusion_texture: texture_2d<f32>;
-@group(#{MATERIAL_BIND_GROUP}) @binding(108)
-var occlusion_sampler: sampler;
-@group(#{MATERIAL_BIND_GROUP}) @binding(109)
+@group(#{MATERIAL_BIND_GROUP}) @binding(106)
 var emissive_texture: texture_2d<f32>;
-@group(#{MATERIAL_BIND_GROUP}) @binding(110)
-var emissive_sampler: sampler;
 
 fn xrds_has_texture(flag: u32) -> bool {
     return (xrds_runtime_material.flags & flag) != 0u;
@@ -95,7 +87,7 @@ fn xrds_apply_extension(
     if xrds_has_texture(XRDS_TEXTURE_FLAG_BASE_COLOR) {
         pbr_input.material.base_color *= textureSampleBias(
             base_color_texture,
-            base_color_sampler,
+            textures_sampler,
             xrds_slot_uv(xrds_runtime_material.base_color, in),
             bias.mip_bias,
         );
@@ -106,7 +98,7 @@ fn xrds_apply_extension(
             pbr_input.material.emissive.rgb
                 * textureSampleBias(
                     emissive_texture,
-                    emissive_sampler,
+                    textures_sampler,
                     xrds_slot_uv(xrds_runtime_material.emissive, in),
                     bias.mip_bias,
                 ).rgb,
@@ -117,7 +109,7 @@ fn xrds_apply_extension(
     if xrds_has_texture(XRDS_TEXTURE_FLAG_METALLIC_ROUGHNESS) {
         let metallic_roughness = textureSampleBias(
             metallic_roughness_texture,
-            metallic_roughness_sampler,
+            textures_sampler,
             xrds_slot_uv(xrds_runtime_material.metallic_roughness, in),
             bias.mip_bias,
         );
@@ -128,7 +120,7 @@ fn xrds_apply_extension(
     if xrds_has_texture(XRDS_TEXTURE_FLAG_OCCLUSION) {
         pbr_input.diffuse_occlusion *= textureSampleBias(
             occlusion_texture,
-            occlusion_sampler,
+            textures_sampler,
             xrds_slot_uv(xrds_runtime_material.occlusion, in),
             bias.mip_bias,
         ).r;
@@ -144,7 +136,7 @@ fn xrds_apply_extension(
         );
         let sampled_normal = textureSampleBias(
             normal_texture,
-            normal_sampler,
+            textures_sampler,
             xrds_slot_uv(xrds_runtime_material.normal, in),
             bias.mip_bias,
         ).rgb;

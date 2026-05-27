@@ -12,13 +12,31 @@ use xrds::scene_graph::{
     XRDS_SCENE_DOCUMENT_VERSION,
 };
 
-use crate::state::{BuildJob, EditorSession, EditorState};
+use crate::state::{EditorSession, EditorState, ExportAppPending, PendingFileDialog, PendingFileOpKind};
 
 // Baked in at compile time: <sdk>/apps/xrds-editor
 const EDITOR_MANIFEST_DIR: &str = env!("CARGO_MANIFEST_DIR");
 
 const XRDS_EXTENSION: &str = "xrds";
 const XRDS_FILTER_NAME: &str = "XRDS Scene";
+
+// ── Helper: spawn a file-dialog thread and store a PendingFileDialog ─────────
+
+pub(crate) fn spawn_file_dialog(
+    state: &mut EditorState,
+    op: PendingFileOpKind,
+    builder: impl FnOnce() -> Option<PathBuf> + Send + 'static,
+) {
+    if state.pending_file_dialog.is_some() {
+        return; // another dialog already in flight
+    }
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || { let _ = tx.send(builder()); });
+    state.pending_file_dialog = Some(PendingFileDialog {
+        rx: std::sync::Mutex::new(rx),
+        op,
+    });
+}
 
 // ── Public entry points ───────────────────────────────────────────────────────
 
@@ -34,52 +52,40 @@ pub fn save(session: &mut EditorSession, state: &mut EditorState) {
     }
 }
 
-/// Always open a Save As dialog.
+/// Queue a Save As dialog; actual save happens in `XrdsEditorApp::update` when
+/// the path arrives through the channel.
 pub fn save_as(session: &mut EditorSession, state: &mut EditorState) {
-    let Some(path) = save_dialog(session) else {
-        return; // user cancelled
-    };
-    match session.session.save_as(&path) {
-        Ok(_) => {
-            state.status_message = Some(format!(
-                "Saved: {}",
-                path.file_name().unwrap_or_default().to_string_lossy()
-            ));
-        }
-        Err(e) => state.status_message = Some(format!("Save failed: {e:?}")),
-    }
+    let dir = session.session.save_path()
+        .and_then(|p| p.parent())
+        .map(|p| p.to_path_buf());
+    let filename = session.session.save_path()
+        .and_then(|p| p.file_name())
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| {
+            let name = &session.document().metadata.name;
+            if name.is_empty() { "untitled.xrds".to_string() } else { format!("{name}.xrds") }
+        });
+
+    spawn_file_dialog(state, PendingFileOpKind::SaveSceneAs, move || {
+        let mut dialog = rfd::FileDialog::new()
+            .add_filter(XRDS_FILTER_NAME, &[XRDS_EXTENSION])
+            .set_title("Save Scene As")
+            .set_file_name(&filename);
+        if let Some(d) = dir { dialog = dialog.set_directory(d); }
+        let mut path = dialog.save_file()?;
+        if path.extension().is_none() { path.set_extension(XRDS_EXTENSION); }
+        Some(path)
+    });
 }
 
-/// Open a file dialog and load a `.xrds` scene.
-/// Replaces the running session.  Triggers a runtime sync to apply
-/// transforms / visibility to live entities.  Geometry changes (e.g. a sphere
-/// with a different radius) and added / removed nodes require a restart.
-pub fn load(session: &mut EditorSession, state: &mut EditorState) {
-    let Some(path) = open_dialog() else {
-        return; // user cancelled
-    };
-
-    match XrdsSceneDocumentSession::load_json(&path) {
-        Ok(new_session) => {
-            session.session = new_session;
-            state.selection.clear();
-            state.editing_name = None;
-            state.clear_pending_translations();
-            state.clear_pending_rotations();
-            state.pending_scale = None;
-            state.pending_material = None;
-            state.pending_visible = None;
-            state.gizmo_drag = None;
-            state.needs_runtime_sync = true;
-            state.status_message = Some(format!(
-                "Loaded: {}",
-                path.file_name().unwrap_or_default().to_string_lossy()
-            ));
-        }
-        Err(e) => {
-            state.status_message = Some(format!("Load failed: {e:?}"));
-        }
-    }
+/// Queue an Open dialog; session replacement happens in `XrdsEditorApp::update`.
+pub fn load(_session: &mut EditorSession, state: &mut EditorState) {
+    spawn_file_dialog(state, PendingFileOpKind::OpenScene, || {
+        rfd::FileDialog::new()
+            .add_filter(XRDS_FILTER_NAME, &[XRDS_EXTENSION])
+            .set_title("Open Scene")
+            .pick_file()
+    });
 }
 
 /// Open the template picker dialog — actual scene creation happens in `apply_template`.
@@ -113,97 +119,33 @@ pub fn apply_template(session: &mut EditorSession, state: &mut EditorState, doc:
 
 // ── Asset import ─────────────────────────────────────────────────────────────
 
-/// Open a file picker, detect the asset kind from the extension, compute a
-/// scene-relative URI, and register the asset in the catalog via `ensure_*_asset`.
-///
-/// Uses `ensure_*` (not `register_*`) so that importing a file whose id already
-/// exists in the catalog quietly returns the existing asset instead of erroring.
-pub fn import_asset(session: &mut EditorSession, state: &mut EditorState) {
-    // Single dialog accepting all supported asset types.
-    let Some(path) = rfd::FileDialog::new()
-        .add_filter("All Supported", &[
-            "gltf","glb",
-            "png","jpg","jpeg","ktx2","dds",
-            "exr","hdr",
-            "mp3","ogg","wav","flac",
-        ])
-        .add_filter("glTF / GLB",      &["gltf","glb"])
-        .add_filter("Textures",        &["png","jpg","jpeg","ktx2","dds"])
-        .add_filter("Environment Maps",&["exr","hdr","ktx2","dds"])
-        .add_filter("Audio",           &["mp3","ogg","wav","flac"])
-        .set_title("Import Asset")
-        .pick_file()
-    else {
-        return; // user cancelled
-    };
-
-    // Detect kind from extension.
-    let ext = path.extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("")
-        .to_lowercase();
-
-    let kind = detect_kind(&ext);
-
-    // Compute URI: relative to scene save directory if possible, absolute otherwise.
-    let uri = scene_relative_uri(&path, session.session.save_path());
-    let save_note = if session.session.save_path().is_none() {
-        "  (save the scene to make URIs relative)"
-    } else {
-        ""
-    };
-
-    // Preferred asset id from filename stem: "asset:{stem}".
-    let stem = path.file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("asset");
-    let preferred_id = format!("asset:{stem}");
-
-    // Register via ensure_* — handles id conflicts automatically.
-    let result = match kind {
-        XrdsSceneAssetKind::Gltf =>
-            session.session.ensure_gltf_asset(Some(&preferred_id), &uri)
-                .map(|r| (r.asset.id.clone(), r.created)),
-        XrdsSceneAssetKind::Texture =>
-            session.session.ensure_texture_asset(Some(&preferred_id), &uri)
-                .map(|r| (r.asset.id.clone(), r.created)),
-        XrdsSceneAssetKind::EnvironmentMap =>
-            session.session.ensure_environment_map_asset(Some(&preferred_id), &uri)
-                .map(|r| (r.asset.id.clone(), r.created)),
-        XrdsSceneAssetKind::Audio =>
-            session.session.ensure_audio_asset(Some(&preferred_id), &uri)
-                .map(|r| (r.asset.id.clone(), r.created)),
-    };
-
-    match result {
-        Ok((id, true)) => {
-            state.status_message = Some(format!(
-                "Imported: {id}  ({uri}){save_note}"
-            ));
-            // Switch to project-assets tab so the user sees the new entry.
-            state.palette_tab = 1;
-        }
-        Ok((id, false)) => {
-            state.status_message = Some(format!(
-                "Already in catalog: {id}  ({uri})"
-            ));
-            state.palette_tab = 1;
-        }
-        Err(e) => {
-            state.status_message = Some(format!("Import failed: {e:?}"));
-        }
-    }
+/// Queue an asset-import file picker; actual registration happens in
+/// `XrdsEditorApp::update` when the path arrives through the channel.
+pub fn import_asset(_session: &mut EditorSession, state: &mut EditorState) {
+    spawn_file_dialog(state, PendingFileOpKind::ImportAsset, || {
+        rfd::FileDialog::new()
+            .add_filter("All Supported", &[
+                "gltf","glb",
+                "png","jpg","jpeg","ktx2","dds",
+                "exr","hdr",
+                "mp3","ogg","wav","flac",
+            ])
+            .add_filter("glTF / GLB",       &["gltf","glb"])
+            .add_filter("Textures",         &["png","jpg","jpeg","ktx2","dds"])
+            .add_filter("Environment Maps", &["exr","hdr","ktx2","dds"])
+            .add_filter("Audio",            &["mp3","ogg","wav","flac"])
+            .set_title("Import Asset")
+            .pick_file()
+    });
 }
 
-/// Detect asset kind from a file extension.
-fn detect_kind(ext: &str) -> XrdsSceneAssetKind {
+/// Detect asset kind from a file extension (pub(crate) for use in update()).
+pub(crate) fn detect_kind(ext: &str) -> XrdsSceneAssetKind {
     match ext {
-        "gltf" | "glb"                => XrdsSceneAssetKind::Gltf,
-        "exr"  | "hdr"                => XrdsSceneAssetKind::EnvironmentMap,
-        "mp3"  | "ogg" | "wav" | "flac" => XrdsSceneAssetKind::Audio,
-        // png/jpg/jpeg/ktx2/dds → Texture by default;
-        // ktx2/dds could also be EnvironmentMap but Texture is more common.
-        _                             => XrdsSceneAssetKind::Texture,
+        "gltf" | "glb"                   => XrdsSceneAssetKind::Gltf,
+        "exr"  | "hdr"                   => XrdsSceneAssetKind::EnvironmentMap,
+        "mp3"  | "ogg" | "wav" | "flac"  => XrdsSceneAssetKind::Audio,
+        _                                => XrdsSceneAssetKind::Texture,
     }
 }
 
@@ -247,17 +189,19 @@ fn relative_from(target: &Path, base: &Path) -> Option<PathBuf> {
     if rel.as_os_str().is_empty() { None } else { Some(rel) }
 }
 
-/// Export the selected node and its full subtree to a glTF/GLB file.
+/// Queue an export-selection dialog; processing happens in `XrdsEditorApp::update`.
 ///
-/// For `GltfAsset` nodes the xrds-gltf exporter only stores a URI reference —
-/// no mesh data is embedded. Those nodes are handled by copying the original
-/// source file directly, which preserves all geometry and textures.
-/// Primitive/light/camera nodes are exported via the normal xrds-gltf path.
+/// For `GltfAsset` nodes the original file is copied directly (preserving all
+/// geometry and textures); for primitive/light/camera nodes the xrds-gltf
+/// exporter builds a GLB from the subtree document.
 pub fn export_glb_selection(session: &EditorSession, state: &mut EditorState) {
     let Some(selected_id) = state.selection.primary() else {
         state.status_message = Some("Nothing selected — select a node first.".into());
         return;
     };
+    if state.pending_file_dialog.is_some() {
+        return;
+    }
 
     let doc = session.document();
     let Some(node) = doc.node(selected_id) else {
@@ -265,63 +209,37 @@ pub fn export_glb_selection(session: &EditorSession, state: &mut EditorState) {
         return;
     };
 
-    // GltfAsset: the exporter writes only a URI reference, not the mesh.
-    // Copy the original source file so the export contains real geometry.
     if let XrdsSceneNodePayload::GltfAsset(gltf) = &node.payload {
         let source = resolve_asset_uri(&gltf.asset_uri, session.session.save_path());
-        let ext = source.extension().and_then(|e| e.to_str()).unwrap_or("glb");
+        let ext = source.extension().and_then(|e| e.to_str()).unwrap_or("glb").to_owned();
         let default_name = source
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| format!("{}.{ext}", node.name));
-
-        let Some(dest) = rfd::FileDialog::new()
-            .add_filter("glTF / GLB", &["gltf", "glb"])
-            .set_title("Export glTF Asset")
-            .set_file_name(default_name)
-            .save_file()
-        else {
-            return;
-        };
-
-        match std::fs::copy(&source, &dest) {
-            Ok(bytes) => state.status_message = Some(format!(
-                "Exported: {}  ({} KB)",
-                dest.file_name().unwrap_or_default().to_string_lossy(),
-                bytes / 1024
-            )),
-            Err(e) => state.status_message = Some(format!("Export failed: {e}")),
-        }
+        let op = PendingFileOpKind::ExportGlbSelectionCopy { source };
+        spawn_file_dialog(state, op, move || {
+            rfd::FileDialog::new()
+                .add_filter("glTF / GLB", &["gltf", "glb"])
+                .set_title("Export glTF Asset")
+                .set_file_name(default_name)
+                .save_file()
+        });
         return;
     }
 
-    // Primitive / light / camera nodes: build a subtree document and run the exporter.
     let node_name = node.name.clone();
-    let Some(subtree) = doc.subtree_document(selected_id) else {
+    let Some(_subtree) = doc.subtree_document(selected_id) else {
         state.status_message = Some("Could not build subtree for export.".into());
         return;
     };
-
-    let Some(path) = rfd::FileDialog::new()
-        .add_filter("Binary glTF", &["glb"])
-        .set_title("Export Selected as GLB")
-        .set_file_name(format!("{node_name}.glb"))
-        .save_file()
-    else {
-        return;
-    };
-
-    match xrds_gltf::export_glb(&subtree) {
-        Ok(bytes) => match std::fs::write(&path, &bytes) {
-            Ok(_) => state.status_message = Some(format!(
-                "Exported selection: {}  ({} KB)",
-                path.file_name().unwrap_or_default().to_string_lossy(),
-                bytes.len() / 1024
-            )),
-            Err(e) => state.status_message = Some(format!("Write failed: {e}")),
-        },
-        Err(e) => state.status_message = Some(format!("GLB export failed: {e}")),
-    }
+    let op = PendingFileOpKind::ExportGlbSelectionExport { node_id: selected_id };
+    spawn_file_dialog(state, op, move || {
+        rfd::FileDialog::new()
+            .add_filter("Binary glTF", &["glb"])
+            .set_title("Export Selected as GLB")
+            .set_file_name(format!("{node_name}.glb"))
+            .save_file()
+    });
 }
 
 /// Resolve an asset URI to an absolute `PathBuf`.
@@ -337,31 +255,17 @@ fn resolve_asset_uri(uri: &str, save_path: Option<&Path>) -> PathBuf {
     p.to_path_buf()
 }
 
-/// Export the current document to a GLB file.
+/// Queue an export-GLB save dialog; processing happens in `XrdsEditorApp::update`.
 pub fn export_glb(session: &EditorSession, state: &mut EditorState) {
-    let Some(path) = rfd::FileDialog::new()
-        .add_filter("Binary glTF", &["glb"])
-        .set_title("Export GLB")
-        .set_file_name({
-            let name = &session.document().metadata.name;
-            if name.is_empty() { "scene.glb".to_string() } else { format!("{name}.glb") }
-        })
-        .save_file()
-    else {
-        return;
-    };
-
-    match xrds_gltf::export_glb(session.document()) {
-        Ok(bytes) => match std::fs::write(&path, &bytes) {
-            Ok(_) => state.status_message = Some(format!(
-                "Exported: {}  ({} KB)",
-                path.file_name().unwrap_or_default().to_string_lossy(),
-                bytes.len() / 1024
-            )),
-            Err(e) => state.status_message = Some(format!("Write failed: {e}")),
-        },
-        Err(e) => state.status_message = Some(format!("GLB export failed: {e}")),
-    }
+    let name = session.document().metadata.name.clone();
+    let default_filename = if name.is_empty() { "scene.glb".to_string() } else { format!("{name}.glb") };
+    spawn_file_dialog(state, PendingFileOpKind::ExportGlb, move || {
+        rfd::FileDialog::new()
+            .add_filter("Binary glTF", &["glb"])
+            .set_title("Export GLB")
+            .set_file_name(default_filename)
+            .save_file()
+    });
 }
 
 // ── Export as Application ─────────────────────────────────────────────────────
@@ -376,45 +280,31 @@ pub fn export_glb(session: &EditorSession, state: &mut EditorState) {
 ///     assets/...       — all referenced asset files copied in-place
 ///
 /// After export the user runs `cargo build --release` inside the output folder.
+///
+/// The folder picker runs on a background thread via a channel to avoid a
+/// `dispatch_sync` deadlock on macOS when called from a Bevy ECS system that
+/// runs on a thread-pool thread (not the main thread).
 pub fn export_app(session: &EditorSession, state: &mut EditorState) {
+    if state.export_app_pending.is_some() {
+        return; // already waiting for a folder pick
+    }
+
+    let doc = session.document().clone();
     let save_path = session.session.save_path().map(|p| p.to_path_buf());
 
-    let Some(out_dir) = rfd::FileDialog::new()
-        .set_title("Export as Application — Choose Output Folder")
-        .pick_folder()
-    else {
-        return;
-    };
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let result = rfd::FileDialog::new()
+            .set_title("Export as Application — Choose Output Folder")
+            .pick_folder();
+        let _ = tx.send(result);
+    });
 
-    match do_export_app(session.document(), save_path.as_deref(), &out_dir) {
-        Ok(()) => {
-            let build_dir = out_dir.clone();
-            let handle = std::thread::spawn(move || {
-                std::process::Command::new("cargo")
-                    .args(["build", "--release"])
-                    .current_dir(&build_dir)
-                    .status()
-                    .map_err(|e| format!("Could not start cargo: {e}"))
-                    .and_then(|s| {
-                        if s.success() {
-                            Ok(())
-                        } else {
-                            Err(format!("cargo build --release failed (exit {:?})", s.code()))
-                        }
-                    })
-            });
-            state.build_job = Some(BuildJob { handle, out_dir });
-            state.status_message = Some(
-                "Building… (first build takes a few minutes — status updates when done)".into(),
-            );
-        }
-        Err(e) => {
-            state.status_message = Some(format!("App export failed: {e}"));
-        }
-    }
+    state.export_app_pending = Some(ExportAppPending { rx: std::sync::Mutex::new(rx), doc, save_path });
+    state.status_message = Some("Choose an output folder…".into());
 }
 
-fn do_export_app(
+pub(crate) fn do_export_app(
     doc: &XrdsSceneDocument,
     save_path: Option<&Path>,
     out_dir: &Path,
@@ -591,45 +481,6 @@ pub fn reveal_in_explorer(path: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-// ── Dialog helpers ────────────────────────────────────────────────────────────
-
-fn save_dialog(session: &EditorSession) -> Option<PathBuf> {
-    let mut dialog = rfd::FileDialog::new()
-        .add_filter(XRDS_FILTER_NAME, &[XRDS_EXTENSION])
-        .set_title("Save Scene As");
-
-    // Pre-fill the filename from the current save path or scene name.
-    if let Some(p) = session.session.save_path() {
-        if let Some(parent) = p.parent() {
-            dialog = dialog.set_directory(parent);
-        }
-        if let Some(name) = p.file_name() {
-            dialog = dialog.set_file_name(name.to_string_lossy().as_ref());
-        }
-    } else {
-        let scene_name = &session.document().metadata.name;
-        let filename = if scene_name.is_empty() {
-            "untitled.xrds".to_string()
-        } else {
-            format!("{scene_name}.xrds")
-        };
-        dialog = dialog.set_file_name(&filename);
-    }
-
-    let mut path = dialog.save_file()?;
-    // Ensure the extension is set correctly.
-    if path.extension().is_none() {
-        path.set_extension(XRDS_EXTENSION);
-    }
-    Some(path)
-}
-
-fn open_dialog() -> Option<PathBuf> {
-    rfd::FileDialog::new()
-        .add_filter(XRDS_FILTER_NAME, &[XRDS_EXTENSION])
-        .set_title("Open Scene")
-        .pick_file()
-}
 
 #[cfg(test)]
 mod tests {
