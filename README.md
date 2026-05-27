@@ -61,6 +61,17 @@ For a quick visual verification pass on environment-map lighting, run [examples/
 
 ## How to build
 
+Install system dependencies (Ubuntu/Debian):
+
+```shell
+sudo apt install clang libssl-dev libasound2-dev \
+    libavcodec-dev libavformat-dev libavutil-dev libavdevice-dev \
+    libavfilter-dev libswresample-dev libswscale-dev libpostproc-dev \
+    libxcb-glx0-dev
+```
+
+Then build:
+
 ```shell
 cargo build
 ```

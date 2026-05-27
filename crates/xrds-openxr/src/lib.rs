@@ -30,7 +30,7 @@ pub fn is_openxr_available() -> bool {
     }
     #[cfg(not(target_os = "windows"))]
     {
-        unsafe { openxr::Entry::load() }.is_ok()
+        unsafe { ::openxr::Entry::load() }.is_ok()
     }
 }
 

@@ -143,7 +143,10 @@ impl OpenXrInitPlugin {
         #[cfg(not(target_os = "windows"))]
         let result = unsafe { openxr::Entry::load() };
 
+        #[cfg(target_os = "windows")]
         let (entry, _lib) = result.map_err(|e| anyhow::anyhow!("Could not load OpenXR runtime: {e}"))?;
+        #[cfg(not(target_os = "windows"))]
+        let entry = result.map_err(|e| anyhow::anyhow!("Could not load OpenXR runtime: {e}"))?;
 
         let default_settings = self.wgpu_settings.clone().unwrap_or_default();
         let wgpu_backends = default_settings.backends.unwrap_or(wgpu::Backends::VULKAN);
@@ -210,13 +213,18 @@ impl OpenXrInitPlugin {
                 &application_info,
                 default_settings,
             )?
-        } else if cfg!(target_os = "windows") && wgpu_backends.intersects(wgpu::Backends::DX12) {
-            GraphicsInner::<openxr::D3D12>::initialize(
-                &instance,
-                system_id,
-                &application_info,
-                default_settings,
-            )?
+        } else if wgpu_backends.intersects(wgpu::Backends::DX12) {
+            {
+                #[cfg(not(target_os = "windows"))]
+                { anyhow::bail!("D3D12 backend is only supported on Windows") }
+                #[cfg(target_os = "windows")]
+                { GraphicsInner::<openxr::D3D12>::initialize(
+                    &instance,
+                    system_id,
+                    &application_info,
+                    default_settings,
+                )? }
+            }
         } else if wgpu_backends.intersects(wgpu::Backends::GL) {
             GraphicsInner::<openxr::OpenGL>::initialize(
                 &instance,
