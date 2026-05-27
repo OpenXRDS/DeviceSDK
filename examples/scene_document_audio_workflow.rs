@@ -291,6 +291,7 @@ fn authored_scene_document() -> XrdsSceneDocument {
                     looped: true,
                     spatial: false,
                     autoplay: true,
+                    ..Default::default()
                 }),
                 editor: XrdsEditorMetadata::default(),
             },
@@ -312,6 +313,7 @@ fn authored_scene_document() -> XrdsSceneDocument {
                     looped: true, // loop so it plays continuously for demo purposes
                     spatial: true,
                     autoplay: true,
+                    ..Default::default()
                 }),
                 editor: XrdsEditorMetadata::default(),
             },
@@ -331,6 +333,7 @@ fn authored_scene_document() -> XrdsSceneDocument {
                     looped: true,
                     spatial: true,
                     autoplay: true,
+                    ..Default::default()
                 }),
                 editor: XrdsEditorMetadata::default(),
             },

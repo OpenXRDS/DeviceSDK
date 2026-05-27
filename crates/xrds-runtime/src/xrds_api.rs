@@ -20,6 +20,8 @@ mod install;
 mod material;
 #[path = "xrds_api/recipes.rs"]
 mod recipes;
+#[path = "xrds_api/reimport.rs"]
+mod reimport;
 #[path = "xrds_api/registry.rs"]
 mod registry;
 #[path = "xrds_api/spawn.rs"]
@@ -38,7 +40,7 @@ use std::collections::{HashMap, HashSet};
 use std::marker::PhantomData;
 use std::sync::Arc;
 use xrds_components::primitives::{
-    XrdsCube, XrdsCylinder, XrdsPlane3D, XrdsSphere, XrdsTetrahedron,
+    XrdsCube, XrdsCylinder, XrdsPlane3D, XrdsSphere, XrdsTetrahedron, XrdsText, XrdsTextAlignment,
 };
 use xrds_components::world::lights::{
     XrdsAmbientLight, XrdsDirectionalLight, XrdsPointLight, XrdsSpotLight,
@@ -56,13 +58,18 @@ use xrds_components::{
     XrdsMutableComponent, XrdsRegistry,
 };
 use xrds_scene_graph::{
-    XrdsEditorMetadata, XrdsSceneAnimationRepeatMode, XrdsSceneAsset, XrdsSceneAssetKind,
-    XrdsSceneDocument, XrdsSceneGltfAnimationSelector, XrdsSceneGltfMorphTargetSelector,
-    XrdsSceneGltfNodeAuthoring, XrdsSceneGltfPlayback, XrdsSceneMetadata, XrdsSceneNode,
-    XrdsSceneNodePayload, XrdsSceneRuntimeComponent, XrdsSceneRuntimeNode,
+    XrdsEditorMetadata, XrdsHudTextData, XrdsSceneAnimationRepeatMode, XrdsSceneAsset,
+    XrdsSceneAssetKind, XrdsSceneDocument, XrdsSceneGltfAnimationSelector,
+    XrdsSceneGltfMorphTargetSelector, XrdsSceneGltfNodeAuthoring, XrdsSceneGltfPlayback,
+    XrdsSceneHudText, XrdsSceneMetadata, XrdsSceneNode, XrdsSceneNodePayload,
+    XrdsSceneRuntimeComponent, XrdsSceneRuntimeNode,
 };
 
 pub use context::XrdsUpdateContext;
+/// Read-only entity→id index exposed for viewport picking systems.
+/// Access as `Res<XrdsIdIndex>` in Bevy systems: `id_index.id_of(entity)`
+/// returns the `XrdsId` for any entity that was spawned by an XRDS import.
+pub use state::XrdsIdIndex;
 use environment::*;
 use gltf::*;
 use helper::*;
@@ -403,6 +410,15 @@ pub(super) struct PendingGltfMorphTargetOverrideRequests {
 /// trait into the lower-level runtime and Bevy scheduling model internally.
 #[allow(unused_variables)]
 pub trait XrdsApp {
+    /// Called once before [`setup`] with direct access to the Bevy [`App`].
+    ///
+    /// Use this to add plugins (e.g. `bevy_egui::EguiPlugin`) or Bevy systems that the
+    /// SDK does not otherwise expose.  This fires before XRDS resources are initialised,
+    /// so it is safe to add any Bevy plugin here.
+    ///
+    /// The default implementation does nothing.
+    fn configure(&mut self, _app: &mut App) {}
+
     fn setup(&mut self, api: &mut XrdsAPI<'_>) {}
     fn update(&mut self, ctx: &mut XrdsUpdateContext<'_>) {}
 }

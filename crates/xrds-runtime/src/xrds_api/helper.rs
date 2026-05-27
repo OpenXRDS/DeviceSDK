@@ -326,6 +326,26 @@ pub(super) fn export_scene_node_in_world(
         ));
     }
 
+    if let Some(stored) = world.get::<XrdsStoredHudText>(entity) {
+        let name = world
+            .get::<bevy::prelude::Name>(entity)
+            .map(|n| n.as_str())
+            .unwrap_or("HUD Text");
+        return Ok(apply_editor_metadata_to_node(
+            world,
+            entity,
+            XrdsSceneNode::from_hud_text(node_id, parent_node_id, name, stored.0.clone()),
+        ));
+    }
+
+    if let Some(descriptor) = world.get::<XrdsStored<XrdsText>>(entity) {
+        return Ok(apply_editor_metadata_to_node(
+            world,
+            entity,
+            XrdsSceneNode::from_xrds_text(node_id, parent_node_id, &descriptor.0),
+        ));
+    }
+
     Err(XrdsSceneExportError::UnsupportedRuntimeDescriptor(id))
 }
 
@@ -678,6 +698,12 @@ pub(super) fn gltf_load_status_for_entity_in_world(
     world: &World,
     entity: Entity,
 ) -> Option<XrdsGltfLoadStatus> {
+    // Use the SceneRoot handle (Handle<Scene>) to check load state. The Scene
+    // sub-asset is produced by the GLTF loader, so its state faithfully reflects
+    // whether the .glb file has been parsed. Checking the Gltf parent handle
+    // is not safe here because calling asset_server.load() and immediately
+    // dropping the returned handle every frame can interfere with Bevy's
+    // ref-count tracking and prevent the asset from ever reaching Loaded.
     let scene_root = world.get::<SceneRoot>(entity)?;
     let asset_server = world.get_resource::<AssetServer>()?;
 
@@ -719,10 +745,13 @@ fn gltf_asset_handle_for_entity_in_world(
 ) -> Result<bevy::prelude::Handle<bevy::gltf::Gltf>, XrdsGltfRuntimeError> {
     let descriptor = gltf_descriptor_for_entity_in_world(world, entity)
         .ok_or(XrdsGltfRuntimeError::NotAGltfRuntimeEntity)?;
-    let asset_server = world
-        .get_resource::<AssetServer>()
-        .ok_or_else(|| XrdsGltfRuntimeError::AssetNotLoaded(descriptor.gltf_asset_path.clone()))?;
-    Ok(asset_server.load::<bevy::gltf::Gltf>(descriptor.gltf_asset_path.clone()))
+    // Use the handle that was stored at spawn time. Calling asset_server.load()
+    // here and dropping the result was the root cause: without a persistent
+    // strong handle the Gltf asset is never inserted into Assets<Gltf>.
+    world
+        .get::<XrdsStoredGltfHandle>(entity)
+        .map(|stored| stored.0.clone())
+        .ok_or_else(|| XrdsGltfRuntimeError::AssetNotLoaded(descriptor.gltf_asset_path.clone()))
 }
 
 fn gltf_asset_for_entity_in_world<'w>(
@@ -812,13 +841,16 @@ fn resolve_gltf_animation_selection_for_entity_in_world(
 
         let clip_handle = asset_server.load::<bevy::animation::AnimationClip>(
             bevy::gltf::GltfAssetLabel::Animation(*index)
-                .from_asset(descriptor.gltf_asset_path.clone()),
+                .from_asset(super::gltf::relativize_asset_path(&descriptor.gltf_asset_path)),
         );
 
         if let Ok(gltf) = gltf_asset_for_entity_in_world(world, entity) {
-            if let Some(clip_handle) = gltf.animations.get(*index).cloned() {
-                let info = gltf_animation_info_from_asset(world, gltf, *index, &clip_handle);
-                return Ok((*index, clip_handle, info));
+            if let Some(gltf_clip_handle) = gltf.animations.get(*index).cloned() {
+                // Prefer the handle that the GLTF loader already registered so that
+                // the AnimationGraph references exactly the same AssetId that the
+                // loader used when building AnimationTarget IDs on bone entities.
+                let info = gltf_animation_info_from_asset(world, gltf, *index, &gltf_clip_handle);
+                return Ok((*index, gltf_clip_handle, info));
             }
 
             return Err(XrdsGltfRuntimeError::AnimationNotFound(
@@ -826,6 +858,8 @@ fn resolve_gltf_animation_selection_for_entity_in_world(
             ));
         }
 
+        // GLTF parent asset not yet in Assets<Gltf> — fall back to a direct load
+        // so the request can still be processed (will retry next frame if needed).
         let info = gltf_animation_info_without_metadata(world, *index, &clip_handle);
         return Ok((*index, clip_handle, info));
     }
@@ -913,6 +947,7 @@ pub(super) fn apply_gltf_animation_request_for_entity_in_world(
 
     let player_entities = animation_player_entities_for_root_in_world(world, entity);
     if player_entities.is_empty() {
+        debug!("gltf animation: no AnimationPlayer found in descendants of {:?}, will retry", entity);
         return Ok(false);
     }
 
@@ -920,19 +955,68 @@ pub(super) fn apply_gltf_animation_request_for_entity_in_world(
     let graph_handle = world.resource_mut::<Assets<AnimationGraph>>().add(graph);
 
     for player_entity in player_entities {
-        if let Some(mut player) = world.get_mut::<AnimationPlayer>(player_entity) {
-            let active = player.play(graph_index).set_speed(request.options.speed);
-            if matches!(request.options.repeat, XrdsAnimationRepeatMode::Loop) {
-                active.repeat();
+        // 1. Ensure visibility components on the player and its ancestors to fix B0004
+        // which can cause the GlobalTransform to stop updating, making the drone look static.
+        let mut cur = Some(player_entity);
+        while let Some(curr_entity) = cur {
+            let mut next_parent = None;
+            if let Ok(mut e) = world.get_entity_mut(curr_entity) {
+                if !e.contains::<Visibility>() { e.insert(Visibility::Visible); }
+                if !e.contains::<InheritedVisibility>() { e.insert(InheritedVisibility::default()); }
+                if !e.contains::<ViewVisibility>() { e.insert(ViewVisibility::default()); }
+                if !e.contains::<GlobalTransform>() { e.insert(GlobalTransform::default()); }
+                
+                if let Some(co) = e.get::<ChildOf>() {
+                    next_parent = Some(co.0);
+                }
             }
+            cur = next_parent;
+        }
+
+        // 2. Start playback BEFORE inserting the graph handle — matches the
+        // gltf_samples_check pattern (player.play() → commands.insert(graph))
+        // so that active_animations is populated when animate_targets evaluates.
+        if let Some(mut player) = world.get_mut::<AnimationPlayer>(player_entity) {
+            let active = player.play(graph_index);
+
+            match request.options.repeat {
+                XrdsAnimationRepeatMode::Loop => { active.repeat(); }
+                XrdsAnimationRepeatMode::Once => {}
+            }
+
+            active.set_speed(request.options.speed);
+
             if request.options.start_paused {
                 active.pause();
             }
+
+            println!("XRDS Diagnostic: Started animation node {:?} on player {:?}", graph_index, player_entity);
         }
 
+        // 3. Insert graph handle AFTER play() so the handle insertion cannot
+        // clear or invalidate the active animation we just registered.
         world
             .entity_mut(player_entity)
             .insert(AnimationGraphHandle(graph_handle.clone()));
+
+        // Diagnostic: count bone entities linked to this player via AnimationTarget.
+        // Zero means no bones will animate — a sign of entity hierarchy mismatch.
+        {
+            let mut q = world.query::<&bevy::animation::AnimationTarget>();
+            let target_count = q.iter(world).filter(|t| t.player == player_entity).count();
+            if target_count == 0 {
+                warn!(
+                    "XRDS: AnimationPlayer {:?} has NO AnimationTarget descendants — \
+                     bone transforms will not be applied, animation will appear static",
+                    player_entity
+                );
+            } else {
+                println!(
+                    "XRDS: {} bone target(s) linked to player {:?}",
+                    target_count, player_entity
+                );
+            }
+        }
     }
 
     world
@@ -994,10 +1078,12 @@ pub(super) fn apply_pending_gltf_animation_requests_on_scene_ready(
     mut commands: Commands,
 ) {
     let entity = scene_ready.entity;
+    // [CRASH-ZONE 4] SceneInstanceReady fires after Bevy's scene spawner creates
+    // all skeleton/mesh child entities. Bone children may arrive without a parent
+    // that has InheritedVisibility (B0004), which can crash the wgpu encoder.
     let Some(request) = pending.requests.remove(&entity) else {
         return;
     };
-
     commands.queue(move |world: &mut World| {
         match apply_gltf_animation_request_for_entity_in_world(world, entity, &request) {
             Ok(true) => {

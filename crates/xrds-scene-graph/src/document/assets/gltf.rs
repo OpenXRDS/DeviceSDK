@@ -563,6 +563,10 @@ impl XrdsSceneDocument {
         rebound_node_ids
     }
 
+    /// Rewrite every node reference to `previous_asset_id` → `new_asset_id`.
+    ///
+    /// Covers all payload types that can hold an asset id reference:
+    /// `GltfAsset`, `AudioClip`, and material texture slots on primitive meshes.
     fn rewrite_gltf_asset_ids(
         &mut self,
         previous_asset_id: &str,
@@ -571,17 +575,44 @@ impl XrdsSceneDocument {
         let mut rewritten_node_ids = Vec::new();
 
         for node in &mut self.nodes {
-            let XrdsSceneNodePayload::GltfAsset(asset) = &mut node.payload else {
-                continue;
-            };
+            let mut changed = false;
 
-            if asset.asset_id.as_deref() != Some(previous_asset_id) {
-                continue;
+            match &mut node.payload {
+                XrdsSceneNodePayload::GltfAsset(asset) => {
+                    if asset.asset_id.as_deref() == Some(previous_asset_id) {
+                        asset.asset_id = Some(new_asset_id.to_string());
+                        node.editor.set_asset_id(Some(new_asset_id.to_string()));
+                        changed = true;
+                    }
+                }
+                XrdsSceneNodePayload::AudioClip(clip) => {
+                    if clip.asset_id == previous_asset_id {
+                        clip.asset_id = new_asset_id.to_string();
+                        changed = true;
+                    }
+                }
+                // Primitive meshes: rewrite texture slot references.
+                XrdsSceneNodePayload::Sphere(s) => {
+                    changed = rewrite_material_texture_asset_ids(&mut s.material, previous_asset_id, new_asset_id);
+                }
+                XrdsSceneNodePayload::Cube(c) => {
+                    changed = rewrite_material_texture_asset_ids(&mut c.material, previous_asset_id, new_asset_id);
+                }
+                XrdsSceneNodePayload::Cylinder(c) => {
+                    changed = rewrite_material_texture_asset_ids(&mut c.material, previous_asset_id, new_asset_id);
+                }
+                XrdsSceneNodePayload::Plane3D(p) => {
+                    changed = rewrite_material_texture_asset_ids(&mut p.material, previous_asset_id, new_asset_id);
+                }
+                XrdsSceneNodePayload::Tetrahedron(t) => {
+                    changed = rewrite_material_texture_asset_ids(&mut t.material, previous_asset_id, new_asset_id);
+                }
+                _ => {}
             }
 
-            asset.asset_id = Some(new_asset_id.to_string());
-            node.editor.set_asset_id(Some(new_asset_id.to_string()));
-            rewritten_node_ids.push(node.id);
+            if changed {
+                rewritten_node_ids.push(node.id);
+            }
         }
 
         rewritten_node_ids
@@ -676,6 +707,24 @@ fn validate_resolved_gltf_source(
         );
     }
 
+    const BEVY_MAX_MORPH_TARGETS: usize = 64;
+    for mesh in gltf.meshes() {
+        for primitive in mesh.primitives() {
+            let count = primitive.morph_targets().count();
+            if count > BEVY_MAX_MORPH_TARGETS {
+                return (
+                    XrdsSceneGltfSourceDiagnosticStatus::TooManyMorphTargets,
+                    Some(document_path),
+                    Some(format!(
+                        "glTF asset '{path}' mesh '{}' has {count} morph targets \
+                         (Bevy limit is {BEVY_MAX_MORPH_TARGETS})",
+                        mesh.name().unwrap_or("<unnamed>")
+                    )),
+                );
+            }
+        }
+    }
+
     (
         XrdsSceneGltfSourceDiagnosticStatus::Valid,
         Some(document_path),
@@ -736,6 +785,7 @@ pub enum XrdsSceneGltfSourceDiagnosticStatus {
     ParseError,
     NoScenes,
     MissingSceneIndex,
+    TooManyMorphTargets,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -959,4 +1009,29 @@ pub struct XrdsSceneAssetRenameResult {
     pub previous_asset_id: String,
     pub new_asset_id: String,
     pub rewritten_node_ids: Vec<XrdsSceneNodeId>,
+}
+
+/// Rewrite texture slot asset id references inside a material.
+/// Returns `true` if any slot was updated.
+fn rewrite_material_texture_asset_ids(
+    material: &mut XrdsSceneMaterial,
+    previous_id: &str,
+    new_id: &str,
+) -> bool {
+    let mut changed = false;
+    for slot in [
+        &mut material.textures.base_color,
+        &mut material.textures.metallic_roughness,
+        &mut material.textures.normal,
+        &mut material.textures.occlusion,
+        &mut material.textures.emissive,
+    ] {
+        if let Some(ref mut tex) = slot {
+            if tex.texture_asset_id == previous_id {
+                tex.texture_asset_id = new_id.to_string();
+                changed = true;
+            }
+        }
+    }
+    changed
 }

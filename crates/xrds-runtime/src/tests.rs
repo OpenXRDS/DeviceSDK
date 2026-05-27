@@ -20,20 +20,21 @@ use xrds_components::{
     XrdsMaterialTextureUvTransformMode,
 };
 use xrds_scene_graph::{
-    XrdsEditorMetadata, XrdsGltfAssetExportPolicy, XrdsSceneAnimationRepeatMode, XrdsSceneAsset,
-    XrdsSceneAssetKind, XrdsSceneCube, XrdsSceneDocument, XrdsSceneEnvironment,
+    XrdsEditorMetadata, XrdsGltfAssetExportPolicy, XrdsSceneAmbientLight, XrdsSceneAnimationRepeatMode,
+    XrdsSceneAsset, XrdsSceneAssetKind, XrdsSceneAudioClip, XrdsSceneCamera, XrdsSceneCameraProjection,
+    XrdsSceneCube, XrdsSceneDirectionalLight, XrdsSceneDocument, XrdsSceneEnvironment,
     XrdsSceneExposureEnvironment, XrdsSceneFogEnvironment, XrdsSceneGltfAnimationSelector,
     XrdsSceneGltfAsset, XrdsSceneGltfMorphTargetOverride, XrdsSceneGltfMorphTargetSelector,
     XrdsSceneGltfMorphTargetWeight, XrdsSceneGltfNodeAuthoring, XrdsSceneGltfNodeLocator,
     XrdsSceneGltfPlayback, XrdsSceneIblEnvironment, XrdsSceneMaterial, XrdsSceneMaterialAlphaMode,
     XrdsSceneMaterialPbrParams, XrdsSceneMaterialTextureSlots, XrdsSceneMetadata, XrdsSceneNode,
-    XrdsSceneNodeId, XrdsSceneNodePayload, XrdsSceneSkyboxEnvironment, XrdsSceneTextureFilterMode,
+    XrdsSceneNodeId, XrdsSceneNodePayload, XrdsScenePointLight, XrdsSceneSkyboxEnvironment,
+    XrdsSceneSpotLight, XrdsSceneText, XrdsSceneTextAlignment, XrdsSceneTextureFilterMode,
     XrdsSceneTextureRef, XrdsSceneTextureSamplerParams, XrdsSceneTextureUvParams,
-    XrdsSceneAudioClip, XrdsSceneTextureUvTransformMode, XrdsSceneTextureWrapMode,
-    XrdsSceneTransform, XrdsSourceLink,
+    XrdsSceneTextureUvTransformMode, XrdsSceneTextureWrapMode, XrdsSceneTransform, XrdsSourceLink,
 };
 
-const VALID_GLTF_PATH: &str = "models/TestStatus/EmbeddedTriangle.gltf";
+const VALID_GLTF_PATH: &str = "models/animated/buster_drone.glb";
 const BROKEN_DEPENDENCY_GLTF_PATH: &str = "models/TestBrokenDependency/MissingBufferScene.gltf";
 const MISSING_ROOT_SCENE_PATH: &str = "models/DoesNotExist/MissingScene.gltf#Scene0";
 const MORPH_STRESS_TEST_PATH: &str = "models/MorphStressTest/MorphStressTest.gltf";
@@ -371,15 +372,20 @@ fn spawn_scene_root_entity(app: &mut App, asset_path: &str) -> Handle<XrdsGltfAs
 }
 
 fn spawn_stored_gltf_entity(app: &mut App, gltf_asset_path: &str) -> Handle<XrdsGltfAsset> {
-    let scene_handle = {
+    let (scene_handle, gltf_handle) = {
         let asset_server = app.world().resource::<AssetServer>();
-        asset_server.load::<Scene>(format!("{gltf_asset_path}#Scene0"))
+        let relative_path = gltf::relativize_asset_path(gltf_asset_path);
+        (
+            asset_server.load::<Scene>(format!("{gltf_asset_path}#Scene0")),
+            asset_server.load::<bevy::gltf::Gltf>(relative_path),
+        )
     };
     let root = app
         .world_mut()
         .spawn((
             Name::new("StoredGltfTestEntity"),
             SceneRoot(scene_handle),
+            XrdsStoredGltfHandle(gltf_handle),
             XrdsStored(
                 XrdsGltfAsset::new(gltf_asset_path.to_string()).with_name("StoredGltfTestEntity"),
             ),
@@ -433,10 +439,13 @@ fn spawn_real_stored_gltf_entity(app: &mut App, gltf_asset_path: &str) -> Handle
 }
 
 fn seed_synthetic_gltf_asset(app: &mut App, gltf_asset_path: &str) {
+    // spawn_gltf_descriptor relativizes the path before calling load(), so we must
+    // do the same here — otherwise the handle IDs differ and assets.get() returns None.
+    let relative_path = gltf::relativize_asset_path(gltf_asset_path);
     let (gltf_handle, clip_handles) = {
         let asset_server = app.world().resource::<AssetServer>();
         (
-            asset_server.load::<bevy::gltf::Gltf>(gltf_asset_path.to_string()),
+            asset_server.load::<bevy::gltf::Gltf>(relative_path),
             [
                 asset_server.load::<AnimationClip>(format!("{gltf_asset_path}#Animation0")),
                 asset_server.load::<AnimationClip>(format!("{gltf_asset_path}#Animation1")),
@@ -525,5 +534,7 @@ mod document_roundtrip;
 mod gltf_document;
 #[path = "tests/gltf_runtime.rs"]
 mod gltf_runtime;
+#[path = "tests/gltf_samples.rs"]
+mod gltf_samples;
 #[path = "tests/scene_environment.rs"]
 mod scene_environment;

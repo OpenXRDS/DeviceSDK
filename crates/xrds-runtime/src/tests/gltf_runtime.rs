@@ -11,7 +11,8 @@ fn gltf_load_status_transitions_from_pending_to_loaded_for_valid_scene() {
         Some(XrdsGltfLoadStatus::NotLoaded | XrdsGltfLoadStatus::Loading)
     ));
 
-    let final_status = drive_until_terminal_status(&mut app, &handle, 1000);
+    // 5000 × 2ms = 10s — generous budget so parallel test runs don't race the asset loader.
+    let final_status = drive_until_terminal_status(&mut app, &handle, 5000);
     assert_eq!(final_status, Some(XrdsGltfLoadStatus::Loaded));
 }
 

@@ -305,6 +305,10 @@ fn register_stored_audio_clip_updaters(registry: &mut SurfaceUpdateRegistry) {
     register_common_stored_updaters::<XrdsAudioClip>(registry);
 }
 
+fn register_stored_text_updaters(registry: &mut SurfaceUpdateRegistry) {
+    register_common_stored_updaters::<XrdsText>(registry);
+}
+
 fn register_default_mutable_updaters(registry: &mut SurfaceUpdateRegistry) {
     register_stored_node_updaters(registry);
     register_stored_camera_updaters(registry);
@@ -319,6 +323,7 @@ fn register_default_mutable_updaters(registry: &mut SurfaceUpdateRegistry) {
     register_stored_spot_light_updaters(registry);
     register_stored_ambient_light_updaters(registry);
     register_stored_audio_clip_updaters(registry);
+    register_stored_text_updaters(registry);
 }
 
 fn register_default_primitive_updaters(registry: &mut SurfaceUpdateRegistry) {
@@ -368,17 +373,17 @@ pub(super) fn register_default_updaters(registry: &mut SurfaceUpdateRegistry) {
             return;
         }
 
-        let scene_handle = {
+        let (scene_handle, gltf_handle) = {
             let server = world.resource::<AssetServer>();
-            let path = if params.gltf_asset_path.contains('#') {
-                params.gltf_asset_path.clone()
-            } else {
-                format!("{}#Scene{}", params.gltf_asset_path, params.scene_index)
-            };
-            server.load::<Scene>(path)
+            let relative_path = super::gltf::relativize_asset_path(&params.gltf_asset_path);
+            let path = build_scene_asset_path(&params.gltf_asset_path, params.scene_index);
+            let scene = server.load::<Scene>(path);
+            let gltf = server.load::<bevy::gltf::Gltf>(relative_path);
+            (scene, gltf)
         };
         world.entity_mut(entity).insert((
             SceneRoot(scene_handle),
+            XrdsStoredGltfHandle(gltf_handle),
             GlobalTransform::default(),
             build_visibility_hierarchy_components(true),
         ));

@@ -1,5 +1,6 @@
 mod error;
 mod runtime;
+pub mod viewer;
 pub mod xrds_api;
 
 pub use error::*;

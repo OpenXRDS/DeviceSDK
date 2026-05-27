@@ -9,8 +9,11 @@ homepage = "https://github.com/OpenXRDS"
 authors = ["OpenXRDS developers"]
 
 [workspace]
-members = ["crates/*"]
-resolver = "2"
+members = ["crates/*", "apps/*"]
+
+[workspace.dependencies.xrds-gltf]
+package = "xrds-gltf"
+path = "./crates/xrds-gltf"
 
 [workspace.dependencies.xrds-audio]
 package = "xrds-audio"
@@ -58,9 +61,18 @@ glam = { version = "0.29.2", features = ["bytemuck"] }
 [target.'cfg(windows)'.dependencies]
 winreg = { version = "0.55.0" }
 
+[features]
+# Re-exports Bevy ECS types and bevy_egui under `xrds::editor` so that editor
+# applications do not need direct `bevy` or `bevy_egui` imports.
+editor = ["dep:bevy", "dep:bevy_egui"]
+
 [dependencies]
 xrds-internal = { workspace = true }
 xrds-scene-graph = { workspace = true }
+bevy = { workspace = true, optional = true }
+bevy_egui = { version = "0.37", optional = true }
+egui_extras = { version = "0.29" }
+svg = { version = "0.14" }
 
 [dev-dependencies]
 bevy = { workspace = true }

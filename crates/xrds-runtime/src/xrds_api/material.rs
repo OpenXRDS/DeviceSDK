@@ -11,9 +11,10 @@ use xrds_components::{
     XrdsMaterialTextureSlots, XrdsMaterialTextureUvParams, XrdsMaterialTextureWrapMode,
 };
 
-const XRDS_RUNTIME_MATERIAL_SHADER_PATH: &str = "shaders/xrds_runtime_material_extension.wgsl";
+const XRDS_RUNTIME_MATERIAL_SHADER_PATH: &str =
+    "embedded://xrds_runtime/xrds_api/shaders/xrds_runtime_material_extension.wgsl";
 const XRDS_RUNTIME_MATERIAL_PREPASS_SHADER_PATH: &str =
-    "shaders/xrds_runtime_material_prepass.wgsl";
+    "embedded://xrds_runtime/xrds_api/shaders/xrds_runtime_material_prepass.wgsl";
 const XRDS_TEXTURE_FLAG_BASE_COLOR: u32 = 1 << 0;
 const XRDS_TEXTURE_FLAG_METALLIC_ROUGHNESS: u32 = 1 << 1;
 const XRDS_TEXTURE_FLAG_NORMAL: u32 = 1 << 2;

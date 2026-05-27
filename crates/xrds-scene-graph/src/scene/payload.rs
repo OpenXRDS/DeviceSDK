@@ -15,6 +15,10 @@ pub enum XrdsSceneNodePayload {
     PointLight(XrdsScenePointLight),
     SpotLight(XrdsSceneSpotLight),
     AudioClip(XrdsSceneAudioClip),
+    InteractionZone(XrdsSceneInteractionZone),
+    PlayerSpawn(XrdsScenePlayerSpawn),
+    HudText(XrdsSceneHudText),
+    Text(XrdsSceneText),
 }
 
 impl XrdsSceneNodePayload {
@@ -33,6 +37,10 @@ impl XrdsSceneNodePayload {
             | Self::PointLight(_)
             | Self::SpotLight(_) => XrdsGltfExportClass::Light,
             Self::AudioClip(_) => XrdsGltfExportClass::NodeOnly,
+            Self::InteractionZone(_) => XrdsGltfExportClass::NodeOnly,
+            Self::PlayerSpawn(_) => XrdsGltfExportClass::NodeOnly,
+            Self::HudText(_) => XrdsGltfExportClass::NodeOnly,
+            Self::Text(_) => XrdsGltfExportClass::NodeOnly,
         }
     }
 }
@@ -790,6 +798,18 @@ impl Default for XrdsSceneSpotLight {
     }
 }
 
+/// Distance rolloff model for spatial audio.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum XrdsAudioDistanceModel {
+    /// Gain decreases linearly from `min_distance` to `max_distance`.
+    Linear,
+    /// Gain decreases by the inverse of distance (Web Audio default).
+    #[default]
+    Inverse,
+    /// Gain decreases exponentially with distance.
+    Exponential,
+}
+
 /// Authored audio clip node referencing a catalog `Audio` asset.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct XrdsSceneAudioClip {
@@ -804,6 +824,23 @@ pub struct XrdsSceneAudioClip {
     pub spatial: bool,
     #[serde(default)]
     pub autoplay: bool,
+    // ── Spatial audio parameters (only meaningful when `spatial` is true) ──
+    #[serde(default, skip_serializing_if = "XrdsAudioDistanceModel::is_default")]
+    pub distance_model: XrdsAudioDistanceModel,
+    #[serde(default = "default_audio_min_distance")]
+    pub min_distance: f32,
+    #[serde(default = "default_audio_max_distance")]
+    pub max_distance: f32,
+    #[serde(default = "default_audio_rolloff")]
+    pub rolloff_factor: f32,
+    #[serde(default)]
+    pub hrtf: bool,
+}
+
+impl XrdsAudioDistanceModel {
+    fn is_default(&self) -> bool {
+        *self == XrdsAudioDistanceModel::Inverse
+    }
 }
 
 fn default_audio_volume() -> f32 {
@@ -814,6 +851,18 @@ fn default_audio_spatial() -> bool {
     true
 }
 
+fn default_audio_min_distance() -> f32 {
+    1.0
+}
+
+fn default_audio_max_distance() -> f32 {
+    50.0
+}
+
+fn default_audio_rolloff() -> f32 {
+    1.0
+}
+
 impl Default for XrdsSceneAudioClip {
     fn default() -> Self {
         Self {
@@ -822,6 +871,153 @@ impl Default for XrdsSceneAudioClip {
             looped: false,
             spatial: true,
             autoplay: false,
+            distance_model: XrdsAudioDistanceModel::Inverse,
+            min_distance: 1.0,
+            max_distance: 50.0,
+            rolloff_factor: 1.0,
+            hrtf: false,
+        }
+    }
+}
+
+/// Shape of an interaction zone volume.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum XrdsInteractionZoneShape {
+    Sphere { radius: f32 },
+    Box { half_extents: [f32; 3] },
+}
+
+impl Default for XrdsInteractionZoneShape {
+    fn default() -> Self {
+        Self::Box { half_extents: [0.5, 0.5, 0.5] }
+    }
+}
+
+/// What kind of grab interaction the zone supports.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum XrdsGrabType {
+    #[default]
+    None,
+    Snap,
+    Free,
+}
+
+/// An invisible volume marking an object as interactable in XR.
+/// Has no visible mesh — its bounds are shown in the editor as a wireframe overlay.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct XrdsSceneInteractionZone {
+    pub shape: XrdsInteractionZoneShape,
+    pub grab_type: XrdsGrabType,
+    pub hoverable: bool,
+}
+
+impl Default for XrdsSceneInteractionZone {
+    fn default() -> Self {
+        Self {
+            shape: XrdsInteractionZoneShape::default(),
+            grab_type: XrdsGrabType::None,
+            hoverable: true,
+        }
+    }
+}
+
+/// Locomotion style for the player pawn at runtime.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum XrdsPlayerLocomotionMode {
+    /// Blink/arc teleport (comfort-friendly default).
+    #[default]
+    Teleport,
+    /// Continuous thumbstick locomotion.
+    Smooth,
+    /// Free-fly (no gravity, editor-style movement).
+    Flying,
+}
+
+/// Authored player spawn point.  The runtime spawns the default pawn here when
+/// play mode starts.  One document may contain multiple PlayerSpawn nodes; the
+/// runtime uses the first one it finds.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct XrdsScenePlayerSpawn {
+    pub locomotion_mode: XrdsPlayerLocomotionMode,
+    /// Horizontal field of view in degrees for the player camera.
+    pub fov_deg: f32,
+}
+
+impl Default for XrdsScenePlayerSpawn {
+    fn default() -> Self {
+        Self {
+            locomotion_mode: XrdsPlayerLocomotionMode::default(),
+            fov_deg: 90.0,
+        }
+    }
+}
+
+/// Anchor corner/edge for a HUD text overlay.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum XrdsHudAnchor {
+    #[default]
+    TopLeft,
+    TopCenter,
+    TopRight,
+    MiddleLeft,
+    Center,
+    MiddleRight,
+    BottomLeft,
+    BottomCenter,
+    BottomRight,
+}
+
+/// Screen-space HUD text overlay node.  Rendered as a Bevy UI text widget.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct XrdsSceneHudText {
+    pub text: String,
+    /// Font size in pixels.  Default 16.
+    pub font_size: f32,
+    /// RGBA colour in 0-1 range.  Default opaque white.
+    pub color: [f32; 4],
+    pub anchor: XrdsHudAnchor,
+    /// Pixel offset from the chosen anchor corner.  Default [8, 8].
+    pub offset: [f32; 2],
+}
+
+impl Default for XrdsSceneHudText {
+    fn default() -> Self {
+        Self {
+            text: "HUD Text".to_string(),
+            font_size: 16.0,
+            color: [1.0, 1.0, 1.0, 1.0],
+            anchor: XrdsHudAnchor::TopLeft,
+            offset: [8.0, 8.0],
+        }
+    }
+}
+
+/// Text alignment for world-space text nodes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum XrdsSceneTextAlignment {
+    Left,
+    #[default]
+    Center,
+    Right,
+}
+
+/// World-space 3D text node rendered via `Text2d`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct XrdsSceneText {
+    pub text: String,
+    pub font_size: f32,
+    /// RGBA colour in 0-1 range.  Default opaque white.
+    pub color: [f32; 4],
+    pub alignment: XrdsSceneTextAlignment,
+}
+
+impl Default for XrdsSceneText {
+    fn default() -> Self {
+        Self {
+            text: "Text".to_string(),
+            font_size: 24.0,
+            color: [1.0, 1.0, 1.0, 1.0],
+            alignment: XrdsSceneTextAlignment::Center,
         }
     }
 }
@@ -834,6 +1030,7 @@ impl From<&XrdsAudioClip> for XrdsSceneAudioClip {
             looped: value.looped,
             spatial: value.spatial,
             autoplay: value.autoplay,
+            ..Default::default()
         }
     }
 }

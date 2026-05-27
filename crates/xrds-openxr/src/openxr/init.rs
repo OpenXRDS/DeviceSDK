@@ -38,34 +38,40 @@ impl Plugin for OpenXrInitPlugin {
         build_states(app);
         build_system_sets(app);
 
-        // Initialize OpenXR system and graphics backend
-        let (openxr_instance, graphics_backends) = self
-            .initialize(&self.app_name)
-            .expect("Could not initialize OpenXR and WGPU instance");
+        // Initialize OpenXR system and graphics backend; fall back to desktop if unavailable.
+        match self.initialize(&self.app_name) {
+            Ok((openxr_instance, graphics_backends)) => {
+                let render_resources = graphics_backends
+                    .get_render_resources()
+                    .expect("Could not get render resources");
 
-        let render_resources = graphics_backends
-            .get_render_resources()
-            .expect("Could not get render resources");
+                app.insert_resource(openxr_instance.clone())
+                    .insert_resource(graphics_backends)
+                    .add_plugins(RenderPlugin {
+                        render_creation: RenderCreation::Manual(render_resources),
+                        ..Default::default()
+                    });
 
-        app.insert_resource(openxr_instance.clone())
-            .insert_resource(graphics_backends)
-            .add_plugins(RenderPlugin {
-                render_creation: RenderCreation::Manual(render_resources),
-                ..Default::default()
-            });
+                #[cfg(feature = "preview_window")]
+                app.insert_resource(WinitSettings {
+                    focused_mode: UpdateMode::Continuous,
+                    unfocused_mode: UpdateMode::Continuous,
+                });
 
-        #[cfg(feature = "preview_window")]
-        app.insert_resource(WinitSettings {
-            focused_mode: UpdateMode::Continuous,
-            unfocused_mode: UpdateMode::Continuous,
-        });
+                let render_app = app.sub_app_mut(RenderApp);
+                render_app.insert_resource(openxr_instance);
 
-        let render_app = app.sub_app_mut(RenderApp);
-        render_app.insert_resource(openxr_instance);
-
-        let world = app.world_mut();
-        world.insert_resource(OpenXrSystemState::Available);
-        world.write_message(OpenXrMessageCreateSession);
+                let world = app.world_mut();
+                world.insert_resource(OpenXrSystemState::Available);
+                world.write_message(OpenXrMessageCreateSession);
+            }
+            Err(e) => {
+                warn!("OpenXR unavailable, falling back to desktop rendering: {e}");
+                app.add_plugins(RenderPlugin::default());
+                // OpenXrSystemState stays Unavailable (the default from init_resource),
+                // so all XR session and frame-loop systems are skipped automatically.
+            }
+        }
     }
 
     fn finish(&self, _app: &mut App) {}
@@ -137,7 +143,7 @@ impl OpenXrInitPlugin {
         #[cfg(not(target_os = "windows"))]
         let result = unsafe { openxr::Entry::load() };
 
-        let (entry, _lib) = result.unwrap();
+        let (entry, _lib) = result.map_err(|e| anyhow::anyhow!("Could not load OpenXR runtime: {e}"))?;
 
         let default_settings = self.wgpu_settings.clone().unwrap_or_default();
         let wgpu_backends = default_settings.backends.unwrap_or(wgpu::Backends::VULKAN);
@@ -164,7 +170,7 @@ impl OpenXrInitPlugin {
                 // oxr_extension.oculus_android_session_state_enable = true;
             }
         } else {
-            panic!("Unsupported backend");
+            anyhow::bail!("Unsupported wgpu backend for OpenXR");
         };
         openxr_extensions = intersects_extensions(&entry, openxr_extensions)?;
 
@@ -177,7 +183,7 @@ impl OpenXrInitPlugin {
         };
         let instance = entry
             .create_instance(&application_info, &openxr_extensions, &[])
-            .expect("Could not create OpenXR instance");
+            .map_err(|e| anyhow::anyhow!("Could not create OpenXR instance: {e}"))?;
         let system_id_res = (
             instance.system(FormFactor::HEAD_MOUNTED_DISPLAY),
             instance.system(FormFactor::HANDHELD_DISPLAY),
@@ -185,7 +191,7 @@ impl OpenXrInitPlugin {
         let system_id = match system_id_res {
             (Ok(hmd_system_id), Ok(_)) | (Ok(hmd_system_id), Err(_)) => hmd_system_id,
             (Err(_), Ok(handheld_system_id)) => handheld_system_id,
-            (Err(_), Err(_)) => panic!("No xr system found"),
+            (Err(_), Err(_)) => anyhow::bail!("No XR system found (no HMD or handheld device detected)"),
         };
 
         let system_properties = instance.system_properties(system_id)?;
@@ -219,7 +225,7 @@ impl OpenXrInitPlugin {
                 default_settings,
             )?
         } else {
-            panic!("Unsupported backend");
+            anyhow::bail!("Unsupported wgpu backend for OpenXR");
         };
 
         let openxr_instance = OpenXrInstance {

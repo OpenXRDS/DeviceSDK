@@ -62,6 +62,16 @@ impl XrdsSceneDocumentSession {
         !self.redo_stack.is_empty()
     }
 
+    /// Number of operations available to undo.
+    pub fn undo_count(&self) -> usize {
+        self.undo_stack.len()
+    }
+
+    /// Number of operations available to redo.
+    pub fn redo_count(&self) -> usize {
+        self.redo_stack.len()
+    }
+
     pub fn history_limit(&self) -> usize {
         self.history_limit
     }
@@ -371,6 +381,30 @@ impl XrdsSceneDocumentSession {
                 .set_node_source_link(node_id, source)
                 .map_err(XrdsSceneDocumentEditError::MetadataWorkflow)
         })
+    }
+
+    /// Set the authored transform for a node (translation, rotation, scale).
+    ///
+    /// This is the commit path for inspector field edits and gizmo drags.
+    /// For immediate runtime preview *before* committing, use
+    /// `XrdsUpdateContext::set_translation_for_node` instead.
+    /// Set the authored transform for a node (translation, rotation, scale).
+    ///
+    /// This is the commit path for inspector field edits and gizmo drags.
+    /// Returns `false` if the node id was not found in the document.
+    pub fn set_node_transform(
+        &mut self,
+        node_id: XrdsSceneNodeId,
+        transform: XrdsSceneTransform,
+    ) -> bool {
+        let mut found = false;
+        let _ = self.edit(|document| {
+            if let Some(node) = document.node_mut(node_id) {
+                node.transform = transform;
+                found = true;
+            }
+        });
+        found
     }
 
     pub fn set_node_material(

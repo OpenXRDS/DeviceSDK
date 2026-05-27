@@ -28,6 +28,16 @@ pub(super) struct XrdsStoredEditorMetadata(pub(super) XrdsEditorMetadata);
 #[derive(Component, Debug, Clone, PartialEq)]
 pub(super) struct XrdsStoredSceneGltfNodeAuthoring(pub(super) XrdsSceneGltfNodeAuthoring);
 
+/// Holds the strong Handle<Gltf> for a spawned GLTF entity so the parent
+/// asset stays in Assets<Gltf> for the lifetime of the entity.
+#[derive(Component, Debug, Clone)]
+pub(super) struct XrdsStoredGltfHandle(pub(super) bevy::prelude::Handle<bevy::gltf::Gltf>);
+
+/// Stores the authored HUD text payload on a spawned HUD text entity so that
+/// `export_scene_node_in_world` can reconstruct the document node.
+#[derive(Component, Debug, Clone)]
+pub(super) struct XrdsStoredHudText(pub(super) xrds_scene_graph::XrdsSceneHudText);
+
 #[derive(Component, Debug, Clone, Copy)]
 pub(super) struct XrdsDescriptorType(pub(super) TypeId);
 
@@ -48,7 +58,7 @@ impl Default for XrdsIdAllocator {
 }
 
 #[derive(Resource, Default)]
-pub(super) struct XrdsIdIndex {
+pub struct XrdsIdIndex {
     pub(super) id_to_entity: HashMap<XrdsId, Entity>,
     pub(super) entity_to_id: HashMap<Entity, XrdsId>,
 }
@@ -59,11 +69,20 @@ impl XrdsIdIndex {
         self.entity_to_id.insert(entity, id);
     }
 
-    pub(super) fn id_of(&self, entity: Entity) -> Option<XrdsId> {
+    /// Look up the XRDS id for a Bevy entity.
+    ///
+    /// Useful for viewport picking: the clicked `Entity` (from a
+    /// `Pointer<Click>` event) maps back to the authored `XrdsId`,
+    /// which converts to `XrdsSceneNodeId` for session operations.
+    pub fn id_of(&self, entity: Entity) -> Option<XrdsId> {
         self.entity_to_id.get(&entity).copied()
     }
 
-    pub(super) fn entity_of(&self, id: XrdsId) -> Option<Entity> {
+    /// Look up the Bevy entity for an XRDS id.
+    ///
+    /// Used by editor outline systems that need to add/remove render components
+    /// (e.g. `Wireframe`) to the live entity when the selection changes.
+    pub fn entity_of(&self, id: XrdsId) -> Option<Entity> {
         self.id_to_entity.get(&id).copied()
     }
 

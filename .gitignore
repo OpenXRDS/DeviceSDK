@@ -4,3 +4,8 @@ crates/xrds-net/
 .cargo
 .vscode
 .claude
+games/*
+CLAUDE.md
+SHORTTERM_GOAL.md
+docs/done/*
+docs/EDITOR_TODO.md

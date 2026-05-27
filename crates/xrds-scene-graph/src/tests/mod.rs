@@ -34,6 +34,7 @@ pub(super) fn persistence_test_document() -> XrdsSceneDocument {
             extras: [("theme".to_string(), "industrial".to_string())]
                 .into_iter()
                 .collect(),
+            ..Default::default()
         },
         assets: vec![XrdsSceneAsset {
             id: "asset:lamp".to_string(),

@@ -131,4 +131,53 @@ impl XrdsSceneDocument {
     ) -> Option<&XrdsSceneGltfNodeAuthoring> {
         self.gltf_node_authoring.get(&node_id.0)
     }
+
+    /// Returns a new document containing only `root_id` and all its descendants.
+    ///
+    /// The root node's `parent_id` is cleared to `None` so it becomes a top-level
+    /// export root. Returns `None` if `root_id` does not exist in this document.
+    pub fn subtree_document(&self, root_id: XrdsSceneNodeId) -> Option<XrdsSceneDocument> {
+        use std::collections::{HashSet, VecDeque};
+
+        let mut ids: Vec<XrdsSceneNodeId> = Vec::new();
+        let mut queue = VecDeque::new();
+        queue.push_back(root_id);
+        while let Some(id) = queue.pop_front() {
+            if self.node(id).is_none() {
+                continue;
+            }
+            ids.push(id);
+            for child in self.children_of(id) {
+                queue.push_back(child.id);
+            }
+        }
+        if ids.is_empty() {
+            return None;
+        }
+
+        let id_set: HashSet<XrdsSceneNodeId> = ids.iter().copied().collect();
+
+        let mut nodes: Vec<XrdsSceneNode> = self.nodes.iter()
+            .filter(|n| id_set.contains(&n.id))
+            .cloned()
+            .collect();
+
+        if let Some(root_node) = nodes.iter_mut().find(|n| n.id == root_id) {
+            root_node.parent_id = None;
+            root_node.transform = XrdsSceneTransform::default(); // export at origin, not world position
+        }
+
+        let gltf_node_authoring = self.gltf_node_authoring.iter()
+            .filter(|(k, _)| id_set.contains(&XrdsSceneNodeId(**k)))
+            .map(|(k, v)| (*k, v.clone()))
+            .collect();
+
+        Some(XrdsSceneDocument {
+            version: self.version,
+            metadata: self.metadata.clone(),
+            assets: self.assets.clone(),
+            nodes,
+            gltf_node_authoring,
+        })
+    }
 }

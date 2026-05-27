@@ -403,6 +403,7 @@ fn audio_clip_node_survives_import_export_round_trip() {
                 looped: true,
                 spatial: false,
                 autoplay: true,
+                ..Default::default()
             }),
             editor: XrdsEditorMetadata::default(),
         }],
@@ -607,4 +608,239 @@ fn live_rename_appears_in_exported_document() {
     assert_eq!(root.name, "Renamed Root");
 }
 
+#[test]
+fn light_nodes_survive_import_export_round_trip() {
+    let mut app = xrds_test_app();
 
+    let document = XrdsSceneDocument {
+        nodes: vec![
+            XrdsSceneNode {
+                id: XrdsSceneNodeId(900),
+                parent_id: None,
+                name: "Sun".to_string(),
+                enabled: true,
+                visible: true,
+                transform: XrdsSceneTransform {
+                    translation: [0.0, 5.0, 0.0],
+                    ..Default::default()
+                },
+                payload: XrdsSceneNodePayload::DirectionalLight(XrdsSceneDirectionalLight {
+                    color: [1.0, 0.9, 0.8, 1.0],
+                    illuminance: 8000.0,
+                    shadows: true,
+                }),
+                editor: XrdsEditorMetadata::default(),
+            },
+            XrdsSceneNode {
+                id: XrdsSceneNodeId(901),
+                parent_id: None,
+                name: "Lamp".to_string(),
+                enabled: true,
+                visible: true,
+                transform: XrdsSceneTransform {
+                    translation: [2.0, 3.0, 0.0],
+                    ..Default::default()
+                },
+                payload: XrdsSceneNodePayload::PointLight(XrdsScenePointLight {
+                    color: [0.8, 0.8, 1.0, 1.0],
+                    intensity: 500.0,
+                    range: 8.0,
+                    radius: 0.1,
+                    shadows: false,
+                }),
+                editor: XrdsEditorMetadata::default(),
+            },
+            XrdsSceneNode {
+                id: XrdsSceneNodeId(902),
+                parent_id: None,
+                name: "Spot".to_string(),
+                enabled: true,
+                visible: true,
+                transform: XrdsSceneTransform::default(),
+                payload: XrdsSceneNodePayload::SpotLight(XrdsSceneSpotLight {
+                    color: [1.0, 1.0, 0.8, 1.0],
+                    intensity: 1200.0,
+                    range: 15.0,
+                    inner_angle: 0.2,
+                    outer_angle: 0.5,
+                    shadows: true,
+                }),
+                editor: XrdsEditorMetadata::default(),
+            },
+            XrdsSceneNode {
+                id: XrdsSceneNodeId(903),
+                parent_id: None,
+                name: "Sky".to_string(),
+                enabled: true,
+                visible: true,
+                transform: XrdsSceneTransform::default(),
+                payload: XrdsSceneNodePayload::AmbientLight(XrdsSceneAmbientLight {
+                    color: [0.5, 0.5, 0.6, 1.0],
+                    brightness: 0.3,
+                    affects_baked_lighting: true,
+                }),
+                editor: XrdsEditorMetadata::default(),
+            },
+        ],
+        ..Default::default()
+    };
+
+    {
+        let mut xrds = XrdsAPI::attach(&mut app);
+        xrds.import_scene_document(&document)
+            .expect("light nodes import should succeed");
+    }
+
+    app.update();
+
+    let exported = {
+        let xrds = XrdsAPI::attach(&mut app);
+        xrds.export_scene_document()
+            .expect("export after light import should succeed")
+    };
+
+    let dir_node = exported.node(XrdsSceneNodeId(900)).expect("directional light should export");
+    assert_eq!(dir_node.transform.translation, [0.0, 5.0, 0.0]);
+    let XrdsSceneNodePayload::DirectionalLight(dir) = &dir_node.payload else {
+        panic!("expected DirectionalLight, got {:?}", dir_node.payload);
+    };
+    assert_eq!(dir.color, [1.0, 0.9, 0.8, 1.0]);
+    assert_eq!(dir.illuminance, 8000.0);
+    assert!(dir.shadows);
+
+    let pt_node = exported.node(XrdsSceneNodeId(901)).expect("point light should export");
+    let XrdsSceneNodePayload::PointLight(pt) = &pt_node.payload else {
+        panic!("expected PointLight, got {:?}", pt_node.payload);
+    };
+    assert_eq!(pt.color, [0.8, 0.8, 1.0, 1.0]);
+    assert_eq!(pt.intensity, 500.0);
+    assert_eq!(pt.range, 8.0);
+    assert_eq!(pt.radius, 0.1);
+    assert!(!pt.shadows);
+
+    let spot_node = exported.node(XrdsSceneNodeId(902)).expect("spot light should export");
+    let XrdsSceneNodePayload::SpotLight(spot) = &spot_node.payload else {
+        panic!("expected SpotLight, got {:?}", spot_node.payload);
+    };
+    assert_eq!(spot.intensity, 1200.0);
+    assert_eq!(spot.inner_angle, 0.2);
+    assert_eq!(spot.outer_angle, 0.5);
+    assert!(spot.shadows);
+
+    let amb_node = exported.node(XrdsSceneNodeId(903)).expect("ambient light should export");
+    let XrdsSceneNodePayload::AmbientLight(amb) = &amb_node.payload else {
+        panic!("expected AmbientLight, got {:?}", amb_node.payload);
+    };
+    assert_eq!(amb.color, [0.5, 0.5, 0.6, 1.0]);
+    assert_eq!(amb.brightness, 0.3);
+    assert!(amb.affects_baked_lighting);
+}
+
+#[test]
+fn camera_node_survives_import_export_round_trip() {
+    let mut app = xrds_test_app();
+
+    let document = XrdsSceneDocument {
+        nodes: vec![XrdsSceneNode {
+            id: XrdsSceneNodeId(910),
+            parent_id: None,
+            name: "MainCam".to_string(),
+            enabled: true,
+            visible: true,
+            transform: XrdsSceneTransform {
+                translation: [0.0, 2.0, 5.0],
+                ..Default::default()
+            },
+            payload: XrdsSceneNodePayload::Camera(XrdsSceneCamera {
+                projection: XrdsSceneCameraProjection::Perspective {
+                    fov_deg: 75.0,
+                    near: 0.05,
+                    far: Some(500.0),
+                    order: 0,
+                },
+                look_at: None,
+            }),
+            editor: XrdsEditorMetadata::default(),
+        }],
+        ..Default::default()
+    };
+
+    {
+        let mut xrds = XrdsAPI::attach(&mut app);
+        xrds.import_scene_document(&document)
+            .expect("camera node import should succeed");
+    }
+
+    app.update();
+
+    let exported = {
+        let xrds = XrdsAPI::attach(&mut app);
+        xrds.export_scene_document()
+            .expect("export after camera import should succeed")
+    };
+
+    let cam_node = exported.node(XrdsSceneNodeId(910)).expect("camera should export");
+    assert_eq!(cam_node.name, "MainCam");
+    assert_eq!(cam_node.transform.translation, [0.0, 2.0, 5.0]);
+    let XrdsSceneNodePayload::Camera(cam) = &cam_node.payload else {
+        panic!("expected Camera payload, got {:?}", cam_node.payload);
+    };
+    let XrdsSceneCameraProjection::Perspective { fov_deg, near, far, .. } = cam.projection else {
+        panic!("expected Perspective projection, got {:?}", cam.projection);
+    };
+    assert_eq!(fov_deg, 75.0);
+    assert_eq!(near, 0.05);
+    assert_eq!(far, Some(500.0));
+}
+
+#[test]
+fn text3d_node_survives_import_export_round_trip() {
+    let mut app = xrds_test_app();
+
+    let document = XrdsSceneDocument {
+        nodes: vec![XrdsSceneNode {
+            id: XrdsSceneNodeId(920),
+            parent_id: None,
+            name: "Label".to_string(),
+            enabled: true,
+            visible: true,
+            transform: XrdsSceneTransform {
+                translation: [1.0, 2.0, 0.0],
+                ..Default::default()
+            },
+            payload: XrdsSceneNodePayload::Text(XrdsSceneText {
+                text: "Hello XR".to_string(),
+                font_size: 32.0,
+                color: [0.2, 0.8, 1.0, 1.0],
+                alignment: XrdsSceneTextAlignment::Left,
+            }),
+            editor: XrdsEditorMetadata::default(),
+        }],
+        ..Default::default()
+    };
+
+    {
+        let mut xrds = XrdsAPI::attach(&mut app);
+        xrds.import_scene_document(&document)
+            .expect("text3d node import should succeed");
+    }
+
+    app.update();
+
+    let exported = {
+        let xrds = XrdsAPI::attach(&mut app);
+        xrds.export_scene_document()
+            .expect("export after text3d import should succeed")
+    };
+
+    let text_node = exported.node(XrdsSceneNodeId(920)).expect("text3d node should export");
+    assert_eq!(text_node.name, "Label");
+    assert_eq!(text_node.transform.translation, [1.0, 2.0, 0.0]);
+    let XrdsSceneNodePayload::Text(text) = &text_node.payload else {
+        panic!("expected Text payload, got {:?}", text_node.payload);
+    };
+    assert_eq!(text.text, "Hello XR");
+    assert_eq!(text.font_size, 32.0);
+    assert_eq!(text.color, [0.2, 0.8, 1.0, 1.0]);
+    assert_eq!(text.alignment, XrdsSceneTextAlignment::Left);
+}

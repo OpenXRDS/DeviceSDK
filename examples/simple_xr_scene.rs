@@ -11,7 +11,9 @@ struct SimpleXrSceneApp;
 pub fn main() {
     let runtime = Runtime::new(RuntimeParameters {
         app_name: "SimpleXRScene".to_owned(),
+        asset_path: None,
         enable_xr: true,
+        ..Default::default()
     });
     runtime
         .run_xrds(SimpleXrSceneApp)

@@ -270,7 +270,7 @@ fn tetrahedron_mesh(vertices: [[f32; 3]; 4]) -> Mesh {
 
     Mesh::new(
         PrimitiveTopology::TriangleList,
-        RenderAssetUsages::RENDER_WORLD,
+        RenderAssetUsages::default(),
     )
     .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
     .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
@@ -301,7 +301,7 @@ fn insert_spawned_pbr_recipe_entity(
         Mesh3d(mesh_handle),
         MeshMaterial3d(material_handle),
         build_transform(&transform),
-        build_visibility(visible),
+        build_visibility_hierarchy_components(visible),
         XrdsStoredMaterial(material),
     ));
 }

@@ -111,6 +111,41 @@ impl XrdsAPI<'_> {
         self.entity_of_id(id).map(Handle::from)
     }
 
+    /// Return every XRDS id currently live in the runtime.
+    ///
+    /// Useful for editor hierarchy panels that need to enumerate all nodes without
+    /// holding typed handles.  The order is unspecified.
+    pub fn all_runtime_ids(&self) -> Vec<XrdsId> {
+        self.app
+            .world()
+            .resource::<XrdsIdIndex>()
+            .id_to_entity
+            .keys()
+            .copied()
+            .collect()
+    }
+
+    /// Resolve the parent id for any node by its raw XRDS id.
+    ///
+    /// Complements [`parent_id_of`] for cases where no typed handle is available
+    /// (e.g. editor hierarchy panels that work purely with ids).
+    pub fn parent_id_of_node(&self, id: XrdsId) -> Option<XrdsId> {
+        self.app
+            .world()
+            .resource::<XrdsHierarchyIndex>()
+            .parent_id_of(id)
+    }
+
+    /// Return the child ids for any node by its raw XRDS id.
+    ///
+    /// Complements [`child_ids_of`] for cases where no typed handle is available.
+    pub fn children_ids_of_node(&self, id: XrdsId) -> Vec<XrdsId> {
+        self.app
+            .world()
+            .resource::<XrdsHierarchyIndex>()
+            .child_ids_of(id)
+    }
+
     /// Resolve the authored XRDS parent id for a spawned entity.
     pub fn parent_id_of<C>(&self, handle: &Handle<C>) -> Option<XrdsId> {
         let id = self.id_of(handle)?;
@@ -298,6 +333,13 @@ impl XrdsAPI<'_> {
                     self.spawn_with_id(id, &component)?.entity()
                 }
                 XrdsSceneRuntimeComponent::AudioClip(component) => {
+                    self.spawn_with_id(id, &component)?.entity()
+                }
+                XrdsSceneRuntimeComponent::HudText(hud) => {
+                    reserve_runtime_id_in_world(self.app.world_mut(), id)?;
+                    spawn_hud_text_entity(self.app.world_mut(), id, &hud)
+                }
+                XrdsSceneRuntimeComponent::Text(component) => {
                     self.spawn_with_id(id, &component)?.entity()
                 }
             };
@@ -1304,4 +1346,84 @@ impl XrdsAPI<'_> {
         registry.register_clone::<C>();
         self
     }
+}
+
+/// Spawn a Bevy UI text entity for a HUD text node and register it with XRDS indices.
+pub(super) fn spawn_hud_text_entity(
+    world: &mut World,
+    id: XrdsId,
+    hud: &xrds_scene_graph::XrdsHudTextData,
+) -> Entity {
+    use bevy::text::{TextColor, TextFont};
+    use bevy::ui::{Node, PositionType, Val};
+
+    let [r, g, b, a] = hud.color;
+    let [ox, oy] = hud.offset;
+
+    let mut node = Node {
+        position_type: PositionType::Absolute,
+        ..Default::default()
+    };
+
+    match hud.anchor {
+        xrds_scene_graph::XrdsHudAnchor::TopLeft => {
+            node.top = Val::Px(oy);
+            node.left = Val::Px(ox);
+        }
+        xrds_scene_graph::XrdsHudAnchor::TopCenter => {
+            node.top = Val::Px(oy);
+            node.left = Val::Percent(50.0);
+        }
+        xrds_scene_graph::XrdsHudAnchor::TopRight => {
+            node.top = Val::Px(oy);
+            node.right = Val::Px(ox);
+        }
+        xrds_scene_graph::XrdsHudAnchor::MiddleLeft => {
+            node.top = Val::Percent(50.0);
+            node.left = Val::Px(ox);
+        }
+        xrds_scene_graph::XrdsHudAnchor::Center => {
+            node.top = Val::Percent(50.0);
+            node.left = Val::Percent(50.0);
+        }
+        xrds_scene_graph::XrdsHudAnchor::MiddleRight => {
+            node.top = Val::Percent(50.0);
+            node.right = Val::Px(ox);
+        }
+        xrds_scene_graph::XrdsHudAnchor::BottomLeft => {
+            node.bottom = Val::Px(oy);
+            node.left = Val::Px(ox);
+        }
+        xrds_scene_graph::XrdsHudAnchor::BottomCenter => {
+            node.bottom = Val::Px(oy);
+            node.left = Val::Percent(50.0);
+        }
+        xrds_scene_graph::XrdsHudAnchor::BottomRight => {
+            node.bottom = Val::Px(oy);
+            node.right = Val::Px(ox);
+        }
+    }
+
+    let stored = XrdsStoredHudText(xrds_scene_graph::XrdsSceneHudText {
+        text: hud.text.clone(),
+        font_size: hud.font_size,
+        color: hud.color,
+        anchor: hud.anchor,
+        offset: hud.offset,
+    });
+
+    let entity = world
+        .spawn((
+            bevy::ui::widget::Text::new(hud.text.clone()),
+            node,
+            TextFont { font_size: hud.font_size, ..Default::default() },
+            TextColor(bevy::color::Color::srgba(r, g, b, a)),
+            stored,
+        ))
+        .id();
+
+    world.resource_mut::<XrdsIdIndex>().register(id, entity);
+    world.resource_mut::<XrdsHierarchyIndex>().ensure_node(id);
+
+    entity
 }

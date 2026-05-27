@@ -1258,6 +1258,7 @@ fn audio_clip_node_references_audio_catalog_asset_and_drives_usage_tracking() {
                     looped: false,
                     spatial: true,
                     autoplay: false,
+                    ..Default::default()
                 }),
                 editor: XrdsEditorMetadata::default(),
             },

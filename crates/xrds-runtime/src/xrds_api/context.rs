@@ -87,6 +87,103 @@ impl XrdsUpdateContext<'_> {
         set_translation_in_world(self.world, handle, translation);
     }
 
+    /// Apply translation directly to any live node by its XRDS id.
+    ///
+    /// This is the immediate-preview path for the editor's inspector fields and
+    /// transform gizmo: the runtime component is updated without going through a
+    /// typed handle, so it works for any node type.  For the authoritative
+    /// session commit, call `XrdsSceneDocumentSession::set_node_transform`.
+    pub fn set_translation_for_node(&mut self, id: XrdsId, translation: [f32; 3]) {
+        if let Some(entity) = self.world.resource::<XrdsIdIndex>().entity_of(id) {
+            if let Some(mut params) = transform_params_for_entity(self.world, entity) {
+                params.translation = translation;
+                apply_transform_to_entity(self.world, entity, params);
+            }
+        }
+    }
+
+    /// Apply rotation (quaternion `[x, y, z, w]`) to any live node by its XRDS id.
+    pub fn set_rotation_for_node(&mut self, id: XrdsId, rotation_quat_xyzw: [f32; 4]) {
+        if let Some(entity) = self.world.resource::<XrdsIdIndex>().entity_of(id) {
+            if let Some(mut params) = transform_params_for_entity(self.world, entity) {
+                params.rotation_quat_xyzw = rotation_quat_xyzw;
+                apply_transform_to_entity(self.world, entity, params);
+            }
+        }
+    }
+
+    /// Apply scale to any live node by its XRDS id.
+    pub fn set_scale_for_node(&mut self, id: XrdsId, scale: [f32; 3]) {
+        if let Some(entity) = self.world.resource::<XrdsIdIndex>().entity_of(id) {
+            if let Some(mut params) = transform_params_for_entity(self.world, entity) {
+                params.scale = scale;
+                apply_transform_to_entity(self.world, entity, params);
+            }
+        }
+    }
+
+    /// Apply material params to any live node by its XRDS id.
+    pub fn set_material_params_for_node(&mut self, id: XrdsId, params: XrdsMaterialParams) {
+        if let Some(entity) = self.world.resource::<XrdsIdIndex>().entity_of(id) {
+            set_material_params_for_entity_in_world(self.world, entity, params);
+        }
+    }
+
+    /// Apply point light color/intensity/range to any live node by its XRDS id.
+    pub fn set_point_light_params_for_node(&mut self, id: XrdsId, color: [f32; 4], intensity: f32, range: f32) {
+        if let Some(entity) = self.world.resource::<XrdsIdIndex>().entity_of(id) {
+            if let Some(mut light) = self.world.get_mut::<PointLight>(entity) {
+                light.color = Color::linear_rgba(color[0], color[1], color[2], color[3]);
+                light.intensity = intensity;
+                light.range = range;
+            }
+        }
+    }
+
+    /// Apply directional light color/illuminance to any live node by its XRDS id.
+    pub fn set_directional_light_params_for_node(&mut self, id: XrdsId, color: [f32; 4], illuminance: f32) {
+        if let Some(entity) = self.world.resource::<XrdsIdIndex>().entity_of(id) {
+            if let Some(mut light) = self.world.get_mut::<DirectionalLight>(entity) {
+                light.color = Color::linear_rgba(color[0], color[1], color[2], color[3]);
+                light.illuminance = illuminance;
+            }
+        }
+    }
+
+    /// Apply spot light color/intensity/range/angles to any live node by its XRDS id.
+    pub fn set_spot_light_params_for_node(&mut self, id: XrdsId, color: [f32; 4], intensity: f32, range: f32, inner_angle: f32, outer_angle: f32) {
+        if let Some(entity) = self.world.resource::<XrdsIdIndex>().entity_of(id) {
+            if let Some(mut light) = self.world.get_mut::<SpotLight>(entity) {
+                light.color = Color::linear_rgba(color[0], color[1], color[2], color[3]);
+                light.intensity = intensity;
+                light.range = range;
+                light.inner_angle = inner_angle;
+                light.outer_angle = outer_angle;
+            }
+        }
+    }
+
+    /// Apply ambient light color/brightness to the global AmbientLight resource.
+    pub fn set_ambient_light_params(&mut self, color: [f32; 4], brightness: f32) {
+        if let Some(mut light) = self.world.get_resource_mut::<AmbientLight>() {
+            light.color = Color::linear_rgba(color[0], color[1], color[2], color[3]);
+            light.brightness = brightness;
+        }
+    }
+
+    /// Show or hide a node in the 3D viewport by setting its Bevy `Visibility` component.
+    pub fn set_visible_for_node(&mut self, id: XrdsId, visible: bool) {
+        if let Some(entity) = self.world.resource::<XrdsIdIndex>().entity_of(id) {
+            if let Some(mut v) = self.world.get_mut::<bevy::prelude::Visibility>(entity) {
+                *v = if visible {
+                    bevy::prelude::Visibility::Inherited
+                } else {
+                    bevy::prelude::Visibility::Hidden
+                };
+            }
+        }
+    }
+
     /// Set only the rotation (quaternion `[x, y, z, w]`).
     ///
     /// This is intended for interactive preview updates. For authoritative editor commits,
@@ -362,6 +459,44 @@ impl XrdsUpdateContext<'_> {
     /// Resolve a typed handle from an XRDS id.
     pub fn handle_of<C>(&self, id: XrdsId) -> Option<Handle<C>> {
         handle_of_id_in_world(self.world, id)
+    }
+
+    /// Read an arbitrary Bevy resource from the live world.
+    ///
+    /// This is the escape hatch for `XrdsApp::update()` implementations that
+    /// need to react to custom app-level resources (e.g. editor state, input
+    /// queues) without direct `World` access.  Returns `None` if the resource
+    /// has not been inserted.
+    pub fn resource<T: bevy::prelude::Resource>(&self) -> Option<&T> {
+        self.world.get_resource::<T>()
+    }
+
+    /// Mutably access an arbitrary Bevy resource from `update()`.
+    pub fn resource_mut<T: bevy::prelude::Resource>(&mut self) -> Option<bevy::prelude::Mut<T>> {
+        self.world.get_resource_mut::<T>()
+    }
+
+    /// Despawn all XRDS entities and re-spawn everything from `document`.
+    ///
+    /// Use this when the document has structural changes (new or deleted nodes)
+    /// that cannot be applied with incremental `set_*_for_node` calls.
+    pub fn reimport_scene(
+        &mut self,
+        document: &XrdsSceneDocument,
+    ) -> Result<Vec<XrdsId>, XrdsSceneImportError> {
+        reimport::reimport_scene_in_world(self.world, document)
+    }
+
+    /// Spawn a single new node from `document` without despawning any existing
+    /// entities.  Use this for incremental additions such as palette placement.
+    /// `id` must be the `XrdsId` of a node that exists in `document` but has
+    /// not yet been registered in the XRDS runtime.
+    pub fn spawn_document_node(
+        &mut self,
+        id: XrdsId,
+        document: &XrdsSceneDocument,
+    ) -> Result<XrdsId, XrdsSceneImportError> {
+        reimport::spawn_document_node_in_world(self.world, document, id)
     }
 
     /// Queue a typed update patch from within `on_update`.

@@ -15,6 +15,16 @@ impl From<XrdsSceneNodeId> for XrdsId {
     }
 }
 
+/// XR compositor blend mode for the scene (VR = opaque, AR = passthrough).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum XrdsXrBlendMode {
+    /// Fully opaque VR rendering. Default.
+    #[default]
+    Opaque,
+    /// Alpha-blend compositor passthrough (AR).
+    AlphaBlend,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct XrdsSceneMetadata {
     pub name: String,
@@ -22,7 +32,15 @@ pub struct XrdsSceneMetadata {
     pub default_scene_label: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub environment: Option<XrdsSceneEnvironment>,
+    #[serde(default, skip_serializing_if = "XrdsXrBlendMode::is_default")]
+    pub xr_blend_mode: XrdsXrBlendMode,
     pub extras: BTreeMap<String, String>,
+}
+
+impl XrdsXrBlendMode {
+    fn is_default(&self) -> bool {
+        *self == XrdsXrBlendMode::Opaque
+    }
 }
 
 impl Default for XrdsSceneMetadata {
@@ -32,6 +50,7 @@ impl Default for XrdsSceneMetadata {
             authored_by: None,
             default_scene_label: None,
             environment: None,
+            xr_blend_mode: XrdsXrBlendMode::Opaque,
             extras: BTreeMap::new(),
         }
     }
@@ -59,6 +78,17 @@ pub struct XrdsSceneRuntimeNode {
     pub gltf_node_authoring: Option<XrdsSceneGltfNodeAuthoring>,
 }
 
+/// Data for a HUD text runtime node.  Does not have a world-space transform.
+#[derive(Debug, Clone)]
+pub struct XrdsHudTextData {
+    pub id: XrdsId,
+    pub text: String,
+    pub font_size: f32,
+    pub color: [f32; 4],
+    pub anchor: XrdsHudAnchor,
+    pub offset: [f32; 2],
+}
+
 #[derive(Debug, Clone)]
 pub enum XrdsSceneRuntimeComponent {
     Node(XrdsNode),
@@ -74,6 +104,8 @@ pub enum XrdsSceneRuntimeComponent {
     PointLight(XrdsPointLight),
     SpotLight(XrdsSpotLight),
     AudioClip(XrdsAudioClip),
+    HudText(XrdsHudTextData),
+    Text(XrdsText),
 }
 
 impl XrdsSceneNode {
@@ -294,6 +326,74 @@ impl XrdsSceneNode {
                     looped: clip.looped,
                     spatial: clip.spatial,
                     autoplay: clip.autoplay,
+                }),
+                material: None,
+                editor,
+                gltf_node_authoring: None,
+            },
+            // Interaction zones have no visible mesh at runtime — spawn as an empty node.
+            // The zone shape/grab data is preserved in the document for XR runtimes to read.
+            XrdsSceneNodePayload::InteractionZone(_) => XrdsSceneRuntimeNode {
+                id: self.id.into(),
+                parent_id: self.parent_id.map(Into::into),
+                component: XrdsSceneRuntimeComponent::Node(XrdsNode {
+                    name: self.name.clone(),
+                    enabled: self.enabled,
+                    visible: self.visible,
+                    transform,
+                }),
+                material: None,
+                editor,
+                gltf_node_authoring: None,
+            },
+            // Player spawn points are document-only markers; at runtime the pawn is spawned
+            // separately. Represent as an empty node so the transform is preserved.
+            XrdsSceneNodePayload::PlayerSpawn(_) => XrdsSceneRuntimeNode {
+                id: self.id.into(),
+                parent_id: self.parent_id.map(Into::into),
+                component: XrdsSceneRuntimeComponent::Node(XrdsNode {
+                    name: self.name.clone(),
+                    enabled: self.enabled,
+                    visible: self.visible,
+                    transform,
+                }),
+                material: None,
+                editor,
+                gltf_node_authoring: None,
+            },
+            // HUD text nodes are screen-space UI; carry their display data into runtime.
+            XrdsSceneNodePayload::HudText(hud) => XrdsSceneRuntimeNode {
+                id: self.id.into(),
+                parent_id: self.parent_id.map(Into::into),
+                component: XrdsSceneRuntimeComponent::HudText(XrdsHudTextData {
+                    id: self.id.into(),
+                    text: hud.text.clone(),
+                    font_size: hud.font_size,
+                    color: hud.color,
+                    anchor: hud.anchor,
+                    offset: hud.offset,
+                }),
+                material: None,
+                editor,
+                gltf_node_authoring: None,
+            },
+            // World-space text node.
+            XrdsSceneNodePayload::Text(t) => XrdsSceneRuntimeNode {
+                id: self.id.into(),
+                parent_id: self.parent_id.map(Into::into),
+                component: XrdsSceneRuntimeComponent::Text(XrdsText {
+                    name: self.name.clone(),
+                    enabled: self.enabled,
+                    visible: self.visible,
+                    transform,
+                    text: t.text.clone(),
+                    font_size: t.font_size,
+                    color: t.color,
+                    alignment: match t.alignment {
+                        XrdsSceneTextAlignment::Left => XrdsTextAlignment::Left,
+                        XrdsSceneTextAlignment::Center => XrdsTextAlignment::Center,
+                        XrdsSceneTextAlignment::Right => XrdsTextAlignment::Right,
+                    },
                 }),
                 material: None,
                 editor,
@@ -549,6 +649,48 @@ impl XrdsSceneNode {
             light.visible,
             light.transform,
             XrdsSceneNodePayload::SpotLight(light.into()),
+        )
+    }
+
+    pub fn from_hud_text(
+        id: XrdsSceneNodeId,
+        parent_id: Option<XrdsSceneNodeId>,
+        name: &str,
+        hud: XrdsSceneHudText,
+    ) -> Self {
+        Self::from_parts(
+            id,
+            parent_id,
+            name,
+            true,
+            true,
+            TransformParams::default(),
+            XrdsSceneNodePayload::HudText(hud),
+        )
+    }
+
+    pub fn from_xrds_text(
+        id: XrdsSceneNodeId,
+        parent_id: Option<XrdsSceneNodeId>,
+        text: &XrdsText,
+    ) -> Self {
+        Self::from_parts(
+            id,
+            parent_id,
+            &text.name,
+            text.enabled,
+            text.visible,
+            text.transform,
+            XrdsSceneNodePayload::Text(XrdsSceneText {
+                text: text.text.clone(),
+                font_size: text.font_size,
+                color: text.color,
+                alignment: match text.alignment {
+                    XrdsTextAlignment::Left => XrdsSceneTextAlignment::Left,
+                    XrdsTextAlignment::Center => XrdsSceneTextAlignment::Center,
+                    XrdsTextAlignment::Right => XrdsSceneTextAlignment::Right,
+                },
+            }),
         )
     }
 }

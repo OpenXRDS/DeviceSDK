@@ -4,6 +4,7 @@
 // When To Use: Use when SDK application facade is insufficient and direct lifecycle hooks are required.
 use crate::*;
 use bevy::{
+    asset::UnapprovedPathMode,
     ecs::system::ScheduleSystem,
     gizmos::{config::GizmoConfig, AppGizmoBuilder},
     log::{Level, LogPlugin},
@@ -86,6 +87,32 @@ pub struct Runtime {
 pub struct RuntimeParameters {
     pub app_name: String,
     pub enable_xr: bool,
+    /// Override the directory Bevy's `AssetPlugin` uses to resolve asset paths.
+    ///
+    /// Defaults to `None`, which lets Bevy use its own default (typically the
+    /// `assets/` directory next to the package's `Cargo.toml`).
+    ///
+    /// Set this when the executable's working directory differs from the asset
+    /// root — for example, an editor app in a sub-directory of a workspace that
+    /// shares the workspace-root `assets/` folder:
+    ///
+    /// ```rust,ignore
+    /// RuntimeParameters {
+    ///     asset_path: Some(
+    ///         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    ///             .join("../../assets")
+    ///             .to_string_lossy()
+    ///             .into_owned(),
+    ///     ),
+    ///     ..Default::default()
+    /// }
+    /// ```
+    pub asset_path: Option<String>,
+    /// Allow loading assets from paths outside the configured asset root.
+    ///
+    /// Required when the editor lets users pick arbitrary files from the filesystem
+    /// (e.g. `C:/Users/.../Downloads/model.glb`). Defaults to `false`.
+    pub allow_unapproved_paths: bool,
 }
 
 impl Default for RuntimeParameters {
@@ -93,6 +120,8 @@ impl Default for RuntimeParameters {
         Self {
             app_name: "OpenXRDS".to_owned(),
             enable_xr: false,
+            asset_path: None,
+            allow_unapproved_paths: false,
         }
     }
 }
@@ -103,13 +132,33 @@ pub(crate) fn build_bevy_app(params: &RuntimeParameters) -> App {
     // Add log plugin first for logging in plugin build phase
     app.add_plugins(LogPlugin {
         level: Level::INFO,
-        filter: "bevy=info,wgpu=warn,naga=info,symphonia_bundle_mp3=error,symphonia_core=error".to_owned(),
+        filter: "bevy=info,wgpu=warn,wgpu_hal=off,naga=info,symphonia_bundle_mp3=error,symphonia_core=error,bevy_gltf=error".to_owned(),
         ..Default::default()
     });
 
-    if params.enable_xr {
+    let mut asset_plugin = bevy::asset::AssetPlugin::default();
+    if let Some(ref path) = params.asset_path {
+        asset_plugin.file_path = path.clone();
+    }
+    if params.allow_unapproved_paths {
+        asset_plugin.unapproved_path_mode = UnapprovedPathMode::Allow;
+    }
+
+    let use_xr = params.enable_xr && {
+        if xrds_openxr::is_openxr_available() {
+            true
+        } else {
+            warn!("enable_xr=true but no OpenXR runtime found — falling back to desktop rendering");
+            false
+        }
+    };
+
+    if use_xr {
         app.add_plugins(xrds_openxr::add_plugins(
-            DefaultPlugins.build().disable::<LogPlugin>(),
+            DefaultPlugins
+                .build()
+                .disable::<LogPlugin>()
+                .set(asset_plugin),
             if params.app_name.is_empty() {
                 "OpenXRDS".to_owned()
             } else {
@@ -117,7 +166,12 @@ pub(crate) fn build_bevy_app(params: &RuntimeParameters) -> App {
             },
         ));
     } else {
-        app.add_plugins(DefaultPlugins.build().disable::<LogPlugin>());
+        app.add_plugins(
+            DefaultPlugins
+                .build()
+                .disable::<LogPlugin>()
+                .set(asset_plugin),
+        );
     }
 
     app
@@ -170,11 +224,14 @@ where
     A: XrdsApp + Send + Sync + 'static,
 {
     fn on_construct(&mut self, mut on_construct: OnConstruct) {
-        let mut api = XrdsAPI::attach(on_construct.app_mut());
         let mut app = self
             .app
             .take()
             .expect("XrdsAppAdapter app was already consumed before on_construct");
+        // configure fires first so the app can add plugins (e.g. EguiPlugin) before
+        // XRDS resources are initialised and before app.run() calls finish/cleanup.
+        app.configure(on_construct.app_mut());
+        let mut api = XrdsAPI::attach(on_construct.app_mut());
         app.setup(&mut api);
         api.insert_resource(XrdsAppState { app });
     }
