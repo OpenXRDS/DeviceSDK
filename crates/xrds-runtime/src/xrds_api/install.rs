@@ -12,6 +12,26 @@ pub(super) fn install_xrds(app: &mut App) {
 
     app.add_plugins(XrdsComponentsPlugin);
     app.add_plugins(MaterialPlugin::<XrdsRuntimeMaterial>::default());
+    // Not added in test builds: cosmic-text panics in headless environments with no
+    // system fonts. Round-trip tests only verify document serialization, not rendering.
+    #[cfg(not(test))]
+    {
+        // LoadFonts is inserted by Runtime::build_bevy_app with absolute paths derived from
+        // RuntimeParameters::asset_path. If XrdsAPI::attach is called outside of a Runtime
+        // context, fall back to system fonts so text rendering still works.
+        let has_load_fonts = app.world().contains_resource::<bevy_rich_text3d::LoadFonts>();
+        app.add_plugins(bevy_rich_text3d::Text3dPlugin {
+            load_system_fonts: !has_load_fonts,
+            asynchronous_load: false,
+            // 1024-wide atlas matches the official examples (arabic.rs, spooky.rs).
+            // Needed because size:128 glyphs can reach 192px+ on HiDPI displays,
+            // leaving only 2 glyphs per row in the default 512-wide atlas.
+            default_atlas_dimension: (1024, 512),
+            ..Default::default()
+        });
+        app.add_plugins(bevy_fontmesh::FontMeshPlugin::<bevy::pbr::StandardMaterial>::default());
+    }
+    app.init_resource::<crate::xrds_api::anchor::ActivePlayerAnchorEntity>();
     app.init_resource::<XrdsIdAllocator>();
     app.init_resource::<XrdsIdIndex>();
     app.init_resource::<XrdsHierarchyIndex>();
@@ -60,6 +80,45 @@ pub(super) fn install_xrds(app: &mut App) {
     app.add_systems(
         PostUpdate,
         ensure_visibility_hierarchy_components_system
+            .after(XrdsUpdateSystemSet)
+            .before(bevy::camera::visibility::VisibilitySystems::VisibilityPropagate),
+    );
+    // Billboard — single() fails when there are 2 XR eye cameras; kept separate so
+    // billboard can keep its parent-relative rotation path unchanged.
+    app.add_systems(
+        PostUpdate,
+        crate::xrds_api::billboard::billboard_system
+            .after(bevy::transform::TransformSystems::Propagate)
+            .before(bevy::camera::visibility::VisibilitySystems::VisibilityPropagate),
+    );
+    // Player root sync — runs BEFORE TransformPropagate so the updated player body
+    // position propagates down to all anchor children in the same frame.
+    // Only fires when an XrdsPlayerCamera entity exists (deployed runtime only;
+    // the editor uses its own sync_player_root_system with PlayerPawnMarker).
+    app.add_systems(
+        PostUpdate,
+        crate::xrds_api::anchor::sync_player_root_system
+            .before(bevy::transform::TransformSystems::Propagate),
+    );
+    // Anchor modes — must run AFTER TransformPropagate so camera GlobalTransforms are
+    // fresh, and write GlobalTransform directly so VisibilityPropagate sees the correct
+    // world position this frame without waiting for a second Propagate pass.
+    //
+    // teleport_on_anchor_switch_system runs first (only fires when XrdsPlayerCamera
+    // exists) so the updated camera position is visible to all anchor-mode systems
+    // within the same frame as the switch.
+    app.add_systems(
+        PostUpdate,
+        (
+            crate::xrds_api::anchor::teleport_on_anchor_switch_system,
+            crate::xrds_api::anchor::head_locked_system,
+            crate::xrds_api::anchor::body_locked_system,
+            crate::xrds_api::anchor::comfort_pinned_system,
+            crate::xrds_api::anchor::cylindrical_system,
+            crate::xrds_api::anchor::apply_anchor_fov_system,
+        )
+            .chain()
+            .after(bevy::transform::TransformSystems::Propagate)
             .before(bevy::camera::visibility::VisibilitySystems::VisibilityPropagate),
     );
     app.add_systems(

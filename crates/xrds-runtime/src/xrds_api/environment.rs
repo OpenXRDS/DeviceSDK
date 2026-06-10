@@ -19,6 +19,14 @@ struct XrdsManagedSceneExposureEnvironment;
 #[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct XrdsManagedSceneFogEnvironment;
 
+/// Opt-in marker: cameras with this component always receive scene environment
+/// settings (fog, exposure, IBL) regardless of whether they were spawned by XRDS.
+///
+/// Intended for editor cameras or any camera that should respond to scene-level
+/// environment policy without being part of the XRDS scene graph.
+#[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct XrdsReceivesEnvironment;
+
 pub(super) fn store_imported_scene_environment_in_world(
     world: &mut World,
     environment: Option<XrdsSceneEnvironment>,
@@ -107,25 +115,25 @@ fn sync_managed_scene_exposure_in_world(world: &mut World) {
         return;
     };
 
-    let cameras: Vec<(Entity, bool, bool)> = {
+    let cameras: Vec<(Entity, bool, bool, bool)> = {
         let mut query = world.query_filtered::<(
             Entity,
             Option<&Exposure>,
             Option<&XrdsManagedSceneExposureEnvironment>,
+            Option<&XrdsReceivesEnvironment>,
         ), With<Camera3d>>();
         query
             .iter(world)
-            .map(|(entity, existing_exposure, managed)| {
-                (entity, existing_exposure.is_some(), managed.is_some())
+            .map(|(entity, existing, managed, receives)| {
+                (entity, existing.is_some(), managed.is_some(), receives.is_some())
             })
             .collect()
     };
 
-    for (entity, has_exposure, managed) in cameras {
-        if has_exposure && !managed {
-            continue;
+    for (entity, has_exposure, managed, receives) in cameras {
+        if has_exposure && !managed && !receives {
+            continue; // skip cameras with user-set exposure that haven't opted in
         }
-
         world
             .entity_mut(entity)
             .insert((exposure, XrdsManagedSceneExposureEnvironment));
@@ -138,25 +146,25 @@ fn sync_managed_scene_fog_in_world(world: &mut World) {
         return;
     };
 
-    let cameras: Vec<(Entity, bool, bool)> = {
+    let cameras: Vec<(Entity, bool, bool, bool)> = {
         let mut query = world.query_filtered::<(
             Entity,
             Option<&DistanceFog>,
             Option<&XrdsManagedSceneFogEnvironment>,
+            Option<&XrdsReceivesEnvironment>,
         ), With<Camera3d>>();
         query
             .iter(world)
-            .map(|(entity, existing_fog, managed)| {
-                (entity, existing_fog.is_some(), managed.is_some())
+            .map(|(entity, existing, managed, receives)| {
+                (entity, existing.is_some(), managed.is_some(), receives.is_some())
             })
             .collect()
     };
 
-    for (entity, has_fog, managed) in cameras {
-        if has_fog && !managed {
+    for (entity, has_fog, managed, receives) in cameras {
+        if has_fog && !managed && !receives {
             continue;
         }
-
         world
             .entity_mut(entity)
             .insert((fog.clone(), XrdsManagedSceneFogEnvironment));

@@ -2,7 +2,7 @@ use bevy::{
     camera::{ManualTextureViewHandle, RenderTarget},
     prelude::*,
     render::{
-        extract_resource::ExtractResourcePlugin, texture::ManualTextureView, view::ExtractedView,
+        extract_resource::ExtractResourcePlugin, texture::ManualTextureView,
         MainWorld, Render, RenderApp, RenderSystems,
     },
 };
@@ -11,7 +11,7 @@ use wgpu::TextureViewDescriptor;
 use crate::{
     backends::OpenXrGraphicsBackends,
     openxr::{
-        camera::{OpenXrCameraIndex, OpenXrViewProjection},
+        camera::{OpenXrCameraIndex, OpenXrPlayerRoot, OpenXrViewProjection},
         frame::OpenXrFrameWaiter,
         layers::builder::OpenXrCompositionLayerBuilder,
         resources::{
@@ -88,18 +88,16 @@ impl Plugin for OpenXrRenderPlugin {
                 Render,
                 (
                     openxr_acquire_swapchain_image,
-                    openxr_update_render_views,
                     openxr_wait_swapchain_image,
                 )
                     .chain()
                     .in_set(OpenXrRenderSystems::PreRender)
-                    // .run_if(openxr_in_state_visible)
                     .run_if(resource_equals(OpenXrSessionState::Running)),
             )
             .add_systems(
                 Render,
                 (
-                    openxr_release_swapchain_image, //.run_if(openxr_in_state_visible),
+                    openxr_release_swapchain_image,
                     openxr_end_frame,
                 )
                     .chain()
@@ -229,10 +227,15 @@ fn openxr_update_camera(
 
 fn openxr_update_view_projection(
     mut query: Query<(&mut Transform, &mut Projection, &OpenXrCameraIndex)>,
+    root_q: Query<&Transform, (With<OpenXrPlayerRoot>, Without<OpenXrCameraIndex>)>,
     views: Res<OpenXrViews>,
     graphics_backends: Res<OpenXrGraphicsBackends>,
 ) {
     debug_span!("OpenXrRenderPlugin");
+    // Read Transform directly — avoids the one-frame GlobalTransform propagation lag
+    // since this system runs in PostUpdate before TransformSystems::Propagate.
+    let root = root_q.single().ok().copied();
+
     for (mut transform, mut projection, camera_index) in query.iter_mut() {
         let view = &views.0[camera_index.0 as usize];
         trace!("view: pose={:?}, fov={:?}", view.pose, view.fov);
@@ -253,10 +256,27 @@ fn openxr_update_view_projection(
             panic!("Unexpected projection type for OpenXR camera. Must be Projection::Custom");
         }
 
-        *transform = get_transform(view);
+        let head_pose = get_transform(view);
+        *transform = apply_root_to_pose(root.as_ref(), &head_pose);
         trace!("update_camera transform={:?}", *transform);
     }
     trace!("update_camera")
+}
+
+/// Apply an optional player root to a raw STAGE-space head pose.
+/// Only the root's XZ position and yaw are applied — Y comes entirely from
+/// physical head tracking so standing height is never double-counted.
+fn apply_root_to_pose(root: Option<&Transform>, head_pose: &Transform) -> Transform {
+    match root {
+        Some(r) => {
+            let yaw = r.rotation.to_euler(EulerRot::YXZ).0;
+            let yaw_rot = Quat::from_rotation_y(yaw);
+            let origin = Vec3::new(r.translation.x, 0.0, r.translation.z);
+            Transform::from_translation(origin + yaw_rot * head_pose.translation)
+                .with_rotation(yaw_rot * head_pose.rotation)
+        }
+        None => *head_pose,
+    }
 }
 
 fn get_transform(view: &openxr::View) -> Transform {
@@ -274,13 +294,15 @@ fn get_transform(view: &openxr::View) -> Transform {
 }
 
 fn openxr_update_preview_camera(
-    mut query: Query<&mut Transform, With<OpenXrCamera>>,
+    mut query: Query<&mut Transform, (With<OpenXrCamera>, Without<OpenXrCameraIndex>)>,
+    root_q: Query<&Transform, (With<OpenXrPlayerRoot>, Without<OpenXrCameraIndex>, Without<OpenXrCamera>)>,
     views: Res<OpenXrViews>,
 ) {
     debug_span!("OpenXrRenderPlugin");
+    let root = root_q.single().ok().copied();
+    let head_pose = get_transform(&views.0[0]);
     for mut transform in query.iter_mut() {
-        // TODO: Check condition (left or right)
-        *transform = get_transform(&views.0[0]);
+        *transform = apply_root_to_pose(root.as_ref(), &head_pose);
         trace!("update_user_camera");
     }
 }
@@ -300,22 +322,6 @@ fn openxr_begin_frame(
     )
 }
 
-fn openxr_update_render_views(
-    views: Res<OpenXrViews>,
-    mut query: Query<(&mut ExtractedView, &OpenXrCameraIndex)>,
-) {
-    for (mut extracted_view, camera_index) in query.iter_mut() {
-        let view = &views.0[camera_index.0 as usize];
-        extracted_view.world_from_view =
-            GlobalTransform::default().mul_transform(get_transform(view));
-        // TODO: Make global transform locatable
-        trace!(
-            "update_views: world_from_view={:?}, viewport={:?}",
-            extracted_view.world_from_view,
-            extracted_view.viewport
-        );
-    }
-}
 
 fn openxr_acquire_swapchain_image(
     mut swapchain: ResMut<OpenXrSwapchain>,

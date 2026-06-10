@@ -346,6 +346,14 @@ pub(super) fn export_scene_node_in_world(
         ));
     }
 
+    if let Some(descriptor) = world.get::<XrdsStored<XrdsExtrudedText>>(entity) {
+        return Ok(apply_editor_metadata_to_node(
+            world,
+            entity,
+            XrdsSceneNode::from_xrds_extruded_text(node_id, parent_node_id, &descriptor.0),
+        ));
+    }
+
     Err(XrdsSceneExportError::UnsupportedRuntimeDescriptor(id))
 }
 
@@ -685,6 +693,20 @@ pub(super) fn ambient_light_params_in_world(
             color: stored.0.color,
             brightness: stored.0.brightness,
             affects_baked_lighting: stored.0.affects_baked_lighting,
+        })
+}
+
+pub(super) fn text_params_in_world(
+    world: &World,
+    handle: &Handle<XrdsText>,
+) -> Option<TextParams> {
+    world
+        .get::<XrdsStored<XrdsText>>(handle.entity())
+        .map(|stored| TextParams {
+            text: stored.0.text.clone(),
+            font_size: stored.0.font_size,
+            color: stored.0.color,
+            alignment: stored.0.alignment,
         })
 }
 

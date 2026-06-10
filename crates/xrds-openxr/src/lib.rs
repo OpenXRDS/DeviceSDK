@@ -10,11 +10,18 @@ pub(crate) mod openxr;
 #[cfg(target_os = "windows")]
 mod windows;
 
-pub use openxr::OpenXrCamera;
+pub use openxr::camera::OpenXrCamera;
+pub use openxr::camera::OpenXrCameraIndex;
+pub use openxr::camera::OpenXrPlayerRoot;
+pub use openxr::input::{XrInput, XrInputSource, XrPointerState};
+pub use openxr::render_model::XrControllerModelAssets;
 
 use crate::openxr::{
+    blit::OpenXrBlitPlugin,
     camera::OpenXrCameraPlugin, init::OpenXrInitPlugin,
+    input::XrInputPlugin,
     reference_space::OpenXrReferenceSpacePlugin, render::OpenXrRenderPlugin,
+    render_model::ControllerModelPlugin,
     session::OpenXrSessionPlugin, swapchain::OpenXrSwapchainPlugin,
 };
 
@@ -49,7 +56,10 @@ pub fn add_plugins<PG: PluginGroup>(base_plugins: PG, app_name: String) -> Plugi
         .add(OpenXrReferenceSpacePlugin)
         .add(OpenXrSwapchainPlugin)
         .add(OpenXrCameraPlugin)
-        .add(OpenXrRenderPlugin);
+        .add(OpenXrRenderPlugin)
+        .add(OpenXrBlitPlugin)
+        .add(XrInputPlugin)
+        .add(ControllerModelPlugin);
 
     #[cfg(feature = "preview_window")]
     let plugin_builder = {
@@ -57,6 +67,9 @@ pub fn add_plugins<PG: PluginGroup>(base_plugins: PG, app_name: String) -> Plugi
             primary_window: Some(Window {
                 transparent: true,
                 present_mode: bevy::window::PresentMode::AutoNoVsync,
+                // Keep the preview window focused so keyboard input reaches Bevy
+                // even while the user is looking through the HMD.
+                focused: true,
                 ..Default::default()
             }),
             ..Default::default()

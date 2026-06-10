@@ -95,6 +95,9 @@ pub(super) fn reimport_scene_in_world(
         }
     }
 
+    // ── 4b. Tag Player / PlayerAnchor entities ────────────────────────────────
+    tag_player_anchor_entities(world, document);
+
     // ── 5. Apply materials ────────────────────────────────────────────────────
     for (entity, mat) in material_updates {
         set_material_params_for_entity_in_world(world, entity, mat);
@@ -157,6 +160,27 @@ pub(super) fn spawn_document_node_in_world(
 
     world.resource_mut::<XrdsIdIndex>().register(target_id, entity);
 
+    // Tag Player / PlayerAnchor entities.
+    if let Some(doc_node) = document.nodes.iter().find(|n| XrdsId::from(n.id) == target_id) {
+        if let Ok(mut e) = world.get_entity_mut(entity) {
+            match &doc_node.payload {
+                XrdsSceneNodePayload::Player(_) => { e.insert(XrdsPlayerRoot); }
+                XrdsSceneNodePayload::PlayerAnchor(a) => {
+                    e.insert(XrdsPlayerAnchorRoot);
+                    e.insert(XrdsAnchorFov(a.fov_deg));
+                    if a.is_initial { e.insert(XrdsInitialAnchor); }
+                    let world_tf = authored_world_transform(&document.nodes, doc_node);
+                    e.insert(PlayerAnchorCameraPose {
+                        translation: world_tf.translation,
+                        rotation:    world_tf.rotation,
+                        fov_deg:     a.fov_deg,
+                    });
+                }
+                _ => {}
+            }
+        }
+    }
+
     if let Some(mat) = node.material.clone() {
         set_material_params_for_entity_in_world(world, entity, mat);
     }
@@ -217,6 +241,9 @@ fn spawn_runtime_component(
             Some(spawn_hud_text_for_reimport(commands, hud))
         }
         XrdsSceneRuntimeComponent::Text(c) => Some(spawn_text_descriptor(commands, c)),
+        XrdsSceneRuntimeComponent::ExtrudedText(c) => {
+            Some(spawn_extruded_text_descriptor(commands, c))
+        }
     }
 }
 
@@ -291,4 +318,112 @@ fn spawn_hud_text_for_reimport(
             stored,
         ))
         .id()
+}
+
+/// Tag `XrdsPlayerRoot` and `XrdsPlayerAnchorRoot` (+ related components) on
+/// every entity whose document node carries a `Player` or `PlayerAnchor` payload.
+///
+/// Called after node entities are spawned — both from the full `reimport_scene_in_world`
+/// path (editor) and from the `import_scene_document` / `import_scene_document_json` path
+/// (exported xrds-app runtime).  Without this step, `ActivePlayerAnchorEntity` has nothing
+/// to select and all body-locked anchor systems fall back to legacy "all active" behaviour.
+///
+/// Uses `eprintln!` rather than `info!` so the output is visible even before Bevy's tracing
+/// subscriber is initialised (xrds-app calls `setup()` inside `on_construct`, before the
+/// event loop starts).
+pub(super) fn tag_player_anchor_entities(
+    world: &mut World,
+    document: &XrdsSceneDocument,
+) {
+    let anchor_nodes_in_doc = document.nodes.iter()
+        .filter(|n| matches!(n.payload, XrdsSceneNodePayload::PlayerAnchor(_)))
+        .count();
+    let player_nodes_in_doc = document.nodes.iter()
+        .filter(|n| matches!(n.payload, XrdsSceneNodePayload::Player(_)))
+        .count();
+    eprintln!(
+        "[xrds-runtime] tag_player_anchor_entities: document has {anchor_nodes_in_doc} PlayerAnchor(s), {player_nodes_in_doc} Player(s)"
+    );
+
+    let mut anchor_tagged = 0u32;
+    let mut player_tagged = 0u32;
+
+    for node in &document.nodes {
+        let entity = match world.resource::<XrdsIdIndex>().entity_of(node.id.into()) {
+            Some(e) => e,
+            None => {
+                if matches!(
+                    node.payload,
+                    XrdsSceneNodePayload::PlayerAnchor(_) | XrdsSceneNodePayload::Player(_)
+                ) {
+                    eprintln!(
+                        "[xrds-runtime] tag: node '{}' id={:?} ({}) has NO entity in XrdsIdIndex — skipped",
+                        node.name,
+                        node.id,
+                        match &node.payload {
+                            XrdsSceneNodePayload::PlayerAnchor(_) => "PlayerAnchor",
+                            XrdsSceneNodePayload::Player(_) => "Player",
+                            _ => "other",
+                        }
+                    );
+                }
+                continue;
+            }
+        };
+        match &node.payload {
+            XrdsSceneNodePayload::Player(_) => {
+                if let Ok(mut e) = world.get_entity_mut(entity) {
+                    e.insert(XrdsPlayerRoot);
+                    player_tagged += 1;
+                }
+            }
+            XrdsSceneNodePayload::PlayerAnchor(a) => {
+                if let Ok(mut e) = world.get_entity_mut(entity) {
+                    e.insert(XrdsPlayerAnchorRoot);
+                    e.insert(XrdsAnchorFov(a.fov_deg));
+                    if a.is_initial { e.insert(XrdsInitialAnchor); }
+                    let world_tf = authored_world_transform(&document.nodes, node);
+                    eprintln!(
+                        "[xrds-runtime] tag: PlayerAnchor '{}' (is_initial={}) → entity {:?}, world_pos={:?}, fov={}°",
+                        node.name, a.is_initial, entity, world_tf.translation, a.fov_deg
+                    );
+                    e.insert(PlayerAnchorCameraPose {
+                        translation: world_tf.translation,
+                        rotation:    world_tf.rotation,
+                        fov_deg:     a.fov_deg,
+                    });
+                    anchor_tagged += 1;
+                }
+            }
+            _ => {}
+        }
+    }
+    eprintln!(
+        "[xrds-runtime] tag_player_anchor_entities complete: tagged {anchor_tagged} PlayerAnchor(s), {player_tagged} Player(s)"
+    );
+}
+
+/// Compute an authored node's world-space Transform by walking up the document
+/// parent chain and composing local transforms.
+///
+/// All transforms are authored (pre-runtime) values; no Bevy `GlobalTransform`
+/// is involved, so this is safe to call during scene import before any
+/// `TransformPropagate` pass has run.
+fn authored_world_transform(
+    nodes: &[xrds_scene_graph::XrdsSceneNode],
+    node:  &xrds_scene_graph::XrdsSceneNode,
+) -> Transform {
+    let local = Transform {
+        translation: Vec3::from_array(node.transform.translation),
+        rotation:    Quat::from_array(node.transform.rotation_quat_xyzw),
+        scale:       Vec3::from_array(node.transform.scale),
+    };
+    let Some(parent_id) = node.parent_id else { return local; };
+    let Some(parent) = nodes.iter().find(|n| n.id == parent_id) else { return local; };
+    let parent_world = authored_world_transform(nodes, parent);
+    Transform {
+        translation: parent_world.transform_point(local.translation),
+        rotation:    parent_world.rotation * local.rotation,
+        scale:       parent_world.scale * local.scale,
+    }
 }

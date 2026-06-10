@@ -31,8 +31,19 @@ mod state;
 #[cfg(test)]
 #[path = "tests.rs"]
 mod tests;
+#[path = "xrds_api/anchor.rs"]
+mod anchor;
+#[path = "xrds_api/billboard.rs"]
+mod billboard;
 #[path = "xrds_api/updaters.rs"]
 mod updaters;
+
+pub use anchor::{
+    ActivePlayerAnchorEntity, PlayerAnchorCameraPose,
+    XrdsAnchorFov, XrdsBodyLocked, XrdsComfortPinned, XrdsCylindrical, XrdsHeadLocked,
+    XrdsInitialAnchor, XrdsPlayerAnchorRoot, XrdsPlayerCamera, XrdsPlayerRoot,
+};
+pub use billboard::XrdsBillboard;
 
 use bevy::{ecs::world::CommandQueue, prelude::*};
 use std::any::{Any, TypeId};
@@ -40,7 +51,8 @@ use std::collections::{HashMap, HashSet};
 use std::marker::PhantomData;
 use std::sync::Arc;
 use xrds_components::primitives::{
-    XrdsCube, XrdsCylinder, XrdsPlane3D, XrdsSphere, XrdsTetrahedron, XrdsText, XrdsTextAlignment,
+    XrdsCube, XrdsCylinder, XrdsExtrudedText, XrdsExtrudedTextAlignment, XrdsPlane3D, XrdsSphere,
+    XrdsTetrahedron, XrdsText, XrdsTextAlignment, XrdsTextAnchor,
 };
 use xrds_components::world::lights::{
     XrdsAmbientLight, XrdsDirectionalLight, XrdsPointLight, XrdsSpotLight,
@@ -51,7 +63,8 @@ use xrds_components::{
     CameraProjectionPatch, CubeGeometryParams, CylinderGeometryParams, DirectionalLightParams,
     GltfAssetSourcePatch, NamePatch, OrthographicCameraParams, ParentPatch,
     PerspectiveCameraParams, Plane3DGeometryParams, PointLightParams, SphereGeometryParams,
-    SpotLightParams, TetrahedronGeometryParams, TransformParams, VisibilityPatch,
+    ExtrudedTextParams, SpotLightParams, TetrahedronGeometryParams, TextParams, TransformParams,
+    VisibilityPatch,
     XrdsAssetComponent, XrdsColor, XrdsComponent, XrdsComponentsPlugin, XrdsId, XrdsLinearRgba,
     XrdsMaterialAlphaMode, XrdsMaterialParams, XrdsMaterialPbrParams, XrdsMaterialTextureRef,
     XrdsMaterialTextureSlotKind, XrdsMaterialTextureSlots,
@@ -66,10 +79,18 @@ use xrds_scene_graph::{
 };
 
 pub use context::XrdsUpdateContext;
+pub use environment::XrdsReceivesEnvironment;
 /// Read-only entity→id index exposed for viewport picking systems.
 /// Access as `Res<XrdsIdIndex>` in Bevy systems: `id_index.id_of(entity)`
 /// returns the `XrdsId` for any entity that was spawned by an XRDS import.
 pub use state::XrdsIdIndex;
+
+/// `SystemSet` label for `run_xrds_app_update` (the exclusive system that drives
+/// `XrdsApp::update`).  Runs in `PostUpdate`, before Bevy's `VisibilityPropagate`
+/// and before `ensure_visibility_hierarchy_components_system`, so any entities
+/// spawned by a reimport are visible to the PostUpdate visibility safety-net.
+#[derive(bevy::ecs::schedule::SystemSet, Debug, Hash, PartialEq, Eq, Clone, Copy)]
+pub struct XrdsUpdateSystemSet;
 use environment::*;
 use gltf::*;
 use helper::*;

@@ -146,6 +146,36 @@ impl XrdsAPI<'_> {
             .child_ids_of(id)
     }
 
+    // -----------------------------------------------------------------------
+    // PlayerAnchor API
+    // -----------------------------------------------------------------------
+
+    /// Return the first `PlayerAnchor` document node that has `is_initial: true`,
+    /// or the first `PlayerAnchor` node in document order if none are marked initial.
+    ///
+    /// Used by play-mode startup to find where to spawn the player pawn.
+    pub fn initial_player_anchor_id(&self) -> Option<XrdsId> {
+        use xrds_scene_graph::XrdsSceneNodePayload;
+        let world = self.app.world();
+        let id_index = world.resource::<XrdsIdIndex>();
+        // Access the imported document via the environment resource which holds a copy of the nodes.
+        // Walk all entities with XrdsPlayerAnchorRoot and prefer those with is_initial flag.
+        // Since we don't store the document here, we return the first anchor entity id.
+        let mut first: Option<XrdsId> = None;
+        for (&entity, &id) in &id_index.entity_to_id {
+            if world
+                .get_entity(entity)
+                .ok()
+                .is_some_and(|e| e.contains::<XrdsPlayerAnchorRoot>())
+            {
+                if first.is_none() {
+                    first = Some(id);
+                }
+            }
+        }
+        first
+    }
+
     /// Resolve the authored XRDS parent id for a spawned entity.
     pub fn parent_id_of<C>(&self, handle: &Handle<C>) -> Option<XrdsId> {
         let id = self.id_of(handle)?;
@@ -342,6 +372,9 @@ impl XrdsAPI<'_> {
                 XrdsSceneRuntimeComponent::Text(component) => {
                     self.spawn_with_id(id, &component)?.entity()
                 }
+                XrdsSceneRuntimeComponent::ExtrudedText(component) => {
+                    self.spawn_with_id(id, &component)?.entity()
+                }
             };
 
             self.app
@@ -428,6 +461,11 @@ impl XrdsAPI<'_> {
             document.environment().cloned(),
         );
         let imported_ids = self.import_runtime_nodes(runtime_nodes)?;
+        // Tag Player/PlayerAnchor entities with runtime marker components.
+        // import_runtime_nodes works from XrdsSceneRuntimeComponent (which has no payload
+        // field), so the Player/PlayerAnchor distinction must be recovered from the
+        // original document nodes here.
+        crate::xrds_api::reimport::tag_player_anchor_entities(self.app.world_mut(), document);
         apply_imported_scene_environment_policy_in_world(self.app.world_mut());
         Ok(imported_ids)
     }
@@ -722,6 +760,20 @@ impl XrdsAPI<'_> {
         &mut self,
         handle: &Handle<XrdsAmbientLight>,
         params: AmbientLightParams,
+    ) -> &mut Self {
+        self.queue_update(handle, params)
+    }
+
+    /// Read current 3D text content and styling parameters.
+    pub fn text_params(&self, handle: &Handle<XrdsText>) -> Option<TextParams> {
+        text_params_in_world(self.app.world(), handle)
+    }
+
+    /// Queue a 3D text content and styling update.
+    pub fn set_text_params(
+        &mut self,
+        handle: &Handle<XrdsText>,
+        params: TextParams,
     ) -> &mut Self {
         self.queue_update(handle, params)
     }

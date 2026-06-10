@@ -112,12 +112,47 @@ impl XrdsUpdateContext<'_> {
         }
     }
 
+    /// Update the `XrdsAnchorFov` component on a PlayerAnchor entity without reimport.
+    /// Called during the live-preview phase so the FOV overlay reflects slider changes instantly.
+    pub fn set_anchor_fov_for_node(&mut self, id: XrdsId, fov_deg: f32) {
+        use crate::xrds_api::anchor::XrdsAnchorFov;
+        if let Some(entity) = self.world.resource::<XrdsIdIndex>().entity_of(id) {
+            if let Some(mut fov) = self.world.get_mut::<XrdsAnchorFov>(entity) {
+                fov.0 = fov_deg;
+            }
+        }
+    }
+
     /// Apply scale to any live node by its XRDS id.
     pub fn set_scale_for_node(&mut self, id: XrdsId, scale: [f32; 3]) {
         if let Some(entity) = self.world.resource::<XrdsIdIndex>().entity_of(id) {
             if let Some(mut params) = transform_params_for_entity(self.world, entity) {
                 params.scale = scale;
                 apply_transform_to_entity(self.world, entity, params);
+            }
+        }
+    }
+
+    /// Update the base color of an extruded-text node's `StandardMaterial` in-place.
+    ///
+    /// Use this instead of a full reimport for color-only changes: avoids the
+    /// `bevy_fontmesh::update_text_meshes` deferred-command race condition where
+    /// that system queues commands for a `TextMesh` entity and our reimport
+    /// despawns it before the commands are applied.
+    pub fn set_extruded_text_color_for_node(&mut self, id: XrdsId, color: [f32; 4]) {
+        let Some(entity) = self.world.resource::<XrdsIdIndex>().entity_of(id) else {
+            return;
+        };
+        let mat_handle = self.world
+            .get::<bevy::prelude::MeshMaterial3d<bevy::pbr::StandardMaterial>>(entity)
+            .map(|m| m.0.clone());
+        let Some(handle) = mat_handle else { return; };
+        let [r, g, b, _a] = color;
+        if let Some(mut materials) =
+            self.world.get_resource_mut::<bevy::asset::Assets<bevy::pbr::StandardMaterial>>()
+        {
+            if let Some(mat) = materials.get_mut(&handle) {
+                mat.base_color = bevy::color::Color::srgb(r, g, b);
             }
         }
     }
@@ -304,6 +339,16 @@ impl XrdsUpdateContext<'_> {
         ambient_light_params_in_world(self.world, handle)
     }
 
+    /// Read current 3D text content and styling parameters.
+    pub fn text_params(&self, handle: &Handle<XrdsText>) -> Option<TextParams> {
+        text_params_in_world(self.world, handle)
+    }
+
+    /// Queue a 3D text content and styling update.
+    pub fn set_text_params(&mut self, handle: &Handle<XrdsText>, params: TextParams) {
+        self.queue_update(handle, params);
+    }
+
     /// Read current point light intensity.
     pub fn point_light_intensity<C>(&self, handle: &Handle<C>) -> Option<f32> {
         self.world
@@ -459,6 +504,51 @@ impl XrdsUpdateContext<'_> {
     /// Resolve a typed handle from an XRDS id.
     pub fn handle_of<C>(&self, id: XrdsId) -> Option<Handle<C>> {
         handle_of_id_in_world(self.world, id)
+    }
+
+    /// Update the perspective FOV on a camera entity (live preview).
+    /// Modifies `Projection::Perspective.fov` in-place without reimporting.
+    pub fn set_camera_fov_for_node(&mut self, id: XrdsId, fov_deg: f32) {
+        use bevy::prelude::Projection;
+        let Some(entity) = self.world.resource::<XrdsIdIndex>().entity_of(id) else { return; };
+        if let Some(mut proj) = self.world.get_mut::<Projection>(entity) {
+            if let Projection::Perspective(ref mut p) = *proj {
+                p.fov = fov_deg.to_radians();
+            }
+        }
+    }
+
+    /// Return the animation clip names for a GLTF entity, in clip-index order.
+    ///
+    /// Returns an empty vec if the entity was not spawned by XRDS, if the GLTF
+    /// asset is not yet fully loaded, or if the asset has no animations.
+    pub fn gltf_clip_names(&self, id: XrdsId) -> Vec<(usize, String)> {
+        use bevy::gltf::Gltf;
+        use bevy::prelude::Assets;
+        use crate::xrds_api::state::XrdsStoredGltfHandle;
+
+        let Some(entity) = self.world.resource::<XrdsIdIndex>().entity_of(id) else {
+            return Vec::new();
+        };
+        let Some(handle) = self.world.get::<XrdsStoredGltfHandle>(entity) else {
+            return Vec::new();
+        };
+        let Some(gltf) = self.world.get_resource::<Assets<Gltf>>().and_then(|a| a.get(&handle.0)) else {
+            return Vec::new();
+        };
+        gltf.animations
+            .iter()
+            .enumerate()
+            .map(|(i, anim_h)| {
+                let name = gltf
+                    .named_animations
+                    .iter()
+                    .find(|(_, h)| h.id() == anim_h.id())
+                    .map(|(n, _)| n.to_string())
+                    .unwrap_or_else(|| format!("Clip {i}"));
+                (i, name)
+            })
+            .collect()
     }
 
     /// Read an arbitrary Bevy resource from the live world.

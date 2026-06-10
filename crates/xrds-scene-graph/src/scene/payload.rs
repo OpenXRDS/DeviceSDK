@@ -17,8 +17,11 @@ pub enum XrdsSceneNodePayload {
     AudioClip(XrdsSceneAudioClip),
     InteractionZone(XrdsSceneInteractionZone),
     PlayerSpawn(XrdsScenePlayerSpawn),
+    Player(XrdsScenePlayer),
+    PlayerAnchor(XrdsScenePlayerAnchor),
     HudText(XrdsSceneHudText),
     Text(XrdsSceneText),
+    ExtrudedText(XrdsSceneExtrudedText),
 }
 
 impl XrdsSceneNodePayload {
@@ -39,8 +42,11 @@ impl XrdsSceneNodePayload {
             Self::AudioClip(_) => XrdsGltfExportClass::NodeOnly,
             Self::InteractionZone(_) => XrdsGltfExportClass::NodeOnly,
             Self::PlayerSpawn(_) => XrdsGltfExportClass::NodeOnly,
+            Self::Player(_) => XrdsGltfExportClass::NodeOnly,
+            Self::PlayerAnchor(_) => XrdsGltfExportClass::NodeOnly,
             Self::HudText(_) => XrdsGltfExportClass::NodeOnly,
             Self::Text(_) => XrdsGltfExportClass::NodeOnly,
+            Self::ExtrudedText(_) => XrdsGltfExportClass::NodeOnly,
         }
     }
 }
@@ -939,7 +945,9 @@ pub enum XrdsPlayerLocomotionMode {
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct XrdsScenePlayerSpawn {
     pub locomotion_mode: XrdsPlayerLocomotionMode,
-    /// Horizontal field of view in degrees for the player camera.
+    /// Vertical field of view in degrees for the player camera.
+    /// 60° vertical ≈ 90° horizontal on 16:9 — standard comfortable desktop FOV.
+    /// For XR the headset overrides this with its own optics.
     pub fov_deg: f32,
 }
 
@@ -947,7 +955,62 @@ impl Default for XrdsScenePlayerSpawn {
     fn default() -> Self {
         Self {
             locomotion_mode: XrdsPlayerLocomotionMode::default(),
-            fov_deg: 90.0,
+            fov_deg: 60.0,
+        }
+    }
+}
+
+/// World-space pawn entity.  Parent of one or more `PlayerAnchor` nodes.
+///
+/// `Player` is the moving root for a playable entity — its transform is driven
+/// at runtime by the locomotion system.  `locomotion_mode` and `fov_deg` apply
+/// when the player inhabits any child `PlayerAnchor` (unless that anchor
+/// overrides them).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct XrdsScenePlayer {
+    /// Display label shown in the editor hierarchy.
+    pub label: String,
+    /// Default locomotion mode for all child anchors.
+    pub locomotion_mode: XrdsPlayerLocomotionMode,
+}
+
+impl Default for XrdsScenePlayer {
+    fn default() -> Self {
+        Self {
+            label: "Player".to_string(),
+            locomotion_mode: XrdsPlayerLocomotionMode::default(),
+        }
+    }
+}
+
+/// A playable-entity perspective anchor.
+///
+/// Children whose `Text` payload has a non-World anchor mode are authored in this
+/// node's local coordinate space rather than world space.  Only one `PlayerAnchor`
+/// can be active at a time; switching is an API call.
+///
+/// `PlayerAnchor` with `is_initial: true` replaces `PlayerSpawn` as the scene entry
+/// point.  `PlayerSpawn` is kept as a legacy alias for one migration cycle.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct XrdsScenePlayerAnchor {
+    /// Display label shown in the editor hierarchy and any in-game UI.
+    pub label: String,
+    /// Locomotion mode when the player inhabits this anchor.
+    pub locomotion_mode: XrdsPlayerLocomotionMode,
+    /// Vertical FOV in degrees.  Overridden by HMD optics in XR.
+    pub fov_deg: f32,
+    /// If `true`, the runtime spawns the player pawn at this anchor on play-mode start.
+    /// At most one `PlayerAnchor` per scene should have `is_initial: true`.
+    pub is_initial: bool,
+}
+
+impl Default for XrdsScenePlayerAnchor {
+    fn default() -> Self {
+        Self {
+            label: "Player Anchor".to_string(),
+            locomotion_mode: XrdsPlayerLocomotionMode::default(),
+            fov_deg: 60.0,
+            is_initial: false,
         }
     }
 }
@@ -1001,7 +1064,25 @@ pub enum XrdsSceneTextAlignment {
     Right,
 }
 
-/// World-space 3D text node rendered via `Text2d`.
+/// Spatial anchor mode for world-space text nodes.
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+pub enum XrdsSceneTextAnchor {
+    /// Rotation is fixed — uses the node's authored transform rotation.
+    #[default]
+    World,
+    /// Rotated every frame to face the active `Camera3d`. Useful for nameplates.
+    Billboard,
+    /// Follows all head movements (position + rotation). Full HUD anchor.
+    HeadLocked,
+    /// Follows body position and yaw; ignores head pitch and roll.
+    BodyLocked,
+    /// Like HeadLocked but Z-distance from camera is clamped to `depth_m`.
+    ComfortPinned { depth_m: f32 },
+    /// Text on the inside of a cylinder of `radius_m` centred on the player.
+    Cylindrical { radius_m: f32 },
+}
+
+/// World-space 3D text node rendered via `bevy_rich_text3d`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct XrdsSceneText {
     pub text: String,
@@ -1009,6 +1090,10 @@ pub struct XrdsSceneText {
     /// RGBA colour in 0-1 range.  Default opaque white.
     pub color: [f32; 4],
     pub alignment: XrdsSceneTextAlignment,
+    /// Spatial anchor mode.  Defaults to `World` (fixed rotation).
+    /// `#[serde(default)]` ensures existing scenes without this field load correctly.
+    #[serde(default)]
+    pub anchor: XrdsSceneTextAnchor,
 }
 
 impl Default for XrdsSceneText {
@@ -1017,6 +1102,31 @@ impl Default for XrdsSceneText {
             text: "Text".to_string(),
             font_size: 24.0,
             color: [1.0, 1.0, 1.0, 1.0],
+            alignment: XrdsSceneTextAlignment::Center,
+            anchor: XrdsSceneTextAnchor::World,
+        }
+    }
+}
+
+/// World-space extruded 3D text node rendered via `bevy_fontmesh`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct XrdsSceneExtrudedText {
+    pub text: String,
+    pub font_size: f32,
+    /// RGBA colour in 0-1 range.  Default opaque white.
+    pub color: [f32; 4],
+    /// Z-axis extrusion depth in world units.
+    pub depth: f32,
+    pub alignment: XrdsSceneTextAlignment,
+}
+
+impl Default for XrdsSceneExtrudedText {
+    fn default() -> Self {
+        Self {
+            text: "Text".to_string(),
+            font_size: 24.0,
+            color: [1.0, 1.0, 1.0, 1.0],
+            depth: 0.1,
             alignment: XrdsSceneTextAlignment::Center,
         }
     }

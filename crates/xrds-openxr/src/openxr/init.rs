@@ -175,6 +175,8 @@ impl OpenXrInitPlugin {
         } else {
             anyhow::bail!("Unsupported wgpu backend for OpenXR");
         };
+        openxr_extensions.fb_render_model = true;
+        openxr_extensions.ext_hand_tracking = true;
         openxr_extensions = intersects_extensions(&entry, openxr_extensions)?;
 
         let application_info = ApplicationInfo {
@@ -182,7 +184,7 @@ impl OpenXrInitPlugin {
             application_version: 1,
             engine_name: "bevy",
             engine_version: 17,
-            api_version: openxr::Version::new(1, 1, 49),
+            api_version: openxr::Version::new(1, 1, 0),
         };
         let instance = entry
             .create_instance(&application_info, &openxr_extensions, &[])

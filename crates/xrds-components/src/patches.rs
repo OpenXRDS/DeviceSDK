@@ -1,4 +1,5 @@
 use crate::{CameraProjectionParams, XrdsId};
+use crate::primitives::{XrdsExtrudedTextAlignment, XrdsTextAlignment};
 
 /// Runtime patch payload for scene-graph parenting.
 #[derive(Debug, Clone, Copy, Default)]
@@ -35,4 +36,23 @@ pub struct GltfAssetSourcePatch {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct CameraProjectionPatch {
     pub projection: CameraProjectionParams,
+}
+
+/// Runtime patch payload for 3D text content and styling.
+#[derive(Debug, Clone)]
+pub struct TextParams {
+    pub text: String,
+    pub font_size: f32,
+    pub color: [f32; 4],
+    pub alignment: XrdsTextAlignment,
+}
+
+/// Runtime patch payload for extruded 3D text content and styling.
+#[derive(Debug, Clone)]
+pub struct ExtrudedTextParams {
+    pub text: String,
+    pub font_size: f32,
+    pub color: [f32; 4],
+    pub depth: f32,
+    pub alignment: XrdsExtrudedTextAlignment,
 }

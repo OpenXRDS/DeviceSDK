@@ -305,8 +305,88 @@ fn register_stored_audio_clip_updaters(registry: &mut SurfaceUpdateRegistry) {
     register_common_stored_updaters::<XrdsAudioClip>(registry);
 }
 
+fn register_stored_extruded_text_updaters(registry: &mut SurfaceUpdateRegistry) {
+    register_common_stored_updaters::<XrdsExtrudedText>(registry);
+
+    registry.register::<XrdsExtrudedText, ExtrudedTextParams, _>(|world, entity, params| {
+        use bevy_fontmesh::prelude::{JustifyText, TextAnchor, TextMesh, TextMeshStyle};
+
+        let justify = match params.alignment {
+            XrdsExtrudedTextAlignment::Left => JustifyText::Left,
+            XrdsExtrudedTextAlignment::Center => JustifyText::Center,
+            XrdsExtrudedTextAlignment::Right => JustifyText::Right,
+        };
+
+        if let Some(mut tm) = world.get_mut::<TextMesh>(entity) {
+            tm.text = params.text.clone();
+            tm.style = TextMeshStyle {
+                depth: params.depth,
+                anchor: TextAnchor::Center,
+                justify,
+                ..Default::default()
+            };
+        }
+
+        // Update material color.
+        if let Some(mat_handle) = world
+            .get::<bevy::prelude::MeshMaterial3d<bevy::pbr::StandardMaterial>>(entity)
+            .map(|m| m.0.clone())
+        {
+            let [r, g, b, _a] = params.color;
+            if let Some(mut materials) =
+                world.get_resource_mut::<bevy::asset::Assets<bevy::pbr::StandardMaterial>>()
+            {
+                if let Some(mat) = materials.get_mut(&mat_handle) {
+                    mat.base_color = bevy::color::Color::srgb(r, g, b);
+                }
+            }
+        }
+
+        // Sync the stored descriptor (used by scene export).
+        let _ = with_stored_descriptor_mut::<XrdsExtrudedText, _>(world, entity, |descriptor| {
+            descriptor.text = params.text.clone();
+            descriptor.font_size = params.font_size;
+            descriptor.color = params.color;
+            descriptor.depth = params.depth;
+            descriptor.alignment = params.alignment;
+        });
+    });
+}
+
 fn register_stored_text_updaters(registry: &mut SurfaceUpdateRegistry) {
     register_common_stored_updaters::<XrdsText>(registry);
+
+    registry.register::<XrdsText, TextParams, _>(|world, entity, params| {
+        use bevy::color::Srgba;
+        use bevy_rich_text3d::{Text3d, Text3dStyling, TextAlign};
+
+        let text_align = match params.alignment {
+            XrdsTextAlignment::Left => TextAlign::Left,
+            XrdsTextAlignment::Center => TextAlign::Center,
+            XrdsTextAlignment::Right => TextAlign::Right,
+        };
+
+        if world.get::<Text3d>(entity).is_some() {
+            world.entity_mut(entity).insert(Text3d::new(params.text.clone()));
+        }
+        if let Some(mut s) = world.get_mut::<Text3dStyling>(entity) {
+            s.size = 128.0;
+            s.world_scale = Some(bevy::math::Vec2::splat(params.font_size * 0.01));
+            s.color = Srgba::new(
+                params.color[0],
+                params.color[1],
+                params.color[2],
+                params.color[3],
+            );
+            s.align = text_align;
+        }
+        let _ = with_stored_descriptor_mut::<XrdsText, _>(world, entity, |descriptor| {
+            descriptor.text = params.text.clone();
+            descriptor.font_size = params.font_size;
+            descriptor.color = params.color;
+            descriptor.alignment = params.alignment;
+        });
+    });
 }
 
 fn register_default_mutable_updaters(registry: &mut SurfaceUpdateRegistry) {
@@ -324,6 +404,7 @@ fn register_default_mutable_updaters(registry: &mut SurfaceUpdateRegistry) {
     register_stored_ambient_light_updaters(registry);
     register_stored_audio_clip_updaters(registry);
     register_stored_text_updaters(registry);
+    register_stored_extruded_text_updaters(registry);
 }
 
 fn register_default_primitive_updaters(registry: &mut SurfaceUpdateRegistry) {

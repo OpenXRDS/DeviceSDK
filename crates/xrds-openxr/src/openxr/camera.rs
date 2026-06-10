@@ -24,6 +24,15 @@ impl Default for OpenXrViewProjection {
 #[require(Camera3d, Transform)]
 pub struct OpenXrCamera;
 
+/// Marker for the entity whose world transform is used as the XR player root.
+///
+/// When present, `openxr_update_view_projection` applies head poses relative to
+/// this entity's `GlobalTransform` instead of raw STAGE space.
+/// Spawn it on your locomotion/player entity (e.g. the body the user walks around as).
+/// If absent, poses are applied in raw STAGE world space (original behaviour).
+#[derive(Component, Clone, Copy, Debug, Default)]
+pub struct OpenXrPlayerRoot;
+
 #[derive(Component, ExtractComponent, Clone, Copy, Debug, Default)]
 #[require(Camera3d)]
 pub struct OpenXrCameraIndex(pub u32);

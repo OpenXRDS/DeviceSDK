@@ -110,7 +110,7 @@ fn load_openxr_entry(path: &Path) -> anyhow::Result<(Entry, Arc<Library>)> {
             min_interface_version: 0,
             max_interface_version: openxr::sys::CURRENT_LOADER_RUNTIME_VERSION as u32,
             min_api_version: Version::new(0, 0, 0),
-            max_api_version: Version::new(1, 1, 49), // openxr::sys::CURRENT_API_VERSION,
+            max_api_version: Version::new(1, 2, 0), // stay ahead of runtime ICD versions
         };
 
         let mut negotiate_runtime_request = XrNegotiateRuntimeRequest {

@@ -64,6 +64,9 @@ pub(super) fn register_default_interpreters(registry: &mut SurfaceInterpreterReg
     registry.register_entity::<XrdsText, _>(|text, commands, _asset_server| {
         spawn_text_descriptor(commands, text)
     });
+    registry.register_entity::<XrdsExtrudedText, _>(|text, commands, _asset_server| {
+        spawn_extruded_text_descriptor(commands, text)
+    });
     registry.register_entity::<XrdsTetrahedron, _>(|tetrahedron, commands, _asset_server| {
         let entity = execute_spawn_recipe(
             commands,
@@ -97,4 +100,5 @@ pub(super) fn register_default_descriptor_cloners(registry: &mut SurfaceDescript
     registry.register_clone::<XrdsAmbientLight>();
     registry.register_clone::<XrdsAudioClip>();
     registry.register_clone::<XrdsText>();
+    registry.register_clone::<XrdsExtrudedText>();
 }

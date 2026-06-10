@@ -30,6 +30,8 @@ xrds-components = { workspace = true }
 xrds-openxr = { workspace = true }
 xrds-scene-graph = { workspace = true }
 bevy = { workspace = true }
+bevy_rich_text3d = { workspace = true }
+bevy_fontmesh = { workspace = true }
 gltf = "1.4.1"
 
 [build-dependencies]

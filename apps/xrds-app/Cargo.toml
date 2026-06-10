@@ -1,0 +1,15 @@
+[package]
+name = "xrds-app"
+version = "0.1.0"
+edition = "2021"
+description = "Standalone XR application runtime — loads scene.json from the executable directory."
+
+[[bin]]
+name = "xrds-app"
+path = "src/main.rs"
+
+[dependencies]
+xrds-runtime     = { workspace = true }
+xrds-scene-graph = { workspace = true }
+xrds-openxr      = { workspace = true }
+bevy             = { workspace = true }

@@ -65,7 +65,11 @@ pub struct OnUpdate<'a>(&'a mut App);
 
 impl OnUpdate<'_> {
     pub fn add_systems<M>(&mut self, systems: impl IntoScheduleConfigs<ScheduleSystem, M>) {
-        self.0.add_systems(Update, systems);
+        // PostUpdate guarantees all Update deferred commands are flushed before
+        // run_xrds_app_update executes, eliminating the race condition where
+        // regular Update systems (e.g. bevy_fontmesh::update_text_meshes) queue
+        // commands for entities that reimport_scene_in_world then despawns.
+        self.0.add_systems(PostUpdate, systems);
     }
 }
 
@@ -113,6 +117,12 @@ pub struct RuntimeParameters {
     /// Required when the editor lets users pick arbitrary files from the filesystem
     /// (e.g. `C:/Users/.../Downloads/model.glb`). Defaults to `false`.
     pub allow_unapproved_paths: bool,
+    /// Allow Bevy's winit event loop to start on a non-main thread.
+    ///
+    /// Required when another framework (e.g. Tauri) already owns the main thread's
+    /// event loop. Has no effect on macOS where the main thread is always required.
+    /// Defaults to `false`.
+    pub run_on_any_thread: bool,
 }
 
 impl Default for RuntimeParameters {
@@ -122,6 +132,7 @@ impl Default for RuntimeParameters {
             enable_xr: false,
             asset_path: None,
             allow_unapproved_paths: false,
+            run_on_any_thread: false,
         }
     }
 }
@@ -140,6 +151,40 @@ pub(crate) fn build_bevy_app(params: &RuntimeParameters) -> App {
     if let Some(ref path) = params.asset_path {
         asset_plugin.file_path = path.clone();
     }
+
+    // Resolve the asset root to an absolute path and pre-configure bundled fonts so
+    // bevy_rich_text3d can find them regardless of the working directory at runtime.
+    {
+        use std::path::PathBuf;
+        let asset_root = params.asset_path
+            .as_deref()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                std::env::current_dir()
+                    .map(|d| d.join("assets"))
+                    .unwrap_or_else(|_| PathBuf::from("assets"))
+            });
+        let font_names = [
+            "NotoSans-Regular.ttf",
+            "NotoSans-Bold.ttf",
+            "NotoSans-Italic.ttf",
+            "NotoSans-BoldItalic.ttf",
+        ];
+        let font_paths = font_names
+            .iter()
+            .map(|f| {
+                asset_root
+                    .join("fonts")
+                    .join(f)
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect::<Vec<_>>();
+        app.insert_resource(bevy_rich_text3d::LoadFonts {
+            font_paths,
+            ..Default::default()
+        });
+    }
     if params.allow_unapproved_paths {
         asset_plugin.unapproved_path_mode = UnapprovedPathMode::Allow;
     }
@@ -153,12 +198,16 @@ pub(crate) fn build_bevy_app(params: &RuntimeParameters) -> App {
         }
     };
 
+    let mut winit_plugin = bevy::winit::WinitPlugin::<bevy::winit::WakeUp>::default();
+    winit_plugin.run_on_any_thread = params.run_on_any_thread;
+
     if use_xr {
         app.add_plugins(xrds_openxr::add_plugins(
             DefaultPlugins
                 .build()
                 .disable::<LogPlugin>()
-                .set(asset_plugin),
+                .set(asset_plugin)
+                .set(winit_plugin),
             if params.app_name.is_empty() {
                 "OpenXRDS".to_owned()
             } else {
@@ -170,7 +219,8 @@ pub(crate) fn build_bevy_app(params: &RuntimeParameters) -> App {
             DefaultPlugins
                 .build()
                 .disable::<LogPlugin>()
-                .set(asset_plugin),
+                .set(asset_plugin)
+                .set(winit_plugin),
         );
     }
 
@@ -237,6 +287,6 @@ where
     }
 
     fn on_update(&mut self, mut on_update: OnUpdate) {
-        on_update.add_systems(run_xrds_app_update::<A>);
+        on_update.add_systems(run_xrds_app_update::<A>.in_set(XrdsUpdateSystemSet));
     }
 }

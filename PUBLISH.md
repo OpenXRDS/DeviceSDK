@@ -1,34 +1,61 @@
+# Publish Pipeline
+
 flowchart TD
     A[GUI Editor] --> B[Author Scene Content]
     B --> C[XrdsSceneDocument]
     B --> D[Asset Catalog and Project Assets]
-    B --> E[App or Project Manifest]
 
-    C --> F[Export XRDS Content Package]
-    D --> F
-    E --> F
+    C --> E[Export as Application]
+    D --> E
 
-    F --> G[Publish Pipeline]
-    G --> H[Select Target Device Profile]
+    E --> F[Generated Runner Crate]
+    F --> F1[src/main.rs — XrdsSceneViewer]
+    F --> F2[Cargo.toml — SDK path dependency]
+    F --> F3[assets/ — scene.xrds + all referenced assets]
 
-    H --> I[Generic XR Runner Template]
-    F --> I
+    F --> G[cargo build --release]
+    G --> H[Distributable Binary + assets/]
+    H --> I[Reveal in Explorer — immediately runnable]
 
-    I --> J[Build and Package]
-    J --> K[Installable XR Application]
+    subgraph Future
+        J[App or Project Manifest] --> K[Publish Pipeline]
+        K --> L[Select Target Device Profile]
+        L --> M[Platform Packaging and Signing]
+        M --> N[Store or Sideload Package]
+        N --> O[Deploy to XR Device]
+        O --> P[Launch OpenXR Runtime]
+        P --> Q[Runner Loads XRDS Content]
+        Q --> R[Live XR World on Device]
+    end
 
-    K --> L[Deploy to XR Device]
-    L --> M[Launch OpenXR Runtime]
-    M --> N[Runner Loads XRDS Content]
-    N --> O[XrdsAPI Imports Scene]
-    O --> P[Live XR World on Device]
+    I -.->|future path| K
 
-    Q[Optional App Logic or Gameplay] --> I
-    R[Optional Platform Signing and Store Packaging] --> J
+* The GUI editor authors content and exports a self-contained runner project.
+* Export bundles the scene document, all referenced assets, and a generated Rust runner (XrdsSceneViewer).
+* The runner is built locally with `cargo build --release` — no separate build server required.
+* The resulting binary + assets/ folder is immediately runnable by double-click on the host platform.
+* Validated on Windows, Linux (Ubuntu), and macOS.
 
+## Current Export Flow (Implemented)
 
-* The GUI editor authors content, not the final executable directly.
-* The editor exports an XRDS content package: scene document, assets, manifest.
-* A publish pipeline combines that package with a generic XR runner template.
-* The build step creates an installable XR application for the target device.
-* On device, the runner starts OpenXR, loads the content, and imports it through [XrdsAPI](vscode-file://vscode-app/c:/Program%20Files/Microsoft%20VS%20Code/41dd792b5e/resources/app/out/vs/code/electron-browser/workbench/workbench.html).
+    File → Export as Application…
+      └─ folder picker
+           └─ clone scene, relativize asset URIs
+                └─ copy all catalog assets to assets/
+                     └─ generate Cargo.toml + src/main.rs
+                          └─ cargo build --release (background thread)
+                               └─ copy assets/ to target/release/assets/
+                                    └─ reveal target/release/ in explorer
+
+## Future: Publish Pipeline (Not Yet Implemented)
+
+To ship to XR devices (Meta Quest, Pico, VIVE, etc.) the following is needed on top of the current export:
+
+* **App manifest** — display name, version, permissions, orientation, min/target API level
+* **Target device profile** — per-platform feature flags and dependency gates
+* **Platform packaging** — APK (Android/Quest), IPA (visionOS), or installer (PC VR)
+* **Signing** — developer certificate, store signing, or debug signing for sideload
+* **Store packaging** — App Lab / Meta Store / Steam submission bundle
+* **Device deploy** — ADB sideload (Android) or platform deploy tool
+
+The runner template pattern (generate → build → package) established in Phase 1 is the foundation this pipeline will build on.

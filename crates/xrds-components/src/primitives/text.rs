@@ -10,6 +10,17 @@ pub enum XrdsTextAlignment {
     Right,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum XrdsTextAnchor {
+    #[default]
+    World,
+    Billboard,
+    ComfortPinned { depth_m: f32 },
+    BodyLocked,
+    HeadLocked,
+    Cylindrical { radius_m: f32 },
+}
+
 #[derive(Debug, Clone)]
 pub struct XrdsText {
     pub name: String,
@@ -20,6 +31,7 @@ pub struct XrdsText {
     pub font_size: f32,
     pub color: [f32; 4],
     pub alignment: XrdsTextAlignment,
+    pub anchor: XrdsTextAnchor,
 }
 
 impl XrdsText {
@@ -33,6 +45,7 @@ impl XrdsText {
             font_size: 24.0,
             color: [1.0, 1.0, 1.0, 1.0],
             alignment: XrdsTextAlignment::Center,
+            anchor: XrdsTextAnchor::World,
         }
     }
 

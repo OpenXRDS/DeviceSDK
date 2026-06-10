@@ -137,6 +137,100 @@ impl OpenXrSession {
     }
 
     #[inline]
+    pub fn attach_action_sets(&self, sets: &[&openxr::ActionSet]) -> openxr::Result<()> {
+        openxr_graphics!(&self.0; inner => inner.attach_action_sets(sets))
+    }
+
+    #[inline]
+    pub fn sync_actions<'a>(&self, action_sets: &[openxr::ActiveActionSet<'a>]) -> openxr::Result<()> {
+        openxr_graphics!(&self.0; inner => inner.sync_actions(action_sets))
+    }
+
+    #[inline]
+    pub fn action_state_f32(
+        &self,
+        action: &openxr::Action<f32>,
+        path:   openxr::Path,
+    ) -> openxr::Result<openxr::ActionState<f32>> {
+        openxr_graphics!(&self.0; inner => action.state(inner, path))
+    }
+
+    #[inline]
+    pub fn action_state_bool(
+        &self,
+        action: &openxr::Action<bool>,
+        path:   openxr::Path,
+    ) -> openxr::Result<openxr::ActionState<bool>> {
+        openxr_graphics!(&self.0; inner => action.state(inner, path))
+    }
+
+    #[inline]
+    pub fn action_state_vec2f(
+        &self,
+        action: &openxr::Action<openxr::Vector2f>,
+        path:   openxr::Path,
+    ) -> openxr::Result<openxr::ActionState<openxr::Vector2f>> {
+        openxr_graphics!(&self.0; inner => action.state(inner, path))
+    }
+
+    /// Create a hand tracker for one hand. Requires `XR_EXT_hand_tracking`.
+    #[inline]
+    pub fn create_hand_tracker(&self, hand: openxr::Hand) -> openxr::Result<openxr::HandTracker> {
+        openxr_graphics!(&self.0; inner => inner.create_hand_tracker(hand))
+    }
+
+    /// Create a reference space and return it as an owned `openxr::Space`.
+    /// Used for hand-joint location, which requires the same `SessionInner` as the hand tracker.
+    #[inline]
+    pub fn create_owned_reference_space(
+        &self,
+        ty:   openxr::ReferenceSpaceType,
+        pose: openxr::Posef,
+    ) -> openxr::Result<openxr::Space> {
+        openxr_graphics!(&self.0; inner => inner.create_reference_space(ty, pose))
+    }
+
+    // --- XR_FB_render_model ---
+
+    pub fn enumerate_render_model_paths_fb(&self) -> openxr::Result<Vec<openxr::Path>> {
+        openxr_graphics!(&self.0; inner => inner.enumerate_render_model_paths_fb())
+    }
+
+    pub fn get_render_model_properties_fb(
+        &self,
+        path:  openxr::Path,
+        flags: openxr::RenderModelFlagsFB,
+    ) -> openxr::Result<openxr::RenderModelPropertiesFB> {
+        openxr_graphics!(&self.0; inner => inner.get_render_model_properties_fb(path, flags))
+    }
+
+    pub fn load_render_model_fb(
+        &self,
+        model_key: openxr::sys::RenderModelKeyFB,
+    ) -> openxr::Result<Vec<u8>> {
+        openxr_graphics!(&self.0; inner => inner.load_render_model_fb(model_key))
+    }
+
+    #[inline]
+    pub fn create_action_space(
+        &self,
+        action:         &openxr::Action<openxr::Posef>,
+        subaction_path: openxr::Path,
+    ) -> openxr::Result<openxr::Space> {
+        openxr_graphics!(&self.0; inner => {
+            // create_space takes Session<G> by value in openxr 0.19 (Arc clone — cheap)
+            action.create_space(
+                inner.clone(),
+                subaction_path,
+                openxr::Posef {
+                    orientation: openxr::Quaternionf { x: 0.0, y: 0.0, z: 0.0, w: 1.0 },
+                    position:    openxr::Vector3f    { x: 0.0, y: 0.0, z: 0.0 },
+                },
+            )
+        })
+    }
+
+    #[inline]
     #[allow(unused)]
     pub fn locate_space(
         &self,

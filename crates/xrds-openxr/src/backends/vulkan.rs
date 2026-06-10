@@ -311,7 +311,9 @@ impl OpenXrGraphicsBackend<openxr::Vulkan> for GraphicsInner<openxr::Vulkan> {
                     mip_level_count: 1,
                     sample_count,
                     dimension: wgpu::TextureDimension::D2,
-                    usage: wgpu::TextureUses::COLOR_TARGET | wgpu::TextureUses::COPY_DST,
+                    usage: wgpu::TextureUses::COLOR_TARGET
+                        | wgpu::TextureUses::COPY_DST
+                        | wgpu::TextureUses::RESOURCE,
                     memory_flags: MemoryFlags::empty(),
                     view_formats: vec![],
                 },
@@ -328,7 +330,8 @@ impl OpenXrGraphicsBackend<openxr::Vulkan> for GraphicsInner<openxr::Vulkan> {
                         mip_level_count: 1,
                         sample_count,
                         usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                            | wgpu::TextureUsages::COPY_DST,
+                            | wgpu::TextureUsages::COPY_DST
+                            | wgpu::TextureUsages::TEXTURE_BINDING,
                         view_formats: &[],
                     },
                 )

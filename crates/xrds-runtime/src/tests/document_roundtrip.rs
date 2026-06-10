@@ -813,6 +813,7 @@ fn text3d_node_survives_import_export_round_trip() {
                 font_size: 32.0,
                 color: [0.2, 0.8, 1.0, 1.0],
                 alignment: XrdsSceneTextAlignment::Left,
+                ..Default::default()
             }),
             editor: XrdsEditorMetadata::default(),
         }],

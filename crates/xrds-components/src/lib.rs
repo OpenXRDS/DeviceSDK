@@ -21,8 +21,8 @@ pub use light_params::{
 };
 pub use world::audio::XrdsAudioClip;
 pub use patches::{
-    CameraLookAtPatch, CameraProjectionPatch, GltfAssetSourcePatch, NamePatch, ParentPatch,
-    VisibilityPatch,
+    CameraLookAtPatch, CameraProjectionPatch, ExtrudedTextParams, GltfAssetSourcePatch, NamePatch,
+    ParentPatch, TextParams, VisibilityPatch,
 };
 pub use values::{
     CubeGeometryParams, CylinderGeometryParams, Plane3DGeometryParams, SphereGeometryParams,

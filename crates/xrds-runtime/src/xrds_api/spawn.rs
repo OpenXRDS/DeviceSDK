@@ -457,34 +457,142 @@ pub(super) fn spawn_audio_clip_descriptor(
     entity
 }
 
-// TODO: XrdsText currently uses Text2d which requires Camera2d to render. In apps that only
-// have Camera3d (including the editor), text is invisible at runtime. The proper fix is a
-// billboard mesh with a dynamically-generated text texture so it works with any camera.
-// Until then, the editor uses an egui overlay to approximate text label rendering.
 pub(super) fn spawn_text_descriptor(commands: &mut Commands, text: &XrdsText) -> Entity {
-    use bevy::text::{TextColor, TextFont, TextLayout};
+    use bevy::color::Srgba;
+    use bevy::pbr::StandardMaterial;
+    use bevy::render::alpha::AlphaMode;
+    use bevy_rich_text3d::{Text3d, Text3dStyling, TextAlign, TextAtlas};
+    use crate::xrds_api::anchor::{
+        XrdsBodyLocked, XrdsComfortPinned, XrdsCylindrical, XrdsHeadLocked,
+    };
+    use crate::XrdsBillboard;
+
+    let entity        = commands.spawn_empty().id();
+    let descriptor    = text.clone();
+    let name          = text.name.clone();
+    let transform     = text.transform;
+    let visible       = text.visible;
+    let content       = text.text.clone();
+    let font_size     = text.font_size;
+    let [r, g, b, a]  = text.color;
+    let anchor        = text.anchor;
+    let local_offset  = build_transform(&text.transform);
+    let text_align    = match text.alignment {
+        XrdsTextAlignment::Left   => TextAlign::Left,
+        XrdsTextAlignment::Center => TextAlign::Center,
+        XrdsTextAlignment::Right  => TextAlign::Right,
+    };
+
+    commands.queue(move |world: &mut World| {
+        let material_handle = {
+            let mut materials = world.resource_mut::<bevy::asset::Assets<StandardMaterial>>();
+            materials.add(StandardMaterial {
+                base_color_texture: Some(TextAtlas::DEFAULT_IMAGE.clone()),
+                // Mask(0.5) renders in the opaque pass — reliably visible in XR.
+                // AlphaMode::Blend would go through the transparent pass which fails in
+                // many XR configurations (stereo depth-sort, swapchain alpha channel).
+                // Mask clips sub-threshold alpha at glyph edges (slight aliasing) but
+                // the text is always rendered. This matches the official 3D example.
+                alpha_mode: AlphaMode::Mask(0.5),
+                unlit: true,
+                cull_mode: None,
+                ..Default::default()
+            })
+        };
+        world.entity_mut(entity).insert((
+            Name::new(name),
+            Text3d::new(content),
+            Text3dStyling {
+                // size = rasterization quality in pixels (does not affect world scale).
+                // 128px gives sharper glyphs than the 64px in the official 3D example.
+                // world_scale = em size in world units; font_size 24 → 0.24 m per em.
+                size: 128.0,
+                world_scale: Some(bevy::math::Vec2::splat(font_size * 0.01)),
+                color: Srgba::new(r, g, b, a),
+                align: text_align,
+                ..Default::default()
+            },
+            bevy::prelude::Mesh3d::default(),
+            bevy::prelude::MeshMaterial3d(material_handle),
+            build_transform(&transform),
+            build_visibility_hierarchy_components(visible),
+            XrdsStored(descriptor),
+        ));
+        // Insert the anchor marker after all base components are present.
+        // NoFrustumCulling bypasses Bevy's AABB-based frustum culling, which would
+        // otherwise cull these entities at their authored position before the anchor
+        // system relocates them to the correct HUD position each frame.
+        use bevy::camera::visibility::NoFrustumCulling;
+        match anchor {
+            XrdsTextAnchor::Billboard                  => { world.entity_mut(entity).insert(XrdsBillboard); }
+            XrdsTextAnchor::HeadLocked                 => { world.entity_mut(entity).insert((XrdsHeadLocked { local_offset }, NoFrustumCulling)); }
+            XrdsTextAnchor::BodyLocked                 => { world.entity_mut(entity).insert((XrdsBodyLocked { local_offset }, NoFrustumCulling)); }
+            XrdsTextAnchor::ComfortPinned { depth_m }  => { world.entity_mut(entity).insert((XrdsComfortPinned { depth_m, local_offset }, NoFrustumCulling)); }
+            XrdsTextAnchor::Cylindrical  { radius_m }  => { world.entity_mut(entity).insert((XrdsCylindrical  { radius_m, local_offset }, NoFrustumCulling)); }
+            XrdsTextAnchor::World                      => {}
+        }
+    });
+
+    entity
+}
+
+pub(super) fn spawn_extruded_text_descriptor(
+    commands: &mut Commands,
+    text: &XrdsExtrudedText,
+) -> Entity {
+    use bevy::color::Color;
+    use bevy_fontmesh::prelude::{FontMesh, JustifyText, TextAnchor, TextMesh, TextMeshStyle};
 
     let entity = commands.spawn_empty().id();
     let descriptor = text.clone();
     let name = text.name.clone();
-    let transform = text.transform;
+    // Apply font_size as uniform scale: bevy_fontmesh generates 1 em ≈ 1 world unit.
+    // font_size 24 → scale 0.24 m/em (matches flat text world_scale formula).
+    let mut transform = text.transform;
+    let scale_factor = text.font_size * 0.01;
+    transform.scale = [
+        transform.scale[0] * scale_factor,
+        transform.scale[1] * scale_factor,
+        transform.scale[2] * scale_factor,
+    ];
     let visible = text.visible;
     let content = text.text.clone();
-    let font_size = text.font_size;
-    let [r, g, b, a] = text.color;
+    let [r, g, b, _a] = text.color;
+    let depth = text.depth;
     let justify = match text.alignment {
-        XrdsTextAlignment::Left => Justify::Left,
-        XrdsTextAlignment::Center => Justify::Center,
-        XrdsTextAlignment::Right => Justify::Right,
+        XrdsExtrudedTextAlignment::Left => JustifyText::Left,
+        XrdsExtrudedTextAlignment::Center => JustifyText::Center,
+        XrdsExtrudedTextAlignment::Right => JustifyText::Right,
     };
 
     commands.queue(move |world: &mut World| {
+        let font_handle: bevy::asset::Handle<FontMesh> = world
+            .resource::<bevy::asset::AssetServer>()
+            .load("fonts/NotoSans-Regular.ttf");
+
+        let material_handle = {
+            let mut materials =
+                world.resource_mut::<bevy::asset::Assets<bevy::pbr::StandardMaterial>>();
+            materials.add(bevy::pbr::StandardMaterial {
+                base_color: Color::srgb(r, g, b),
+                ..Default::default()
+            })
+        };
+
         world.entity_mut(entity).insert((
-            Name::new(name),
-            Text2d::new(content),
-            TextFont { font_size, ..Default::default() },
-            TextColor(bevy::color::Color::srgba(r, g, b, a)),
-            TextLayout::new_with_justify(justify),
+            bevy::prelude::Name::new(name),
+            TextMesh {
+                text: content,
+                font: font_handle,
+                style: TextMeshStyle {
+                    depth,
+                    anchor: TextAnchor::Center,
+                    justify,
+                    ..Default::default()
+                },
+            },
+            bevy::prelude::Mesh3d::default(),
+            bevy::prelude::MeshMaterial3d(material_handle),
             build_transform(&transform),
             build_visibility_hierarchy_components(visible),
             XrdsStored(descriptor),

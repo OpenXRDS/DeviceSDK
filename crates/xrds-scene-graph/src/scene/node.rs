@@ -106,6 +106,7 @@ pub enum XrdsSceneRuntimeComponent {
     AudioClip(XrdsAudioClip),
     HudText(XrdsHudTextData),
     Text(XrdsText),
+    ExtrudedText(XrdsExtrudedText),
 }
 
 impl XrdsSceneNode {
@@ -361,6 +362,36 @@ impl XrdsSceneNode {
                 editor,
                 gltf_node_authoring: None,
             },
+            // Player is the world-space pawn entity; spawn as empty node.
+            // XrdsPlayerRoot is inserted by the runtime importer after spawn.
+            XrdsSceneNodePayload::Player(_) => XrdsSceneRuntimeNode {
+                id: self.id.into(),
+                parent_id: self.parent_id.map(Into::into),
+                component: XrdsSceneRuntimeComponent::Node(XrdsNode {
+                    name: self.name.clone(),
+                    enabled: self.enabled,
+                    visible: self.visible,
+                    transform,
+                }),
+                material: None,
+                editor,
+                gltf_node_authoring: None,
+            },
+            // PlayerAnchor is a reference frame for HUD children; spawn as empty node.
+            // XrdsPlayerAnchorRoot is inserted by the runtime importer after spawn.
+            XrdsSceneNodePayload::PlayerAnchor(_) => XrdsSceneRuntimeNode {
+                id: self.id.into(),
+                parent_id: self.parent_id.map(Into::into),
+                component: XrdsSceneRuntimeComponent::Node(XrdsNode {
+                    name: self.name.clone(),
+                    enabled: self.enabled,
+                    visible: self.visible,
+                    transform,
+                }),
+                material: None,
+                editor,
+                gltf_node_authoring: None,
+            },
             // HUD text nodes are screen-space UI; carry their display data into runtime.
             XrdsSceneNodePayload::HudText(hud) => XrdsSceneRuntimeNode {
                 id: self.id.into(),
@@ -393,6 +424,37 @@ impl XrdsSceneNode {
                         XrdsSceneTextAlignment::Left => XrdsTextAlignment::Left,
                         XrdsSceneTextAlignment::Center => XrdsTextAlignment::Center,
                         XrdsSceneTextAlignment::Right => XrdsTextAlignment::Right,
+                    },
+                    anchor: match t.anchor {
+                        XrdsSceneTextAnchor::World                            => XrdsTextAnchor::World,
+                        XrdsSceneTextAnchor::Billboard                        => XrdsTextAnchor::Billboard,
+                        XrdsSceneTextAnchor::HeadLocked                       => XrdsTextAnchor::HeadLocked,
+                        XrdsSceneTextAnchor::BodyLocked                       => XrdsTextAnchor::BodyLocked,
+                        XrdsSceneTextAnchor::ComfortPinned { depth_m }        => XrdsTextAnchor::ComfortPinned { depth_m },
+                        XrdsSceneTextAnchor::Cylindrical  { radius_m }        => XrdsTextAnchor::Cylindrical  { radius_m },
+                    },
+                }),
+                material: None,
+                editor,
+                gltf_node_authoring: None,
+            },
+            // Extruded 3D text node.
+            XrdsSceneNodePayload::ExtrudedText(t) => XrdsSceneRuntimeNode {
+                id: self.id.into(),
+                parent_id: self.parent_id.map(Into::into),
+                component: XrdsSceneRuntimeComponent::ExtrudedText(XrdsExtrudedText {
+                    name: self.name.clone(),
+                    enabled: self.enabled,
+                    visible: self.visible,
+                    transform,
+                    text: t.text.clone(),
+                    font_size: t.font_size,
+                    color: t.color,
+                    depth: t.depth,
+                    alignment: match t.alignment {
+                        XrdsSceneTextAlignment::Left => XrdsExtrudedTextAlignment::Left,
+                        XrdsSceneTextAlignment::Center => XrdsExtrudedTextAlignment::Center,
+                        XrdsSceneTextAlignment::Right => XrdsExtrudedTextAlignment::Right,
                     },
                 }),
                 material: None,
@@ -689,6 +751,40 @@ impl XrdsSceneNode {
                     XrdsTextAlignment::Left => XrdsSceneTextAlignment::Left,
                     XrdsTextAlignment::Center => XrdsSceneTextAlignment::Center,
                     XrdsTextAlignment::Right => XrdsSceneTextAlignment::Right,
+                },
+                anchor: match text.anchor {
+                    XrdsTextAnchor::World                          => XrdsSceneTextAnchor::World,
+                    XrdsTextAnchor::Billboard                      => XrdsSceneTextAnchor::Billboard,
+                    XrdsTextAnchor::HeadLocked                     => XrdsSceneTextAnchor::HeadLocked,
+                    XrdsTextAnchor::BodyLocked                     => XrdsSceneTextAnchor::BodyLocked,
+                    XrdsTextAnchor::ComfortPinned { depth_m }      => XrdsSceneTextAnchor::ComfortPinned { depth_m },
+                    XrdsTextAnchor::Cylindrical   { radius_m }     => XrdsSceneTextAnchor::Cylindrical   { radius_m },
+                },
+            }),
+        )
+    }
+
+    pub fn from_xrds_extruded_text(
+        id: XrdsSceneNodeId,
+        parent_id: Option<XrdsSceneNodeId>,
+        text: &XrdsExtrudedText,
+    ) -> Self {
+        Self::from_parts(
+            id,
+            parent_id,
+            &text.name,
+            text.enabled,
+            text.visible,
+            text.transform,
+            XrdsSceneNodePayload::ExtrudedText(XrdsSceneExtrudedText {
+                text: text.text.clone(),
+                font_size: text.font_size,
+                color: text.color,
+                depth: text.depth,
+                alignment: match text.alignment {
+                    XrdsExtrudedTextAlignment::Left => XrdsSceneTextAlignment::Left,
+                    XrdsExtrudedTextAlignment::Center => XrdsSceneTextAlignment::Center,
+                    XrdsExtrudedTextAlignment::Right => XrdsSceneTextAlignment::Right,
                 },
             }),
         )
