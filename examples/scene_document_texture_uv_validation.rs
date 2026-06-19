@@ -68,6 +68,7 @@ fn authored_scene_document() -> XrdsSceneDocument {
                 transform: XrdsSceneTransform::default(),
                 payload: XrdsSceneNodePayload::Empty,
                 editor: XrdsEditorMetadata::default(),
+                grabbable: false,
             },
             XrdsSceneNode {
                 id: DOCUMENT_CAMERA_ID,
@@ -89,6 +90,7 @@ fn authored_scene_document() -> XrdsSceneDocument {
                     look_at: Some([0.0, 1.2, 0.0]),
                 }),
                 editor: XrdsEditorMetadata::default(),
+                grabbable: false,
             },
             XrdsSceneNode {
                 id: DOCUMENT_BASELINE_PLANE_ID,
@@ -104,8 +106,10 @@ fn authored_scene_document() -> XrdsSceneDocument {
                 payload: XrdsSceneNodePayload::Plane3D(XrdsScenePlane3D {
                     size: [2.0, 2.0],
                     material: baseline_material(),
+                    ..Default::default()
                 }),
                 editor: XrdsEditorMetadata::default(),
+                grabbable: false,
             },
             XrdsSceneNode {
                 id: DOCUMENT_TRANSFORMED_PLANE_ID,
@@ -121,8 +125,10 @@ fn authored_scene_document() -> XrdsSceneDocument {
                 payload: XrdsSceneNodePayload::Plane3D(XrdsScenePlane3D {
                     size: [2.0, 2.0],
                     material: transformed_material(),
+                    ..Default::default()
                 }),
                 editor: XrdsEditorMetadata::default(),
+                grabbable: false,
             },
         ],
         ..Default::default()

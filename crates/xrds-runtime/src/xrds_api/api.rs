@@ -155,7 +155,6 @@ impl XrdsAPI<'_> {
     ///
     /// Used by play-mode startup to find where to spawn the player pawn.
     pub fn initial_player_anchor_id(&self) -> Option<XrdsId> {
-        use xrds_scene_graph::XrdsSceneNodePayload;
         let world = self.app.world();
         let id_index = world.resource::<XrdsIdIndex>();
         // Access the imported document via the environment resource which holds a copy of the nodes.
@@ -174,6 +173,47 @@ impl XrdsAPI<'_> {
             }
         }
         first
+    }
+
+    /// Link a HUD template to a `PlayerAnchor` at runtime.
+    ///
+    /// Despawns any existing HUD instance on the anchor, then spawns a fresh one
+    /// from `template`.  Pass `None` to remove the HUD without spawning a new one.
+    ///
+    /// Call this from `XrdsApp::setup` or `XrdsApp::update` after the scene has
+    /// been imported (i.e. the anchor entity must already exist in the runtime).
+    pub fn link_hud(
+        &mut self,
+        anchor_id: XrdsId,
+        template: Option<&xrds_scene_graph::XrdsHudTemplate>,
+    ) {
+        let world = self.app.world_mut();
+        let anchor_entity = match world.resource::<XrdsIdIndex>().entity_of(anchor_id) {
+            Some(e) => e,
+            None => return,
+        };
+
+        // Despawn any previously-spawned HUD item entities.
+        let old_item_entities: Vec<Entity> = world
+            .get::<XrdsStoredHudInstance>(anchor_entity)
+            .map(|h| h.items.iter().map(|(_, e)| *e).collect())
+            .unwrap_or_default();
+        for e in old_item_entities {
+            if let Ok(e) = world.get_entity_mut(e) {
+                e.despawn();
+            }
+        }
+        if let Ok(mut e) = world.get_entity_mut(anchor_entity) {
+            e.remove::<XrdsStoredHudInstance>();
+        }
+
+        // Spawn new instance if a template was provided.
+        if let Some(t) = template {
+            let instance = spawn_hud_instance_for_anchor(world, anchor_entity, t);
+            if let Ok(mut e) = world.get_entity_mut(anchor_entity) {
+                e.insert(instance);
+            }
+        }
     }
 
     /// Resolve the authored XRDS parent id for a spawned entity.
@@ -195,6 +235,61 @@ impl XrdsAPI<'_> {
             .world()
             .resource::<XrdsHierarchyIndex>()
             .child_ids_of(id)
+    }
+
+    /// Mark an entity as pick-up-able by the XR grab system.
+    ///
+    /// After this call the entity will be found by the SDK's trigger-press raycast and
+    /// can be picked up with the controller trigger in XR play mode.
+    pub fn make_grabbable<C>(&mut self, handle: &Handle<C>) -> &mut Self {
+        if let Ok(mut e) = self.app.world_mut().get_entity_mut(handle.entity()) {
+            e.insert(xrds_components::XrGrabbable);
+        }
+        self
+    }
+
+    /// Mark an entity by XRDS id as pick-up-able.
+    ///
+    /// Use this variant when you have an [`XrdsId`] rather than a typed handle — for example
+    /// after [`import_scene_document_json`] where the ids come from the document.
+    pub fn make_grabbable_by_id(&mut self, id: XrdsId) -> &mut Self {
+        let world = self.app.world_mut();
+        if let Some(entity) = world.resource::<XrdsIdIndex>().entity_of(id) {
+            if let Ok(mut e) = world.get_entity_mut(entity) {
+                e.insert(xrds_components::XrGrabbable);
+            }
+        }
+        self
+    }
+
+    /// Remove the `XrGrabbable` marker from an entity (makes it non-grabbable again).
+    pub fn make_ungrabable<C>(&mut self, handle: &Handle<C>) -> &mut Self {
+        if let Ok(mut e) = self.app.world_mut().get_entity_mut(handle.entity()) {
+            e.remove::<xrds_components::XrGrabbable>();
+        }
+        self
+    }
+
+    /// Return a random world-space position within a randomly chosen `PlayerSpawnZone` in the scene.
+    ///
+    /// Picks from all zones regardless of ownership. Y is taken from the zone centre (not randomised).
+    /// Returns `None` if no spawn zones exist.
+    pub fn random_spawn_zone_position(&self) -> Option<Vec3> {
+        random_spawn_zone_position_in_world(self.app.world(), None)
+    }
+
+    /// Return a random spawn position from zones designated for `player_node_id`,
+    /// falling back to shared zones (no owner) when no designated zones exist.
+    ///
+    /// Use this in multi-player / team scenarios where each player has its own spawn zone.
+    /// Returns `None` if no eligible zones are found.
+    pub fn random_spawn_zone_position_for(&self, player_node_id: u64) -> Option<Vec3> {
+        random_spawn_zone_position_in_world(self.app.world(), Some(player_node_id))
+    }
+
+    /// Teleport the player (the entity tagged `XrdsPlayerRoot`) to `position`.
+    pub fn teleport_player(&mut self, position: Vec3) {
+        teleport_player_in_world(self.app.world_mut(), position);
     }
 
     /// Rename an entity through XRDS and keep the descriptor name in sync.
@@ -375,6 +470,10 @@ impl XrdsAPI<'_> {
                 XrdsSceneRuntimeComponent::ExtrudedText(component) => {
                     self.spawn_with_id(id, &component)?.entity()
                 }
+                XrdsSceneRuntimeComponent::InteractionZone(node, zone) => {
+                    reserve_runtime_id_in_world(self.app.world_mut(), id)?;
+                    spawn_interaction_zone_entity(self.app.world_mut(), id, &node, &zone)
+                }
             };
 
             self.app
@@ -466,6 +565,8 @@ impl XrdsAPI<'_> {
         // field), so the Player/PlayerAnchor distinction must be recovered from the
         // original document nodes here.
         crate::xrds_api::reimport::tag_player_anchor_entities(self.app.world_mut(), document);
+        crate::xrds_api::reimport::tag_grabbable_entities(self.app.world_mut(), document);
+        crate::xrds_api::reimport::tag_spawn_zone_entities(self.app.world_mut(), document);
         apply_imported_scene_environment_policy_in_world(self.app.world_mut());
         Ok(imported_ids)
     }
@@ -776,6 +877,35 @@ impl XrdsAPI<'_> {
         params: TextParams,
     ) -> &mut Self {
         self.queue_update(handle, params)
+    }
+
+    /// Spawn a 3D head-locked HUD text label at the given camera-space offset.
+    ///
+    /// The label follows the player's head — it stays at a fixed position relative
+    /// to the camera regardless of where the player looks or moves.
+    ///
+    /// `offset` is camera-space: `+X` right, `+Y` up, `-Z` in front of the camera.
+    /// A typical starting point is `Vec3::new(0.0, -0.1, -0.5)` — 50 cm in front,
+    /// 10 cm below the centre line.
+    ///
+    /// Update the text at runtime with [`Self::set_text_params`] (in setup) or
+    /// [`XrdsUpdateContext::set_text_params`] (in update).
+    pub fn spawn_hud_label(&mut self, text: &str, offset: Vec3) -> Handle<XrdsText> {
+        let descriptor = XrdsText {
+            name: "HudLabel".to_string(),
+            text: text.to_string(),
+            font_size: 4.0,
+            color: [1.0, 1.0, 1.0, 1.0],
+            alignment: XrdsTextAlignment::Center,
+            anchor: XrdsTextAnchor::HeadLocked,
+            transform: TransformParams {
+                translation: offset.to_array(),
+                ..Default::default()
+            },
+            enabled: true,
+            visible: true,
+        };
+        self.spawn(&descriptor)
     }
 
     /// Queue a cube geometry update.

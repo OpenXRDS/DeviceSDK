@@ -11,6 +11,7 @@ fn document_validation_rejects_missing_parent() {
             visible: true,
             transform: XrdsSceneTransform::default(),
             payload: XrdsSceneNodePayload::Empty,
+            grabbable: false,
             editor: XrdsEditorMetadata::default(),
         }],
         ..Default::default()
@@ -35,6 +36,7 @@ fn primitives_are_marked_for_mesh_bake_on_gltf_export() {
         visible: true,
         transform: XrdsSceneTransform::default(),
         payload: XrdsSceneNodePayload::Cube(XrdsSceneCube::default()),
+        grabbable: false,
         editor: XrdsEditorMetadata::default(),
     };
 
@@ -106,6 +108,7 @@ fn runtime_projection_preserves_ids_parents_and_gltf_references() {
                 visible: true,
                 transform: XrdsSceneTransform::default(),
                 payload: XrdsSceneNodePayload::Empty,
+                grabbable: false,
                 editor: XrdsEditorMetadata::default(),
             },
             XrdsSceneNode {
@@ -121,6 +124,7 @@ fn runtime_projection_preserves_ids_parents_and_gltf_references() {
                     scene_index: 0,
                     export_policy: XrdsGltfAssetExportPolicy::KeepExternalReference,
                 }),
+                grabbable: false,
                 editor: XrdsEditorMetadata::default(),
             },
         ],
@@ -172,7 +176,9 @@ fn runtime_projection_preserves_material_for_mesh_nodes() {
                 },
                 textures: XrdsSceneMaterialTextureSlots::default(),
             },
+            ..Default::default()
         }),
+        grabbable: false,
         editor: XrdsEditorMetadata::default(),
     };
 

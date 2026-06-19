@@ -14,8 +14,9 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 use xrds_components::primitives::{
-    XrdsCube, XrdsCylinder, XrdsExtrudedText, XrdsExtrudedTextAlignment, XrdsPlane3D, XrdsSphere,
-    XrdsTetrahedron, XrdsText, XrdsTextAlignment, XrdsTextAnchor,
+    XrdsCube, XrdsCylinder, XrdsExtrudedText, XrdsExtrudedTextAlignment,
+    XrdsPlane3D, XrdsSphere, XrdsTetrahedron, XrdsText, XrdsTextAlignment,
+    XrdsTextAnchor,
 };
 use xrds_components::world::lights::{
     XrdsAmbientLight, XrdsDirectionalLight, XrdsPointLight, XrdsSpotLight,
@@ -29,6 +30,7 @@ use xrds_components::{
     XrdsMaterialTextureUvTransformMode,
     XrdsMaterialTextureWrapMode,
 };
+pub use xrds_components::XrdsPhysicsBody;
 
 mod scene;
 pub use scene::*;

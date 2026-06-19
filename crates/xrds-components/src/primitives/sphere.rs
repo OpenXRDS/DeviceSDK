@@ -1,5 +1,6 @@
 use crate::{
     default_component_name, TransformParams, XrdsComponent, XrdsMutableComponent, XrdsObject,
+    XrdsPhysicsBody,
 };
 
 #[derive(Debug, Clone)]
@@ -9,6 +10,9 @@ pub struct XrdsSphere {
     pub visible: bool,
     pub transform: TransformParams,
     pub radius: f32,
+    pub physics_body: XrdsPhysicsBody,
+    pub gravity_scale: f32,
+    pub mass: f32,
 }
 
 impl XrdsSphere {
@@ -19,6 +23,9 @@ impl XrdsSphere {
             visible: true,
             transform: TransformParams::default(),
             radius: 0.5,
+            physics_body: XrdsPhysicsBody::None,
+            gravity_scale: 1.0,
+            mass: 1.0,
         }
     }
 

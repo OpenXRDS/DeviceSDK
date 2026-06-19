@@ -1,9 +1,40 @@
 use super::*;
+use avian3d::prelude::{Collider, RigidBody};
 use bevy::audio::{AudioSource, PlaybackMode, PlaybackSettings, Volume};
 use bevy::core_pipeline::core_3d::graph::Core3d;
 use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::post_process::bloom::Bloom;
 use bevy::render::camera::CameraRenderGraph;
+
+fn insert_physics_components<T, F>(
+    world: &mut World,
+    entity: Entity,
+    physics_body: XrdsPhysicsBody,
+    gravity_scale: f32,
+    mass: f32,
+    make_collider: F,
+    params: T,
+) where
+    F: FnOnce(T) -> Collider,
+{
+    match physics_body {
+        XrdsPhysicsBody::None => {}
+        XrdsPhysicsBody::Static => {
+            world.entity_mut(entity).insert((RigidBody::Static, make_collider(params)));
+        }
+        XrdsPhysicsBody::Dynamic => {
+            // SweptCcd prevents tunneling for fast-moving bodies (especially boxes whose
+            // corner-based contact detection is less robust than sphere's center check).
+            world.entity_mut(entity).insert((
+                RigidBody::Dynamic,
+                make_collider(params),
+                avian3d::prelude::SweptCcd::default(),
+                avian3d::prelude::GravityScale(gravity_scale),
+                avian3d::prelude::Mass(mass),
+            ));
+        }
+    }
+}
 
 fn camera_transform_with_look_at(camera: &XrdsCamera) -> TransformParams {
     let mut params = camera.transform;
@@ -143,6 +174,9 @@ pub(super) fn spawn_cube_descriptor(commands: &mut Commands, cube: &XrdsCube) ->
     let transform = cube.transform;
     let visible = cube.visible;
     let size = cube.size;
+    let physics_body = cube.physics_body;
+    let gravity_scale = cube.gravity_scale;
+    let mass = cube.mass;
     let material = XrdsMaterialParams::default();
 
     commands.queue(move |world: &mut World| {
@@ -159,6 +193,9 @@ pub(super) fn spawn_cube_descriptor(commands: &mut Commands, cube: &XrdsCube) ->
             XrdsStored(descriptor),
         ));
         apply_authored_material_to_entity(world, entity, material);
+        insert_physics_components(world, entity, physics_body, gravity_scale, mass, |pb| {
+            avian3d::prelude::Collider::cuboid(pb[0] / 2.0, pb[1] / 2.0, pb[2] / 2.0)
+        }, size);
     });
 
     entity
@@ -175,6 +212,9 @@ pub(super) fn spawn_cylinder_descriptor(
     let visible = cylinder.visible;
     let radius = cylinder.radius;
     let height = cylinder.height;
+    let physics_body = cylinder.physics_body;
+    let gravity_scale = cylinder.gravity_scale;
+    let mass = cylinder.mass;
     let material = XrdsMaterialParams::default();
 
     commands.queue(move |world: &mut World| {
@@ -191,6 +231,10 @@ pub(super) fn spawn_cylinder_descriptor(
             XrdsStored(descriptor),
         ));
         apply_authored_material_to_entity(world, entity, material);
+        // Avian3d cylinder: radius, half_height
+        insert_physics_components(world, entity, physics_body, gravity_scale, mass, |_| {
+            avian3d::prelude::Collider::cylinder(radius, height / 2.0)
+        }, [0.0f32; 1]);
     });
 
     entity
@@ -203,6 +247,9 @@ pub(super) fn spawn_sphere_descriptor(commands: &mut Commands, sphere: &XrdsSphe
     let transform = sphere.transform;
     let visible = sphere.visible;
     let radius = sphere.radius;
+    let physics_body = sphere.physics_body;
+    let gravity_scale = sphere.gravity_scale;
+    let mass = sphere.mass;
     let material = XrdsMaterialParams::default();
 
     commands.queue(move |world: &mut World| {
@@ -219,6 +266,9 @@ pub(super) fn spawn_sphere_descriptor(commands: &mut Commands, sphere: &XrdsSphe
             XrdsStored(descriptor),
         ));
         apply_authored_material_to_entity(world, entity, material);
+        insert_physics_components(world, entity, physics_body, gravity_scale, mass, |_| {
+            avian3d::prelude::Collider::sphere(radius)
+        }, [0.0f32; 1]);
     });
 
     entity
@@ -231,6 +281,9 @@ pub(super) fn spawn_plane_descriptor(commands: &mut Commands, plane: &XrdsPlane3
     let transform = plane.transform;
     let visible = plane.visible;
     let size = plane.size;
+    let physics_body = plane.physics_body;
+    let gravity_scale = plane.gravity_scale;
+    let mass = plane.mass;
     let material = XrdsMaterialParams::default();
 
     commands.queue(move |world: &mut World| {
@@ -247,6 +300,10 @@ pub(super) fn spawn_plane_descriptor(commands: &mut Commands, plane: &XrdsPlane3
             XrdsStored(descriptor),
         ));
         apply_authored_material_to_entity(world, entity, material);
+        // Half-space: infinite solid below the plane's surface — no tunneling, perfect alignment.
+        insert_physics_components(world, entity, physics_body, gravity_scale, mass, |_| {
+            avian3d::prelude::Collider::half_space(Vec3::Y)
+        }, size);
     });
 
     entity
@@ -600,6 +657,109 @@ pub(super) fn spawn_extruded_text_descriptor(
     });
 
     entity
+}
+
+/// Spawn an interaction zone as an avian3d sensor collider, registering it in the XRDS id index.
+/// No mesh is created — the zone is purely a trigger volume.
+pub(super) fn spawn_interaction_zone_entity(
+    world: &mut World,
+    id: XrdsId,
+    node: &xrds_components::world::XrdsNode,
+    zone: &xrds_components::XrdsInteractionZone,
+) -> Entity {
+    use avian3d::prelude::{CollisionEventsEnabled, Sensor};
+
+    let collider = match zone.shape {
+        xrds_components::XrdsInteractionZoneShape::Sphere { radius } => {
+            Collider::sphere(radius)
+        }
+        xrds_components::XrdsInteractionZoneShape::Box { half_extents: [hx, hy, hz] } => {
+            Collider::cuboid(hx * 2.0, hy * 2.0, hz * 2.0)
+        }
+    };
+
+    let entity = world
+        .spawn((
+            bevy::prelude::Name::new(node.name.clone()),
+            build_transform(&node.transform),
+            build_visibility_hierarchy_components(node.visible),
+            collider,
+            Sensor,
+            CollisionEventsEnabled,
+            *zone,
+        ))
+        .id();
+
+    world.resource_mut::<XrdsIdIndex>().register(id, entity);
+    world.resource_mut::<XrdsHierarchyIndex>().ensure_node(id);
+
+    entity
+}
+
+/// Spawn 3D text entities for every item in `template` and parent them to
+/// `anchor_entity`.  Returns the `XrdsStoredHudInstance` to be inserted on the
+/// anchor.  Intended to be called from `tag_player_anchor_entities` immediately
+/// after the anchor is tagged so that item entities exist before the first frame.
+pub(super) fn spawn_hud_instance_for_anchor(
+    world: &mut World,
+    anchor_entity: Entity,
+    template: &xrds_scene_graph::XrdsHudTemplate,
+) -> super::state::XrdsStoredHudInstance {
+    use bevy::camera::visibility::NoFrustumCulling;
+    use bevy::color::Srgba;
+    use bevy::pbr::StandardMaterial;
+    use bevy::render::alpha::AlphaMode;
+    use bevy_rich_text3d::{Text3d, Text3dStyling, TextAlign, TextAtlas};
+    use crate::xrds_api::anchor::XrdsHeadLocked;
+
+    let depth = template.depth;
+
+    let material_handle = {
+        let mut materials = world.resource_mut::<bevy::asset::Assets<StandardMaterial>>();
+        materials.add(StandardMaterial {
+            base_color_texture: Some(TextAtlas::DEFAULT_IMAGE.clone()),
+            alpha_mode: AlphaMode::Mask(0.5),
+            unlit: true,
+            cull_mode: None,
+            ..Default::default()
+        })
+    };
+
+    let mut item_pairs: Vec<(String, Entity)> = Vec::new();
+
+    for item in &template.items {
+        let [r, g, b, a] = item.color;
+        let [ix, iy]     = item.position;
+        let font_size    = item.font_size;
+
+        // The head-locked offset places the item in camera-local space:
+        // X right, Y up, -Z forward at `depth` metres in front of the lens.
+        let local_offset = Transform::from_translation(Vec3::new(ix, iy, -depth));
+
+        let item_entity = world.spawn((
+            bevy::prelude::Name::new(item.name.clone()),
+            Text3d::new(item.text.clone()),
+            Text3dStyling {
+                size: 128.0,
+                world_scale: Some(bevy::math::Vec2::splat(font_size * 0.01)),
+                color: Srgba::new(r, g, b, a),
+                align: TextAlign::Center,
+                ..Default::default()
+            },
+            bevy::prelude::Mesh3d::default(),
+            bevy::prelude::MeshMaterial3d(material_handle.clone()),
+            Transform::from_translation(Vec3::new(ix, iy, -depth)),
+            GlobalTransform::default(),
+            build_visibility_hierarchy_components(true),
+            XrdsHeadLocked { local_offset },
+            NoFrustumCulling,
+        )).id();
+
+        world.entity_mut(anchor_entity).add_child(item_entity);
+        item_pairs.push((item.name.clone(), item_entity));
+    }
+
+    super::state::XrdsStoredHudInstance { items: item_pairs }
 }
 
 pub(super) fn build_scene_asset_path(path: &str, scene_index: usize) -> String {

@@ -19,6 +19,11 @@ struct XrdsManagedSceneExposureEnvironment;
 #[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct XrdsManagedSceneFogEnvironment;
 
+/// Stores the per-anchor exposure override (ev100) set by `apply_anchor_exposure_system`.
+/// `None` means no override — the scene-wide exposure applies.
+#[derive(Resource, Debug, Clone, Default)]
+pub(super) struct XrdsAnchorExposureOverride(pub(super) Option<f32>);
+
 /// Opt-in marker: cameras with this component always receive scene environment
 /// settings (fog, exposure, IBL) regardless of whether they were spawned by XRDS.
 ///
@@ -109,7 +114,7 @@ fn sync_managed_scene_skybox_in_world(world: &mut World) {
     }
 }
 
-fn sync_managed_scene_exposure_in_world(world: &mut World) {
+pub(super) fn sync_managed_scene_exposure_in_world(world: &mut World) {
     let Some(exposure) = resolve_imported_scene_exposure_in_world(world) else {
         clear_managed_scene_exposure_in_world(world);
         return;
@@ -243,11 +248,13 @@ fn resolve_imported_scene_skybox_in_world(world: &World) -> Option<Skybox> {
 }
 
 fn resolve_imported_scene_exposure_in_world(world: &World) -> Option<Exposure> {
+    // Anchor-level override takes priority over the scene-wide setting.
+    if let Some(ev100) = world.get_resource::<XrdsAnchorExposureOverride>().and_then(|r| r.0) {
+        return Some(Exposure { ev100 });
+    }
     imported_scene_environment_in_world(world)
         .and_then(|environment| environment.exposure)
-        .map(|exposure| Exposure {
-            ev100: exposure.ev100,
-        })
+        .map(|exposure| Exposure { ev100: exposure.ev100 })
 }
 
 fn resolve_imported_scene_fog_in_world(world: &World) -> Option<DistanceFog> {

@@ -87,6 +87,7 @@ fn authored_scene_document() -> XrdsSceneDocument {
                 transform: XrdsSceneTransform::default(),
                 payload: XrdsSceneNodePayload::Empty,
                 editor: XrdsEditorMetadata::default(),
+                grabbable: false,
             },
             XrdsSceneNode {
                 id: DOCUMENT_CUBE_ID.into(),
@@ -108,8 +109,10 @@ fn authored_scene_document() -> XrdsSceneDocument {
                         pbr: Default::default(),
                         textures: Default::default(),
                     },
+                    ..Default::default()
                 }),
                 editor: XrdsEditorMetadata::default(),
+                grabbable: false,
             },
             XrdsSceneNode {
                 id: DOCUMENT_LIGHT_ID.into(),
@@ -128,6 +131,7 @@ fn authored_scene_document() -> XrdsSceneDocument {
                     ..Default::default()
                 }),
                 editor: XrdsEditorMetadata::default(),
+                grabbable: false,
             },
             XrdsSceneNode {
                 id: DOCUMENT_CAMERA_ID.into(),
@@ -149,6 +153,7 @@ fn authored_scene_document() -> XrdsSceneDocument {
                     look_at: Some([0.0, 1.0, 0.0]),
                 }),
                 editor: XrdsEditorMetadata::default(),
+                grabbable: false,
             },
         ],
         ..Default::default()

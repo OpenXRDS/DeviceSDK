@@ -103,6 +103,7 @@ fn authored_scene_document() -> XrdsSceneDocument {
                 transform: XrdsSceneTransform::default(),
                 payload: XrdsSceneNodePayload::Empty,
                 editor: XrdsEditorMetadata::default(),
+                grabbable: false,
             },
             XrdsSceneNode {
                 id: XrdsSceneNodeId(2),
@@ -124,8 +125,10 @@ fn authored_scene_document() -> XrdsSceneDocument {
                         pbr: Default::default(),
                         textures: Default::default(),
                     },
+                    ..Default::default()
                 }),
                 editor: XrdsEditorMetadata::default(),
+                grabbable: false,
             },
         ],
         ..Default::default()

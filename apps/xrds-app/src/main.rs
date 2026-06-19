@@ -1,12 +1,16 @@
-use bevy::ecs::message::MessageReader;
+use bevy::ecs::message::{MessageReader, MessageWriter};
 use bevy::input::mouse::{MouseMotion, MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
-use xrds_scene_graph::{XrdsPlayerLocomotionMode, XrdsSceneDocument, XrdsSceneNodePayload};
+use xrds_scene_graph::{XrdsPlayerLocomotionMode, XrdsSceneDocument, XrdsSceneNodeId, XrdsSceneNodePayload};
+use xrds_runtime::{XrdsGltfAnimationSelector, XrdsGltfAnimationPlaybackOptions};
+use xrds_runtime::sdk::world::XrdsGltfAsset;
+use xrds_runtime::sdk::XrdsId;
 use xrds_runtime::{
-    ActivePlayerAnchorEntity, Runtime, RuntimeParameters, XrdsAPI, XrdsApp,
-    XrdsInitialAnchor, XrdsPlayerAnchorRoot, XrdsPlayerCamera, XrdsUpdateContext,
+    ActivePlayerAnchorEntity, Runtime, RuntimeParameters, TextParams, XrDropEvent, XrGrabEvent,
+    XrdsAPI, XrdsApp, XrdsInitialAnchor, XrdsPlayerAnchorRoot, XrdsPlayerCamera,
+    XrdsText, XrdsUpdateContext,
 };
-use xrds_openxr::{OpenXrCameraIndex, OpenXrPlayerRoot, XrControllerModelAssets, XrInput};
+use xrds_openxr::{OpenXrCameraIndex, OpenXrPlayerRoot, XrControllerModelAssets, XrHand, XrHapticRequest, XrInput};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -20,6 +24,15 @@ const EYE_HEIGHT:    f32 = 1.6;
 // ---------------------------------------------------------------------------
 // Components / resources
 // ---------------------------------------------------------------------------
+
+/// Toggled by `animation_key_system`; consumed in `SceneFileApp::update()`.
+#[derive(Resource, Default)]
+struct AnimationState {
+    /// True when P was pressed this frame; cleared after update() processes it.
+    toggled: bool,
+    /// Current playback state — toggled each time P is pressed.
+    playing: bool,
+}
 
 #[derive(Component)]
 struct AppCamera;
@@ -65,7 +78,11 @@ impl Default for SpawnConfig {
 // ---------------------------------------------------------------------------
 
 struct SceneFileApp {
-    scene_path: std::path::PathBuf,
+    scene_path:    std::path::PathBuf,
+    /// GltfAsset node IDs collected at setup time for P-key animation playback.
+    gltf_node_ids: Vec<XrdsSceneNodeId>,
+    /// Head-locked status label spawned in setup(); updated each time animation state changes.
+    hud_handle:    Option<xrds_runtime::Handle<XrdsText>>,
 }
 
 impl SceneFileApp {
@@ -152,11 +169,12 @@ impl XrdsApp for SceneFileApp {
             config.position, config.fov_deg, config.locomotion
         );
         app.insert_resource(config);
+        app.insert_resource(AnimationState::default());
         app.add_systems(PostStartup, (spawn_app_camera, spawn_controller_visuals));
         // set_initial_anchor_system runs after spawn_app_camera to ensure the camera entity
         // exists when we first set ActivePlayerAnchorEntity.
         app.add_systems(PostStartup, set_initial_anchor_system.after(spawn_app_camera));
-        app.add_systems(Update, (deactivate_scene_cameras, manage_window_camera, fly_camera_system, grounded_camera_system, xr_locomotion_system, update_controller_visuals, attach_controller_models, player_anchor_key_system));
+        app.add_systems(Update, (deactivate_scene_cameras, manage_window_camera, fly_camera_system, grounded_camera_system, xr_locomotion_system, update_controller_visuals, attach_controller_models, player_anchor_key_system, animation_key_system, haptic_test_key_system, grab_event_log_system));
     }
 
     fn setup(&mut self, api: &mut XrdsAPI<'_>) {
@@ -171,9 +189,63 @@ impl XrdsApp for SceneFileApp {
                 self.scene_path.display()
             ),
         }
+        if let Some(spawn_pos) = api.random_spawn_zone_position() {
+            eprintln!("[xrds-app] PlayerSpawnZone: teleporting player to {:?}", spawn_pos);
+            api.teleport_player(spawn_pos);
+        }
+        // Cache GltfAsset node IDs so update() can drive animation playback without
+        // re-reading the document every frame.
+        if let Ok(doc) = XrdsSceneDocument::load_json(&self.scene_path) {
+            self.gltf_node_ids = doc.nodes.iter()
+                .filter_map(|n| matches!(n.payload, XrdsSceneNodePayload::GltfAsset(_))
+                    .then_some(n.id))
+                .collect();
+            eprintln!("[xrds-app] {} GltfAsset node(s) found for animation", self.gltf_node_ids.len());
+        }
+
+        // HUD label — 50 cm in front, 15 cm below centre line.
+        self.hud_handle = Some(api.spawn_hud_label(
+            "P: play/stop  H: haptic L  J: haptic R",
+            Vec3::new(0.0, -0.15, -0.5),
+        ));
     }
 
-    fn update(&mut self, _ctx: &mut XrdsUpdateContext<'_>) {}
+    fn update(&mut self, ctx: &mut XrdsUpdateContext<'_>) {
+        let toggled = ctx.resource::<AnimationState>().map(|s| s.toggled).unwrap_or(false);
+        if !toggled { return; }
+
+        // Flip state and clear the toggle flag.
+        let playing = ctx.resource::<AnimationState>().map(|s| !s.playing).unwrap_or(true);
+        if let Some(mut state) = ctx.resource_mut::<AnimationState>() {
+            state.toggled = false;
+            state.playing = playing;
+        }
+
+        for &node_id in &self.gltf_node_ids {
+            let Some(handle) = ctx.handle_of::<XrdsGltfAsset>(XrdsId::from(node_id)) else { continue };
+            if playing {
+                let _ = ctx.play_gltf_animation(
+                    &handle,
+                    XrdsGltfAnimationSelector::Index(0),
+                    XrdsGltfAnimationPlaybackOptions::default(),
+                );
+            } else {
+                let _ = ctx.stop_gltf_animation(&handle);
+            }
+        }
+
+        // Update HUD to reflect current animation state.
+        if let Some(ref hud) = self.hud_handle {
+            let label = if playing { "▶  P: stop  H: haptic L  J: haptic R" }
+                        else       { "⏹  P: play  H: haptic L  J: haptic R" };
+            ctx.set_text_params(hud, TextParams {
+                text:      label.to_string(),
+                font_size: 4.0,
+                color:     [1.0, 1.0, 1.0, 1.0],
+                alignment: xrds_runtime::XrdsTextAlignment::Center,
+            });
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -573,6 +645,55 @@ fn player_anchor_key_system(
 }
 
 // ---------------------------------------------------------------------------
+// Animation key — P toggles play/stop on all GLB objects
+// ---------------------------------------------------------------------------
+
+fn animation_key_system(
+    keyboard: Res<ButtonInput<KeyCode>>,
+    mut state: ResMut<AnimationState>,
+) {
+    if keyboard.just_pressed(KeyCode::KeyP) {
+        state.toggled = true;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Haptic test — H = left controller pulse, J = right controller pulse
+// ---------------------------------------------------------------------------
+
+fn haptic_test_key_system(
+    keyboard: Res<ButtonInput<KeyCode>>,
+    mut haptic: MessageWriter<XrHapticRequest>,
+) {
+    if keyboard.just_pressed(KeyCode::KeyH) {
+        haptic.write(XrHapticRequest { hand: XrHand::Left,  amplitude: 1.0, duration_secs: 0.2, frequency: 0.0 });
+    }
+    if keyboard.just_pressed(KeyCode::KeyJ) {
+        haptic.write(XrHapticRequest { hand: XrHand::Right, amplitude: 1.0, duration_secs: 0.2, frequency: 0.0 });
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Grab event logging
+// ---------------------------------------------------------------------------
+
+/// Read XrGrabEvent / XrDropEvent messages and log them.
+///
+/// Replace this with gameplay logic (highlight, UI update, physics hand-off, etc.)
+/// once the basic grab loop is confirmed working.
+fn grab_event_log_system(
+    mut grab_events: MessageReader<XrGrabEvent>,
+    mut drop_events: MessageReader<XrDropEvent>,
+) {
+    for ev in grab_events.read() {
+        info!("[grab] GRABBED id={:?} hand={:?}", ev.id, ev.hand);
+    }
+    for ev in drop_events.read() {
+        info!("[grab] DROPPED  id={:?} hand={:?}", ev.id, ev.hand);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
 
@@ -598,6 +719,6 @@ fn main() {
         allow_unapproved_paths: true,
         ..Default::default()
     })
-    .run_xrds(SceneFileApp { scene_path })
+    .run_xrds(SceneFileApp { scene_path, gltf_node_ids: Vec::new(), hud_handle: None })
     .expect("runtime error");
 }

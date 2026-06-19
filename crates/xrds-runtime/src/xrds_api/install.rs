@@ -12,6 +12,10 @@ pub(super) fn install_xrds(app: &mut App) {
 
     app.add_plugins(XrdsComponentsPlugin);
     app.add_plugins(MaterialPlugin::<XrdsRuntimeMaterial>::default());
+    app.add_plugins(avian3d::prelude::PhysicsPlugins::default());
+    if !app.is_plugin_added::<bevy_mod_outline::OutlinePlugin>() {
+        app.add_plugins(bevy_mod_outline::OutlinePlugin);
+    }
     // Not added in test builds: cosmic-text panics in headless environments with no
     // system fonts. Round-trip tests only verify document serialization, not rendering.
     #[cfg(not(test))]
@@ -37,6 +41,7 @@ pub(super) fn install_xrds(app: &mut App) {
     app.init_resource::<XrdsHierarchyIndex>();
     app.init_resource::<XrdsImportedAssetCatalog>();
     app.init_resource::<XrdsImportedSceneEnvironment>();
+    app.init_resource::<XrdsImportedHudLibrary>();
     app.init_resource::<SurfaceInterpreterRegistry>();
     app.init_resource::<SurfaceDescriptorRegistry>();
     app.init_resource::<QueuedSurfaceComponents>();
@@ -46,6 +51,12 @@ pub(super) fn install_xrds(app: &mut App) {
     app.init_resource::<PendingGltfAnimationRequests>();
     app.init_resource::<ActiveGltfAnimationStates>();
     app.init_resource::<PendingGltfMorphTargetOverrideRequests>();
+    app.init_resource::<crate::xrds_api::grab::XrGrabState>();
+    app.init_resource::<crate::xrds_api::environment::XrdsAnchorExposureOverride>();
+    app.add_message::<xrds_components::XrGrabEvent>();
+    app.add_message::<xrds_components::XrDropEvent>();
+    app.add_message::<xrds_components::XrZoneEnterEvent>();
+    app.add_message::<xrds_components::XrZoneExitEvent>();
 
     {
         let mut registry = app.world_mut().resource_mut::<SurfaceInterpreterRegistry>();
@@ -116,6 +127,7 @@ pub(super) fn install_xrds(app: &mut App) {
             crate::xrds_api::anchor::comfort_pinned_system,
             crate::xrds_api::anchor::cylindrical_system,
             crate::xrds_api::anchor::apply_anchor_fov_system,
+            crate::xrds_api::anchor::apply_anchor_exposure_system,
         )
             .chain()
             .after(bevy::transform::TransformSystems::Propagate)
@@ -150,6 +162,8 @@ pub(super) fn install_xrds(app: &mut App) {
         sync_imported_scene_environment_policy_system
             .after(apply_pending_gltf_morph_target_override_requests_system),
     );
+    app.add_systems(Update, crate::xrds_api::grab::grab_system);
+    app.add_systems(Update, crate::xrds_api::zone::zone_collision_system);
     // Runs in PreUpdate — before Bevy's audio sink creation — so that entities whose
     // rodio decoder would panic are removed before Bevy ever tries to play them.
     app.add_systems(PreUpdate, pre_validate_audio_decoders_system);

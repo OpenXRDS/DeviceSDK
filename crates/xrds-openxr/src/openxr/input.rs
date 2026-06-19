@@ -1,3 +1,4 @@
+use bevy::ecs::message::MessageReader;
 use bevy::prelude::*;
 use openxr::ActiveActionSet;
 
@@ -56,6 +57,28 @@ pub enum XrInputSource {
     Hand,
 }
 
+/// Which hand to target for haptic output.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum XrHand {
+    Left,
+    Right,
+}
+
+/// Send this message to trigger a haptic pulse on a controller.
+///
+/// Register with `app.add_message::<XrHapticRequest>()` (done automatically by `XrInputPlugin`).
+/// Write with `MessageWriter<XrHapticRequest>` or `world.write_message(...)`.
+#[derive(Clone, Copy, Debug, bevy::prelude::Message)]
+pub struct XrHapticRequest {
+    pub hand: XrHand,
+    /// Vibration intensity, clamped to 0.0–1.0.
+    pub amplitude: f32,
+    /// Duration in seconds. Values ≤ 0 use the runtime minimum pulse.
+    pub duration_secs: f32,
+    /// Frequency in Hz. Use 0.0 to let the runtime choose.
+    pub frequency: f32,
+}
+
 // ---------------------------------------------------------------------------
 // Internal resource — stores OpenXR action handles
 // ---------------------------------------------------------------------------
@@ -72,6 +95,8 @@ pub(crate) struct OpenXrInput {
     pub menu:             openxr::Action<bool>,
     /// Thumbstick pressed as a button.
     pub thumbstick_click: openxr::Action<bool>,
+    /// Haptic output action — used by `apply_haptic_feedback_system`.
+    pub haptic:           openxr::Action<openxr::Haptic>,
     /// Aim spaces created after session attach; `None` until `attach_xr_input` runs.
     pub aim_space_left:   Option<openxr::Space>,
     pub aim_space_right:  Option<openxr::Space>,
@@ -95,6 +120,7 @@ pub struct XrInputPlugin;
 impl Plugin for XrInputPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<XrInput>();
+        app.add_message::<XrHapticRequest>();
         app.add_systems(
             OpenXrSchedules::SessionCreate,
             create_xr_input.in_set(OpenXrRuntimeSystems::SessionCreate),
@@ -105,7 +131,10 @@ impl Plugin for XrInputPlugin {
         );
         app.add_systems(
             OpenXrSchedules::Update,
-            poll_xr_input
+            (
+                poll_xr_input,
+                apply_haptic_feedback_system,
+            )
                 .in_set(OpenXrRuntimeSystems::PreFrameLoop)
                 .run_if(openxr_in_state_focused),
         );
@@ -135,6 +164,7 @@ fn create_xr_input(world: &mut World) {
     let select          = action_set.create_action::<bool>             ("select",          "Select",          subaction_paths).unwrap();
     let menu            = action_set.create_action::<bool>             ("menu",            "Menu",            subaction_paths).unwrap();
     let thumbstick_click = action_set.create_action::<bool>            ("thumbstick_click","Thumbstick Click",subaction_paths).unwrap();
+    let haptic          = action_set.create_action::<openxr::Haptic>   ("haptic",          "Haptic Output",   subaction_paths).unwrap();
 
     // Meta Quest Touch / Oculus Touch controllers
     let oculus = xr.string_to_path("/interaction_profiles/oculus/touch_controller").unwrap();
@@ -156,6 +186,9 @@ fn create_xr_input(world: &mut World) {
         // Thumbstick press
         openxr::Binding::new(&thumbstick_click, xr.string_to_path("/user/hand/left/input/thumbstick/click").unwrap()),
         openxr::Binding::new(&thumbstick_click, xr.string_to_path("/user/hand/right/input/thumbstick/click").unwrap()),
+        // Haptic output
+        openxr::Binding::new(&haptic, xr.string_to_path("/user/hand/left/output/haptic").unwrap()),
+        openxr::Binding::new(&haptic, xr.string_to_path("/user/hand/right/output/haptic").unwrap()),
     ]).expect("Oculus Touch bindings");
 
     // KHR simple controller — generic / emulator fallback
@@ -165,10 +198,12 @@ fn create_xr_input(world: &mut World) {
         openxr::Binding::new(&aim_pose, xr.string_to_path("/user/hand/right/input/aim/pose").unwrap()),
         openxr::Binding::new(&select,   xr.string_to_path("/user/hand/left/input/select/click").unwrap()),
         openxr::Binding::new(&select,   xr.string_to_path("/user/hand/right/input/select/click").unwrap()),
+        openxr::Binding::new(&haptic,   xr.string_to_path("/user/hand/left/output/haptic").unwrap()),
+        openxr::Binding::new(&haptic,   xr.string_to_path("/user/hand/right/output/haptic").unwrap()),
     ]).expect("KHR simple bindings");
 
     world.insert_resource(OpenXrInput {
-        action_set, aim_pose, trigger, grip, thumbstick, select, menu, thumbstick_click,
+        action_set, aim_pose, trigger, grip, thumbstick, select, menu, thumbstick_click, haptic,
         aim_space_left:  None,
         aim_space_right: None,
         path_left,
@@ -312,6 +347,34 @@ fn poll_xr_input(
     xr_input.left.select_just_released  =  prev_sel_l && !xr_input.left.select;
     xr_input.right.select_just_pressed  = !prev_sel_r && xr_input.right.select;
     xr_input.right.select_just_released =  prev_sel_r && !xr_input.right.select;
+}
+
+// ---------------------------------------------------------------------------
+// Haptic feedback system
+// ---------------------------------------------------------------------------
+
+fn apply_haptic_feedback_system(
+    session: Res<OpenXrSession>,
+    input:   Res<OpenXrInput>,
+    mut req: MessageReader<XrHapticRequest>,
+) {
+    for r in req.read() {
+        let path = match r.hand {
+            XrHand::Left  => input.path_left,
+            XrHand::Right => input.path_right,
+        };
+        let duration = if r.duration_secs > 0.0 {
+            openxr::Duration::from_nanos((r.duration_secs * 1_000_000_000.0) as i64)
+        } else {
+            openxr::Duration::MIN_HAPTIC
+        };
+        if let Err(e) = session.apply_haptic_feedback(
+            &input.haptic, path,
+            r.amplitude.clamp(0.0, 1.0), duration, r.frequency,
+        ) {
+            warn!("apply_haptic_feedback ({:?}): {e:?}", r.hand);
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

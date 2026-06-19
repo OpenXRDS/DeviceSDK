@@ -22,6 +22,7 @@ pub enum XrdsSceneNodePayload {
     HudText(XrdsSceneHudText),
     Text(XrdsSceneText),
     ExtrudedText(XrdsSceneExtrudedText),
+    PlayerSpawnZone(XrdsScenePlayerSpawnZone),
 }
 
 impl XrdsSceneNodePayload {
@@ -44,9 +45,10 @@ impl XrdsSceneNodePayload {
             Self::PlayerSpawn(_) => XrdsGltfExportClass::NodeOnly,
             Self::Player(_) => XrdsGltfExportClass::NodeOnly,
             Self::PlayerAnchor(_) => XrdsGltfExportClass::NodeOnly,
-            Self::HudText(_) => XrdsGltfExportClass::NodeOnly,
-            Self::Text(_) => XrdsGltfExportClass::NodeOnly,
-            Self::ExtrudedText(_) => XrdsGltfExportClass::NodeOnly,
+            Self::HudText(_)         => XrdsGltfExportClass::NodeOnly,
+            Self::Text(_)            => XrdsGltfExportClass::NodeOnly,
+            Self::ExtrudedText(_)    => XrdsGltfExportClass::NodeOnly,
+            Self::PlayerSpawnZone(_) => XrdsGltfExportClass::NodeOnly,
         }
     }
 }
@@ -644,10 +646,19 @@ impl From<&XrdsSpotLight> for XrdsSceneSpotLight {
     }
 }
 
+fn default_one() -> f32 { 1.0 }
+fn is_one(v: &f32) -> bool { (*v - 1.0).abs() < 1e-5 }
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct XrdsSceneCube {
     pub size: [f32; 3],
     pub material: XrdsSceneMaterial,
+    #[serde(default, skip_serializing_if = "XrdsPhysicsBody::is_none")]
+    pub physics_body: XrdsPhysicsBody,
+    #[serde(default = "default_one", skip_serializing_if = "is_one")]
+    pub gravity_scale: f32,
+    #[serde(default = "default_one", skip_serializing_if = "is_one")]
+    pub mass: f32,
 }
 
 impl Default for XrdsSceneCube {
@@ -655,6 +666,9 @@ impl Default for XrdsSceneCube {
         Self {
             size: [1.0, 1.0, 1.0],
             material: XrdsSceneMaterial::default(),
+            physics_body: XrdsPhysicsBody::None,
+            gravity_scale: 1.0,
+            mass: 1.0,
         }
     }
 }
@@ -664,6 +678,12 @@ pub struct XrdsSceneCylinder {
     pub radius: f32,
     pub height: f32,
     pub material: XrdsSceneMaterial,
+    #[serde(default, skip_serializing_if = "XrdsPhysicsBody::is_none")]
+    pub physics_body: XrdsPhysicsBody,
+    #[serde(default = "default_one", skip_serializing_if = "is_one")]
+    pub gravity_scale: f32,
+    #[serde(default = "default_one", skip_serializing_if = "is_one")]
+    pub mass: f32,
 }
 
 impl Default for XrdsSceneCylinder {
@@ -672,6 +692,9 @@ impl Default for XrdsSceneCylinder {
             radius: 0.5,
             height: 1.0,
             material: XrdsSceneMaterial::default(),
+            physics_body: XrdsPhysicsBody::None,
+            gravity_scale: 1.0,
+            mass: 1.0,
         }
     }
 }
@@ -680,6 +703,12 @@ impl Default for XrdsSceneCylinder {
 pub struct XrdsSceneSphere {
     pub radius: f32,
     pub material: XrdsSceneMaterial,
+    #[serde(default, skip_serializing_if = "XrdsPhysicsBody::is_none")]
+    pub physics_body: XrdsPhysicsBody,
+    #[serde(default = "default_one", skip_serializing_if = "is_one")]
+    pub gravity_scale: f32,
+    #[serde(default = "default_one", skip_serializing_if = "is_one")]
+    pub mass: f32,
 }
 
 impl Default for XrdsSceneSphere {
@@ -687,6 +716,9 @@ impl Default for XrdsSceneSphere {
         Self {
             radius: 0.5,
             material: XrdsSceneMaterial::default(),
+            physics_body: XrdsPhysicsBody::None,
+            gravity_scale: 1.0,
+            mass: 1.0,
         }
     }
 }
@@ -695,6 +727,12 @@ impl Default for XrdsSceneSphere {
 pub struct XrdsScenePlane3D {
     pub size: [f32; 2],
     pub material: XrdsSceneMaterial,
+    #[serde(default, skip_serializing_if = "XrdsPhysicsBody::is_none")]
+    pub physics_body: XrdsPhysicsBody,
+    #[serde(default = "default_one", skip_serializing_if = "is_one")]
+    pub gravity_scale: f32,
+    #[serde(default = "default_one", skip_serializing_if = "is_one")]
+    pub mass: f32,
 }
 
 impl Default for XrdsScenePlane3D {
@@ -702,6 +740,9 @@ impl Default for XrdsScenePlane3D {
         Self {
             size: [1.0, 1.0],
             material: XrdsSceneMaterial::default(),
+            physics_body: XrdsPhysicsBody::None,
+            gravity_scale: 1.0,
+            mass: 1.0,
         }
     }
 }
@@ -886,27 +927,9 @@ impl Default for XrdsSceneAudioClip {
     }
 }
 
-/// Shape of an interaction zone volume.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-pub enum XrdsInteractionZoneShape {
-    Sphere { radius: f32 },
-    Box { half_extents: [f32; 3] },
-}
-
-impl Default for XrdsInteractionZoneShape {
-    fn default() -> Self {
-        Self::Box { half_extents: [0.5, 0.5, 0.5] }
-    }
-}
-
-/// What kind of grab interaction the zone supports.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub enum XrdsGrabType {
-    #[default]
-    None,
-    Snap,
-    Free,
-}
+// Zone shape and grab-type come from xrds-components so that the runtime
+// can use the same types without pulling in xrds-scene-graph.
+pub use xrds_components::{XrdsGrabType, XrdsInteractionZoneShape};
 
 /// An invisible volume marking an object as interactable in XR.
 /// Has no visible mesh — its bounds are shown in the editor as a wireframe overlay.
@@ -1002,6 +1025,13 @@ pub struct XrdsScenePlayerAnchor {
     /// If `true`, the runtime spawns the player pawn at this anchor on play-mode start.
     /// At most one `PlayerAnchor` per scene should have `is_initial: true`.
     pub is_initial: bool,
+    /// Optional HUD template to instantiate head-locked for this anchor.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hud_template_id: Option<HudTemplateId>,
+    /// Per-anchor exposure override (ev100).  Overrides the scene-wide exposure while
+    /// this anchor is active.  `None` = use the scene-wide exposure setting.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exposure: Option<f32>,
 }
 
 impl Default for XrdsScenePlayerAnchor {
@@ -1011,7 +1041,31 @@ impl Default for XrdsScenePlayerAnchor {
             locomotion_mode: XrdsPlayerLocomotionMode::default(),
             fov_deg: 60.0,
             is_initial: false,
+            hud_template_id: None,
+            exposure: None,
         }
+    }
+}
+
+/// A rectangular volume within which a player spawns at a random position.
+///
+/// `size` is the full width × height × depth in metres.  At runtime the SDK
+/// picks a random XZ position within the footprint (Y stays at the zone centre)
+/// and teleports the player there.  Multiple zones in a scene are each equally
+/// likely to be chosen.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct XrdsScenePlayerSpawnZone {
+    /// Full box dimensions [width, height, depth] in metres.
+    pub size: [f32; 3],
+    /// Optional Player node ID this zone is reserved for.
+    /// `None` = shared (any player may use it); `Some(id)` = exclusive to that Player node.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub player_node_id: Option<u64>,
+}
+
+impl Default for XrdsScenePlayerSpawnZone {
+    fn default() -> Self {
+        Self { size: [4.0, 0.1, 4.0], player_node_id: None }
     }
 }
 
@@ -1144,3 +1198,4 @@ impl From<&XrdsAudioClip> for XrdsSceneAudioClip {
         }
     }
 }
+

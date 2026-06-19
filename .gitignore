@@ -9,5 +9,5 @@ CLAUDE.md
 SHORTTERM_GOAL.md
 docs/done/*
 docs/EDITOR_TODO.md
-apps/xrds-editor-tauri/node_modules/*
-apps/xrds-editor-tauri/dist/*
+apps/xrds-editor/node_modules/*
+apps/xrds-editor/dist/*

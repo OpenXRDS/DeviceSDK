@@ -359,6 +359,7 @@ fn export_scene_document_captures_runtime_gltf_morph_weights_in_authoring() {
                 scene_index: 0,
                 export_policy: XrdsGltfAssetExportPolicy::KeepExternalReference,
             }),
+            grabbable: false,
             editor: XrdsEditorMetadata::default(),
         }],
         gltf_node_authoring: [(
@@ -493,6 +494,7 @@ fn export_scene_document_captures_runtime_gltf_playback_in_authoring() {
                 scene_index: 0,
                 export_policy: XrdsGltfAssetExportPolicy::KeepExternalReference,
             }),
+            grabbable: false,
             editor: XrdsEditorMetadata::default(),
         }],
         ..Default::default()

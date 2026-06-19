@@ -63,6 +63,11 @@ pub struct XrdsSceneNode {
     pub name: String,
     pub enabled: bool,
     pub visible: bool,
+    /// When true the XR grab system allows the player to pick up this entity
+    /// with the controller trigger.  Saved to the scene document so the
+    /// attribute survives export and reload.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub grabbable: bool,
     pub transform: XrdsSceneTransform,
     pub payload: XrdsSceneNodePayload,
     pub editor: XrdsEditorMetadata,
@@ -107,6 +112,8 @@ pub enum XrdsSceneRuntimeComponent {
     HudText(XrdsHudTextData),
     Text(XrdsText),
     ExtrudedText(XrdsExtrudedText),
+    /// Carries the base node (name/transform/visible) plus zone-specific data.
+    InteractionZone(XrdsNode, xrds_components::XrdsInteractionZone),
 }
 
 impl XrdsSceneNode {
@@ -184,6 +191,9 @@ impl XrdsSceneNode {
                     visible: self.visible,
                     transform,
                     size: cube.size,
+                    physics_body: cube.physics_body,
+                    gravity_scale: cube.gravity_scale,
+                    mass: cube.mass,
                 }),
                 material: Some(cube.material.clone().into()),
                 editor,
@@ -199,6 +209,9 @@ impl XrdsSceneNode {
                     transform,
                     radius: cylinder.radius,
                     height: cylinder.height,
+                    physics_body: cylinder.physics_body,
+                    gravity_scale: cylinder.gravity_scale,
+                    mass: cylinder.mass,
                 }),
                 material: Some(cylinder.material.clone().into()),
                 editor,
@@ -213,6 +226,9 @@ impl XrdsSceneNode {
                     visible: self.visible,
                     transform,
                     radius: sphere.radius,
+                    physics_body: sphere.physics_body,
+                    gravity_scale: sphere.gravity_scale,
+                    mass: sphere.mass,
                 }),
                 material: Some(sphere.material.clone().into()),
                 editor,
@@ -227,6 +243,9 @@ impl XrdsSceneNode {
                     visible: self.visible,
                     transform,
                     size: plane.size,
+                    physics_body: plane.physics_body,
+                    gravity_scale: plane.gravity_scale,
+                    mass: plane.mass,
                 }),
                 material: Some(plane.material.clone().into()),
                 editor,
@@ -332,17 +351,22 @@ impl XrdsSceneNode {
                 editor,
                 gltf_node_authoring: None,
             },
-            // Interaction zones have no visible mesh at runtime — spawn as an empty node.
-            // The zone shape/grab data is preserved in the document for XR runtimes to read.
-            XrdsSceneNodePayload::InteractionZone(_) => XrdsSceneRuntimeNode {
+            XrdsSceneNodePayload::InteractionZone(z) => XrdsSceneRuntimeNode {
                 id: self.id.into(),
                 parent_id: self.parent_id.map(Into::into),
-                component: XrdsSceneRuntimeComponent::Node(XrdsNode {
-                    name: self.name.clone(),
-                    enabled: self.enabled,
-                    visible: self.visible,
-                    transform,
-                }),
+                component: XrdsSceneRuntimeComponent::InteractionZone(
+                    XrdsNode {
+                        name:    self.name.clone(),
+                        enabled: self.enabled,
+                        visible: self.visible,
+                        transform,
+                    },
+                    xrds_components::XrdsInteractionZone {
+                        shape:     z.shape,
+                        grab_type: z.grab_type,
+                        hoverable: z.hoverable,
+                    },
+                ),
                 material: None,
                 editor,
                 gltf_node_authoring: None,
@@ -461,6 +485,21 @@ impl XrdsSceneNode {
                 editor,
                 gltf_node_authoring: None,
             },
+            // Spawn zones are document-only volumes; represented as an empty node at runtime.
+            // The XrdsPlayerSpawnZone component is inserted by tag_spawn_zone_entities().
+            XrdsSceneNodePayload::PlayerSpawnZone(_) => XrdsSceneRuntimeNode {
+                id: self.id.into(),
+                parent_id: self.parent_id.map(Into::into),
+                component: XrdsSceneRuntimeComponent::Node(XrdsNode {
+                    name: self.name.clone(),
+                    enabled: self.enabled,
+                    visible: self.visible,
+                    transform,
+                }),
+                material: None,
+                editor,
+                gltf_node_authoring: None,
+            },
         }
     }
 
@@ -479,6 +518,7 @@ impl XrdsSceneNode {
             name: name.to_string(),
             enabled,
             visible,
+            grabbable: false,
             transform: transform.into(),
             payload,
             editor: XrdsEditorMetadata::default(),
@@ -565,6 +605,9 @@ impl XrdsSceneNode {
             XrdsSceneNodePayload::Cube(XrdsSceneCube {
                 size: cube.size,
                 material: material.unwrap_or_default().into(),
+                physics_body: cube.physics_body,
+                gravity_scale: cube.gravity_scale,
+                mass: cube.mass,
             }),
         )
     }
@@ -586,6 +629,9 @@ impl XrdsSceneNode {
                 radius: cylinder.radius,
                 height: cylinder.height,
                 material: material.unwrap_or_default().into(),
+                physics_body: cylinder.physics_body,
+                gravity_scale: cylinder.gravity_scale,
+                mass: cylinder.mass,
             }),
         )
     }
@@ -606,6 +652,9 @@ impl XrdsSceneNode {
             XrdsSceneNodePayload::Sphere(XrdsSceneSphere {
                 radius: sphere.radius,
                 material: material.unwrap_or_default().into(),
+                physics_body: sphere.physics_body,
+                gravity_scale: sphere.gravity_scale,
+                mass: sphere.mass,
             }),
         )
     }
@@ -626,6 +675,9 @@ impl XrdsSceneNode {
             XrdsSceneNodePayload::Plane3D(XrdsScenePlane3D {
                 size: plane.size,
                 material: material.unwrap_or_default().into(),
+                physics_body: plane.physics_body,
+                gravity_scale: plane.gravity_scale,
+                mass: plane.mass,
             }),
         )
     }

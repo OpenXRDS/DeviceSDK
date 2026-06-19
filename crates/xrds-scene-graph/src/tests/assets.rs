@@ -21,6 +21,7 @@ fn runtime_projection_resolves_gltf_asset_uri_from_catalog_reference() {
                 scene_index: 0,
                 export_policy: XrdsGltfAssetExportPolicy::KeepExternalReference,
             }),
+            grabbable: false,
             editor: XrdsEditorMetadata::default(),
         }],
         ..Default::default()
@@ -60,6 +61,7 @@ fn runtime_projection_falls_back_to_embedded_gltf_uri_when_catalog_entry_is_miss
                 scene_index: 0,
                 export_policy: XrdsGltfAssetExportPolicy::KeepExternalReference,
             }),
+            grabbable: false,
             editor: XrdsEditorMetadata::default(),
         }],
         ..Default::default()
@@ -93,6 +95,7 @@ fn document_place_gltf_asset_uses_catalog_reference_and_allocates_node_id() {
             visible: true,
             transform: XrdsSceneTransform::default(),
             payload: XrdsSceneNodePayload::Empty,
+            grabbable: false,
             editor: XrdsEditorMetadata::default(),
         }],
         ..Default::default()
@@ -301,6 +304,7 @@ fn remove_asset_rejects_when_policy_requires_no_references() {
                 scene_index: 0,
                 export_policy: XrdsGltfAssetExportPolicy::KeepExternalReference,
             }),
+            grabbable: false,
             editor: XrdsEditorMetadata::default(),
         }],
         ..Default::default()
@@ -343,6 +347,7 @@ fn remove_asset_can_detach_references_and_keep_fallback_uri() {
                 scene_index: 0,
                 export_policy: XrdsGltfAssetExportPolicy::KeepExternalReference,
             }),
+            grabbable: false,
             editor: XrdsEditorMetadata {
                 source: Some(XrdsSourceLink {
                     asset_id: Some("asset:lamp".to_string()),
@@ -411,6 +416,7 @@ fn rebind_gltf_asset_updates_catalog_and_referencing_node_fallbacks() {
                 scene_index: 0,
                 export_policy: XrdsGltfAssetExportPolicy::KeepExternalReference,
             }),
+            grabbable: false,
             editor: XrdsEditorMetadata::default(),
         }],
         ..Default::default()
@@ -471,6 +477,7 @@ fn rename_asset_id_rewrites_catalog_references_and_editor_metadata() {
                 scene_index: 0,
                 export_policy: XrdsGltfAssetExportPolicy::KeepExternalReference,
             }),
+            grabbable: false,
             editor: XrdsEditorMetadata {
                 source: Some(XrdsSourceLink {
                     asset_id: Some("asset:lamp".to_string()),
@@ -559,6 +566,7 @@ fn gltf_node_health_reports_catalog_resolved_missing_and_detached_states() {
                     scene_index: 0,
                     export_policy: XrdsGltfAssetExportPolicy::KeepExternalReference,
                 }),
+                grabbable: false,
                 editor: XrdsEditorMetadata::default(),
             },
             XrdsSceneNode {
@@ -574,6 +582,7 @@ fn gltf_node_health_reports_catalog_resolved_missing_and_detached_states() {
                     scene_index: 1,
                     export_policy: XrdsGltfAssetExportPolicy::KeepExternalReference,
                 }),
+                grabbable: false,
                 editor: XrdsEditorMetadata::default(),
             },
             XrdsSceneNode {
@@ -589,6 +598,7 @@ fn gltf_node_health_reports_catalog_resolved_missing_and_detached_states() {
                     scene_index: 2,
                     export_policy: XrdsGltfAssetExportPolicy::KeepExternalReference,
                 }),
+                grabbable: false,
                 editor: XrdsEditorMetadata::default(),
             },
         ],
@@ -650,6 +660,7 @@ fn gltf_source_diagnostics_report_valid_missing_invalid_extension_and_bad_scene_
                     scene_index: 0,
                     export_policy: XrdsGltfAssetExportPolicy::KeepExternalReference,
                 }),
+                grabbable: false,
                 editor: XrdsEditorMetadata::default(),
             },
             XrdsSceneNode {
@@ -665,6 +676,7 @@ fn gltf_source_diagnostics_report_valid_missing_invalid_extension_and_bad_scene_
                     scene_index: 0,
                     export_policy: XrdsGltfAssetExportPolicy::KeepExternalReference,
                 }),
+                grabbable: false,
                 editor: XrdsEditorMetadata::default(),
             },
             XrdsSceneNode {
@@ -680,6 +692,7 @@ fn gltf_source_diagnostics_report_valid_missing_invalid_extension_and_bad_scene_
                     scene_index: 0,
                     export_policy: XrdsGltfAssetExportPolicy::KeepExternalReference,
                 }),
+                grabbable: false,
                 editor: XrdsEditorMetadata::default(),
             },
             XrdsSceneNode {
@@ -695,6 +708,7 @@ fn gltf_source_diagnostics_report_valid_missing_invalid_extension_and_bad_scene_
                     scene_index: 5,
                     export_policy: XrdsGltfAssetExportPolicy::KeepExternalReference,
                 }),
+                grabbable: false,
                 editor: XrdsEditorMetadata::default(),
             },
         ],
@@ -780,6 +794,7 @@ fn asset_usage_reports_reference_counts_for_catalog_assets() {
                     scene_index: 0,
                     export_policy: XrdsGltfAssetExportPolicy::KeepExternalReference,
                 }),
+                grabbable: false,
                 editor: XrdsEditorMetadata::default(),
             },
             XrdsSceneNode {
@@ -795,6 +810,7 @@ fn asset_usage_reports_reference_counts_for_catalog_assets() {
                     scene_index: 1,
                     export_policy: XrdsGltfAssetExportPolicy::KeepExternalReference,
                 }),
+                grabbable: false,
                 editor: XrdsEditorMetadata::default(),
             },
         ],
@@ -853,6 +869,7 @@ fn asset_diagnostics_summarize_node_health_and_unused_assets() {
                     scene_index: 0,
                     export_policy: XrdsGltfAssetExportPolicy::KeepExternalReference,
                 }),
+                grabbable: false,
                 editor: XrdsEditorMetadata::default(),
             },
             XrdsSceneNode {
@@ -875,7 +892,9 @@ fn asset_diagnostics_summarize_node_health_and_unused_assets() {
                         },
                         ..Default::default()
                     },
+                    ..Default::default()
                 }),
+                grabbable: false,
                 editor: XrdsEditorMetadata::default(),
             },
             XrdsSceneNode {
@@ -891,6 +910,7 @@ fn asset_diagnostics_summarize_node_health_and_unused_assets() {
                     scene_index: 2,
                     export_policy: XrdsGltfAssetExportPolicy::KeepExternalReference,
                 }),
+                grabbable: false,
                 editor: XrdsEditorMetadata::default(),
             },
         ],
@@ -1058,6 +1078,7 @@ fn document_validation_rejects_gltf_authoring_on_non_gltf_node() {
             visible: true,
             transform: XrdsSceneTransform::default(),
             payload: XrdsSceneNodePayload::Empty,
+            grabbable: false,
             editor: XrdsEditorMetadata::default(),
         }],
         gltf_node_authoring: [(
@@ -1260,6 +1281,7 @@ fn audio_clip_node_references_audio_catalog_asset_and_drives_usage_tracking() {
                     autoplay: false,
                     ..Default::default()
                 }),
+                grabbable: false,
                 editor: XrdsEditorMetadata::default(),
             },
         ],
@@ -1307,6 +1329,7 @@ fn audio_clip_node_validation_rejects_missing_and_wrong_kind_assets() {
                 asset_id: "asset:missing".to_string(),
                 ..Default::default()
             }),
+            grabbable: false,
             editor: XrdsEditorMetadata::default(),
         }],
         ..Default::default()
@@ -1340,6 +1363,7 @@ fn audio_clip_node_validation_rejects_missing_and_wrong_kind_assets() {
                 asset_id: "asset:texture".to_string(),
                 ..Default::default()
             }),
+            grabbable: false,
             editor: XrdsEditorMetadata::default(),
         }],
         ..Default::default()

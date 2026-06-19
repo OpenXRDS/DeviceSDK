@@ -19,6 +19,7 @@ fn import_scene_document_applies_authored_exposure_to_imported_cameras() {
             visible: true,
             transform: XrdsSceneTransform::default(),
             payload: XrdsSceneNodePayload::Camera(Default::default()),
+            grabbable: false,
             editor: XrdsEditorMetadata::default(),
         }],
         ..Default::default()
@@ -65,6 +66,7 @@ fn import_scene_document_applies_authored_fog_to_imported_cameras() {
             visible: true,
             transform: XrdsSceneTransform::default(),
             payload: XrdsSceneNodePayload::Camera(Default::default()),
+            grabbable: false,
             editor: XrdsEditorMetadata::default(),
         }],
         ..Default::default()
@@ -129,6 +131,7 @@ fn import_scene_document_applies_authored_ibl_environment_to_imported_cameras() 
             visible: true,
             transform: XrdsSceneTransform::default(),
             payload: XrdsSceneNodePayload::Camera(Default::default()),
+            grabbable: false,
             editor: XrdsEditorMetadata::default(),
         }],
         ..Default::default()
@@ -192,6 +195,7 @@ fn import_scene_document_applies_authored_skybox_to_imported_cameras() {
             visible: true,
             transform: XrdsSceneTransform::default(),
             payload: XrdsSceneNodePayload::Camera(Default::default()),
+            grabbable: false,
             editor: XrdsEditorMetadata::default(),
         }],
         ..Default::default()
@@ -257,6 +261,7 @@ fn scene_environment_policy_applies_to_non_imported_cameras() {
             visible: true,
             transform: XrdsSceneTransform::default(),
             payload: XrdsSceneNodePayload::Camera(Default::default()),
+            grabbable: false,
             editor: XrdsEditorMetadata::default(),
         }],
         ..Default::default()
@@ -688,6 +693,7 @@ fn export_scene_document_preserves_imported_ibl_environment_by_default() {
             visible: true,
             transform: XrdsSceneTransform::default(),
             payload: XrdsSceneNodePayload::Camera(Default::default()),
+            grabbable: false,
             editor: XrdsEditorMetadata::default(),
         }],
         ..Default::default()
@@ -732,6 +738,7 @@ fn export_scene_document_preserves_imported_skybox_environment_by_default() {
             visible: true,
             transform: XrdsSceneTransform::default(),
             payload: XrdsSceneNodePayload::Camera(Default::default()),
+            grabbable: false,
             editor: XrdsEditorMetadata::default(),
         }],
         ..Default::default()
@@ -767,6 +774,7 @@ fn export_scene_document_preserves_imported_exposure_by_default() {
             visible: true,
             transform: XrdsSceneTransform::default(),
             payload: XrdsSceneNodePayload::Camera(Default::default()),
+            grabbable: false,
             editor: XrdsEditorMetadata::default(),
         }],
         ..Default::default()
@@ -806,6 +814,7 @@ fn export_scene_document_preserves_imported_fog_by_default() {
             visible: true,
             transform: XrdsSceneTransform::default(),
             payload: XrdsSceneNodePayload::Camera(Default::default()),
+            grabbable: false,
             editor: XrdsEditorMetadata::default(),
         }],
         ..Default::default()

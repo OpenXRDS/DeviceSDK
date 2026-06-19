@@ -35,6 +35,14 @@ pub struct ActivePlayerAnchorEntity(pub Option<Entity>);
 #[derive(Component, Clone, Copy)]
 pub struct XrdsAnchorFov(pub f32);
 
+/// Per-anchor exposure override (ev100).  `None` = use the scene-wide exposure.
+///
+/// Inserted by the scene importer on `PlayerAnchor` entities that carry an authored
+/// exposure value.  `apply_anchor_exposure_system` reads this and updates
+/// `XrdsAnchorExposureOverride` when the active anchor changes.
+#[derive(Component, Clone, Copy)]
+pub struct XrdsAnchorExposure(pub Option<f32>);
+
 /// Marks the entity that represents the player's head camera in a deployed runtime.
 ///
 /// Insert this on the camera entity that moves with the player (e.g. `AppCamera`
@@ -135,15 +143,11 @@ pub fn head_locked_system(
             // Leave at authored world position; do not camera-follow.
             continue;
         }
-        let has_anchor_parent = parent_anchor.is_some();
-
-        let forward = cam_tf.rotation * Vec3::NEG_Z;
-        let world_pos = if has_anchor_parent {
-            cam_pos + cam_tf.rotation * anchor.local_offset.translation
-        } else {
-            cam_pos + forward * 1.5
-        };
-        let world_rot = face_camera(cam_pos, world_pos);
+        // local_offset.translation is in camera-local space (X right, Y up, -Z forward).
+        // Rotate it into world space each frame so the entity tracks the camera correctly.
+        // Rotation matches the camera exactly — HUD items are screen-painted, not world billboards.
+        let world_pos = cam_pos + cam_tf.rotation * anchor.local_offset.translation;
+        let world_rot = cam_tf.rotation;
         let world_mat = Mat4::from_scale_rotation_translation(Vec3::ONE, world_rot, world_pos);
         write_world(&mut *tf, &mut *gt, world_mat, child_of, &parent_q);
     }
@@ -494,6 +498,25 @@ pub fn apply_anchor_fov_system(
     if let Projection::Perspective(ref mut persp) = *proj {
         persp.fov = fov.0.to_radians();
     }
+}
+
+/// Apply the arriving anchor's per-anchor exposure override.
+///
+/// Runs every frame in PostUpdate.  On anchor change (or when the active anchor's
+/// `XrdsAnchorExposure` value differs from the cached override), this updates
+/// `XrdsAnchorExposureOverride` and calls `sync_managed_scene_exposure_in_world`
+/// so the camera's `Exposure` component reflects the new setting immediately.
+pub fn apply_anchor_exposure_system(world: &mut World) {
+    let current   = world.resource::<ActivePlayerAnchorEntity>().0;
+    let anchor_ev = current
+        .and_then(|e| world.get::<XrdsAnchorExposure>(e))
+        .and_then(|ae| ae.0);
+
+    let prev = world.resource::<crate::xrds_api::environment::XrdsAnchorExposureOverride>().0;
+    if prev == anchor_ev { return; }
+
+    world.resource_mut::<crate::xrds_api::environment::XrdsAnchorExposureOverride>().0 = anchor_ev;
+    crate::xrds_api::environment::sync_managed_scene_exposure_in_world(world);
 }
 
 /// World-space rotation whose local +Z faces `cam_pos` from `world_pos`.

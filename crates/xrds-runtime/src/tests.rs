@@ -217,6 +217,7 @@ fn imported_test_document() -> XrdsSceneDocument {
                     ..Default::default()
                 },
                 payload: XrdsSceneNodePayload::Empty,
+                grabbable: false,
                 editor: XrdsEditorMetadata {
                     tags: vec!["folder".to_string(), "root".to_string()],
                     layer: Some("Scene".to_string()),
@@ -278,7 +279,9 @@ fn imported_test_document() -> XrdsSceneDocument {
                             alpha_cutoff: 0.42,
                         },
                     },
+                    ..Default::default()
                 }),
+                grabbable: false,
                 editor: XrdsEditorMetadata {
                     tags: vec!["mesh".to_string(), "selectable".to_string()],
                     layer: Some("Gameplay".to_string()),
@@ -318,6 +321,7 @@ fn imported_gltf_catalog_document() -> XrdsSceneDocument {
                     scene_index: 0,
                     export_policy: XrdsGltfAssetExportPolicy::KeepExternalReference,
                 }),
+                grabbable: false,
                 editor: XrdsEditorMetadata {
                     source: Some(XrdsSourceLink {
                         asset_id: Some("asset:lamp".to_string()),
@@ -340,6 +344,7 @@ fn imported_gltf_catalog_document() -> XrdsSceneDocument {
                     scene_index: 0,
                     export_policy: XrdsGltfAssetExportPolicy::KeepExternalReference,
                 }),
+                grabbable: false,
                 editor: XrdsEditorMetadata::default(),
             },
             XrdsSceneNode {
@@ -355,6 +360,7 @@ fn imported_gltf_catalog_document() -> XrdsSceneDocument {
                     scene_index: 0,
                     export_policy: XrdsGltfAssetExportPolicy::KeepExternalReference,
                 }),
+                grabbable: false,
                 editor: XrdsEditorMetadata::default(),
             },
         ],

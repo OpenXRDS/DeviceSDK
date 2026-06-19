@@ -33,17 +33,25 @@ mod state;
 mod tests;
 #[path = "xrds_api/anchor.rs"]
 mod anchor;
+#[path = "xrds_api/grab.rs"]
+mod grab;
+#[path = "xrds_api/raycast.rs"]
+mod raycast;
 #[path = "xrds_api/billboard.rs"]
 mod billboard;
 #[path = "xrds_api/updaters.rs"]
 mod updaters;
+#[path = "xrds_api/zone.rs"]
+mod zone;
 
 pub use anchor::{
     ActivePlayerAnchorEntity, PlayerAnchorCameraPose,
-    XrdsAnchorFov, XrdsBodyLocked, XrdsComfortPinned, XrdsCylindrical, XrdsHeadLocked,
-    XrdsInitialAnchor, XrdsPlayerAnchorRoot, XrdsPlayerCamera, XrdsPlayerRoot,
+    XrdsAnchorExposure, XrdsAnchorFov, XrdsBodyLocked, XrdsComfortPinned, XrdsCylindrical,
+    XrdsHeadLocked, XrdsInitialAnchor, XrdsPlayerAnchorRoot, XrdsPlayerCamera, XrdsPlayerRoot,
 };
 pub use billboard::XrdsBillboard;
+pub use xrds_components::primitives::{XrdsText, XrdsTextAlignment, XrdsTextAnchor};
+pub use xrds_components::TextParams;
 
 use bevy::{ecs::world::CommandQueue, prelude::*};
 use std::any::{Any, TypeId};
@@ -51,8 +59,8 @@ use std::collections::{HashMap, HashSet};
 use std::marker::PhantomData;
 use std::sync::Arc;
 use xrds_components::primitives::{
-    XrdsCube, XrdsCylinder, XrdsExtrudedText, XrdsExtrudedTextAlignment, XrdsPlane3D, XrdsSphere,
-    XrdsTetrahedron, XrdsText, XrdsTextAlignment, XrdsTextAnchor,
+    XrdsCube, XrdsCylinder, XrdsExtrudedText, XrdsExtrudedTextAlignment,
+    XrdsPlane3D, XrdsSphere, XrdsTetrahedron,
 };
 use xrds_components::world::lights::{
     XrdsAmbientLight, XrdsDirectionalLight, XrdsPointLight, XrdsSpotLight,
@@ -63,7 +71,7 @@ use xrds_components::{
     CameraProjectionPatch, CubeGeometryParams, CylinderGeometryParams, DirectionalLightParams,
     GltfAssetSourcePatch, NamePatch, OrthographicCameraParams, ParentPatch,
     PerspectiveCameraParams, Plane3DGeometryParams, PointLightParams, SphereGeometryParams,
-    ExtrudedTextParams, SpotLightParams, TetrahedronGeometryParams, TextParams, TransformParams,
+    ExtrudedTextParams, SpotLightParams, TetrahedronGeometryParams, TransformParams,
     VisibilityPatch,
     XrdsAssetComponent, XrdsColor, XrdsComponent, XrdsComponentsPlugin, XrdsId, XrdsLinearRgba,
     XrdsMaterialAlphaMode, XrdsMaterialParams, XrdsMaterialPbrParams, XrdsMaterialTextureRef,
@@ -71,19 +79,23 @@ use xrds_components::{
     XrdsMutableComponent, XrdsRegistry,
 };
 use xrds_scene_graph::{
-    XrdsEditorMetadata, XrdsHudTextData, XrdsSceneAnimationRepeatMode, XrdsSceneAsset,
+    XrdsEditorMetadata, XrdsSceneAnimationRepeatMode, XrdsSceneAsset,
     XrdsSceneAssetKind, XrdsSceneDocument, XrdsSceneGltfAnimationSelector,
     XrdsSceneGltfMorphTargetSelector, XrdsSceneGltfNodeAuthoring, XrdsSceneGltfPlayback,
-    XrdsSceneHudText, XrdsSceneMetadata, XrdsSceneNode, XrdsSceneNodePayload,
+    XrdsSceneMetadata, XrdsSceneNode, XrdsSceneNodePayload,
     XrdsSceneRuntimeComponent, XrdsSceneRuntimeNode,
 };
 
 pub use context::XrdsUpdateContext;
+pub use xrds_components::{XrDropEvent, XrGrabEvent, XrGrabHand, XrGrabbable, XrGrabbed, XrRayhit, XrdsPlayerSpawnZone};
+pub use xrds_components::XrdsPhysicsBody;
+pub use xrds_components::{XrdsGrabType, XrdsInteractionZone, XrdsInteractionZoneShape, XrZoneEnterEvent, XrZoneExitEvent};
 pub use environment::XrdsReceivesEnvironment;
 /// Read-only entity→id index exposed for viewport picking systems.
 /// Access as `Res<XrdsIdIndex>` in Bevy systems: `id_index.id_of(entity)`
 /// returns the `XrdsId` for any entity that was spawned by an XRDS import.
 pub use state::XrdsIdIndex;
+pub use state::XrdsStoredHudInstance;
 
 /// `SystemSet` label for `run_xrds_app_update` (the exclusive system that drives
 /// `XrdsApp::update`).  Runs in `PostUpdate`, before Bevy's `VisibilityPropagate`

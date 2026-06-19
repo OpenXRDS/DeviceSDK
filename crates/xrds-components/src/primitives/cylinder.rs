@@ -1,5 +1,6 @@
 use crate::{
     default_component_name, TransformParams, XrdsComponent, XrdsMutableComponent, XrdsObject,
+    XrdsPhysicsBody,
 };
 
 #[derive(Debug, Clone)]
@@ -10,6 +11,9 @@ pub struct XrdsCylinder {
     pub transform: TransformParams,
     pub radius: f32,
     pub height: f32,
+    pub physics_body: XrdsPhysicsBody,
+    pub gravity_scale: f32,
+    pub mass: f32,
 }
 
 impl XrdsCylinder {
@@ -21,6 +25,9 @@ impl XrdsCylinder {
             transform: TransformParams::default(),
             radius: 0.5,
             height: 1.0,
+            physics_body: XrdsPhysicsBody::None,
+            gravity_scale: 1.0,
+            mass: 1.0,
         }
     }
 

@@ -441,6 +441,7 @@ fn gltf_source_is_readable_after_import() {
                 scene_index: 0,
                 export_policy: XrdsGltfAssetExportPolicy::KeepExternalReference,
             }),
+            grabbable: false,
             editor: XrdsEditorMetadata::default(),
         }],
         ..Default::default()

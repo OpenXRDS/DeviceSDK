@@ -188,6 +188,7 @@ fn import_scene_document_json_loads_saved_document_into_runtime() {
             visible: true,
             transform: XrdsSceneTransform::default(),
             payload: XrdsSceneNodePayload::Camera(Default::default()),
+            grabbable: false,
             editor: XrdsEditorMetadata::default(),
         }],
         ..Default::default()
@@ -405,6 +406,7 @@ fn audio_clip_node_survives_import_export_round_trip() {
                 autoplay: true,
                 ..Default::default()
             }),
+            grabbable: false,
             editor: XrdsEditorMetadata::default(),
         }],
         ..Default::default()
@@ -629,6 +631,7 @@ fn light_nodes_survive_import_export_round_trip() {
                     illuminance: 8000.0,
                     shadows: true,
                 }),
+                grabbable: false,
                 editor: XrdsEditorMetadata::default(),
             },
             XrdsSceneNode {
@@ -648,6 +651,7 @@ fn light_nodes_survive_import_export_round_trip() {
                     radius: 0.1,
                     shadows: false,
                 }),
+                grabbable: false,
                 editor: XrdsEditorMetadata::default(),
             },
             XrdsSceneNode {
@@ -665,6 +669,7 @@ fn light_nodes_survive_import_export_round_trip() {
                     outer_angle: 0.5,
                     shadows: true,
                 }),
+                grabbable: false,
                 editor: XrdsEditorMetadata::default(),
             },
             XrdsSceneNode {
@@ -679,6 +684,7 @@ fn light_nodes_survive_import_export_round_trip() {
                     brightness: 0.3,
                     affects_baked_lighting: true,
                 }),
+                grabbable: false,
                 editor: XrdsEditorMetadata::default(),
             },
         ],
@@ -760,6 +766,7 @@ fn camera_node_survives_import_export_round_trip() {
                 },
                 look_at: None,
             }),
+            grabbable: false,
             editor: XrdsEditorMetadata::default(),
         }],
         ..Default::default()
@@ -815,6 +822,7 @@ fn text3d_node_survives_import_export_round_trip() {
                 alignment: XrdsSceneTextAlignment::Left,
                 ..Default::default()
             }),
+            grabbable: false,
             editor: XrdsEditorMetadata::default(),
         }],
         ..Default::default()

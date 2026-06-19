@@ -254,6 +254,7 @@ fn authored_scene_document() -> XrdsSceneDocument {
                 transform: XrdsSceneTransform::default(),
                 payload: XrdsSceneNodePayload::Empty,
                 editor: XrdsEditorMetadata::default(),
+                grabbable: false,
             },
             // Imported camera (also becomes the SpatialListener).
             XrdsSceneNode {
@@ -276,6 +277,7 @@ fn authored_scene_document() -> XrdsSceneDocument {
                     look_at: Some([0.0, 0.5, 0.0]),
                 }),
                 editor: XrdsEditorMetadata::default(),
+                grabbable: false,
             },
             // Non-spatial: same volume everywhere; demonstrates looping background music.
             XrdsSceneNode {
@@ -294,6 +296,7 @@ fn authored_scene_document() -> XrdsSceneDocument {
                     ..Default::default()
                 }),
                 editor: XrdsEditorMetadata::default(),
+                grabbable: false,
             },
             // Spatial: at z=6 (in front of camera) and camera height y=3.5.
             // Camera sweeps ±3.5; this zone is at x=-4 → 0.5 units away at sweep peak.
@@ -316,6 +319,7 @@ fn authored_scene_document() -> XrdsSceneDocument {
                     ..Default::default()
                 }),
                 editor: XrdsEditorMetadata::default(),
+                grabbable: false,
             },
             XrdsSceneNode {
                 id: DOCUMENT_COMBAT_MUSIC_ID,
@@ -336,6 +340,7 @@ fn authored_scene_document() -> XrdsSceneDocument {
                     ..Default::default()
                 }),
                 editor: XrdsEditorMetadata::default(),
+                grabbable: false,
             },
         ],
         ..Default::default()

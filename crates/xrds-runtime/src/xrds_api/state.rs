@@ -38,6 +38,16 @@ pub(super) struct XrdsStoredGltfHandle(pub(super) bevy::prelude::Handle<bevy::gl
 #[derive(Component, Debug, Clone)]
 pub(super) struct XrdsStoredHudText(pub(super) xrds_scene_graph::XrdsSceneHudText);
 
+/// Inserted on a `PlayerAnchor` entity when its document node carries a
+/// `hud_template_id`.  Maps each HUD item's authored name to the Bevy entity
+/// that renders it, so `XrdsUpdateContext::set_hud_item` can patch text at
+/// runtime without a scene reimport.
+#[derive(Component, Debug, Clone)]
+pub struct XrdsStoredHudInstance {
+    pub items: Vec<(String, Entity)>,
+}
+
+
 #[derive(Component, Debug, Clone, Copy)]
 pub(super) struct XrdsDescriptorType(pub(super) TypeId);
 
@@ -49,6 +59,11 @@ pub(super) struct XrdsIdAllocator {
 #[derive(Resource, Debug, Clone, Default)]
 pub(super) struct XrdsImportedAssetCatalog {
     pub(super) assets: Vec<XrdsSceneAsset>,
+}
+
+#[derive(Resource, Debug, Clone, Default)]
+pub(super) struct XrdsImportedHudLibrary {
+    pub(super) templates: Vec<xrds_scene_graph::XrdsHudTemplate>,
 }
 
 impl Default for XrdsIdAllocator {

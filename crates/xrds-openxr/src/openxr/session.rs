@@ -230,6 +230,63 @@ impl OpenXrSession {
         })
     }
 
+    pub fn apply_haptic_feedback(
+        &self,
+        action:    &openxr::Action<openxr::Haptic>,
+        path:      openxr::Path,
+        amplitude: f32,
+        duration:  openxr::Duration,
+        frequency: f32,
+    ) -> openxr::Result<()> {
+        openxr_graphics!(&self.0; inner => {
+            unsafe {
+                let action_info = openxr::sys::HapticActionInfo {
+                    ty:              openxr::sys::HapticActionInfo::TYPE,
+                    next:            null(),
+                    action:          action.as_raw(),
+                    subaction_path:  path,
+                };
+                let vibration = openxr::sys::HapticVibration {
+                    ty:        openxr::sys::HapticVibration::TYPE,
+                    next:      null(),
+                    duration,
+                    frequency,
+                    amplitude,
+                };
+                cvt((inner.instance().fp().apply_haptic_feedback)(
+                    inner.as_raw(),
+                    &action_info,
+                    &vibration as *const openxr::sys::HapticVibration
+                        as *const openxr::sys::HapticBaseHeader,
+                ))?;
+                Ok(())
+            }
+        })
+    }
+
+    #[allow(dead_code)]
+    pub fn stop_haptic_feedback(
+        &self,
+        action: &openxr::Action<openxr::Haptic>,
+        path:   openxr::Path,
+    ) -> openxr::Result<()> {
+        openxr_graphics!(&self.0; inner => {
+            unsafe {
+                let action_info = openxr::sys::HapticActionInfo {
+                    ty:             openxr::sys::HapticActionInfo::TYPE,
+                    next:           null(),
+                    action:         action.as_raw(),
+                    subaction_path: path,
+                };
+                cvt((inner.instance().fp().stop_haptic_feedback)(
+                    inner.as_raw(),
+                    &action_info,
+                ))?;
+                Ok(())
+            }
+        })
+    }
+
     #[inline]
     #[allow(unused)]
     pub fn locate_space(

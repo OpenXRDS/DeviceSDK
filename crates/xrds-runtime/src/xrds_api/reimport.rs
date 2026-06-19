@@ -31,9 +31,10 @@ pub(super) fn reimport_scene_in_world(
     *world.resource_mut::<XrdsHierarchyIndex>() = XrdsHierarchyIndex::default();
     world.resource_mut::<QueuedParentChanges>().changes.clear();
 
-    // ── 3. Catalog and environment ────────────────────────────────────────────
+    // ── 3. Catalog, environment, and HUD library ──────────────────────────────
     merge_imported_asset_catalog(world, &document.assets);
     store_imported_scene_environment_in_world(world, document.environment().cloned());
+    world.resource_mut::<XrdsImportedHudLibrary>().templates = document.hud_library.clone();
 
     // Reset global ambient light to Bevy's default before spawning nodes.
     // Any AmbientLight node in the document will override this in step 4.
@@ -98,6 +99,12 @@ pub(super) fn reimport_scene_in_world(
     // ── 4b. Tag Player / PlayerAnchor entities ────────────────────────────────
     tag_player_anchor_entities(world, document);
 
+    // ── 4c. Tag grabbable entities ────────────────────────────────────────────
+    tag_grabbable_entities(world, document);
+
+    // ── 4d. Tag spawn zone entities ───────────────────────────────────────────
+    tag_spawn_zone_entities(world, document);
+
     // ── 5. Apply materials ────────────────────────────────────────────────────
     for (entity, mat) in material_updates {
         set_material_params_for_entity_in_world(world, entity, mat);
@@ -160,7 +167,7 @@ pub(super) fn spawn_document_node_in_world(
 
     world.resource_mut::<XrdsIdIndex>().register(target_id, entity);
 
-    // Tag Player / PlayerAnchor entities.
+    // Tag Player / PlayerAnchor / grabbable entities.
     if let Some(doc_node) = document.nodes.iter().find(|n| XrdsId::from(n.id) == target_id) {
         if let Ok(mut e) = world.get_entity_mut(entity) {
             match &doc_node.payload {
@@ -168,6 +175,7 @@ pub(super) fn spawn_document_node_in_world(
                 XrdsSceneNodePayload::PlayerAnchor(a) => {
                     e.insert(XrdsPlayerAnchorRoot);
                     e.insert(XrdsAnchorFov(a.fov_deg));
+                    e.insert(XrdsAnchorExposure(a.exposure));
                     if a.is_initial { e.insert(XrdsInitialAnchor); }
                     let world_tf = authored_world_transform(&document.nodes, doc_node);
                     e.insert(PlayerAnchorCameraPose {
@@ -177,6 +185,9 @@ pub(super) fn spawn_document_node_in_world(
                     });
                 }
                 _ => {}
+            }
+            if doc_node.grabbable {
+                e.insert(xrds_components::XrGrabbable);
             }
         }
     }
@@ -243,6 +254,30 @@ fn spawn_runtime_component(
         XrdsSceneRuntimeComponent::Text(c) => Some(spawn_text_descriptor(commands, c)),
         XrdsSceneRuntimeComponent::ExtrudedText(c) => {
             Some(spawn_extruded_text_descriptor(commands, c))
+        }
+        XrdsSceneRuntimeComponent::InteractionZone(node, zone) => {
+            use avian3d::prelude::{CollisionEventsEnabled, Sensor};
+            let collider = match zone.shape {
+                xrds_components::XrdsInteractionZoneShape::Sphere { radius } => {
+                    avian3d::prelude::Collider::sphere(radius)
+                }
+                xrds_components::XrdsInteractionZoneShape::Box { half_extents: [hx, hy, hz] } => {
+                    avian3d::prelude::Collider::cuboid(hx * 2.0, hy * 2.0, hz * 2.0)
+                }
+            };
+            Some(
+                commands
+                    .spawn((
+                        bevy::prelude::Name::new(node.name.clone()),
+                        build_transform(&node.transform),
+                        build_visibility_hierarchy_components(node.visible),
+                        collider,
+                        Sensor,
+                        CollisionEventsEnabled,
+                        *zone,
+                    ))
+                    .id(),
+            )
         }
     }
 }
@@ -381,6 +416,7 @@ pub(super) fn tag_player_anchor_entities(
                 if let Ok(mut e) = world.get_entity_mut(entity) {
                     e.insert(XrdsPlayerAnchorRoot);
                     e.insert(XrdsAnchorFov(a.fov_deg));
+                    e.insert(XrdsAnchorExposure(a.exposure));
                     if a.is_initial { e.insert(XrdsInitialAnchor); }
                     let world_tf = authored_world_transform(&document.nodes, node);
                     eprintln!(
@@ -393,6 +429,16 @@ pub(super) fn tag_player_anchor_entities(
                         fov_deg:     a.fov_deg,
                     });
                     anchor_tagged += 1;
+                }
+                // Spawn HUD instance if this anchor has a linked template.
+                if let Some(tid) = a.hud_template_id {
+                    if let Some(template) = document.hud_template(tid) {
+                        let template = template.clone();
+                        let hud_instance = spawn_hud_instance_for_anchor(world, entity, &template);
+                        if let Ok(mut e) = world.get_entity_mut(entity) {
+                            e.insert(hud_instance);
+                        }
+                    }
                 }
             }
             _ => {}
@@ -425,5 +471,37 @@ fn authored_world_transform(
         translation: parent_world.transform_point(local.translation),
         rotation:    parent_world.rotation * local.rotation,
         scale:       parent_world.scale * local.scale,
+    }
+}
+
+/// Insert [`XrGrabbable`] on every entity whose scene document node has `grabbable: true`.
+/// Remove it from any that have `grabbable: false` (handles a toggle from the editor).
+pub(super) fn tag_grabbable_entities(world: &mut World, document: &XrdsSceneDocument) {
+    for node in &document.nodes {
+        let Some(entity) = world.resource::<XrdsIdIndex>().entity_of(node.id.into()) else {
+            continue;
+        };
+        let Ok(mut e) = world.get_entity_mut(entity) else { continue; };
+        if node.grabbable {
+            e.insert(xrds_components::XrGrabbable);
+        } else {
+            e.remove::<xrds_components::XrGrabbable>();
+        }
+    }
+}
+
+/// Insert [`XrdsPlayerSpawnZone`] on every entity whose scene document node is a
+/// `PlayerSpawnZone` payload.  Called after reimport so the API can query zone positions.
+pub(super) fn tag_spawn_zone_entities(world: &mut World, document: &XrdsSceneDocument) {
+    for node in &document.nodes {
+        let XrdsSceneNodePayload::PlayerSpawnZone(ref z) = node.payload else { continue; };
+        let Some(entity) = world.resource::<XrdsIdIndex>().entity_of(node.id.into()) else {
+            continue;
+        };
+        let Ok(mut e) = world.get_entity_mut(entity) else { continue; };
+        e.insert(xrds_components::XrdsPlayerSpawnZone {
+            size: bevy::math::Vec3::from_array(z.size),
+            player_node_id: z.player_node_id,
+        });
     }
 }

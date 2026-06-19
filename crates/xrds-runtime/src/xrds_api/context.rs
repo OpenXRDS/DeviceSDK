@@ -506,6 +506,31 @@ impl XrdsUpdateContext<'_> {
         handle_of_id_in_world(self.world, id)
     }
 
+    /// Pause or unpause the physics simulation globally.
+    /// Pausing stops all rigid-body integration — useful for edit-mode authoring so
+    /// Dynamic objects stay at their authored positions instead of falling immediately.
+    pub fn set_physics_paused(&mut self, paused: bool) {
+        use bevy::prelude::Time;
+        use avian3d::prelude::{Physics, PhysicsTime};
+        if let Some(mut pt) = self.world.get_resource_mut::<Time<Physics>>() {
+            if paused { pt.pause(); } else { pt.unpause(); }
+        }
+    }
+
+    /// Set the gravity multiplier on a dynamic physics entity (live update, no reimport).
+    /// Has no effect if the entity has no `RigidBody::Dynamic` component.
+    pub fn set_gravity_scale_for_node(&mut self, id: XrdsId, scale: f32) {
+        let Some(entity) = self.world.resource::<XrdsIdIndex>().entity_of(id) else { return; };
+        self.world.entity_mut(entity).insert(avian3d::prelude::GravityScale(scale));
+    }
+
+    /// Set the mass (kg) on a dynamic physics entity (live update, no reimport).
+    /// Has no effect if the entity has no `RigidBody::Dynamic` component.
+    pub fn set_mass_for_node(&mut self, id: XrdsId, mass_kg: f32) {
+        let Some(entity) = self.world.resource::<XrdsIdIndex>().entity_of(id) else { return; };
+        self.world.entity_mut(entity).insert(avian3d::prelude::Mass(mass_kg));
+    }
+
     /// Update the perspective FOV on a camera entity (live preview).
     /// Modifies `Projection::Perspective.fov` in-place without reimporting.
     pub fn set_camera_fov_for_node(&mut self, id: XrdsId, fov_deg: f32) {
@@ -739,5 +764,113 @@ impl XrdsUpdateContext<'_> {
         weight: f32,
     ) -> Result<(), XrdsGltfRuntimeError> {
         set_gltf_morph_target_weight_in_world(self.world, handle, node, mesh_name, selector, weight)
+    }
+
+    /// Update the displayed text of a named HUD item on a specific `PlayerAnchor`.
+    ///
+    /// `anchor_id` — the `XrdsId` of the `PlayerAnchor` node.
+    /// `item_name` — the authored name of the `XrdsHudItemDef` (e.g. `"hp"`, `"status"`).
+    /// `text`      — the new text content.
+    /// `color`     — optional RGBA override; `None` keeps the authored color.
+    ///
+    /// Does nothing if the anchor has no linked HUD instance or the item name is not found.
+    pub fn set_hud_item(
+        &mut self,
+        anchor_id: XrdsId,
+        item_name: &str,
+        text: &str,
+        color: Option<[f32; 4]>,
+    ) {
+        use bevy_rich_text3d::{Text3d, Text3dStyling};
+        use bevy::color::Srgba;
+
+        let anchor_entity = match self.world.resource::<XrdsIdIndex>().entity_of(anchor_id) {
+            Some(e) => e,
+            None => return,
+        };
+
+        let item_entity = {
+            let hud = match self.world.get::<XrdsStoredHudInstance>(anchor_entity) {
+                Some(h) => h,
+                None => return,
+            };
+            hud.items.iter()
+                .find(|(name, _)| name == item_name)
+                .map(|(_, e)| *e)
+        };
+
+        let Some(item_entity) = item_entity else { return; };
+
+        let text = text.to_string();
+        if let Some(mut t3d) = self.world.get_mut::<Text3d>(item_entity) {
+            *t3d = Text3d::new(text);
+        }
+        if let Some([r, g, b, a]) = color {
+            if let Some(mut styling) = self.world.get_mut::<Text3dStyling>(item_entity) {
+                styling.color = Srgba::new(r, g, b, a);
+            }
+        }
+    }
+
+    /// Mark an entity as pick-up-able by the XR grab system.
+    ///
+    /// Use this from `update()` to enable grabbing at runtime — for example after a proximity
+    /// check or when entering a specific game state.
+    pub fn make_grabbable(&mut self, id: XrdsId) -> &mut Self {
+        if let Some(entity) = self.world.resource::<XrdsIdIndex>().entity_of(id) {
+            if let Ok(mut e) = self.world.get_entity_mut(entity) {
+                e.insert(xrds_components::XrGrabbable);
+            }
+        }
+        self
+    }
+
+    /// Remove the `XrGrabbable` marker from an entity.
+    pub fn make_ungrabable(&mut self, id: XrdsId) -> &mut Self {
+        if let Some(entity) = self.world.resource::<XrdsIdIndex>().entity_of(id) {
+            if let Ok(mut e) = self.world.get_entity_mut(entity) {
+                e.remove::<xrds_components::XrGrabbable>();
+            }
+        }
+        self
+    }
+
+    /// Cast a ray against all XRDS scene entities and return hits sorted nearest-first.
+    ///
+    /// Uses world-space AABB intersection. One hit per XRDS entity — GLTF submesh children
+    /// all resolve to their common XRDS ancestor, so only the closest hit per entity is kept.
+    ///
+    /// # Example
+    /// ```ignore
+    /// if let Some(xr) = ctx.resource::<XrInput>() {
+    ///     if let Some(pose) = xr.right.pose {
+    ///         let hits = ctx.raycast(pose.translation, pose.rotation * Vec3::NEG_Z, 5.0);
+    ///         if let Some(hit) = hits.first() {
+    ///             // hit.id, hit.distance, hit.point
+    ///         }
+    ///     }
+    /// }
+    /// ```
+    pub fn raycast(&mut self, origin: Vec3, direction: Vec3, max_distance: f32) -> Vec<XrRayhit> {
+        super::raycast::raycast_world(self.world, origin, direction, max_distance)
+    }
+
+    /// Return a random world-space position within a randomly chosen `PlayerSpawnZone` in the scene.
+    ///
+    /// Picks from all zones regardless of ownership. Y is not randomised.
+    /// Returns `None` if no spawn zones are present.
+    pub fn random_spawn_zone_position(&self) -> Option<Vec3> {
+        random_spawn_zone_position_in_world(self.world, None)
+    }
+
+    /// Return a random spawn position from zones designated for `player_node_id`,
+    /// falling back to shared zones (no owner) when no designated zones exist.
+    pub fn random_spawn_zone_position_for(&self, player_node_id: u64) -> Option<Vec3> {
+        random_spawn_zone_position_in_world(self.world, Some(player_node_id))
+    }
+
+    /// Teleport the player (the entity tagged `XrdsPlayerRoot`) to `position`.
+    pub fn teleport_player(&mut self, position: Vec3) {
+        teleport_player_in_world(self.world, position);
     }
 }

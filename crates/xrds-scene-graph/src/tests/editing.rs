@@ -12,6 +12,7 @@ fn document_metadata_workflow_normalizes_editor_fields() {
             visible: true,
             transform: XrdsSceneTransform::default(),
             payload: XrdsSceneNodePayload::Empty,
+            grabbable: false,
             editor: XrdsEditorMetadata::default(),
         }],
         ..Default::default()
@@ -111,6 +112,7 @@ fn document_material_workflow_updates_mesh_nodes_and_rejects_materialless_nodes(
                 visible: true,
                 transform: XrdsSceneTransform::default(),
                 payload: XrdsSceneNodePayload::Cube(XrdsSceneCube::default()),
+                grabbable: false,
                 editor: XrdsEditorMetadata::default(),
             },
             XrdsSceneNode {
@@ -121,6 +123,7 @@ fn document_material_workflow_updates_mesh_nodes_and_rejects_materialless_nodes(
                 visible: true,
                 transform: XrdsSceneTransform::default(),
                 payload: XrdsSceneNodePayload::Empty,
+                grabbable: false,
                 editor: XrdsEditorMetadata::default(),
             },
         ],
@@ -224,6 +227,7 @@ fn document_material_texture_workflow_updates_slots_and_normalizes_ids() {
             visible: true,
             transform: XrdsSceneTransform::default(),
             payload: XrdsSceneNodePayload::Cube(XrdsSceneCube::default()),
+            grabbable: false,
             editor: XrdsEditorMetadata::default(),
         }],
         ..Default::default()
@@ -296,7 +300,9 @@ fn document_validation_rejects_material_texture_reference_to_missing_or_wrong_ki
                     },
                     ..Default::default()
                 },
+                ..Default::default()
             }),
+            grabbable: false,
             editor: XrdsEditorMetadata::default(),
         }],
         ..Default::default()

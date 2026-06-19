@@ -13,7 +13,7 @@ mod windows;
 pub use openxr::camera::OpenXrCamera;
 pub use openxr::camera::OpenXrCameraIndex;
 pub use openxr::camera::OpenXrPlayerRoot;
-pub use openxr::input::{XrInput, XrInputSource, XrPointerState};
+pub use openxr::input::{XrHand, XrHapticRequest, XrInput, XrInputSource, XrPointerState};
 pub use openxr::render_model::XrControllerModelAssets;
 
 use crate::openxr::{

@@ -9,6 +9,7 @@ use bevy::{
     gizmos::{config::GizmoConfig, AppGizmoBuilder},
     log::{Level, LogPlugin},
     prelude::*,
+    window::WindowResolution,
 };
 
 use error::RuntimeError;
@@ -123,6 +124,9 @@ pub struct RuntimeParameters {
     /// event loop. Has no effect on macOS where the main thread is always required.
     /// Defaults to `false`.
     pub run_on_any_thread: bool,
+    /// Initial logical size of the primary window `(width, height)`.
+    /// Defaults to `None`, which lets Bevy use its own default (800 × 600).
+    pub window_resolution: Option<(f32, f32)>,
 }
 
 impl Default for RuntimeParameters {
@@ -133,6 +137,7 @@ impl Default for RuntimeParameters {
             asset_path: None,
             allow_unapproved_paths: false,
             run_on_any_thread: false,
+            window_resolution: None,
         }
     }
 }
@@ -201,18 +206,30 @@ pub(crate) fn build_bevy_app(params: &RuntimeParameters) -> App {
     let mut winit_plugin = bevy::winit::WinitPlugin::<bevy::winit::WakeUp>::default();
     winit_plugin.run_on_any_thread = params.run_on_any_thread;
 
+    let window_plugin = WindowPlugin {
+        primary_window: Some(Window {
+            title: if params.app_name.is_empty() {
+                "OpenXRDS".to_owned()
+            } else {
+                params.app_name.clone()
+            },
+            resolution: params.window_resolution
+                .map(|(w, h)| WindowResolution::new(w as u32, h as u32))
+                .unwrap_or_default(),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+
     if use_xr {
         app.add_plugins(xrds_openxr::add_plugins(
             DefaultPlugins
                 .build()
                 .disable::<LogPlugin>()
                 .set(asset_plugin)
-                .set(winit_plugin),
-            if params.app_name.is_empty() {
-                "OpenXRDS".to_owned()
-            } else {
-                params.app_name.clone()
-            },
+                .set(winit_plugin)
+                .set(window_plugin),
+            params.app_name.clone(),
         ));
     } else {
         app.add_plugins(
@@ -220,7 +237,8 @@ pub(crate) fn build_bevy_app(params: &RuntimeParameters) -> App {
                 .build()
                 .disable::<LogPlugin>()
                 .set(asset_plugin)
-                .set(winit_plugin),
+                .set(winit_plugin)
+                .set(window_plugin),
         );
     }
 

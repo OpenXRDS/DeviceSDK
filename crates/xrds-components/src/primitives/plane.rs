@@ -1,5 +1,6 @@
 use crate::{
     default_component_name, TransformParams, XrdsComponent, XrdsMutableComponent, XrdsObject,
+    XrdsPhysicsBody,
 };
 
 #[derive(Debug, Clone)]
@@ -9,6 +10,9 @@ pub struct XrdsPlane3D {
     pub visible: bool,
     pub transform: TransformParams,
     pub size: [f32; 2],
+    pub physics_body: XrdsPhysicsBody,
+    pub gravity_scale: f32,
+    pub mass: f32,
 }
 
 impl XrdsPlane3D {
@@ -19,6 +23,9 @@ impl XrdsPlane3D {
             visible: true,
             transform: TransformParams::default(),
             size: [1.0, 1.0],
+            physics_body: XrdsPhysicsBody::None,
+            gravity_scale: 1.0,
+            mass: 1.0,
         }
     }
 

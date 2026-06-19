@@ -50,6 +50,7 @@ pub(super) fn persistence_test_document() -> XrdsSceneDocument {
                 visible: true,
                 transform: XrdsSceneTransform::default(),
                 payload: XrdsSceneNodePayload::Empty,
+                grabbable: false,
                 editor: XrdsEditorMetadata {
                     tags: vec!["folder".to_string(), "root".to_string()],
                     layer: Some("Scene".to_string()),
@@ -82,6 +83,7 @@ pub(super) fn persistence_test_document() -> XrdsSceneDocument {
                     scene_index: 0,
                     export_policy: XrdsGltfAssetExportPolicy::KeepExternalReference,
                 }),
+                grabbable: false,
                 editor: XrdsEditorMetadata {
                     tags: vec!["mesh".to_string()],
                     layer: Some("Gameplay".to_string()),

@@ -136,6 +136,7 @@ impl GlbRuntimeAddApp {
                         look_at: Some([0.0, 0.0, 0.0]),
                     }),
                     editor: XrdsEditorMetadata::default(),
+                    grabbable: false,
                 },
                 XrdsSceneNode {
                     id: ID_LIGHT,
@@ -154,6 +155,7 @@ impl GlbRuntimeAddApp {
                         ..Default::default()
                     }),
                     editor: XrdsEditorMetadata::default(),
+                    grabbable: false,
                 },
             ],
             ..Default::default()

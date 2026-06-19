@@ -346,6 +346,7 @@ impl XrdsSceneDocument {
             name: placement.name,
             enabled: placement.enabled,
             visible: placement.visible,
+            grabbable: false,
             transform: placement.transform,
             payload: XrdsSceneNodePayload::GltfAsset(XrdsSceneGltfAsset {
                 asset_id: Some(asset.id),

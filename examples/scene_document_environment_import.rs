@@ -77,6 +77,7 @@ fn authored_scene_document() -> XrdsSceneDocument {
                 transform: XrdsSceneTransform::default(),
                 payload: XrdsSceneNodePayload::Empty,
                 editor: XrdsEditorMetadata::default(),
+                grabbable: false,
             },
             XrdsSceneNode {
                 id: DOCUMENT_CAMERA_ID,
@@ -98,6 +99,7 @@ fn authored_scene_document() -> XrdsSceneDocument {
                     look_at: Some([0.0, 1.0, 0.0]),
                 }),
                 editor: XrdsEditorMetadata::default(),
+                grabbable: false,
             },
             XrdsSceneNode {
                 id: DOCUMENT_KEY_LIGHT_ID,
@@ -116,6 +118,7 @@ fn authored_scene_document() -> XrdsSceneDocument {
                     ..Default::default()
                 }),
                 editor: XrdsEditorMetadata::default(),
+                grabbable: false,
             },
             XrdsSceneNode {
                 id: DOCUMENT_FLOOR_ID,
@@ -142,8 +145,10 @@ fn authored_scene_document() -> XrdsSceneDocument {
                         },
                         ..Default::default()
                     },
+                    ..Default::default()
                 }),
                 editor: XrdsEditorMetadata::default(),
+                grabbable: false,
             },
             XrdsSceneNode {
                 id: DOCUMENT_POLISHED_SPHERE_ID,
@@ -170,8 +175,10 @@ fn authored_scene_document() -> XrdsSceneDocument {
                         },
                         ..Default::default()
                     },
+                    ..Default::default()
                 }),
                 editor: XrdsEditorMetadata::default(),
+                grabbable: false,
             },
             XrdsSceneNode {
                 id: DOCUMENT_ROUGH_SPHERE_ID,
@@ -198,8 +205,10 @@ fn authored_scene_document() -> XrdsSceneDocument {
                         },
                         ..Default::default()
                     },
+                    ..Default::default()
                 }),
                 editor: XrdsEditorMetadata::default(),
+                grabbable: false,
             },
         ],
         ..Default::default()

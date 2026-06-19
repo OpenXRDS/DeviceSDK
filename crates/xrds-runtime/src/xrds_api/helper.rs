@@ -378,7 +378,10 @@ pub(super) fn export_scene_document_in_world(
             .entity_of(id)
             .ok_or(XrdsSceneExportError::MissingRuntimeEntity(id))?;
         let parent_id = hierarchy.parent_id_of(id);
-        let node = export_scene_node_in_world(world, id, entity, parent_id)?;
+        let mut node = export_scene_node_in_world(world, id, entity, parent_id)?;
+        if world.get::<xrds_components::XrGrabbable>(entity).is_some() {
+            node.grabbable = true;
+        }
         if matches!(node.payload, XrdsSceneNodePayload::GltfAsset(_)) {
             let mut authoring = world
                 .get::<XrdsStoredSceneGltfNodeAuthoring>(entity)
@@ -410,11 +413,17 @@ pub(super) fn export_scene_document_in_world(
         reconstruct_asset_catalog(&nodes),
     );
 
+    let hud_library = world
+        .get_resource::<XrdsImportedHudLibrary>()
+        .map(|r| r.templates.clone())
+        .unwrap_or_default();
+
     let document = XrdsSceneDocument {
         metadata,
         assets,
         nodes,
         gltf_node_authoring,
+        hud_library,
         ..Default::default()
     };
     document.validate()?;
@@ -554,6 +563,7 @@ pub(super) fn set_material_pbr_params_in_world<C>(
     params.pbr = pbr;
     set_material_params_in_world(world, handle, params);
 }
+
 
 pub(super) fn material_base_color_in_world<C>(
     world: &World,
@@ -1722,4 +1732,58 @@ pub(super) fn set_material_emissive_in_world<C>(
     let mut params = material_params_in_world(world, handle).unwrap_or_default();
     params.emissive = emissive;
     set_material_params_in_world(world, handle, params);
+}
+
+/// Pick a random world-space position within a randomly chosen [`XrdsPlayerSpawnZone`].
+/// Y comes from the zone entity's world-space Y centre; X and Z are randomised within the zone.
+/// Returns `None` if no matching spawn zones are present.
+///
+/// `player_node_id`:
+/// - `None`      → all zones are eligible (no ownership filter).
+/// - `Some(id)`  → only zones owned by that player (`zone.player_node_id == Some(id)`) plus
+///                 shared zones (`zone.player_node_id == None`) are eligible.
+pub(super) fn random_spawn_zone_position_in_world(
+    world: &World,
+    player_node_id: Option<u64>,
+) -> Option<Vec3> {
+    let zones: Vec<(Vec3, Vec3)> = world.iter_entities()
+        .filter_map(|er| {
+            let gt   = er.get::<GlobalTransform>()?;
+            let zone = er.get::<xrds_components::XrdsPlayerSpawnZone>()?;
+            // Apply ownership filter when a player ID is requested.
+            if let Some(pid) = player_node_id {
+                if zone.player_node_id.is_some() && zone.player_node_id != Some(pid) {
+                    return None;
+                }
+            }
+            Some((gt.translation(), zone.size))
+        })
+        .collect();
+    if zones.is_empty() { return None; }
+
+    // Simple LCG seeded from subsecond time for variety across calls.
+    let seed = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or(42);
+    let mut s = seed;
+    let mut next_f = move || -> f32 {
+        s = s.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        (s >> 8) as f32 / 16_777_216.0   // [0, 1)
+    };
+
+    let (center, size) = zones[(next_f() * zones.len() as f32) as usize % zones.len()];
+    Some(Vec3::new(
+        center.x + (next_f() - 0.5) * size.x,
+        center.y,
+        center.z + (next_f() - 0.5) * size.z,
+    ))
+}
+
+/// Teleport the entity tagged [`XrdsPlayerRoot`] to `position`.
+pub(super) fn teleport_player_in_world(world: &mut World, position: Vec3) {
+    let mut q = world.query_filtered::<&mut Transform, With<XrdsPlayerRoot>>();
+    for mut tf in q.iter_mut(world) {
+        tf.translation = position;
+    }
 }

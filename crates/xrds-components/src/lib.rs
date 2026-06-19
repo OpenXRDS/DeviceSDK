@@ -1,4 +1,5 @@
 mod camera_params;
+mod interaction;
 mod color;
 mod core;
 mod light_params;
@@ -12,6 +13,11 @@ pub use camera_params::{
     XrdsBloom, XrdsClearColorConfig, XrdsTonemapping,
 };
 pub use color::{XrdsColor, XrdsLinearRgba};
+pub use interaction::{
+    XrDropEvent, XrGrabEvent, XrGrabHand, XrGrabbable, XrGrabbed, XrRayhit,
+    XrdsGrabType, XrdsInteractionZone, XrdsInteractionZoneShape, XrdsPhysicsBody,
+    XrdsPlayerSpawnZone, XrZoneEnterEvent, XrZoneExitEvent,
+};
 pub use core::{
     default_component_name, XrdsActor, XrdsAssetComponent, XrdsComponent, XrdsComponentsPlugin,
     XrdsId, XrdsMutableComponent, XrdsObject, XrdsRegistry,

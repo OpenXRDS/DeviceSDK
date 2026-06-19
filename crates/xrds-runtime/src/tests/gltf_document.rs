@@ -62,6 +62,7 @@ fn import_scene_document_resolves_catalog_backed_gltf_references() {
                 scene_index: 0,
                 export_policy: XrdsGltfAssetExportPolicy::KeepExternalReference,
             }),
+            grabbable: false,
             editor: XrdsEditorMetadata::default(),
         }],
         ..Default::default()
@@ -109,6 +110,7 @@ fn import_export_scene_document_preserves_gltf_node_authoring() {
                 scene_index: 0,
                 export_policy: XrdsGltfAssetExportPolicy::KeepExternalReference,
             }),
+            grabbable: false,
             editor: XrdsEditorMetadata::default(),
         }],
         gltf_node_authoring: [(
@@ -186,6 +188,7 @@ fn import_scene_document_queues_default_gltf_playback_from_authoring() {
                 scene_index: 0,
                 export_policy: XrdsGltfAssetExportPolicy::KeepExternalReference,
             }),
+            grabbable: false,
             editor: XrdsEditorMetadata::default(),
         }],
         gltf_node_authoring: [(
@@ -260,6 +263,7 @@ fn import_scene_document_applies_authored_gltf_morph_target_overrides_when_ready
                 scene_index: 0,
                 export_policy: XrdsGltfAssetExportPolicy::KeepExternalReference,
             }),
+            grabbable: false,
             editor: XrdsEditorMetadata::default(),
         }],
         gltf_node_authoring: [(
