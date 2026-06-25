@@ -1,13 +1,14 @@
 use bevy::log::{error, info};
+use std::io::{BufRead, BufReader};
 use std::path::Path;
 use xrds_gltf;
-use crate::editor_state::ExportJob;
+use crate::editor_state::{ApkExportJob, ExportJob};
 use xrds_scene_graph::{
     XrdsSceneDocument, XrdsSceneNode, XrdsSceneNodeId, XrdsSceneDocumentSession,
     XrdsSceneNodePayload, XrdsSceneAssetKind,
 };
 use crate::bevy_scene::build_default_document;
-use crate::bridge::EditorCommand;
+use crate::bridge::{ApkPrerequisite, EditorCommand};
 use crate::editor_state::{EditorSession, EditorState};
 
 /// Apply a file I/O or edit-history EditorCommand.
@@ -304,8 +305,267 @@ pub fn apply_io_command(
             false
         }
 
+        EditorCommand::ExportApk { output_dir } => {
+            // Guard: another APK export already running.
+            if state.apk_export_job.is_some() {
+                state.pending_status = Some("APK export already in progress…".into());
+                return false;
+            }
+
+            // Guard: scene must be saved before export.
+            if session.0.is_dirty() || session.0.save_path().is_none() {
+                state.pending_status = Some("Save the scene before exporting.".into());
+                return false;
+            }
+
+            // Create output directory.
+            let out = std::path::PathBuf::from(output_dir);
+            if let Err(e) = std::fs::create_dir_all(&out) {
+                state.pending_status = Some(format!("APK export failed: {e}"));
+                return false;
+            }
+
+            // Stage scene + user assets into a temp directory.
+            let staging = std::env::temp_dir().join("xrds-apk-stage");
+            let _ = std::fs::remove_dir_all(&staging);
+            if let Err(e) = std::fs::create_dir_all(&staging) {
+                state.pending_status = Some(format!("APK export: cannot create staging dir: {e}"));
+                return false;
+            }
+
+            let doc = session.0.document().clone();
+            let (exported_doc, copy_errors) = prepare_export_document(&doc, &staging);
+            for e in &copy_errors { error!("[io/apk] asset copy: {}", e); }
+
+            let scene_path = staging.join("scene.json");
+            if let Err(e) = exported_doc.save_json(&scene_path) {
+                state.pending_status = Some(format!("APK export: save scene.json failed: {e:?}"));
+                return false;
+            }
+
+            let workspace_root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../..");
+
+            // Shared log + result for the background thread.
+            let log    = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+            let result = std::sync::Arc::new(std::sync::Mutex::new(
+                None::<Result<String, String>>
+            ));
+            let log_clone    = std::sync::Arc::clone(&log);
+            let result_clone = std::sync::Arc::clone(&result);
+            let out_dir_str  = output_dir.clone();
+            let staging_str  = staging.to_string_lossy().into_owned();
+            let workspace_str = workspace_root.to_string_lossy().into_owned();
+
+            std::thread::spawn(move || {
+                let push = |line: String| {
+                    log_clone.lock().unwrap().push(line);
+                };
+
+                // Run platform build script.
+                #[cfg(target_os = "windows")]
+                let mut cmd = {
+                    let script = std::path::Path::new(&workspace_str)
+                        .join("android/quest/build.ps1");
+                    let mut c = std::process::Command::new("powershell.exe");
+                    c.args([
+                        "-ExecutionPolicy", "Bypass",
+                        "-File", script.to_str().unwrap_or(""),
+                        "-SceneDir", &staging_str,
+                    ]);
+                    c
+                };
+                #[cfg(not(target_os = "windows"))]
+                let mut cmd = {
+                    let script = std::path::Path::new(&workspace_str)
+                        .join("android/quest/build.sh");
+                    let mut c = std::process::Command::new("bash");
+                    c.args([
+                        script.to_str().unwrap_or(""),
+                        "--scene-dir", &staging_str,
+                    ]);
+                    c
+                };
+
+                cmd.current_dir(&workspace_str)
+                   .stdout(std::process::Stdio::piped())
+                   .stderr(std::process::Stdio::piped());
+
+                let mut child = match cmd.spawn() {
+                    Ok(c) => c,
+                    Err(e) => {
+                        *result_clone.lock().unwrap() = Some(Err(format!("Failed to start build script: {e}")));
+                        return;
+                    }
+                };
+
+                // Stream stdout and stderr line-by-line from separate threads.
+                // Use take() so child remains valid for wait() below.
+                let log_out = std::sync::Arc::clone(&log_clone);
+                let log_err = std::sync::Arc::clone(&log_clone);
+
+                let stdout = child.stdout.take().unwrap();
+                let stderr = child.stderr.take().unwrap();
+                let (tx, rx) = std::sync::mpsc::channel::<()>();
+                let tx2 = tx.clone();
+
+                std::thread::spawn(move || {
+                    for line in BufReader::new(stdout).lines().flatten() {
+                        log_out.lock().unwrap().push(line);
+                    }
+                    let _ = tx.send(());
+                });
+                std::thread::spawn(move || {
+                    for line in BufReader::new(stderr).lines().flatten() {
+                        log_err.lock().unwrap().push(format!("[err] {line}"));
+                    }
+                    let _ = tx2.send(());
+                });
+
+                // Wait for both reader threads to drain, then collect exit status.
+                rx.recv().ok();
+                rx.recv().ok();
+
+                let exit_status = child.wait();
+                let success = exit_status.as_ref().map(|s| s.success()).unwrap_or(false);
+
+                if !success {
+                    let code = exit_status.ok()
+                        .and_then(|s| s.code())
+                        .map(|c| c.to_string())
+                        .unwrap_or_else(|| "unknown".into());
+                    push(format!("[err] Build script exited with code {code}"));
+                    // Flush the log to disk before returning.
+                    write_build_log(&log_clone.lock().unwrap(), &out_dir_str);
+                    *result_clone.lock().unwrap() = Some(Err(
+                        format!("Build script failed (exit code {code}) — see log for details")
+                    ));
+                    return;
+                }
+
+                push(String::from("--- build script finished ---"));
+
+                // Verify APK was produced.
+                let apk_src = std::path::Path::new(&workspace_str)
+                    .join("android/quest/build/xrds-app.apk");
+                let apk_dst = std::path::Path::new(&out_dir_str).join("xrds-app.apk");
+
+                if !apk_src.exists() {
+                    *result_clone.lock().unwrap() = Some(Err(
+                        "Build script succeeded but xrds-app.apk was not produced.".into()
+                    ));
+                    return;
+                }
+
+                if let Err(e) = std::fs::copy(&apk_src, &apk_dst) {
+                    *result_clone.lock().unwrap() = Some(Err(format!("Copy APK failed: {e}")));
+                    return;
+                }
+
+                // Write install scripts alongside the APK.
+                if let Err(e) = write_install_scripts(std::path::Path::new(&out_dir_str)) {
+                    push(format!("[warn] install script write failed: {e}"));
+                }
+
+                push(format!("APK exported to {out_dir_str}"));
+                write_build_log(&log_clone.lock().unwrap(), &out_dir_str);
+                *result_clone.lock().unwrap() = Some(Ok(
+                    format!("APK exported to {out_dir_str}")
+                ));
+            });
+
+            state.apk_export_job = Some(ApkExportJob { out_dir: output_dir.clone(), log, result });
+            state.pending_status = Some("Building APK… (this may take several minutes)".into());
+            info!("[io] APK export started → {}", output_dir);
+            false
+        }
+
+        EditorCommand::CheckApkPrerequisites => {
+            let prereqs = check_apk_prerequisites();
+            let failed: Vec<&str> = prereqs.iter().filter(|p| !p.ok).map(|p| p.name.as_str()).collect();
+            if failed.is_empty() {
+                info!("[io] APK prerequisites: all OK");
+            } else {
+                info!("[io] APK prerequisites: missing {:?}", failed);
+            }
+            state.apk_prerequisites = Some(prereqs);
+            false
+        }
+
         _ => false,
     }
+}
+
+// ---------------------------------------------------------------------------
+// APK prerequisite check
+// ---------------------------------------------------------------------------
+
+fn check_apk_prerequisites() -> Vec<ApkPrerequisite> {
+    let mut items = Vec::new();
+
+    // 1. ANDROID_HOME + build-tools/
+    let android_home = std::env::var("ANDROID_HOME").unwrap_or_default();
+    let sdk_ok = !android_home.is_empty()
+        && Path::new(&android_home).join("build-tools").exists();
+    items.push(ApkPrerequisite {
+        name: "Android SDK (ANDROID_HOME)".into(),
+        ok: sdk_ok,
+        hint: if sdk_ok { String::new() } else {
+            "Set ANDROID_HOME to your Android SDK root \
+             (e.g. %LOCALAPPDATA%\\Android\\Sdk on Windows)".into()
+        },
+    });
+
+    // 2. Android NDK — try env vars, then $ANDROID_HOME/ndk/
+    let ndk_ok = std::env::var("ANDROID_NDK_HOME")
+        .or_else(|_| std::env::var("NDK_HOME"))
+        .or_else(|_| std::env::var("ANDROID_NDK_ROOT"))
+        .map(|p| Path::new(&p).exists())
+        .unwrap_or_else(|_| {
+            !android_home.is_empty() && Path::new(&android_home).join("ndk").exists()
+        });
+    items.push(ApkPrerequisite {
+        name: "Android NDK".into(),
+        ok: ndk_ok,
+        hint: if ndk_ok { String::new() } else {
+            "Install NDK via Android Studio SDK Manager, \
+             or set ANDROID_NDK_HOME to the NDK directory".into()
+        },
+    });
+
+    // 3. cargo-ndk
+    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
+    let cargo_ndk_ok = std::process::Command::new(&cargo)
+        .args(["ndk", "--version"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    items.push(ApkPrerequisite {
+        name: "cargo-ndk".into(),
+        ok: cargo_ndk_ok,
+        hint: if cargo_ndk_ok { String::new() } else {
+            "Run: cargo install cargo-ndk".into()
+        },
+    });
+
+    // 4. OpenXR loader (fetched by fetch_loader.ps1 / fetch_loader.sh)
+    let workspace_root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../..");
+    let loader = workspace_root
+        .join("android/quest/libs/arm64-v8a/libopenxr_loader.so");
+    let loader_ok = loader.exists();
+    items.push(ApkPrerequisite {
+        name: "OpenXR loader (libopenxr_loader.so)".into(),
+        ok: loader_ok,
+        hint: if loader_ok { String::new() } else {
+            "Run android/quest/fetch_loader.ps1 (Windows) or \
+             android/quest/fetch_loader.sh (Linux/macOS) to download the loader".into()
+        },
+    });
+
+    items
 }
 
 // ---------------------------------------------------------------------------
@@ -323,6 +583,10 @@ fn prepare_export_document(
     let mut new_doc = doc.clone();
     let mut errors  = Vec::new();
 
+    // Pass 1: rewrite catalog URIs (absolute → bare filename) and copy files.
+    // URI = plain filename (no "assets/" prefix); the runtime's asset server is
+    // configured to look in exe_dir/assets/ (desktop) or the APK assets/ directory
+    // (Android), so bare filenames resolve correctly in both contexts.
     for asset in &mut new_doc.assets {
         let src = Path::new(&asset.uri);
         if src.is_absolute() && src.exists() {
@@ -331,14 +595,167 @@ fn prepare_export_document(
             if let Err(e) = std::fs::copy(src, &dst) {
                 errors.push(format!("copy '{}': {e}", src.display()));
             } else {
-                // URI = plain filename (no "assets/" prefix) because
-                // asset_path in xrds-app is already set to exe_dir/assets.
-                // Bevy resolves "buster_drone.glb" → exe_dir/assets/buster_drone.glb.
                 asset.uri = filename.to_string();
             }
         }
     }
+
+    // Pass 2: build a catalog id→uri snapshot (now with rewritten URIs).
+    let catalog_uri: std::collections::HashMap<String, String> = new_doc.assets.iter()
+        .map(|a| (a.id.clone(), a.uri.clone()))
+        .collect();
+
+    // Pass 3: rewrite asset_uri in GltfAsset node payloads so the on-disk
+    // scene.json is self-contained regardless of which resolution path the
+    // runtime chooses (catalog vs. node-level fallback).
+    for node in &mut new_doc.nodes {
+        if let XrdsSceneNodePayload::GltfAsset(ref mut gltf) = node.payload {
+            let portable = gltf.asset_id.as_deref()
+                .and_then(|id| catalog_uri.get(id))
+                .cloned()
+                .or_else(|| {
+                    // No catalog entry: try to copy the file and return the bare name.
+                    let src = Path::new(&gltf.asset_uri);
+                    if src.is_absolute() && src.exists() {
+                        let filename = src.file_name()?.to_string_lossy().into_owned();
+                        let dst = assets_dir.join(&filename);
+                        std::fs::copy(src, &dst).ok()?;
+                        Some(filename)
+                    } else {
+                        None
+                    }
+                });
+            if let Some(uri) = portable {
+                gltf.asset_uri = uri;
+            }
+        }
+    }
+
     (new_doc, errors)
+}
+
+/// Write all log lines to `output_dir/build_log.txt`.
+fn write_build_log(lines: &[String], output_dir: &str) {
+    let path = std::path::Path::new(output_dir).join("build_log.txt");
+    let content = lines.join("\n");
+    if let Err(e) = std::fs::write(&path, content) {
+        error!("[io/apk] could not write build_log.txt: {e}");
+    }
+}
+
+/// Write install.ps1, install.sh and README.txt into `output_dir`.
+fn write_install_scripts(output_dir: &Path) -> Result<(), String> {
+    let pkg = "org.openxrds.devicesdk";
+    let activity = "android.app.NativeActivity";
+
+    std::fs::write(
+        output_dir.join("install.ps1"),
+        format!(
+            "# Install xrds-app.apk on a connected Meta Quest and launch it.\r\n\
+             # Requirements: adb in PATH, Quest in Developer Mode, connected via USB.\r\n\
+             $Pkg = \"{pkg}\"\r\n\
+             $ExtScene = \"/sdcard/Android/data/$Pkg/files/scene.json\"\r\n\
+             # Remove any dev-mode scene pushed to external storage so the APK-bundled\r\n\
+             # scene takes effect. Errors are silenced — the file may not exist.\r\n\
+             Write-Host \"Clearing external scene override (if any)...\"\r\n\
+             adb shell rm -f \"$ExtScene\" 2>$null\r\n\
+             Write-Host \"Installing APK...\"\r\n\
+             adb install -r \"$PSScriptRoot\\xrds-app.apk\"\r\n\
+             Write-Host \"Launching app...\"\r\n\
+             adb shell am start -n \"$Pkg/{activity}\"\r\n\
+             Write-Host \"\"\r\n\
+             Write-Host \"Done. The app launched on your Quest.\"\r\n\
+             Write-Host \"To find it later: App Library -> All -> Unknown Sources -> XRDS App\"\r\n"
+        ),
+    ).map_err(|e| format!("write install.ps1: {e}"))?;
+
+    let sh_path = output_dir.join("install.sh");
+    std::fs::write(
+        &sh_path,
+        format!(
+            "#!/usr/bin/env bash\n\
+             # Install xrds-app.apk on a connected Meta Quest and launch it.\n\
+             # Requirements: adb in PATH, Quest in Developer Mode, connected via USB.\n\
+             set -e\n\
+             PKG=\"{pkg}\"\n\
+             DIR=\"$(cd \"$(dirname \"$0\")\" && pwd)\"\n\
+             EXT_SCENE=\"/sdcard/Android/data/$PKG/files/scene.json\"\n\
+             # Remove any dev-mode scene pushed to external storage so the APK-bundled\n\
+             # scene takes effect. Errors are silenced — the file may not exist.\n\
+             echo \"Clearing external scene override (if any)...\"\n\
+             adb shell rm -f \"$EXT_SCENE\" 2>/dev/null || true\n\
+             echo \"Installing APK...\"\n\
+             adb install -r \"$DIR/xrds-app.apk\"\n\
+             echo \"Launching app...\"\n\
+             adb shell am start -n \"$PKG/{activity}\"\n\
+             echo \"\"\n\
+             echo \"Done. The app launched on your Quest.\"\n\
+             echo \"To find it later: App Library -> All -> Unknown Sources -> XRDS App\"\n"
+        ),
+    ).map_err(|e| format!("write install.sh: {e}"))?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&sh_path)
+            .map_err(|e| e.to_string())?.permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&sh_path, perms).map_err(|e| e.to_string())?;
+    }
+
+    std::fs::write(
+        output_dir.join("README.txt"),
+        "XRDS App — Meta Quest APK Bundle\r\n\
+         =================================\r\n\
+         \r\n\
+         Requirements\r\n\
+         ------------\r\n\
+         - Meta Quest 3 or Quest Pro (Quest 2 not supported)\r\n\
+         - Developer Mode enabled on the headset\r\n\
+         - USB cable connected between PC and Quest\r\n\
+         - Android Platform Tools (adb) in your PATH\r\n\
+         \r\n\
+         Install and launch\r\n\
+         ------------------\r\n\
+         Windows:  .\\install.ps1\r\n\
+         Linux/Mac: bash install.sh\r\n\
+         \r\n\
+         Manual ADB commands:\r\n\
+           adb install -r xrds-app.apk\r\n\
+           adb shell am start -n org.openxrds.devicesdk/android.app.NativeActivity\r\n\
+         \r\n\
+         Finding the app after installation\r\n\
+         -----------------------------------\r\n\
+         The app does not appear in the main Quest app library — Meta only shows\r\n\
+         store-purchased apps there. To find it:\r\n\
+         \r\n\
+           Quest universal menu -> App Library -> All\r\n\
+           -> scroll to the \"Unknown Sources\" section\r\n\
+         \r\n\
+         The app is listed there as \"XRDS App\".\r\n\
+         You can also launch it at any time from your PC:\r\n\
+           adb shell am start -n org.openxrds.devicesdk/android.app.NativeActivity\r\n\
+         \r\n\
+         Scene not loading / seeing the default scene\r\n\
+         --------------------------------------------\r\n\
+         If you previously pushed a scene.json to the device for dev-mode testing,\r\n\
+         that file overrides the APK-bundled scene. The install scripts clear it\r\n\
+         automatically, but to remove it manually:\r\n\
+           adb shell rm /sdcard/Android/data/org.openxrds.devicesdk/files/scene.json\r\n\
+         Then relaunch the app.\r\n\
+         \r\n\
+         Troubleshooting\r\n\
+         ---------------\r\n\
+         - INSTALL_FAILED_UPDATE_INCOMPATIBLE (signing mismatch):\r\n\
+             adb uninstall org.openxrds.devicesdk\r\n\
+           then re-run install.\r\n\
+         - App crashes on launch, check logcat:\r\n\
+             adb logcat -s xrds\r\n\
+         - Developer Mode: Settings -> Developer -> USB Debugging must be ON.\r\n\
+           Wear the headset and accept the \"Allow USB Debugging\" prompt.\r\n"
+    ).map_err(|e| format!("write README.txt: {e}"))?;
+
+    Ok(())
 }
 
 /// Recursively copy `src` directory tree into `dst`.

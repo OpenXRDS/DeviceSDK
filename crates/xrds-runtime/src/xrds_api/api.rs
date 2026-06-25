@@ -428,7 +428,31 @@ impl XrdsAPI<'_> {
                     self.spawn_with_id(id, &component)?.entity()
                 }
                 XrdsSceneRuntimeComponent::GltfAsset(component) => {
-                    self.spawn_with_id(id, &component)?.entity()
+                    // Use spawn_gltf_descriptor directly so a validation failure
+                    // (GLB not found at CWD / invalid file) logs a warning and
+                    // skips the node instead of panicking through spawn_with_id.
+                    reserve_runtime_id_in_world(self.app.world_mut(), id)?;
+                    let mut queue = CommandQueue::default();
+                    let entity_opt = {
+                        let mut commands = Commands::new(&mut queue, self.app.world_mut());
+                        let e = spawn_gltf_descriptor(&mut commands, &component);
+                        if let Some(ent) = e {
+                            commands.entity(ent).insert(XrdsDescriptorType(TypeId::of::<XrdsGltfAsset>()));
+                        }
+                        e
+                    };
+                    queue.apply(self.app.world_mut());
+                    let Some(entity) = entity_opt else {
+                        warn!(
+                            "[import] GltfAsset '{}' skipped: GLB not found or invalid. \
+                             Ensure the file is bundled and the working directory is the asset root.",
+                            component.name
+                        );
+                        continue;
+                    };
+                    self.app.world_mut().resource_mut::<XrdsIdIndex>().register(id, entity);
+                    self.app.world_mut().resource_mut::<XrdsHierarchyIndex>().ensure_node(id);
+                    entity
                 }
                 XrdsSceneRuntimeComponent::Cube(component) => {
                     self.spawn_with_id(id, &component)?.entity()

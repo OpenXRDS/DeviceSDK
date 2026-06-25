@@ -11,6 +11,7 @@ import { ViewportCanvas } from "./components/ViewportCanvas";
 import { KeyboardShortcutsModal } from "./components/KeyboardShortcutsModal";
 import { HudCanvasOverlay } from "./components/HudCanvasOverlay";
 import { HudLibraryPanel } from "./components/HudLibraryPanel";
+import { ApkExportDialog } from "./components/ApkExportDialog";
 import type { EditorCommand } from "./types/bridge";
 
 // ---------------------------------------------------------------------------
@@ -38,8 +39,9 @@ export default function App() {
   const snapshot        = useEditorState();
   const send            = useSendCommand();
   const centerRef       = useRef<HTMLDivElement>(null);
-  const [showShortcuts, setShowShortcuts] = useState(false);
-  const [hudTemplateId, setHudTemplateId] = useState<number | null>(null);
+  const [showShortcuts,  setShowShortcuts]  = useState(false);
+  const [hudTemplateId,  setHudTemplateId]  = useState<number | null>(null);
+  const [showApkExport,  setShowApkExport]  = useState(false);
 
   // Report exact viewport bounds to Rust whenever the layout changes.
   useEffect(() => {
@@ -110,6 +112,7 @@ export default function App() {
     const dir = await ipcDialog("export_app");
     if (dir) send({ type: "ExportApplication", payload: { output_dir: dir } });
   }
+  function handleExportApk() { setShowApkExport(true); }
   async function handleExportGlb() {
     const path = await ipcDialog("export_glb");
     if (path) send({ type: "ExportGlb", payload: { path } });
@@ -136,6 +139,7 @@ export default function App() {
           onImportAsset={handleImportAsset}
           onExportGlb={handleExportGlb}
           onExportApp={handleExportApp}
+          onExportApk={handleExportApk}
           onSave={handleSave}
           onSaveAs={handleSaveAs}
           onShowShortcuts={() => setShowShortcuts(true)}
@@ -169,6 +173,14 @@ export default function App() {
       </div>
 
       {showShortcuts && <KeyboardShortcutsModal onClose={() => setShowShortcuts(false)} />}
+      {showApkExport && (
+        <ApkExportDialog
+          snapshot={snapshot}
+          send={send}
+          onPickFolder={() => ipcDialog("export_app")}
+          onClose={() => setShowApkExport(false)}
+        />
+      )}
       {hudTemplateId !== null && (
         <HudCanvasOverlay
           templateId={hudTemplateId}

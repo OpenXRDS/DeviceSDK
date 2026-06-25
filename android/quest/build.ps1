@@ -159,6 +159,21 @@ if ($SceneDir) {
     Copy-Item $DefaultSceneJson "$Staging\scene.json" -Force
 }
 
+# Generate ASSET_MANIFEST — a plain-text list of every file in the staging directory,
+# relative to the staging root (= the APK assets/ root).  android_main reads this to
+# extract all assets to the filesystem cache on the device, so Bevy can use normal
+# file I/O instead of AAssetManager for GLBs, textures, fonts, audio, etc.
+Write-Host "    Generating ASSET_MANIFEST..."
+Push-Location $Staging
+try {
+    $manifestLines = Get-ChildItem -Recurse -File |
+        ForEach-Object { $_.FullName.Substring($Staging.Length + 1).Replace('\', '/') } |
+        Sort-Object
+    # Use WriteAllLines (UTF-8 without BOM) — compatible with Windows PowerShell 5.1.
+    [System.IO.File]::WriteAllLines("$Staging\ASSET_MANIFEST", $manifestLines)
+    Write-Host "    $($manifestLines.Count) file(s) listed in manifest"
+} finally { Pop-Location }
+
 # ---------------------------------------------------------------------------
 # Step 4: Package APK
 # ---------------------------------------------------------------------------

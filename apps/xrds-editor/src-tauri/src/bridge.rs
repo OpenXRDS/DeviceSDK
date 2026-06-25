@@ -146,6 +146,10 @@ pub enum EditorCommand {
     ExportGlb { path: String },
     ExportApplication { output_dir: String },
 
+    // --- Android / Quest export ---
+    CheckApkPrerequisites,
+    ExportApk { output_dir: String },
+
     // --- Edit ---
     Undo,
     Redo,
@@ -208,6 +212,16 @@ pub struct EditorSnapshot {
     /// True when the side-by-side stereo preview is active.
     #[serde(default)]
     pub stereo_preview_active: bool,
+    /// Results of the last `CheckApkPrerequisites` command.
+    /// `None` on most frames (cleared after sending); `Some` for one frame when a check completes.
+    #[serde(default)]
+    pub apk_prerequisites: Option<Vec<ApkPrerequisite>>,
+    /// True while an APK export build is running.
+    #[serde(default)]
+    pub is_exporting_apk: bool,
+    /// Tail of the APK build log (last ≤200 lines).  Empty when no APK export is running.
+    #[serde(default)]
+    pub apk_build_log: Vec<String>,
 }
 
 /// Snapshot of the scene-wide environment settings (fog, exposure, IBL, skybox).
@@ -345,4 +359,11 @@ pub struct PlayerAnchorNodeDto {
     pub name: String,
     /// Name of the parent `Player` node, or empty string if standalone.
     pub player_name: String,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct ApkPrerequisite {
+    pub name: String,
+    pub ok: bool,
+    pub hint: String,
 }

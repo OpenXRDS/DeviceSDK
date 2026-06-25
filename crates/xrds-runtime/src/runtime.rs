@@ -127,6 +127,16 @@ pub struct RuntimeParameters {
     /// Initial logical size of the primary window `(width, height)`.
     /// Defaults to `None`, which lets Bevy use its own default (800 × 600).
     pub window_resolution: Option<(f32, f32)>,
+    /// Explicit font file paths for `bevy_rich_text3d::LoadFonts`.
+    ///
+    /// When `Some`, these paths are used directly and the automatic asset-root font
+    /// discovery is skipped. Useful on Android/APK mode where bundled fonts are not
+    /// filesystem-accessible — extract them to a cache directory first, then pass the
+    /// extracted paths here so cosmic_text can find them.
+    ///
+    /// When `None` (default), the runtime discovers fonts from `asset_path/fonts/`
+    /// automatically, or falls back to `load_system_fonts` if none are found.
+    pub font_paths: Option<Vec<String>>,
 }
 
 impl Default for RuntimeParameters {
@@ -138,6 +148,7 @@ impl Default for RuntimeParameters {
             allow_unapproved_paths: false,
             run_on_any_thread: false,
             window_resolution: None,
+            font_paths: None,
         }
     }
 }
@@ -157,42 +168,54 @@ pub(crate) fn build_bevy_app(params: &RuntimeParameters) -> App {
         asset_plugin.file_path = path.clone();
     }
 
-    // Resolve the asset root to an absolute path and pre-configure bundled fonts so
-    // bevy_rich_text3d can find them regardless of the working directory at runtime.
-    // Only register paths that actually exist on the filesystem — cosmic-text panics
-    // at first text render if no fonts are loaded at all, but silently skips missing
-    // files at load time. On Android/APK mode (asset_path = None), fonts live inside
-    // the APK and are not filesystem-accessible, so we only set LoadFonts when we have
-    // a real directory we can verify contains the fonts.
+    // Pre-configure bundled fonts so bevy_rich_text3d can find them regardless of the
+    // working directory at runtime.
+    //
+    // Priority:
+    // 1. params.font_paths — caller-provided explicit paths (APK mode: fonts extracted from APK).
+    // 2. asset_root/fonts/ auto-discovery — works on desktop where fonts are on the filesystem.
+    //
+    // cosmic-text panics at first text render if NO fonts are loaded at all, so we only
+    // set LoadFonts when we have real paths. If neither source yields paths, the plugin
+    // falls back to load_system_fonts = true (set in install.rs) which scans /system/fonts/.
     {
         use std::path::PathBuf;
-        let asset_root_opt: Option<PathBuf> = params.asset_path
-            .as_deref()
-            .map(PathBuf::from)
-            .or_else(|| {
-                std::env::current_dir()
-                    .ok()
-                    .map(|d| d.join("assets"))
-            });
-        if let Some(asset_root) = asset_root_opt {
-            let font_names = [
-                "NotoSans-Regular.ttf",
-                "NotoSans-Bold.ttf",
-                "NotoSans-Italic.ttf",
-                "NotoSans-BoldItalic.ttf",
-            ];
-            let font_paths: Vec<String> = font_names
-                .iter()
-                .map(|f| asset_root.join("fonts").join(f))
-                .filter(|p| p.exists())
-                .map(|p| p.to_string_lossy().into_owned())
-                .collect();
-            if !font_paths.is_empty() {
-                app.insert_resource(bevy_rich_text3d::LoadFonts {
-                    font_paths,
-                    ..Default::default()
+        let resolved_font_paths: Vec<String> = if let Some(ref explicit) = params.font_paths {
+            // Caller provided explicit paths — use as-is (filter non-existent for safety).
+            explicit.iter()
+                .filter(|p| PathBuf::from(p).exists())
+                .cloned()
+                .collect()
+        } else {
+            // Auto-discover from asset_path/fonts/ or current_dir/assets/fonts/.
+            let asset_root_opt: Option<PathBuf> = params.asset_path
+                .as_deref()
+                .map(PathBuf::from)
+                .or_else(|| {
+                    std::env::current_dir()
+                        .ok()
+                        .map(|d| d.join("assets"))
                 });
-            }
+            asset_root_opt.map(|asset_root| {
+                let font_names = [
+                    "NotoSans-Regular.ttf",
+                    "NotoSans-Bold.ttf",
+                    "NotoSans-Italic.ttf",
+                    "NotoSans-BoldItalic.ttf",
+                ];
+                font_names
+                    .iter()
+                    .map(|f| asset_root.join("fonts").join(f))
+                    .filter(|p| p.exists())
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .collect()
+            }).unwrap_or_default()
+        };
+        if !resolved_font_paths.is_empty() {
+            app.insert_resource(bevy_rich_text3d::LoadFonts {
+                font_paths: resolved_font_paths,
+                ..Default::default()
+            });
         }
     }
     if params.allow_unapproved_paths {

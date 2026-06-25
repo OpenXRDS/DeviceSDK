@@ -1,6 +1,6 @@
 use bevy::prelude::Resource;
 use xrds_scene_graph::{XrdsSceneDocumentSession, XrdsSceneNodeId};
-use crate::bridge::MaterialParamsDto;
+use crate::bridge::{ApkPrerequisite, MaterialParamsDto};
 
 // ---------------------------------------------------------------------------
 // Session
@@ -135,6 +135,13 @@ pub struct EditorState {
     // ── Export Application ────────────────────────────────────────────────
     /// Background export build job.  `None` when idle.
     pub export_job: Option<ExportJob>,
+
+    // ── Android / Quest export ────────────────────────────────────────────
+    /// Results of the last `CheckApkPrerequisites` run.  Consumed by the
+    /// snapshot broadcaster after one frame (same pattern as `pending_status`).
+    pub apk_prerequisites: Option<Vec<ApkPrerequisite>>,
+    /// Background APK build job.  `None` when idle.
+    pub apk_export_job: Option<ApkExportJob>,
 }
 
 /// A background export job started by `ExportApplication`.
@@ -144,6 +151,16 @@ pub struct EditorState {
 pub struct ExportJob {
     pub out_dir: String,
     /// `Some(Ok(message))` on success, `Some(Err(message))` on failure, `None` while running.
+    pub result: std::sync::Arc<std::sync::Mutex<Option<Result<String, String>>>>,
+}
+
+/// A background APK build job started by `ExportApk`.
+/// Extends ExportJob with a streaming log buffer read by the snapshot broadcaster.
+pub struct ApkExportJob {
+    pub out_dir: String,
+    /// Lines emitted by the build script (stdout + stderr), appended by reader threads.
+    pub log: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    /// `Some(Ok(msg))` on success, `Some(Err(msg))` on failure, `None` while running.
     pub result: std::sync::Arc<std::sync::Mutex<Option<Result<String, String>>>>,
 }
 
@@ -191,6 +208,8 @@ impl Default for EditorState {
             pending_gltf_stop: None,
             gltf_clips: std::collections::HashMap::new(),
             export_job: None,
+            apk_prerequisites: None,
+            apk_export_job: None,
         }
     }
 }

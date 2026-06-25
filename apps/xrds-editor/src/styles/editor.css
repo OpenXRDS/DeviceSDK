@@ -410,3 +410,75 @@ body { font-family: monospace; background: var(--base); color: var(--text);
                            font-size: 11px; font-family: monospace; outline: none; }
 .hud-library-meta { font-size: 9px; color: var(--overlay0); white-space: nowrap; }
 .hud-library-actions { display: flex; gap: 4px; flex-shrink: 0; }
+
+/* ── APK Export Dialog ────────────────────────────────────────────────────── */
+.apk-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.55);
+               display: flex; align-items: center; justify-content: center; z-index: 1000; }
+
+.apk-modal { background: var(--mantle); border: 1px solid var(--surface1);
+             border-radius: 6px; box-shadow: 0 8px 32px rgba(0,0,0,.6);
+             width: 480px; max-height: 85vh; display: flex; flex-direction: column;
+             overflow: hidden; }
+
+.apk-header { display: flex; align-items: center; justify-content: space-between;
+              padding: 10px 14px; border-bottom: 1px solid var(--surface0);
+              font-size: 13px; font-weight: bold; color: var(--text); flex-shrink: 0; }
+
+.apk-close { background: none; border: none; color: var(--subtext0); cursor: pointer;
+             font-size: 14px; line-height: 1; padding: 2px 4px; border-radius: 3px; }
+.apk-close:hover { background: var(--surface0); color: var(--text); }
+
+.apk-body { padding: 14px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
+
+.apk-warn { background: rgba(243,139,168,.12); border: 1px solid var(--red);
+            color: var(--red); border-radius: 4px; padding: 6px 10px; font-size: 11px; }
+
+.apk-section-title { font-size: 10px; text-transform: uppercase; letter-spacing: 1px;
+                     color: var(--blue); font-weight: bold; }
+.apk-section-gap { margin-top: 8px; }
+
+.apk-checking { color: var(--subtext0); font-size: 11px; font-style: italic; padding: 4px 0; }
+
+.apk-prereq-list { list-style: none; margin: 4px 0 0; padding: 0;
+                   display: flex; flex-direction: column; gap: 5px; }
+
+.apk-prereq { display: flex; align-items: flex-start; gap: 8px; font-size: 11px; }
+.apk-prereq-icon { font-size: 13px; line-height: 1.2; flex-shrink: 0; }
+.apk-prereq.ok  .apk-prereq-icon { color: var(--green); }
+.apk-prereq.fail .apk-prereq-icon { color: var(--red); }
+.apk-prereq-info { display: flex; flex-direction: column; gap: 2px; }
+.apk-prereq-name { color: var(--text); }
+.apk-prereq-hint { color: var(--subtext0); font-size: 10px; font-style: italic; }
+
+.apk-dir-row { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
+.apk-dir-path { flex: 1; color: var(--subtext0); font-size: 11px; font-family: monospace;
+                overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+                background: var(--base); border: 1px solid var(--surface0);
+                border-radius: 3px; padding: 3px 7px; }
+
+.apk-log { background: var(--base); border: 1px solid var(--surface0); border-radius: 3px;
+           font-family: monospace; font-size: 10px; line-height: 1.5;
+           height: 180px; overflow-y: auto; padding: 6px 8px; margin-top: 4px;
+           color: var(--subtext0); }
+.apk-log-line     { color: var(--subtext0); }
+.apk-log-line.err { color: var(--red); }
+.apk-log-empty    { color: var(--overlay0); font-style: italic; }
+
+.apk-done-msg { border-radius: 4px; padding: 7px 10px; font-size: 12px; margin-top: 6px; }
+.apk-done-msg.ok   { background: rgba(166,227,161,.12); border: 1px solid var(--green); color: var(--green); }
+.apk-done-msg.fail { background: rgba(243,139,168,.12); border: 1px solid var(--red);   color: var(--red); }
+
+.apk-footer { display: flex; justify-content: flex-end; gap: 8px;
+              padding: 10px 14px; border-top: 1px solid var(--surface0); flex-shrink: 0; }
+
+.apk-btn { background: var(--surface0); border: 1px solid var(--surface1);
+           color: var(--text); padding: 4px 14px; border-radius: 4px;
+           cursor: pointer; font-size: 12px; display: flex; align-items: center; gap: 6px; }
+.apk-btn:hover:not(:disabled) { background: var(--surface1); }
+.apk-btn:disabled { opacity: 0.45; cursor: default; }
+.apk-btn.primary { background: var(--blue); border-color: var(--blue); color: var(--mantle); }
+.apk-btn.primary:hover:not(:disabled) { filter: brightness(1.1); }
+
+.apk-spin { display: inline-block; width: 11px; height: 11px;
+            border: 2px solid rgba(30,30,46,.4); border-top-color: var(--mantle);
+            border-radius: 50%; animation: spin 0.8s linear infinite; flex-shrink: 0; }

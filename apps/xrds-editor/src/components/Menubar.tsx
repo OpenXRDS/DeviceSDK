@@ -10,10 +10,11 @@ interface Props {
   onImportAsset: () => void;
   onExportGlb: () => void;
   onExportApp: () => void;
+  onExportApk: () => void;
   onShowShortcuts: () => void;
 }
 
-export function Menubar({ snapshot, send, onOpen, onSave, onSaveAs, onImportAsset, onExportGlb, onExportApp, onShowShortcuts }: Props) {
+export function Menubar({ snapshot, send, onOpen, onSave, onSaveAs, onImportAsset, onExportGlb, onExportApp, onExportApk, onShowShortcuts }: Props) {
   const openMenu = useRef<string | null>(null);
   const rootRef  = useRef<HTMLDivElement>(null);
 
@@ -73,6 +74,10 @@ export function Menubar({ snapshot, send, onOpen, onSave, onSaveAs, onImportAsse
                onClick={snapshot.is_exporting ? undefined : action(onExportApp)}>
             {snapshot.is_exporting ? "⏳ Exporting…" : "Export Application…"}
             {!snapshot.is_exporting && <span className="mb-shortcut">Ctrl+Shift+A</span>}
+          </div>
+          <div className={`mb-action${(snapshot.is_exporting || snapshot.is_exporting_apk) ? " disabled" : ""}`}
+               onClick={(snapshot.is_exporting || snapshot.is_exporting_apk) ? undefined : action(onExportApk)}>
+            {snapshot.is_exporting_apk ? "⏳ Building APK…" : "Export for Quest…"}
           </div>
         </div>
       </div>

@@ -1,6 +1,12 @@
 use bevy::ecs::message::{MessageReader, MessageWriter};
 use bevy::input::mouse::{MouseMotion, MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
+use bevy::render::{
+    Render, RenderApp, RenderSet,
+    render_resource::{CachedPipelineState, PipelineCache},
+};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 use xrds_scene_graph::{XrdsPlayerLocomotionMode, XrdsSceneDocument, XrdsSceneNodeId, XrdsSceneNodePayload};
 use xrds_runtime::{XrdsGltfAnimationSelector, XrdsGltfAnimationPlaybackOptions};
 use xrds_runtime::sdk::world::XrdsGltfAsset;
@@ -11,6 +17,46 @@ use xrds_runtime::{
     XrdsText, XrdsUpdateContext,
 };
 use xrds_openxr::{OpenXrCameraIndex, OpenXrPlayerRoot, XrControllerModelAssets, XrHand, XrHapticRequest, XrInput};
+
+// ---------------------------------------------------------------------------
+// Shader compilation progress — shared between main world and render world
+// ---------------------------------------------------------------------------
+
+/// Pipeline compile counts written by the render world, read by the main world.
+#[derive(Resource, Clone, Default)]
+struct PipelineProgress {
+    done:  Arc<AtomicU32>,
+    total: Arc<AtomicU32>,
+}
+
+struct ShaderProgressPlugin(PipelineProgress);
+
+impl Plugin for ShaderProgressPlugin {
+    fn build(&self, app: &mut App) {
+        app.insert_resource(self.0.clone());
+        if let Some(render_app) = app.get_sub_app_mut(RenderApp) {
+            render_app.insert_resource(self.0.clone());
+            render_app.add_systems(Render, update_pipeline_progress.in_set(RenderSet::Cleanup));
+        }
+    }
+}
+
+fn update_pipeline_progress(
+    pipeline_cache: Option<Res<PipelineCache>>,
+    progress: Res<PipelineProgress>,
+) {
+    let Some(pipeline_cache) = pipeline_cache else { return };
+    let mut done  = 0u32;
+    let mut total = 0u32;
+    for p in pipeline_cache.pipelines() {
+        total += 1;
+        if matches!(p.state, CachedPipelineState::Ok(_) | CachedPipelineState::Err(_)) {
+            done += 1;
+        }
+    }
+    progress.done.store(done, Ordering::Relaxed);
+    progress.total.store(total, Ordering::Relaxed);
+}
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -83,6 +129,8 @@ struct SceneFileApp {
     gltf_node_ids: Vec<XrdsSceneNodeId>,
     /// Head-locked status label spawned in setup(); updated each time animation state changes.
     hud_handle:    Option<xrds_runtime::Handle<XrdsText>>,
+    /// Head-locked shader compilation progress label; cleared when shaders are ready.
+    loading_hud:   Option<xrds_runtime::Handle<XrdsText>>,
 }
 
 impl SceneFileApp {
@@ -170,6 +218,7 @@ impl XrdsApp for SceneFileApp {
         );
         app.insert_resource(config);
         app.insert_resource(AnimationState::default());
+        app.add_plugins(ShaderProgressPlugin(PipelineProgress::default()));
         app.add_systems(PostStartup, (spawn_app_camera, spawn_controller_visuals));
         // set_initial_anchor_system runs after spawn_app_camera to ensure the camera entity
         // exists when we first set ActivePlayerAnchorEntity.
@@ -203,6 +252,12 @@ impl XrdsApp for SceneFileApp {
             eprintln!("[xrds-app] {} GltfAsset node(s) found for animation", self.gltf_node_ids.len());
         }
 
+        // Shader progress HUD — spawned AFTER scene import so it doesn't claim XrdsId(1).
+        self.loading_hud = Some(api.spawn_hud_label(
+            "Compiling shaders... 0%",
+            Vec3::new(0.0, 0.0, -1.5),
+        ));
+
         // HUD label — 50 cm in front, 15 cm below centre line.
         self.hud_handle = Some(api.spawn_hud_label(
             "P: play/stop  H: haptic L  J: haptic R",
@@ -211,6 +266,37 @@ impl XrdsApp for SceneFileApp {
     }
 
     fn update(&mut self, ctx: &mut XrdsUpdateContext<'_>) {
+        // Update shader compilation progress HUD.
+        if let Some(ref loading_hud) = self.loading_hud {
+            let (done, total) = ctx.resource::<PipelineProgress>()
+                .map(|p| (p.done.load(Ordering::Relaxed), p.total.load(Ordering::Relaxed)))
+                .unwrap_or((0, 0));
+
+            if total > 0 && done >= total {
+                // All pipelines compiled — clear the label.
+                ctx.set_text_params(loading_hud, TextParams {
+                    text:      String::new(),
+                    font_size: 1.0,
+                    color:     [0.0, 0.0, 0.0, 0.0],
+                    alignment: xrds_runtime::XrdsTextAlignment::Center,
+                });
+                self.loading_hud = None;
+            } else {
+                let pct  = if total > 0 { done * 100 / total } else { 0 };
+                let text = if total == 0 {
+                    "Initializing...".to_string()
+                } else {
+                    format!("Compiling shaders... {pct}%  ({done}/{total})")
+                };
+                ctx.set_text_params(loading_hud, TextParams {
+                    text,
+                    font_size: 5.0,
+                    color:     [1.0, 1.0, 0.6, 1.0],
+                    alignment: xrds_runtime::XrdsTextAlignment::Center,
+                });
+            }
+        }
+
         let toggled = ctx.resource::<AnimationState>().map(|s| s.toggled).unwrap_or(false);
         if !toggled { return; }
 
@@ -722,7 +808,7 @@ fn main() {
         allow_unapproved_paths: true,
         ..Default::default()
     })
-    .run_xrds(SceneFileApp { scene_path, gltf_node_ids: Vec::new(), hud_handle: None })
+    .run_xrds(SceneFileApp { scene_path, gltf_node_ids: Vec::new(), hud_handle: None, loading_hud: None })
     .expect("runtime error");
 }
 
@@ -734,6 +820,11 @@ fn main() {
 #[no_mangle]
 fn android_main(android_app: winit::platform::android::activity::AndroidApp) {
     use std::io::Read;
+
+    // Enable full Rust backtraces so panic messages contain a stack trace.
+    // Without this, the panic machinery only prints "note: run with RUST_BACKTRACE=1"
+    // and the actual panic site is invisible in logcat.
+    unsafe { std::env::set_var("RUST_BACKTRACE", "full") };
 
     android_logger::init_once(
         android_logger::Config::default()
@@ -756,11 +847,12 @@ fn android_main(android_app: winit::platform::android::activity::AndroidApp) {
     //   Push scene.json and assets/ to the device before launching:
     //     adb push scene.json /sdcard/Android/data/org.openxrds.devicesdk/files/
     //     adb push assets/    /sdcard/Android/data/org.openxrds.devicesdk/files/assets/
-    //   asset_path is set to the external directory so all GLB paths stay relative.
+    //   asset_path points at the external directory; Bevy uses normal filesystem I/O.
     //
     // APK-bundled mode:
     //   Build with android/quest/build.sh --scene-dir <dir> to bundle scene.json and
-    //   assets/ directly into the APK. Bevy reads them via AAssetManager (asset_path = None).
+    //   assets/ into the APK.  On first launch (or when files change), assets are
+    //   extracted to internal cache storage so all libraries get real filesystem paths.
 
     const PACKAGE: &str = "org.openxrds.devicesdk";
     let external_dir = std::path::PathBuf::from(
@@ -769,38 +861,105 @@ fn android_main(android_app: winit::platform::android::activity::AndroidApp) {
     let external_scene = external_dir.join("scene.json");
 
     let (scene_path, opt_asset_path) = if external_scene.exists() {
-        // Dev mode — scene is on external storage
+        // Dev mode — scene and assets are on external storage; no extraction needed.
         log::info!("[xrds-app] dev mode: loading scene from external storage");
         let ap = external_dir.join("assets").to_string_lossy().into_owned();
         (external_scene, Some(ap))
     } else {
-        // APK-bundled mode — read scene.json from APK via AAssetManager,
-        // then write it to internal cache so SceneFileApp can open it by path.
-        // All other assets (GLBs, fonts, env maps) are read by Bevy directly
-        // from the APK through AAssetManager when asset_path is None.
-        log::info!("[xrds-app] APK mode: reading scene.json from bundled assets");
-        let scene_cstr = std::ffi::CString::new("scene.json").unwrap();
-        let Some(mut asset) = android_app.asset_manager().open(&scene_cstr) else {
+        // APK-bundled mode — extract all bundled assets from the APK to the internal
+        // cache directory, then point Bevy's AssetServer at that directory.
+        //
+        // Android's AAssetManager API is opaque (no filesystem paths), but Bevy's GLTF
+        // loader, cosmic_text/fontdb, and other libraries require real fs::Path entries.
+        // Extracting once to cache (with size-check to skip unchanged files on subsequent
+        // launches) is the conventional Android solution for this constraint.
+        log::info!("[xrds-app] APK mode: extracting bundled assets to internal cache");
+
+        let cache_dir = std::path::PathBuf::from(format!("/data/data/{PACKAGE}/cache"));
+        if let Err(e) = std::fs::create_dir_all(&cache_dir) {
+            log::error!("[xrds-app] failed to create cache dir '{}': {e}", cache_dir.display());
+            return;
+        }
+
+        // Read ASSET_MANIFEST — generated by build.sh, lists every file in the APK's
+        // assets/ root (one relative path per line).
+        let manifest_cstr = std::ffi::CString::new("ASSET_MANIFEST").unwrap();
+        let manifest_content = match android_app.asset_manager().open(&manifest_cstr) {
+            Some(mut f) => {
+                let mut s = String::new();
+                if let Err(e) = std::io::Read::read_to_string(&mut f, &mut s) {
+                    log::error!("[xrds-app] failed to read ASSET_MANIFEST: {e}");
+                    return;
+                }
+                s
+            }
+            None => {
+                log::error!(
+                    "[xrds-app] ASSET_MANIFEST not found in APK. \
+                     Rebuild with the updated build.sh that generates the manifest."
+                );
+                return;
+            }
+        };
+
+        // Extract each listed asset, skipping files whose cached size already matches.
+        let mut n_extracted = 0u32;
+        let mut n_cached    = 0u32;
+        for rel_path in manifest_content.lines() {
+            let rel_path = rel_path.trim();
+            if rel_path.is_empty() { continue; }
+
+            let dest = cache_dir.join(rel_path);
+            if let Some(parent) = dest.parent() {
+                if let Err(e) = std::fs::create_dir_all(parent) {
+                    log::warn!("[xrds-app] cannot create parent dir for '{rel_path}': {e}");
+                    continue;
+                }
+            }
+
+            let Ok(asset_cstr) = std::ffi::CString::new(rel_path) else { continue };
+            let Some(mut f) = android_app.asset_manager().open(&asset_cstr) else {
+                log::warn!("[xrds-app] asset listed in manifest but missing from APK: {rel_path}");
+                continue;
+            };
+            let mut bytes = Vec::new();
+            if let Err(e) = f.read_to_end(&mut bytes) {
+                log::warn!("[xrds-app] failed to read APK asset '{rel_path}': {e}");
+                continue;
+            }
+
+            let cached_size = std::fs::metadata(&dest).ok().map(|m| m.len());
+            if cached_size == Some(bytes.len() as u64) {
+                n_cached += 1;
+                continue;
+            }
+            if let Err(e) = std::fs::write(&dest, &bytes) {
+                log::warn!("[xrds-app] failed to write '{}': {e}", dest.display());
+                continue;
+            }
+            n_extracted += 1;
+        }
+        log::info!("[xrds-app] asset extraction complete: {n_extracted} written, {n_cached} already cached");
+
+        let cached_scene = cache_dir.join("scene.json");
+        if !cached_scene.exists() {
             log::error!(
-                "[xrds-app] scene.json not found in APK assets or external storage. \
-                 Bundle it with: ./android/quest/build.sh --scene-dir <dir>  OR  \
-                 push it: adb push scene.json /sdcard/Android/data/{PACKAGE}/files/"
+                "[xrds-app] scene.json not in cache after extraction. \
+                 Ensure build.sh --scene-dir was used or scene.json exists in APK assets."
             );
             return;
-        };
-        let mut bytes = Vec::new();
-        if let Err(e) = asset.read_to_end(&mut bytes) {
-            log::error!("[xrds-app] failed to read scene.json from APK: {e}");
-            return;
         }
-        let cache_dir = std::path::PathBuf::from(format!("/data/data/{PACKAGE}/cache"));
-        let _ = std::fs::create_dir_all(&cache_dir);
-        let cached_scene = cache_dir.join("scene.json");
-        if let Err(e) = std::fs::write(&cached_scene, &bytes) {
-            log::error!("[xrds-app] failed to write scene.json to internal cache: {e}");
-            return;
+
+        // Set CWD to cache_dir so that validate_gltf_source (which resolves relative
+        // paths against CWD) can find bundled GLB/GLTF files by their bare filename.
+        if let Err(e) = std::env::set_current_dir(&cache_dir) {
+            log::warn!("[xrds-app] could not set CWD to cache dir: {e}");
+        } else {
+            log::info!("[xrds-app] CWD set to {}", cache_dir.display());
         }
-        (cached_scene, None) // None → Bevy uses AAssetManager for relative asset paths
+
+        let cache_dir_str = cache_dir.to_string_lossy().into_owned();
+        (cached_scene, Some(cache_dir_str))
     };
 
     // Give bevy_winit the AndroidApp handle before App::run() is called.
@@ -815,6 +974,6 @@ fn android_main(android_app: winit::platform::android::activity::AndroidApp) {
         allow_unapproved_paths: true,
         ..Default::default()
     })
-    .run_xrds(SceneFileApp { scene_path, gltf_node_ids: Vec::new(), hud_handle: None })
+    .run_xrds(SceneFileApp { scene_path, gltf_node_ids: Vec::new(), hud_handle: None, loading_hud: None })
     .expect("runtime error");
 }

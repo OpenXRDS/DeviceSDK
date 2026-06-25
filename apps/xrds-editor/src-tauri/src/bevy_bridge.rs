@@ -68,6 +68,27 @@ pub fn broadcast_editor_snapshot_system(
 ) {
     let doc = session.0.document();
 
+    // --- Poll APK export job ---
+    // Capture log tail before potentially clearing the job.
+    let apk_build_log: Vec<String> = state.apk_export_job.as_ref()
+        .map(|job| {
+            let log = job.log.lock().unwrap();
+            let start = log.len().saturating_sub(200);
+            log[start..].to_vec()
+        })
+        .unwrap_or_default();
+
+    let apk_done: Option<Result<String, String>> = state.apk_export_job.as_ref()
+        .and_then(|job| job.result.try_lock().ok())
+        .and_then(|guard| guard.clone());
+    if let Some(outcome) = apk_done {
+        state.pending_status = Some(match outcome {
+            Ok(msg)  => msg,
+            Err(msg) => format!("APK export failed: {msg}"),
+        });
+        state.apk_export_job = None;
+    }
+
     let selection_ids: Vec<u64> = state.selection.ids().iter().map(|id| id.0).collect();
     let snapshot = EditorSnapshot {
         hierarchy: build_hierarchy(doc),
@@ -77,7 +98,11 @@ pub fn broadcast_editor_snapshot_system(
         undo_count: session.0.undo_count(),
         redo_count: session.0.redo_count(),
         is_dirty: session.0.is_dirty(),
-        scene_name: doc.metadata.name.clone(),
+        scene_name: session.0.save_path()
+            .and_then(|p| p.file_stem())
+            .and_then(|s| s.to_str())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| doc.metadata.name.clone()),
         status_message: state.pending_status.take(),
         gizmo_mode: format!("{:?}", state.gizmo_mode),
         camera_mode: format!("{:?}", state.camera_mode),
@@ -97,6 +122,9 @@ pub fn broadcast_editor_snapshot_system(
         active_player_anchor_id: state.active_player_anchor_id.map(|id| id.0),
         hud_library: build_hud_library_dto(doc),
         stereo_preview_active: stereo.enabled,
+        apk_prerequisites: state.apk_prerequisites.take(),
+        is_exporting_apk: state.apk_export_job.is_some(),
+        apk_build_log,
     };
 
     bridge.0.outbound.lock().unwrap().push_back(snapshot);
@@ -115,7 +143,7 @@ fn is_structural_command(cmd: &EditorCommand) -> bool {
         // File I/O
         NewScene | OpenScene{..} | SaveScene | SaveSceneAs{..} |
         ImportAsset{..} | ExportGlb{..} | ExportApplication{..} |
-        RemoveAsset{..} |
+        RemoveAsset{..} | CheckApkPrerequisites | ExportApk{..} |
         // History
         Undo | Redo |
         // Play mode / camera / player

@@ -85,6 +85,12 @@ export interface PlayerAnchorEntry {
   player_name: string;
 }
 
+export interface ApkPrerequisite {
+  name: string;
+  ok: boolean;
+  hint: string;
+}
+
 export interface EditorSnapshot {
   hierarchy: HierarchyNode[];
   selection: number[];
@@ -110,6 +116,11 @@ export interface EditorSnapshot {
   active_player_anchor_id: number | null;
   hud_library: HudTemplateDto[];
   stereo_preview_active: boolean;
+  /** Populated for one frame after CheckApkPrerequisites; null otherwise. */
+  apk_prerequisites: ApkPrerequisite[] | null;
+  is_exporting_apk: boolean;
+  /** Tail of the APK build log (last ≤200 lines). Empty when idle. */
+  apk_build_log: string[];
 }
 
 export interface EnvironmentDto {
@@ -144,6 +155,9 @@ export const defaultSnapshot: EditorSnapshot = {
   active_player_anchor_id: null,
   hud_library: [],
   stereo_preview_active: false,
+  apk_prerequisites: null,
+  is_exporting_apk: false,
+  apk_build_log: [],
 };
 
 // ---------------------------------------------------------------------------
@@ -229,6 +243,8 @@ export type EditorCommand =
   | { type: "RemoveAsset";   payload: { asset_id: string } }
   | { type: "ExportGlb";            payload: { path: string } }
   | { type: "ExportApplication";    payload: { output_dir: string } }
+  | { type: "CheckApkPrerequisites" }
+  | { type: "ExportApk";            payload: { output_dir: string } }
   | { type: "SaveScene" }
   | { type: "SaveSceneAs"; payload: { path: string } }
   | { type: "DeleteSelection" }

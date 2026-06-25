@@ -134,6 +134,14 @@ elif [[ -f "$DEFAULT_SCENE" ]]; then
     cp "$DEFAULT_SCENE" "$STAGING/scene.json"
 fi
 
+# Generate ASSET_MANIFEST — a plain-text list of every file in the staging directory,
+# relative to the staging root (= the APK assets/ root).  android_main reads this to
+# extract all assets to the filesystem cache on the device, so Bevy can use normal
+# file I/O instead of AAssetManager for GLBs, textures, fonts, audio, etc.
+echo "    Generating ASSET_MANIFEST..."
+(cd "$STAGING" && find . -type f | sed 's|^\./||' | LC_ALL=C sort) > "$STAGING/ASSET_MANIFEST"
+echo "    $(wc -l < "$STAGING/ASSET_MANIFEST" | tr -d ' ') file(s) listed in manifest"
+
 # Step 4: Package APK
 echo "==> Step 4: Packaging APK..."
 rm -f "$BUILD_DIR/resources.apk" "$BUILD_DIR/aligned.apk" "$BUILD_DIR/xrds-app.apk"
