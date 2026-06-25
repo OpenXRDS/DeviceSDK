@@ -2,9 +2,9 @@ use bevy::prelude::*;
 use bevy::ecs::message::MessageReader;
 use bevy::input::mouse::{MouseMotion, MouseScrollUnit, MouseWheel};
 use bevy::window::PrimaryWindow;
-use xrds_runtime::{XrdsReceivesEnvironment, XrdsIdIndex, sdk::XrdsId};
+use xrds_runtime::{XrdsReceivesEnvironment, XrdsIdIndex, XrdsPlayerCamera, sdk::XrdsId};
 use crate::editor_state::{CameraMode, EditorSession, EditorState};
-use crate::wry_overlay::{LEFT_W, RIGHT_W, TOP_H, BOT_H};
+use crate::wry_overlay::{LEFT_W, RIGHT_W, TOP_H, BOT_H, ViewportRect};
 
 const ORBIT_SENSITIVITY: f32 = 0.007;
 const PAN_SENSITIVITY:   f32 = 0.0025;
@@ -17,6 +17,19 @@ const MAX_DIST:          f32 = 2000.0;
 
 #[derive(Component)]
 pub struct EditorCameraMarker;
+
+/// Marker for the right-eye stereo preview companion camera.
+/// Spawned and despawned by `update_stereo_preview_camera`.
+#[derive(Component)]
+pub struct EditorStereoRightCamera;
+
+/// State for the side-by-side stereo preview mode.
+#[derive(Resource, Default)]
+pub struct StereoPreviewState {
+    pub enabled: bool,
+    pub ipd_m:   f32,
+    pub fov_deg: f32,
+}
 
 #[derive(Resource)]
 pub struct EditorCameraState {
@@ -85,22 +98,29 @@ pub fn spawn_editor_camera(
 /// - `None`      → editor camera on, all scene cameras off.
 /// - `Some(id)`  → editor camera off, matching scene camera on, others off.
 /// - Player pawn camera is always excluded (managed separately by viewport_player).
+/// - Stereo right camera is managed separately based on `StereoPreviewState`.
 pub fn apply_camera_selection_system(
     state: Res<EditorState>,
+    stereo: Res<StereoPreviewState>,
     id_index: Res<XrdsIdIndex>,
-    mut all_cams_q: Query<(Entity, &mut Camera)>,
+    // Exclude pawn cameras — they're managed by viewport_player.
+    mut all_cams_q: Query<(Entity, &mut Camera), Without<crate::viewport_player::PlayerPawnMarker>>,
     editor_cam_q: Query<Entity, With<EditorCameraMarker>>,
-    pawn_q: Query<Entity, With<crate::viewport_player::PlayerPawnMarker>>,
+    stereo_cam_q: Query<Entity, With<EditorStereoRightCamera>>,
 ) {
     let editor_entity = editor_cam_q.single().ok();
-    let pawn_entities: Vec<Entity> = pawn_q.iter().collect();
+    let stereo_entities: Vec<Entity> = stereo_cam_q.iter().collect();
 
     let want_entity: Option<Entity> = state.active_camera_id
         .and_then(|id| id_index.entity_of(XrdsId(id.0)));
 
     for (entity, mut cam) in all_cams_q.iter_mut() {
-        // Never touch the pawn camera — it's managed by viewport_player.
-        if pawn_entities.contains(&entity) { continue; }
+        if stereo_entities.contains(&entity) {
+            // Stereo right camera: active when stereo is enabled and not in play mode.
+            let should = stereo.enabled && !state.is_playing;
+            if cam.is_active != should { cam.is_active = should; }
+            continue;
+        }
 
         let should_be_active = if state.is_playing {
             // During play mode all non-pawn cameras must be off.
@@ -231,6 +251,89 @@ pub fn orbit_camera_system(
 
     let t = cam.to_transform();
     for mut transform in camera_q.iter_mut() { *transform = t; }
+}
+
+/// Manages the stereo preview right-eye companion camera.
+///
+/// Runs in PostUpdate so it sees the final ViewportRect (set during Update by
+/// `drain_responses_and_viewport`) and the final left-camera Transform (set by
+/// `orbit_camera_system`).  Each frame it:
+///   - When stereo disabled: despawns the right camera, restores left viewport to full width.
+///   - When stereo enabled: spawns or updates the right camera; splits both viewports.
+pub fn update_stereo_preview_camera(
+    state: Res<StereoPreviewState>,
+    vp: Res<ViewportRect>,
+    mut commands: Commands,
+    mut left_q: Query<(Entity, &mut Camera, &Transform), With<EditorCameraMarker>>,
+    right_q: Query<Entity, With<EditorStereoRightCamera>>,
+    mut right_cam_q: Query<(&mut Camera, &mut Transform),
+        (With<EditorStereoRightCamera>, Without<EditorCameraMarker>)>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+) {
+    let Ok((left_entity, mut left_cam, left_tf)) = left_q.single_mut() else { return };
+    let sf = windows.single().map(|w| w.scale_factor()).unwrap_or(1.0);
+
+    let phys_x = (vp.x * sf) as u32;
+    let phys_y = (vp.y * sf) as u32;
+    let phys_w = (vp.w * sf) as u32;
+    let phys_h = (vp.h * sf) as u32;
+
+    if !state.enabled || phys_w == 0 || phys_h == 0 {
+        // Despawn right camera, remove head-camera marker, restore left to full viewport.
+        for entity in right_q.iter() { commands.entity(entity).despawn(); }
+        commands.entity(left_entity).remove::<XrdsPlayerCamera>();
+        if let Some(v) = left_cam.viewport.as_mut() {
+            v.physical_position = UVec2::new(phys_x, phys_y);
+            v.physical_size     = UVec2::new(phys_w, phys_h);
+        }
+        return;
+    }
+
+    // Tag left camera as the canonical head camera for head_locked_system.
+    // Without this, pick_head_camera step 3 (any active camera) would non-deterministically
+    // pick either the left or right camera, causing HUD jitter in stereo mode.
+    commands.entity(left_entity).insert(XrdsPlayerCamera);
+
+    let half_w    = phys_w / 2;
+    let right_dir = left_tf.rotation * Vec3::X;
+    let right_pos = left_tf.translation + right_dir * state.ipd_m;
+
+    // Left camera → left half.
+    if let Some(v) = left_cam.viewport.as_mut() {
+        v.physical_position = UVec2::new(phys_x, phys_y);
+        v.physical_size     = UVec2::new(half_w, phys_h);
+    }
+
+    if let Ok((mut right_cam, mut right_tf)) = right_cam_q.single_mut() {
+        // Update existing right camera.
+        right_tf.translation = right_pos;
+        right_tf.rotation    = left_tf.rotation;
+        if let Some(v) = right_cam.viewport.as_mut() {
+            v.physical_position = UVec2::new(phys_x + half_w, phys_y);
+            v.physical_size     = UVec2::new(half_w, phys_h);
+        }
+    } else {
+        // Spawn right camera.
+        commands.spawn((
+            Camera3d::default(),
+            Camera {
+                viewport: Some(bevy::camera::Viewport {
+                    physical_position: UVec2::new(phys_x + half_w, phys_y),
+                    physical_size:     UVec2::new(half_w, phys_h),
+                    ..default()
+                }),
+                order: 1,
+                ..Default::default()
+            },
+            Transform {
+                translation: right_pos,
+                rotation:    left_tf.rotation,
+                scale:       Vec3::ONE,
+            },
+            EditorStereoRightCamera,
+            XrdsReceivesEnvironment,
+        ));
+    }
 }
 
 /// Compute a node's world-space position and rotation by composing the full

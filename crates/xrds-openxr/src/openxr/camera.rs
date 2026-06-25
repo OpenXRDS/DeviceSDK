@@ -51,17 +51,21 @@ impl CameraProjection for OpenXrViewProjection {
     fn update(&mut self, _width: f32, _height: f32) {}
 
     fn far(&self) -> f32 {
-        self.projection_matrix.to_cols_array()[14]
-            / (self.projection_matrix.to_cols_array()[10] + 1.0)
+        // The OpenXR projection uses an infinite reverse-Z mapping (no finite far plane).
+        // The matrix coefficients give near/(0+1)=near which would place Bevy's frustum
+        // far-plane at 0.1 m, culling all scene geometry. Return a large sentinel instead
+        // so visibility culling uses a sane far distance.
+        1000.0
     }
 
     fn get_frustum_corners(&self, z_near: f32, z_far: f32) -> [Vec3A; 8] {
         fn normalized_corner(inverse_matrix: &Mat4, near: f32, ndc_x: f32, ndc_y: f32) -> Vec3A {
             let clip_pos = Vec4::new(ndc_x * near, ndc_y * near, near, near);
-            // I don't know why multiplying the Z axis by -1 is necessary.
-            // As far as I can tell from (likely my incorrect understanding of the code),
-            // PerspectiveProjection::get_frustum_corners() has the Z axis inverted??
-            Vec3A::from_vec4(inverse_matrix.mul_vec4(clip_pos)) / near * Vec3A::new(1., 1., -1.)
+            // M^-1 * clip_pos → view-space (vx, vy, -near, 1).
+            // Dividing by `near` gives the unit direction (vx/near, vy/near, -1)
+            // where z=-1 correctly points FORWARD (-Z is forward in Bevy view space).
+            // Do NOT negate Z here — doing so would flip the frustum backward, behind the camera.
+            Vec3A::from_vec4(inverse_matrix.mul_vec4(clip_pos)) / near
         }
 
         let inv = self.projection_matrix.inverse();

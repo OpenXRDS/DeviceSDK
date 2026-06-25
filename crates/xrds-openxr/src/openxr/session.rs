@@ -1,9 +1,14 @@
 use std::ptr::{self, null, null_mut};
 
 use bevy::{
-    camera::{ManualTextureViewHandle, RenderTarget},
+    camera::{visibility::NoCpuCulling, ManualTextureViewHandle, RenderTarget},
     prelude::*,
-    render::{extract_resource::ExtractResource, texture::ManualTextureView},
+    render::{
+        extract_resource::ExtractResource,
+        render_resource::TextureUsages,
+        texture::ManualTextureView,
+        view::NoIndirectDrawing,
+    },
 };
 use openxr::{sys::ReferenceSpaceCreateInfo, Posef, SpaceLocation, StructureType, ViewStateFlags};
 
@@ -443,26 +448,69 @@ impl Plugin for OpenXrSessionPlugin {
 
 fn initialize_view_and_blend_mode(world: &mut World) {
     debug_span!("OpenXrSessionPlugin");
+    log::info!("XR: initialize_view_and_blend_mode start");
     let openxr_instance = world.resource::<OpenXrInstance>();
 
-    let view_configurations = openxr_instance
-        .enumerate_view_configurations()
-        .expect("Could not enumerate view configuration types");
-    let view_configuration_type = view_configurations
-        .first()
-        .expect("There is no view configuration types");
-    let view_configuration_views = openxr_instance
+    let view_configurations = match openxr_instance.enumerate_view_configurations() {
+        Ok(v) => v,
+        Err(e) => {
+            log::error!("XR: enumerate_view_configurations failed: {e:?}");
+            return;
+        }
+    };
+    let view_configuration_type = match view_configurations.first() {
+        Some(v) => v,
+        None => {
+            log::error!("XR: no view configuration types");
+            return;
+        }
+    };
+    let view_configuration_views = match openxr_instance
         .enumerate_view_configuration_views(view_configuration_type)
-        .expect("Could not enumerate views of view configuration type");
-    let blend_modes = openxr_instance
+    {
+        Ok(v) => v,
+        Err(e) => {
+            log::error!("XR: enumerate_view_configuration_views failed: {e:?}");
+            return;
+        }
+    };
+    let blend_modes = match openxr_instance
         .enumerate_environment_blend_modes(view_configuration_type)
-        .expect("Could not enumerate environment blend modes");
-    let blend_mode = blend_modes.first().expect("There is no blend modes");
+    {
+        Ok(v) => v,
+        Err(e) => {
+            log::error!("XR: enumerate_environment_blend_modes failed: {e:?}");
+            return;
+        }
+    };
+    let blend_mode = match blend_modes.first() {
+        Some(v) => v,
+        None => {
+            log::error!("XR: no environment blend modes");
+            return;
+        }
+    };
 
-    let openxr_views = OpenXrViews(vec![
-        openxr::View::default();
-        view_configuration_views.len()
-    ]);
+    log::info!(
+        "XR: view_config={:?} views={} blend={:?}",
+        view_configuration_type,
+        view_configuration_views.len(),
+        blend_mode
+    );
+
+    let openxr_views = OpenXrViews(
+        (0..view_configuration_views.len())
+            .map(|_| openxr::View {
+                pose: openxr::Posef::IDENTITY,
+                fov: openxr::Fovf {
+                    angle_left:  -std::f32::consts::FRAC_PI_4,
+                    angle_right:  std::f32::consts::FRAC_PI_4,
+                    angle_up:     std::f32::consts::FRAC_PI_4,
+                    angle_down:  -std::f32::consts::FRAC_PI_4,
+                },
+            })
+            .collect()
+    );
 
     let openxr_view_configurations = OpenXrViewConfigurations {
         view_configuration_type: *view_configuration_type,
@@ -479,7 +527,7 @@ fn initialize_view_and_blend_mode(world: &mut World) {
 
     // TODO: Create action set here
 
-    info!("OpenXR system initialized");
+    log::info!("OpenXR system initialized");
     world.insert_resource(openxr_views);
     world.insert_resource(openxr_view_configurations);
     world.insert_resource(openxr_blend_modes);
@@ -488,17 +536,31 @@ fn initialize_view_and_blend_mode(world: &mut World) {
 
 fn initialize_openxr_session(world: &mut World) {
     debug_span!("OpenXrSessionPlugin");
+    log::info!("XR: initialize_openxr_session start");
     let openxr_instance = world.resource::<OpenXrInstance>();
     let graphics_backends = world.resource::<OpenXrGraphicsBackends>();
 
-    let session_create_info = graphics_backends
-        .get_session_create_info()
-        .expect("Could not get openxr session create info");
+    let session_create_info = match graphics_backends.get_session_create_info() {
+        Ok(info) => {
+            log::info!("XR: session_create_info obtained");
+            info
+        }
+        Err(e) => {
+            log::error!("XR: get_session_create_info failed: {e:?}");
+            return;
+        }
+    };
 
-    let (session, frame_waiter, frame_stream) = openxr_instance
-        .create_session(&session_create_info)
-        .expect("Could not create OpenXR session");
-    info!("OpenXR session created");
+    log::info!("XR: calling xrCreateSession...");
+    let (session, frame_waiter, frame_stream) =
+        match openxr_instance.create_session(&session_create_info) {
+            Ok(v) => v,
+            Err(e) => {
+                log::error!("XR: xrCreateSession failed: {e:?}");
+                return;
+            }
+        };
+    log::info!("OpenXR session created");
 
     world.insert_resource(session);
     world.insert_resource(frame_waiter);
@@ -520,16 +582,21 @@ fn begin_openxr_session(world: &mut World) {
     let openxr_session = world.resource::<OpenXrSession>();
     let view_configurations = world.resource::<OpenXrViewConfigurations>();
 
-    info!(
-        "Begin OpenXR session with view type: {:?}",
+    log::info!(
+        "XR: begin_openxr_session view_type={:?}",
         view_configurations.view_configuration_type
     );
 
-    openxr_session
-        .begin(view_configurations.view_configuration_type)
-        .expect("Could not begin OpenXR session");
+    match openxr_session.begin(view_configurations.view_configuration_type) {
+        Ok(_) => log::info!("XR: xrBeginSession succeeded"),
+        Err(e) => {
+            log::error!("XR: xrBeginSession failed: {e:?}");
+            return;
+        }
+    }
 
     world.insert_resource(OpenXrSessionState::Running);
+    log::info!("XR: session state -> Running");
 }
 
 fn end_openxr_session(world: &mut World) {
@@ -541,20 +608,30 @@ fn end_openxr_session(world: &mut World) {
 }
 
 fn handle_events(world: &mut World) {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static FRAME: AtomicU64 = AtomicU64::new(0);
+    let n = FRAME.fetch_add(1, Ordering::Relaxed);
+    if n < 20 || n % 90 == 0 {
+        log::info!("XR: handle_events tick frame={}", n);
+    }
+
     let openxr_instance = world.resource::<OpenXrInstance>();
 
     let mut storage = openxr::EventDataBuffer::new();
-    let event = openxr_instance
-        .poll_event(&mut storage)
-        .expect("Could not poll openxr event");
+    let event = match openxr_instance.poll_event(&mut storage) {
+        Ok(e) => e,
+        Err(e) => {
+            log::error!("XR: poll_event failed: {e:?}");
+            return;
+        }
+    };
     trace!("handle_events");
     if let Some(event) = event {
         match event {
             openxr::Event::SessionStateChanged(state) => {
-                info!(
-                    "  session state changed: {:?}, time: {:?}",
-                    state.state(),
-                    state.time()
+                log::info!(
+                    "XR: session state changed: {:?}",
+                    state.state()
                 );
                 match state.state() {
                     openxr::SessionState::IDLE => {
@@ -585,44 +662,53 @@ fn handle_events(world: &mut World) {
                 }
             }
             openxr::Event::ReferenceSpaceChangePending(reference_space_change_pending) => {
-                reference_space_change_pending.change_time();
-                reference_space_change_pending.pose_in_previous_space();
-                reference_space_change_pending.pose_valid();
-                reference_space_change_pending.reference_space_type();
-                info!(
-                    "  reference space change pending: time={:?}, prev_pose={:?}, valid={:?}, type={:?}",
-                    reference_space_change_pending.change_time(), reference_space_change_pending.pose_in_previous_space(), reference_space_change_pending.pose_valid(), reference_space_change_pending.reference_space_type()
+                log::info!(
+                    "XR: reference space change pending: type={:?}",
+                    reference_space_change_pending.reference_space_type()
                 );
             }
             openxr::Event::EventsLost(event_lost) => {
-                warn!("  events lost: {}", event_lost.lost_event_count());
+                log::warn!("XR: events lost: {}", event_lost.lost_event_count());
             }
             openxr::Event::InstanceLossPending(instance_loss_pending) => {
-                warn!(
-                    "  instance loss pending: {:?}",
+                log::warn!(
+                    "XR: instance loss pending: {:?}",
                     instance_loss_pending.loss_time()
                 );
             }
-            openxr::Event::InteractionProfileChanged(_interaction_profile_changed) => {
-                info!("  Interaction profile has changed");
+            openxr::Event::InteractionProfileChanged(_) => {
+                log::info!("XR: interaction profile changed");
             }
             _ => {
-                warn!("  Unimplemented event");
+                log::warn!("XR: unimplemented event");
             }
         }
     }
 }
 
 fn init_render_resources(world: &mut World) {
-    let frame_stream = world
-        .remove_resource::<OpenXrFrameStream>()
-        .expect("OpenXrFrameStream resource not exists");
-    let swapchain = world
-        .remove_resource::<OpenXrSwapchain>()
-        .expect("OpenXrSwapchain resource not exists");
-    let layer_builder = world
-        .remove_resource::<OpenXrCompositionLayerBuilder>()
-        .expect("OpenXrCompositionLayerBuilder resource not exists");
+    log::info!("XR: init_render_resources start");
+    let frame_stream = match world.remove_resource::<OpenXrFrameStream>() {
+        Some(r) => r,
+        None => {
+            log::error!("XR: init_render_resources: OpenXrFrameStream missing — session create failed");
+            return;
+        }
+    };
+    let swapchain = match world.remove_resource::<OpenXrSwapchain>() {
+        Some(r) => r,
+        None => {
+            log::error!("XR: init_render_resources: OpenXrSwapchain missing — swapchain create failed (or ordering issue)");
+            return;
+        }
+    };
+    let layer_builder = match world.remove_resource::<OpenXrCompositionLayerBuilder>() {
+        Some(r) => r,
+        None => {
+            log::error!("XR: init_render_resources: OpenXrCompositionLayerBuilder missing");
+            return;
+        }
+    };
 
     let render_resources = OpenXrRenderResources {
         frame_stream,
@@ -630,6 +716,7 @@ fn init_render_resources(world: &mut World) {
         layer_builder,
     };
     world.insert_resource(render_resources);
+    log::info!("XR: init_render_resources done");
 }
 
 fn spawn_camera(
@@ -662,14 +749,34 @@ fn spawn_camera(
         manual_texture_views.insert(handle, view);
 
         trace!("view_handle: {:?}", handle);
+        // Each eye must get its own depth texture from Bevy's TextureCache.
+        // Without this, both cameras share the same depth buffer (same size/format/usage
+        // → same cache key). Camera 0 (order=0) fills it; Camera 1's geometry then fails
+        // the GREATER depth test at identical depths (small IPD at distance) → only clear.
+        // Adding COPY_SRC to Camera 1 changes the cache key without affecting rendering.
+        let depth_texture_usages = if i == 0 {
+            TextureUsages::RENDER_ATTACHMENT
+        } else {
+            TextureUsages::RENDER_ATTACHMENT | TextureUsages::COPY_SRC
+        };
         commands.spawn((
             Camera {
                 target: RenderTarget::TextureView(handle),
-                clear_color: ClearColorConfig::Custom(Color::srgb_u8(128, 128, 255)),
+                order: i as isize,
                 ..Default::default()
             },
             OpenXrCameraIndex(i as u32),
             Projection::custom(OpenXrViewProjection::default()),
+            NoCpuCulling,
+            // Bevy 0.17's GPU indirect preprocessing (GpuPreprocessingMode::Culling) mishandles
+            // multi-camera XR on Android: work items for the two eye cameras share global offsets
+            // and interfere, causing one eye to lose all geometry. NoIndirectDrawing forces
+            // PreprocessingOnly (CPU batching) which bypasses the broken indirect dispatch.
+            NoIndirectDrawing,
+            Camera3d {
+                depth_texture_usages: depth_texture_usages.into(),
+                ..Default::default()
+            },
         ));
     }
 }

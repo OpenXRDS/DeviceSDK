@@ -154,6 +154,13 @@ fn pending_vp() -> &'static Mutex<Option<(f32, f32, f32, f32)>> {
     S.get_or_init(|| Mutex::new(None))
 }
 
+/// Pending stereo preview state change from the webview IPC.
+/// Tuple: (enabled, ipd_m, fov_deg)
+fn pending_stereo() -> &'static Mutex<Option<(bool, f32, f32)>> {
+    static S: OnceLock<Mutex<Option<(bool, f32, f32)>>> = OnceLock::new();
+    S.get_or_init(|| Mutex::new(None))
+}
+
 /// Container HWND raw value for SetWindowRgn.
 /// Stored as isize (windows-sys HWND = isize) so the type is always valid.
 #[cfg(windows)]
@@ -347,6 +354,7 @@ pub fn drain_responses_and_viewport(
     mut cam_q:  Query<&mut Camera, With<crate::viewport_camera::EditorCameraMarker>>,
     windows:    Query<&Window, With<PrimaryWindow>>,
     mut vp:     ResMut<ViewportRect>,
+    mut stereo: ResMut<crate::viewport_camera::StereoPreviewState>,
 ) {
     // ── Drain JS responses ────────────────────────────────────────────────────
     let scripts: Vec<String> = pending_responses().lock().unwrap().drain(..).collect();
@@ -355,6 +363,16 @@ pub fn drain_responses_and_viewport(
             for js in &scripts { let _ = wv.evaluate_script(js); }
         }
     });
+
+    // ── Apply stereo preview state — must run every frame, before the viewport early-return.
+    // pending_vp is only set when React's ResizeObserver fires (layout changes only);
+    // most frames pending_vp is None and we would early-return without ever consuming
+    // pending_stereo, making the L|R toggle appear broken.
+    if let Some((enabled, ipd_m, fov_deg)) = pending_stereo().lock().unwrap().take() {
+        stereo.enabled = enabled;
+        stereo.ipd_m   = ipd_m;
+        stereo.fov_deg = fov_deg;
+    }
 
     // ── Apply exact viewport bounds from React ────────────────────────────────
     let Some((bx, by, bw, bh)) = pending_vp().lock().unwrap().take() else { return };
@@ -506,6 +524,13 @@ fn ipc_handler(req: wry::http::Request<String>, inbound: &Arc<Mutex<VecDeque<Edi
             if w > 0.0 && h > 0.0 {
                 *pending_vp().lock().unwrap() = Some((x, y, w, h));
             }
+        }
+
+        Some("stereo_preview") => {
+            let enabled = msg["enabled"].as_bool().unwrap_or(false);
+            let ipd_mm  = msg["ipd_mm"].as_f64().unwrap_or(63.0) as f32;
+            let fov_deg = msg["fov_deg"].as_f64().unwrap_or(90.0) as f32;
+            *pending_stereo().lock().unwrap() = Some((enabled, ipd_mm / 1000.0, fov_deg));
         }
 
         other => { warn!("[ipc] unknown message type: {:?}", other); }

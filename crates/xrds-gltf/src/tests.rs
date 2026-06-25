@@ -30,7 +30,9 @@ fn sphere_doc() -> XrdsSceneDocument {
                     },
                     ..Default::default()
                 },
+                ..Default::default()
             }),
+            grabbable: false,
             editor: XrdsEditorMetadata::default(),
         }],
         ..Default::default()

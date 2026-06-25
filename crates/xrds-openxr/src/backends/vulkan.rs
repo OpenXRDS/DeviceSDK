@@ -1,5 +1,6 @@
 use std::{
-    ffi::{c_void, CString},
+    collections::HashSet,
+    ffi::{c_void, CStr, CString},
     marker::PhantomData,
     sync::Arc,
 };
@@ -110,13 +111,28 @@ impl OpenXrGraphicsBackend<openxr::Vulkan> for GraphicsInner<openxr::Vulkan> {
         // Create ash physical device from raw vulkan physical device
         let phyiscal_device_properties =
             unsafe { vk_instance.get_physical_device_properties(vk_physical_device) };
-        info!(
+        log::info!(
             "OpenXR runtime device: {}, api_version: {}",
             phyiscal_device_properties
                 .device_name_as_c_str()?
                 .to_str()?,
             phyiscal_device_properties.api_version
         );
+
+        // Enumerate supported device extensions for safe filtering below.
+        // On Vulkan 1.2+ devices, extensions promoted to core
+        // (VK_KHR_timeline_semaphore, VK_KHR_imageless_framebuffer,
+        //  VK_KHR_image_format_list) are no longer listed as extensions
+        // even though the functionality is available. Requesting them by
+        // name causes VK_ERROR_EXTENSION_NOT_PRESENT.
+        let supported_ext_props = unsafe {
+            vk_instance.enumerate_device_extension_properties(vk_physical_device)?
+        };
+        let supported_ext_names: HashSet<CString> = supported_ext_props
+            .iter()
+            .map(|p| unsafe { CStr::from_ptr(p.extension_name.as_ptr()) }.to_owned())
+            .collect();
+
         // Create wgpu hal instance from ash instance
         let wgpu_hal_instance = unsafe {
             wgpu_hal::vulkan::Instance::from_raw(
@@ -146,12 +162,29 @@ impl OpenXrGraphicsBackend<openxr::Vulkan> for GraphicsInner<openxr::Vulkan> {
         let enabled_device_extensions = wgpu_exposed_adapter
             .adapter
             .required_device_extensions(wgpu_exposed_adapter.features);
-        debug!(
-            "required device extensions: {:?}",
+        log::debug!(
+            "wgpu required device extensions: {:?}",
             enabled_device_extensions
         );
+
+        // Merge wgpu-required extensions with hardcoded XR extensions.
+        // Hardcoded extensions are filtered against the supported list: on Vulkan 1.2+
+        // devices, extensions promoted to core are absent from the extension list and
+        // requesting them causes VK_ERROR_EXTENSION_NOT_PRESENT.
+        let mut all_device_extensions: Vec<&CStr> = Vec::new();
+        for ext in enabled_device_extensions.iter() {
+            all_device_extensions.push(ext);
+        }
+        for ext in device_extensions.iter() {
+            if supported_ext_names.contains(*ext)
+                && !all_device_extensions.iter().any(|e| *e == *ext)
+            {
+                all_device_extensions.push(ext);
+            }
+        }
+        log::info!("Vulkan device extensions ({} total): {:?}", all_device_extensions.len(), all_device_extensions);
         let device_extensions_cchar: Vec<_> =
-            device_extensions.iter().map(|s| s.as_ptr()).collect();
+            all_device_extensions.iter().map(|s| s.as_ptr()).collect();
         let mut enabled_physical_device_features = wgpu_exposed_adapter
             .adapter
             .physical_device_features(&enabled_device_extensions, features);

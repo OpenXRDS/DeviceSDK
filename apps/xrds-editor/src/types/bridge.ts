@@ -109,6 +109,7 @@ export interface EditorSnapshot {
   player_anchors: PlayerAnchorEntry[];
   active_player_anchor_id: number | null;
   hud_library: HudTemplateDto[];
+  stereo_preview_active: boolean;
 }
 
 export interface EnvironmentDto {
@@ -142,6 +143,7 @@ export const defaultSnapshot: EditorSnapshot = {
   player_anchors: [],
   active_player_anchor_id: null,
   hud_library: [],
+  stereo_preview_active: false,
 };
 
 // ---------------------------------------------------------------------------

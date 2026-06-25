@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type { EditorSnapshot, EditorCommand } from "../types/bridge";
 
 interface Props {
@@ -6,12 +7,23 @@ interface Props {
   onSaveAs: () => void;
 }
 
+function sendStereoIpc(enabled: boolean, ipd_mm: number) {
+  (window as any).ipc?.postMessage(JSON.stringify({
+    type: "stereo_preview",
+    enabled,
+    ipd_mm,
+    fov_deg: 90,
+  }));
+}
+
 export function Toolbar({ snapshot, send, onSaveAs }: Props) {
   const {
     scene_name, is_dirty, undo_count, redo_count,
     gizmo_mode, camera_mode, show_grid, show_fov_overlay, is_playing, selection,
-    available_cameras, active_camera_id,
+    available_cameras, active_camera_id, stereo_preview_active,
   } = snapshot;
+
+  const [stereoIpd, setStereoIpd] = useState(63);
 
   return (
     <div className="toolbar">
@@ -76,6 +88,31 @@ export function Toolbar({ snapshot, send, onSaveAs }: Props) {
               onClick={() => send({ type: "SetPlayMode", payload: { playing: !is_playing } })}>
         {is_playing ? "■ Stop" : "▶ Play"}
       </button>
+
+      <button className={`tb-btn${stereo_preview_active ? " active" : ""}`}
+              title="Stereo Preview — split viewport L/R eye"
+              style={{ marginLeft: 8 }}
+              onClick={() => sendStereoIpc(!stereo_preview_active, stereoIpd)}>
+        L|R
+      </button>
+      {stereo_preview_active && (
+        <label style={{ marginLeft: 4, fontSize: "0.78em", display: "flex", alignItems: "center", gap: 3 }}
+               title="Inter-pupillary distance (mm) — controls L/R eye separation">
+          IPD
+          <input
+            type="number"
+            min={45} max={80} step={1}
+            value={stereoIpd}
+            style={{ width: 40, fontSize: "0.9em" }}
+            onChange={e => {
+              const val = Math.max(45, Math.min(80, Number(e.target.value)));
+              setStereoIpd(val);
+              sendStereoIpc(true, val);
+            }}
+          />
+          mm
+        </label>
+      )}
     </div>
   );
 }

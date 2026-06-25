@@ -13,7 +13,11 @@ use crate::bevy_bridge::{
 };
 use crate::bridge::EditorBridge;
 use crate::editor_state::{EditorSession, EditorState};
-use crate::viewport_camera::{EditorCameraState, apply_camera_selection_system, orbit_camera_system, spawn_editor_camera};
+use crate::viewport_camera::{
+    EditorCameraState, StereoPreviewState,
+    apply_camera_selection_system, orbit_camera_system, spawn_editor_camera,
+    update_stereo_preview_camera,
+};
 use crate::wry_overlay::{
     ViewportRect, WryEditorReady,
     try_attach_wry_editor, push_snapshot_to_webview, drain_responses_and_viewport,
@@ -67,6 +71,7 @@ impl XrdsApp for XrdsEditorTauriApp {
         app.insert_resource(EditorState::default());
         app.insert_resource(EditorCameraState::default());
         app.insert_resource(ViewportRect::default());
+        app.insert_resource(StereoPreviewState::default());
 
         app.add_plugins(OutlinePlugin);
         app.init_gizmo_group::<GridGizmoGroup>();
@@ -138,6 +143,11 @@ impl XrdsApp for XrdsEditorTauriApp {
                     .run_if(resource_exists::<WryEditorReady>),
             )
         );
+
+        // Stereo preview — runs in PostUpdate so it sees the final ViewportRect
+        // and left-camera Transform from the Update schedule.
+        app.add_systems(PostUpdate, update_stereo_preview_camera
+            .before(bevy::transform::TransformSystems::Propagate));
     }
 
     fn setup(&mut self, api: &mut XrdsAPI<'_>) {

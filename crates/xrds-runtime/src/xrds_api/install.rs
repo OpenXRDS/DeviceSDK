@@ -133,6 +133,13 @@ pub(super) fn install_xrds(app: &mut App) {
             .after(bevy::transform::TransformSystems::Propagate)
             .before(bevy::camera::visibility::VisibilitySystems::VisibilityPropagate),
     );
+    // Diagnostic: log whether head-locked HUD entities appear in each Camera3d's
+    // VisibleEntities after check_visibility runs.  Runs every 90 frames to avoid spam.
+    app.add_systems(
+        PostUpdate,
+        crate::xrds_api::anchor::vis_diag_system
+            .after(bevy::camera::visibility::VisibilitySystems::CheckVisibility),
+    );
     app.add_systems(
         Startup,
         apply_queued_parent_changes_system.after(spawn_surface_components_from_queue),

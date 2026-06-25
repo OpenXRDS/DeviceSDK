@@ -1,3 +1,4 @@
+use bevy::camera::visibility::VisibleEntities;
 use bevy::prelude::*;
 
 // ---------------------------------------------------------------------------
@@ -127,7 +128,9 @@ pub fn head_locked_system(
     player_root_q: Query<(), (With<XrdsPlayerRoot>, Without<XrdsHeadLocked>)>,
     active: Res<ActivePlayerAnchorEntity>,
 ) {
-    let Some(cam_gt) = pick_head_camera(&camera_q, player_cam_q.iter().next()) else { return; };
+    let Some(cam_gt) = pick_head_camera(&camera_q, player_cam_q.iter().next()) else {
+        return;
+    };
     let cam_tf = cam_gt.compute_transform();
     let cam_pos = cam_tf.translation;
 
@@ -137,7 +140,9 @@ pub fn head_locked_system(
 
         if let Some(anchor_ent) = parent_anchor {
             // Skip if parent anchor is not the active one.
-            if !is_active_anchor(anchor_ent, &anchor_root_q, &active) { continue; }
+            if !is_active_anchor(anchor_ent, &anchor_root_q, &active) {
+                continue;
+            }
         } else if parent_ent.is_some_and(|e| player_root_q.contains(e)) {
             // Parent is a Player (world-space body) — not a camera anchor.
             // Leave at authored world position; do not camera-follow.
@@ -170,7 +175,9 @@ pub fn body_locked_system(
     player_root_q: Query<(), (With<XrdsPlayerRoot>, Without<XrdsBodyLocked>)>,
     active: Res<ActivePlayerAnchorEntity>,
 ) {
-    let Some(cam_gt) = pick_head_camera(&camera_q, player_cam_q.iter().next()) else { return; };
+    let Some(cam_gt) = pick_head_camera(&camera_q, player_cam_q.iter().next()) else {
+        return;
+    };
     let cam_tf = cam_gt.compute_transform();
     let cam_pos = cam_tf.translation;
     let yaw = cam_tf.rotation.to_euler(EulerRot::YXZ).0;
@@ -187,7 +194,8 @@ pub fn body_locked_system(
                 // toward the active camera so the label is readable from outside.
                 let world_pos = gt.translation();
                 let world_rot = horiz_billboard(world_pos, cam_pos, body_rot);
-                let world_mat = Mat4::from_scale_rotation_translation(Vec3::ONE, world_rot, world_pos);
+                let world_mat =
+                    Mat4::from_scale_rotation_translation(Vec3::ONE, world_rot, world_pos);
                 write_world(&mut *tf, &mut *gt, world_mat, child_of, &parent_q);
                 continue;
             }
@@ -224,7 +232,9 @@ pub fn comfort_pinned_system(
     player_root_q: Query<(), (With<XrdsPlayerRoot>, Without<XrdsComfortPinned>)>,
     active: Res<ActivePlayerAnchorEntity>,
 ) {
-    let Some(cam_gt) = pick_head_camera(&camera_q, player_cam_q.iter().next()) else { return; };
+    let Some(cam_gt) = pick_head_camera(&camera_q, player_cam_q.iter().next()) else {
+        return;
+    };
     let cam_tf = cam_gt.compute_transform();
     let cam_pos = cam_gt.translation();
 
@@ -233,21 +243,32 @@ pub fn comfort_pinned_system(
         let parent_anchor = parent_ent.filter(|&e| anchor_root_q.contains(e));
 
         if let Some(anchor_ent) = parent_anchor {
-            if !is_active_anchor(anchor_ent, &anchor_root_q, &active) { continue; }
+            if !is_active_anchor(anchor_ent, &anchor_root_q, &active) {
+                continue;
+            }
         } else if parent_ent.is_some_and(|e| player_root_q.contains(e)) {
             continue;
         }
         let has_anchor_parent = parent_anchor.is_some();
 
-        let depth = if anchor.depth_m < 0.05 { 1.5 } else { anchor.depth_m };
+        let depth = if anchor.depth_m < 0.05 {
+            1.5
+        } else {
+            anchor.depth_m
+        };
         let forward = cam_tf.rotation * Vec3::NEG_Z;
         let base_pos = cam_pos + forward * depth;
-        let world_pos = if has_anchor_parent && anchor.local_offset.translation.length_squared() > 1e-6 {
-            let lateral = Vec3::new(anchor.local_offset.translation.x, anchor.local_offset.translation.y, 0.0);
-            base_pos + cam_tf.rotation * lateral
-        } else {
-            base_pos
-        };
+        let world_pos =
+            if has_anchor_parent && anchor.local_offset.translation.length_squared() > 1e-6 {
+                let lateral = Vec3::new(
+                    anchor.local_offset.translation.x,
+                    anchor.local_offset.translation.y,
+                    0.0,
+                );
+                base_pos + cam_tf.rotation * lateral
+            } else {
+                base_pos
+            };
         let world_rot = face_camera(cam_pos, world_pos) * anchor.local_offset.rotation;
         let world_mat =
             Mat4::from_scale_rotation_translation(anchor.local_offset.scale, world_rot, world_pos);
@@ -284,7 +305,9 @@ pub fn cylindrical_system(
         let parent_anchor = parent_ent.filter(|&e| anchor_root_q.contains(e));
 
         if let Some(anchor_ent) = parent_anchor {
-            if !is_active_anchor(anchor_ent, &anchor_root_q, &active) { continue; }
+            if !is_active_anchor(anchor_ent, &anchor_root_q, &active) {
+                continue;
+            }
         } else if parent_ent.is_some_and(|e| player_root_q.contains(e)) {
             continue;
         }
@@ -325,13 +348,14 @@ fn is_active_anchor(
     anchor_root_q: &Query<(), impl bevy::ecs::query::QueryFilter>,
     active: &ActivePlayerAnchorEntity,
 ) -> bool {
-    if !anchor_root_q.contains(entity) { return false; }
+    if !anchor_root_q.contains(entity) {
+        return false;
+    }
     match active.0 {
         None => true,
         Some(active_ent) => entity == active_ent,
     }
 }
-
 
 /// Camera selection priority for anchor systems:
 ///
@@ -377,12 +401,16 @@ fn horiz_billboard(world_pos: Vec3, cam_pos: Vec3, body_rot: Quat) -> Quat {
     let to_cam_h = Vec3::new(cam_pos.x - world_pos.x, 0.0, cam_pos.z - world_pos.z);
     if to_cam_h.length_squared() > 1e-4 {
         // looking_to(dir) sets local -Z = dir; local +Z = -dir = toward camera.
-        Transform::IDENTITY.looking_to(-to_cam_h.normalize(), Vec3::Y).rotation
+        Transform::IDENTITY
+            .looking_to(-to_cam_h.normalize(), Vec3::Y)
+            .rotation
     } else {
         // Same XZ: face the body forward direction so text is readable from
         // in front of the player.
         // body_rot * Z  →  local -Z = body_backward  →  local +Z = body_forward.
-        Transform::IDENTITY.looking_to(body_rot * Vec3::Z, Vec3::Y).rotation
+        Transform::IDENTITY
+            .looking_to(body_rot * Vec3::Z, Vec3::Y)
+            .rotation
     }
 }
 
@@ -406,23 +434,29 @@ pub fn sync_player_root_system(
     active: Res<ActivePlayerAnchorEntity>,
     anchor_parent_q: Query<Option<&ChildOf>, With<XrdsPlayerAnchorRoot>>,
 ) {
-    let Some(cam_tf) = camera_q.iter().next() else { return; };
+    let Some(cam_tf) = camera_q.iter().next() else {
+        return;
+    };
 
     let yaw = cam_tf.rotation.to_euler(EulerRot::YXZ).0;
     let body_rot = Quat::from_rotation_y(yaw);
 
     let target_player: Option<Entity> = active.0.and_then(|anchor_ent| {
-        anchor_parent_q.get(anchor_ent).ok()
+        anchor_parent_q
+            .get(anchor_ent)
+            .ok()
             .flatten()
             .map(|co| co.0)
     });
 
     for (player_entity, mut player_tf) in player_q.iter_mut() {
         if let Some(target) = target_player {
-            if player_entity != target { continue; }
+            if player_entity != target {
+                continue;
+            }
         }
         player_tf.translation = cam_tf.translation;
-        player_tf.rotation    = body_rot;
+        player_tf.rotation = body_rot;
     }
 }
 
@@ -441,7 +475,9 @@ pub fn teleport_on_anchor_switch_system(
     mut last_anchor: Local<Option<Entity>>,
 ) {
     let current = active.0;
-    if *last_anchor == current { return; }
+    if *last_anchor == current {
+        return;
+    }
 
     let Ok((mut cam_tf, mut proj)) = camera_q.single_mut() else {
         *last_anchor = current;
@@ -452,7 +488,7 @@ pub fn teleport_on_anchor_switch_system(
     if let Some(departing) = *last_anchor {
         if let Ok(mut pose) = pose_q.get_mut(departing) {
             pose.translation = cam_tf.translation;
-            pose.rotation    = cam_tf.rotation;
+            pose.rotation = cam_tf.rotation;
         }
     }
 
@@ -466,14 +502,12 @@ pub fn teleport_on_anchor_switch_system(
                 pose.translation, pose.fov_deg
             );
             cam_tf.translation = pose.translation;
-            cam_tf.rotation    = pose.rotation;
+            cam_tf.rotation = pose.rotation;
             if let Projection::Perspective(ref mut persp) = *proj {
                 persp.fov = pose.fov_deg.to_radians();
             }
         } else {
-            warn!(
-                "[xrds-runtime] teleport → anchor {arriving:?}: no PlayerAnchorCameraPose found"
-            );
+            warn!("[xrds-runtime] teleport → anchor {arriving:?}: no PlayerAnchorCameraPose found");
         }
     }
 }
@@ -489,12 +523,20 @@ pub fn apply_anchor_fov_system(
     mut last_anchor: Local<Option<Entity>>,
 ) {
     let current = active.0;
-    if *last_anchor == current { return; }
+    if *last_anchor == current {
+        return;
+    }
     *last_anchor = current;
 
-    let Some(arriving) = current else { return; };
-    let Ok(fov) = fov_q.get(arriving) else { return; };
-    let Ok(mut proj) = camera_q.single_mut() else { return; };
+    let Some(arriving) = current else {
+        return;
+    };
+    let Ok(fov) = fov_q.get(arriving) else {
+        return;
+    };
+    let Ok(mut proj) = camera_q.single_mut() else {
+        return;
+    };
     if let Projection::Perspective(ref mut persp) = *proj {
         persp.fov = fov.0.to_radians();
     }
@@ -507,15 +549,21 @@ pub fn apply_anchor_fov_system(
 /// `XrdsAnchorExposureOverride` and calls `sync_managed_scene_exposure_in_world`
 /// so the camera's `Exposure` component reflects the new setting immediately.
 pub fn apply_anchor_exposure_system(world: &mut World) {
-    let current   = world.resource::<ActivePlayerAnchorEntity>().0;
+    let current = world.resource::<ActivePlayerAnchorEntity>().0;
     let anchor_ev = current
         .and_then(|e| world.get::<XrdsAnchorExposure>(e))
         .and_then(|ae| ae.0);
 
-    let prev = world.resource::<crate::xrds_api::environment::XrdsAnchorExposureOverride>().0;
-    if prev == anchor_ev { return; }
+    let prev = world
+        .resource::<crate::xrds_api::environment::XrdsAnchorExposureOverride>()
+        .0;
+    if prev == anchor_ev {
+        return;
+    }
 
-    world.resource_mut::<crate::xrds_api::environment::XrdsAnchorExposureOverride>().0 = anchor_ev;
+    world
+        .resource_mut::<crate::xrds_api::environment::XrdsAnchorExposureOverride>()
+        .0 = anchor_ev;
     crate::xrds_api::environment::sync_managed_scene_exposure_in_world(world);
 }
 
@@ -559,4 +607,45 @@ fn write_world(
         world_tf
     };
     *tf = local_tf;
+}
+
+// ---------------------------------------------------------------------------
+// Visibility diagnostic — logs whether HUD entities appear in each camera's
+// VisibleEntities after CheckVisibility runs. Sampling at 60-frame intervals
+// to avoid logcat spam.
+// ---------------------------------------------------------------------------
+pub fn vis_diag_system(
+    cameras: Query<(Entity, &VisibleEntities), With<Camera3d>>,
+    hud_q: Query<Entity, With<XrdsHeadLocked>>,
+    mesh_q: Query<(Entity, &Name), With<bevy::prelude::Mesh3d>>,
+) {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static N: AtomicU64 = AtomicU64::new(0);
+    let n = N.fetch_add(1, Ordering::Relaxed);
+    if n % 60 != 0 {
+        return;
+    }
+
+    let hud_ents: Vec<Entity> = hud_q.iter().collect();
+    let mesh_ents: Vec<(Entity, String)> = mesh_q
+        .iter()
+        .map(|(e, name)| (e, name.to_string()))
+        .collect();
+
+    for (cam_ent, visible) in &cameras {
+        let total: usize = visible.entities.values().map(|v| v.len()).sum();
+        let has_hud = hud_ents
+            .iter()
+            .any(|&h| visible.entities.values().any(|ents| ents.contains(&h)));
+        // Log which named Mesh3d entities are (and are not) in this camera's VisibleEntities.
+        let mut in_visible: Vec<&str> = Vec::new();
+        let mut missing: Vec<&str> = Vec::new();
+        for (e, name) in &mesh_ents {
+            if visible.entities.values().any(|ents| ents.contains(e)) {
+                in_visible.push(name.as_str());
+            } else {
+                missing.push(name.as_str());
+            }
+        }
+    }
 }

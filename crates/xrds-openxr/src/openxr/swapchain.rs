@@ -89,22 +89,38 @@ impl Plugin for OpenXrSwapchainPlugin {
 
 fn create_swapchain(world: &mut World) {
     debug_span!("OpenXrSessionPlugin");
+    log::info!("XR: create_swapchain start");
 
-    // Must exists
-    let session = world
-        .get_resource::<OpenXrSession>()
-        .expect("OpenXrSession resource not exists");
-    let graphics_backends = world
-        .get_resource::<OpenXrGraphicsBackends>()
-        .expect("OpenXrGraphicsBackends resource not exists");
-    let view_configurations = world
-        .get_resource::<OpenXrViewConfigurations>()
-        .expect("OpenXrViewConfigurations resource not exists");
+    // If session creation failed earlier these resources won't exist — skip gracefully.
+    let session = match world.get_resource::<OpenXrSession>() {
+        Some(s) => s,
+        None => {
+            log::error!("XR: create_swapchain: OpenXrSession resource missing (session create failed?)");
+            return;
+        }
+    };
+    let graphics_backends = match world.get_resource::<OpenXrGraphicsBackends>() {
+        Some(b) => b,
+        None => {
+            log::error!("XR: create_swapchain: OpenXrGraphicsBackends resource missing");
+            return;
+        }
+    };
+    let view_configurations = match world.get_resource::<OpenXrViewConfigurations>() {
+        Some(v) => v,
+        None => {
+            log::error!("XR: create_swapchain: OpenXrViewConfigurations resource missing (view/blend init failed?)");
+            return;
+        }
+    };
 
-    let view_configuration_view = view_configurations
-        .view_configuration_views
-        .first()
-        .expect("View configuration views is empty");
+    let view_configuration_view = match view_configurations.view_configuration_views.first() {
+        Some(v) => v,
+        None => {
+            log::error!("XR: create_swapchain: view_configuration_views is empty");
+            return;
+        }
+    };
 
     let size = Extent3d {
         width: view_configuration_view.recommended_image_rect_width,

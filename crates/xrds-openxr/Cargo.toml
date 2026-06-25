@@ -11,13 +11,22 @@ preview_window = []
 default = ["preview_window"]
 
 [dependencies]
-openxr = { version = "0.19.0", features = ["linked", "static", "mint"] }
 ash = { workspace = true }
 anyhow = { workspace = true }
 bevy = { workspace = true }
 log = { workspace = true }
 wgpu = { workspace = true }
 wgpu-hal = { workspace = true }
+
+# Desktop: build the OpenXR loader from bundled C source (cmake).
+[target.'cfg(not(target_os = "android"))'.dependencies]
+openxr = { version = "0.19.0", features = ["linked", "static", "mint"] }
+
+# Android: dynamic-link against the pre-built libopenxr_loader.so in
+# android/quest/libs/arm64-v8a/. The linker search path is in .cargo/config.toml.
+[target.'cfg(target_os = "android")'.dependencies]
+openxr = { version = "0.19.0", features = ["linked", "mint"] }
+android_system_properties = "0.1"
 
 [target.'cfg(windows)'.dependencies]
 winreg = { version = "0.55.0" }

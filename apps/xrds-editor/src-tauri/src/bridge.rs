@@ -205,6 +205,9 @@ pub struct EditorSnapshot {
     /// HUD template library — all authored HUD layouts in this document.
     #[serde(default)]
     pub hud_library: Vec<HudTemplateDto>,
+    /// True when the side-by-side stereo preview is active.
+    #[serde(default)]
+    pub stereo_preview_active: bool,
 }
 
 /// Snapshot of the scene-wide environment settings (fog, exposure, IBL, skybox).

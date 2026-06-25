@@ -11,3 +11,14 @@ docs/done/*
 docs/EDITOR_TODO.md
 apps/xrds-editor/node_modules/*
 apps/xrds-editor/dist/*
+
+# cargo artifacts in patched crates
+patches/**/.cargo-ok
+patches/**/.cargo_vcs_info.json
+patches/**/Cargo.toml.orig
+patches/**/Cargo.lock
+
+# android/quest build outputs and fetched binaries
+android/quest/build/
+android/quest/jni/
+android/quest/libs/**/*.so

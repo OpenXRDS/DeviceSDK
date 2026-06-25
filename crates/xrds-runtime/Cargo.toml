@@ -24,7 +24,6 @@ winit = { version = "0.30.5", default-features = false, features = [
     "sctk-adwaita",
     "mint",
 ] }
-xrds-net = { workspace = true }
 xrds-audio = { workspace = true }
 xrds-components = { workspace = true }
 xrds-openxr = { workspace = true }
@@ -42,5 +41,10 @@ cbindgen = "0.27.0"
 [target.'cfg(unix)'.dependencies]
 winit = { version = "0.30.5" }
 
-[target.'cfg(android)'.dependencies]
-winit = { version = "0.30.5", features = ["android-game-activity"] }
+# xrds-net has desktop-only C deps (curl, ffmpeg, quiche, webrtc, libunftp).
+# Exclude it from Android where none of those are available or needed.
+[target.'cfg(not(target_os = "android"))'.dependencies]
+xrds-net = { workspace = true }
+
+[target.'cfg(target_os = "android")'.dependencies]
+winit = { version = "0.30.5", features = ["android-native-activity"] }

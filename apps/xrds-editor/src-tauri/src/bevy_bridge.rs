@@ -64,6 +64,7 @@ pub fn broadcast_editor_snapshot_system(
     bridge: Res<BevyBridgeResource>,
     session: Res<EditorSession>,
     mut state: ResMut<EditorState>,
+    stereo: Res<crate::viewport_camera::StereoPreviewState>,
 ) {
     let doc = session.0.document();
 
@@ -95,6 +96,7 @@ pub fn broadcast_editor_snapshot_system(
         player_anchors: build_player_anchor_list(doc),
         active_player_anchor_id: state.active_player_anchor_id.map(|id| id.0),
         hud_library: build_hud_library_dto(doc),
+        stereo_preview_active: stereo.enabled,
     };
 
     bridge.0.outbound.lock().unwrap().push_back(snapshot);

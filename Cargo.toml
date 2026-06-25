@@ -52,7 +52,22 @@ tokio = { version = "1.43.0", features = ["rt-multi-thread", "sync", "macros"] }
 anyhow = "1.0.95"
 env_logger = "0.11.6"
 log = "0.4.25"
-bevy = { version = "0.17.2", features = ["jpeg", "mp3", "wav"] }
+bevy = { version = "0.17.2", default-features = false, features = [
+  # All of bevy's defaults except "android-game-activity" — replaced with
+  # "android-native-activity" so the build works without bundling a Java DEX.
+  "std", "async_executor", "android-native-activity", "android_shared_stdcxx",
+  "animation", "bevy_asset", "bevy_audio", "bevy_color", "bevy_core_pipeline",
+  "bevy_post_process", "bevy_anti_alias", "bevy_gilrs", "bevy_gizmos", "bevy_gltf",
+  "bevy_input_focus", "bevy_log", "bevy_mesh_picking_backend", "bevy_pbr",
+  "bevy_picking", "bevy_render", "bevy_scene", "bevy_image", "bevy_mesh",
+  "bevy_camera", "bevy_light", "bevy_shader", "bevy_sprite",
+  "bevy_sprite_picking_backend", "bevy_sprite_render", "bevy_state", "bevy_text",
+  "bevy_ui", "bevy_ui_picking_backend", "bevy_ui_render", "bevy_window",
+  "bevy_winit", "custom_cursor", "default_font", "hdr", "ktx2", "multi_threaded",
+  "png", "reflect_auto_register", "smaa_luts", "sysinfo_plugin", "tonemapping_luts",
+  "vorbis", "webgl2", "x11", "wayland", "debug", "zstd_rust",
+  "jpeg", "mp3", "wav",
+] }
 avian3d = { version = "0.4", features = ["3d", "parry-f32"] }
 wgpu = { version = "26.0.1", default-features = false, features = ["wgsl", "vulkan", "vulkan-portability"] }
 wgpu-hal = { version = "26.0.1", features = ["vulkan"] }
@@ -64,6 +79,9 @@ bevy_svg = "0.17.0"
 
 [target.'cfg(windows)'.dependencies]
 winreg = { version = "0.55.0" }
+
+[patch.crates-io]
+bevy_winit = { path = "patches/bevy_winit" }
 
 [dependencies]
 xrds-internal = { workspace = true }

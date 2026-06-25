@@ -92,10 +92,34 @@ impl OpenXrCompositionLayerProjectionView {
 
 impl OpenXrLayerBuilder for OpenXrCompositionLayerProjectionBuilder {
     fn build(&self, world: &bevy::ecs::world::World) -> Box<dyn OpenXrCompositionLayer> {
-        let reference_space = world.resource::<OpenXrPrimaryReferenceSpace>();
-        let views = world.resource::<OpenXrViews>();
-        let swapchain = world.resource::<OpenXrSwapchain>();
-        let swapchain_info = world.resource::<OpenXrSwapchainInfo>();
+        let reference_space = match world.get_resource::<OpenXrPrimaryReferenceSpace>() {
+            Some(r) => r,
+            None => {
+                log::error!("XR: projection build: OpenXrPrimaryReferenceSpace missing in render world");
+                return Box::new(OpenXrCompositionLayerProjection::new());
+            }
+        };
+        let views = match world.get_resource::<OpenXrViews>() {
+            Some(r) => r,
+            None => {
+                log::error!("XR: projection build: OpenXrViews missing in render world");
+                return Box::new(OpenXrCompositionLayerProjection::new());
+            }
+        };
+        let swapchain = match world.get_resource::<OpenXrSwapchain>() {
+            Some(r) => r,
+            None => {
+                log::error!("XR: projection build: OpenXrSwapchain missing in render world");
+                return Box::new(OpenXrCompositionLayerProjection::new());
+            }
+        };
+        let swapchain_info = match world.get_resource::<OpenXrSwapchainInfo>() {
+            Some(r) => r,
+            None => {
+                log::error!("XR: projection build: OpenXrSwapchainInfo missing in render world");
+                return Box::new(OpenXrCompositionLayerProjection::new());
+            }
+        };
         let raw_swapchain = swapchain.as_raw();
 
         let rects: Vec<_> = (0..swapchain_info.size.depth_or_array_layers)
@@ -109,11 +133,27 @@ impl OpenXrLayerBuilder for OpenXrCompositionLayerProjectionBuilder {
             .collect();
         trace!("layer rects={:?}", rects);
 
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static LAYER_N: AtomicU64 = AtomicU64::new(0);
+        let layer_n = LAYER_N.fetch_add(1, Ordering::Relaxed);
+        let diag = layer_n < 30 || layer_n % 90 == 0;
+
+        if diag {
+            log::info!("[XR-DIAG] proj_layer#{}: {} views", layer_n, views.0.len());
+        }
+
         let projection_views: Vec<_> = views
             .0
             .iter()
             .enumerate()
             .map(|(i, view)| {
+                if diag {
+                    log::info!(
+                        "[XR-DIAG] proj_layer#{} view[{}]: array_index={} pos=({:.3},{:.3},{:.3})",
+                        layer_n, i, i,
+                        view.pose.position.x, view.pose.position.y, view.pose.position.z,
+                    );
+                }
                 trace!("view#{} fov={:?}, pose={:?}", i, view.fov, view.pose);
                 OpenXrCompositionLayerProjectionView::new()
                     .fov(view.fov)

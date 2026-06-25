@@ -185,12 +185,14 @@ pub(super) fn spawn_cube_descriptor(commands: &mut Commands, cube: &XrdsCube) ->
             meshes.add(Mesh::from(Cuboid::new(size[0], size[1], size[2])))
         };
 
+        use bevy::camera::visibility::NoFrustumCulling;
         world.entity_mut(entity).insert((
             Name::new(name),
             Mesh3d(mesh),
             build_transform(&transform),
             build_visibility_hierarchy_components(visible),
             XrdsStored(descriptor),
+            NoFrustumCulling,
         ));
         apply_authored_material_to_entity(world, entity, material);
         insert_physics_components(world, entity, physics_body, gravity_scale, mass, |pb| {
@@ -223,12 +225,14 @@ pub(super) fn spawn_cylinder_descriptor(
             meshes.add(Mesh::from(Cylinder::new(radius, height)))
         };
 
+        use bevy::camera::visibility::NoFrustumCulling;
         world.entity_mut(entity).insert((
             Name::new(name),
             Mesh3d(mesh),
             build_transform(&transform),
             build_visibility_hierarchy_components(visible),
             XrdsStored(descriptor),
+            NoFrustumCulling,
         ));
         apply_authored_material_to_entity(world, entity, material);
         // Avian3d cylinder: radius, half_height
@@ -258,12 +262,14 @@ pub(super) fn spawn_sphere_descriptor(commands: &mut Commands, sphere: &XrdsSphe
             meshes.add(Mesh::from(Sphere::new(radius)))
         };
 
+        use bevy::camera::visibility::NoFrustumCulling;
         world.entity_mut(entity).insert((
             Name::new(name),
             Mesh3d(mesh),
             build_transform(&transform),
             build_visibility_hierarchy_components(visible),
             XrdsStored(descriptor),
+            NoFrustumCulling,
         ));
         apply_authored_material_to_entity(world, entity, material);
         insert_physics_components(world, entity, physics_body, gravity_scale, mass, |_| {
@@ -292,12 +298,14 @@ pub(super) fn spawn_plane_descriptor(commands: &mut Commands, plane: &XrdsPlane3
             meshes.add(Mesh::from(Plane3d::default().mesh().size(size[0], size[1])))
         };
 
+        use bevy::camera::visibility::NoFrustumCulling;
         world.entity_mut(entity).insert((
             Name::new(name),
             Mesh3d(mesh),
             build_transform(&transform),
             build_visibility_hierarchy_components(visible),
             XrdsStored(descriptor),
+            NoFrustumCulling,
         ));
         apply_authored_material_to_entity(world, entity, material);
         // Half-space: infinite solid below the plane's surface — no tunneling, perfect alignment.
@@ -574,6 +582,7 @@ pub(super) fn spawn_text_descriptor(commands: &mut Commands, text: &XrdsText) ->
             build_transform(&transform),
             build_visibility_hierarchy_components(visible),
             XrdsStored(descriptor),
+            bevy::light::NotShadowCaster,
         ));
         // Insert the anchor marker after all base components are present.
         // NoFrustumCulling bypasses Bevy's AABB-based frustum culling, which would

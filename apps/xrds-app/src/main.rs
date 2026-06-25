@@ -304,18 +304,21 @@ fn deactivate_scene_cameras(mut cameras: Query<&mut Camera, Without<AppCamera>>)
 }
 
 // ---------------------------------------------------------------------------
-// Toggle the AppCamera window render based on XR eye camera activity.
-// Active XR cameras → disable AppCamera (blit handles the window).
-// No active XR cameras (no HMD, covered, session paused) → enable AppCamera.
+// Toggle the AppCamera window render based on whether XR eye cameras exist.
+// XR cameras present → disable AppCamera unconditionally (the XR compositor
+// owns the display; is_active on individual XR cameras can blip false during
+// frame timing without meaning the session ended, which previously caused
+// AppCamera to re-activate and introduce a spurious 3rd visible-entities pass).
+// No XR cameras at all (desktop-only run, no HMD) → enable AppCamera.
 // ---------------------------------------------------------------------------
 
 fn manage_window_camera(
     mut app_cam_q: Query<&mut Camera, With<AppCamera>>,
-    xr_cam_q:      Query<&Camera, (With<OpenXrCameraIndex>, Without<AppCamera>)>,
+    xr_cam_q:      Query<(), With<OpenXrCameraIndex>>,
 ) {
-    let any_xr_active = xr_cam_q.iter().any(|cam| cam.is_active);
+    let xr_present = !xr_cam_q.is_empty();
     for mut cam in app_cam_q.iter_mut() {
-        cam.is_active = !any_xr_active;
+        cam.is_active = !xr_present;
     }
 }
 
@@ -694,7 +697,7 @@ fn grab_event_log_system(
 }
 
 // ---------------------------------------------------------------------------
-// Entry point
+// Entry point — desktop
 // ---------------------------------------------------------------------------
 
 fn main() {
@@ -716,6 +719,99 @@ fn main() {
         app_name: "XRDS App".to_owned(),
         enable_xr: true,
         asset_path: Some(asset_path),
+        allow_unapproved_paths: true,
+        ..Default::default()
+    })
+    .run_xrds(SceneFileApp { scene_path, gltf_node_ids: Vec::new(), hud_handle: None })
+    .expect("runtime error");
+}
+
+// ---------------------------------------------------------------------------
+// Entry point — Android (GameActivity via cargo-ndk)
+// ---------------------------------------------------------------------------
+
+#[cfg(target_os = "android")]
+#[no_mangle]
+fn android_main(android_app: winit::platform::android::activity::AndroidApp) {
+    use std::io::Read;
+
+    android_logger::init_once(
+        android_logger::Config::default()
+            .with_max_level(log::LevelFilter::Debug)
+            .with_tag("xrds"),
+    );
+
+    // Initialize the OpenXR loader BEFORE any OpenXR call (including Entry::load()).
+    // On Android the loader requires the JavaVM and Activity context to find the runtime.
+    // We grab the raw pointers here while android_app is still owned.
+    {
+        let vm      = android_app.vm_as_ptr();
+        let context = android_app.activity_as_ptr();
+        unsafe { xrds_openxr::initialize_openxr_loader_android(vm, context); }
+    }
+
+    // Two modes are supported, selected automatically:
+    //
+    // Dev mode (external storage):
+    //   Push scene.json and assets/ to the device before launching:
+    //     adb push scene.json /sdcard/Android/data/org.openxrds.devicesdk/files/
+    //     adb push assets/    /sdcard/Android/data/org.openxrds.devicesdk/files/assets/
+    //   asset_path is set to the external directory so all GLB paths stay relative.
+    //
+    // APK-bundled mode:
+    //   Build with android/quest/build.sh --scene-dir <dir> to bundle scene.json and
+    //   assets/ directly into the APK. Bevy reads them via AAssetManager (asset_path = None).
+
+    const PACKAGE: &str = "org.openxrds.devicesdk";
+    let external_dir = std::path::PathBuf::from(
+        format!("/sdcard/Android/data/{PACKAGE}/files"),
+    );
+    let external_scene = external_dir.join("scene.json");
+
+    let (scene_path, opt_asset_path) = if external_scene.exists() {
+        // Dev mode — scene is on external storage
+        log::info!("[xrds-app] dev mode: loading scene from external storage");
+        let ap = external_dir.join("assets").to_string_lossy().into_owned();
+        (external_scene, Some(ap))
+    } else {
+        // APK-bundled mode — read scene.json from APK via AAssetManager,
+        // then write it to internal cache so SceneFileApp can open it by path.
+        // All other assets (GLBs, fonts, env maps) are read by Bevy directly
+        // from the APK through AAssetManager when asset_path is None.
+        log::info!("[xrds-app] APK mode: reading scene.json from bundled assets");
+        let scene_cstr = std::ffi::CString::new("scene.json").unwrap();
+        let Some(mut asset) = android_app.asset_manager().open(&scene_cstr) else {
+            log::error!(
+                "[xrds-app] scene.json not found in APK assets or external storage. \
+                 Bundle it with: ./android/quest/build.sh --scene-dir <dir>  OR  \
+                 push it: adb push scene.json /sdcard/Android/data/{PACKAGE}/files/"
+            );
+            return;
+        };
+        let mut bytes = Vec::new();
+        if let Err(e) = asset.read_to_end(&mut bytes) {
+            log::error!("[xrds-app] failed to read scene.json from APK: {e}");
+            return;
+        }
+        let cache_dir = std::path::PathBuf::from(format!("/data/data/{PACKAGE}/cache"));
+        let _ = std::fs::create_dir_all(&cache_dir);
+        let cached_scene = cache_dir.join("scene.json");
+        if let Err(e) = std::fs::write(&cached_scene, &bytes) {
+            log::error!("[xrds-app] failed to write scene.json to internal cache: {e}");
+            return;
+        }
+        (cached_scene, None) // None → Bevy uses AAssetManager for relative asset paths
+    };
+
+    // Give bevy_winit the AndroidApp handle before App::run() is called.
+    bevy_android::ANDROID_APP
+        .set(android_app)
+        .expect("AndroidApp already initialized");
+
+    Runtime::new(RuntimeParameters {
+        app_name: "XRDS App".to_owned(),
+        enable_xr: true,
+        asset_path: opt_asset_path,
         allow_unapproved_paths: true,
         ..Default::default()
     })

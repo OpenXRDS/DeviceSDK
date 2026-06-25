@@ -52,7 +52,6 @@ impl Plugin for OpenXrInitPlugin {
                         ..Default::default()
                     });
 
-                #[cfg(feature = "preview_window")]
                 app.insert_resource(WinitSettings {
                     focused_mode: UpdateMode::Continuous,
                     unfocused_mode: UpdateMode::Continuous,
@@ -66,7 +65,10 @@ impl Plugin for OpenXrInitPlugin {
                 world.write_message(OpenXrMessageCreateSession);
             }
             Err(e) => {
-                warn!("OpenXR unavailable, falling back to desktop rendering: {e}");
+                // Use log:: directly — tracing subscriber not yet initialized at build() time,
+                // so tracing::warn!() would be silently dropped.
+                log::warn!("OpenXR unavailable, falling back to desktop rendering: {e}");
+                log::error!("OpenXR init failure detail: {e:?}");
                 app.add_plugins(RenderPlugin::default());
                 // OpenXrSystemState stays Unavailable (the default from init_resource),
                 // so all XR session and frame-loop systems are skipped automatically.
@@ -201,7 +203,8 @@ impl OpenXrInitPlugin {
 
         let system_properties = instance.system_properties(system_id)?;
         let instance_properties = instance.properties()?;
-        info!(
+        // Use log:: — this runs before LogPlugin initializes tracing.
+        log::info!(
             "OpenXR system: {}, runtime: {}-{}",
             system_properties.system_name,
             instance_properties.runtime_name,
