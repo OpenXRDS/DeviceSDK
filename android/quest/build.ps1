@@ -31,14 +31,19 @@ $PackageName   = "org.openxrds.devicesdk"
 
 # Defaults
 $AndroidHome    = if ($env:ANDROID_HOME)    { $env:ANDROID_HOME }    else { "$env:LOCALAPPDATA\Android\Sdk" }
-$BuildToolsVer  = if ($env:BUILD_TOOLS_VER) { $env:BUILD_TOOLS_VER } else { "35.0.0" }
+$BuildToolsVer  = if ($env:BUILD_TOOLS_VER) { $env:BUILD_TOOLS_VER } else {
+    $bt = Get-ChildItem "$AndroidHome\build-tools" -Directory -ErrorAction SilentlyContinue |
+          Sort-Object Name | Select-Object -Last 1
+    if ($bt) { $bt.Name } else { "" }
+}
 $Keystore       = if ($env:KEYSTORE)        { $env:KEYSTORE }        else { "$HOME\.android\debug.keystore" }
 $KeystorePass   = if ($env:KEYSTORE_PASS)   { $env:KEYSTORE_PASS }   else { "android" }
 $BundledLoader  = "$ScriptDir\libs\arm64-v8a\libopenxr_loader.so"
 $OpenXrLoader   = if ($env:OPENXR_LOADER)   { $env:OPENXR_LOADER }   elseif (Test-Path $BundledLoader) { $BundledLoader } else { "" }
 
 $BuildTools = "$AndroidHome\build-tools\$BuildToolsVer"
-$Platform   = "$AndroidHome\platforms\android-35"
+$Platform   = Get-ChildItem "$AndroidHome\platforms" -Directory -ErrorAction SilentlyContinue |
+              Where-Object { $_.Name -like "android-*" } | Sort-Object Name | Select-Object -Last 1 -ExpandProperty FullName
 $JniDir     = "$ScriptDir\jni\arm64-v8a"
 $BuildDir   = "$ScriptDir\build"
 

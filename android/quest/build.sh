@@ -27,8 +27,16 @@ WORKSPACE_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 PACKAGE_NAME="org.openxrds.devicesdk"
 
 # Defaults
-ANDROID_HOME="${ANDROID_HOME:-$HOME/Android/Sdk}"
-BUILD_TOOLS_VER="${BUILD_TOOLS_VER:-35.0.0}"
+if [[ -z "${ANDROID_HOME:-}" ]]; then
+    if [[ -d "$HOME/Library/Android/sdk" ]]; then
+        ANDROID_HOME="$HOME/Library/Android/sdk"       # macOS
+    else
+        ANDROID_HOME="$HOME/Android/Sdk"               # Ubuntu
+    fi
+fi
+if [[ -z "${BUILD_TOOLS_VER:-}" ]]; then
+    BUILD_TOOLS_VER=$(ls "$ANDROID_HOME/build-tools" 2>/dev/null | sort -V | tail -n1)
+fi
 KEYSTORE="${KEYSTORE:-$HOME/.android/debug.keystore}"
 KEYSTORE_PASS="${KEYSTORE_PASS:-android}"
 BUNDLED_LOADER="$SCRIPT_DIR/libs/arm64-v8a/libopenxr_loader.so"
@@ -36,9 +44,8 @@ OPENXR_LOADER="${OPENXR_LOADER:-}"
 [[ -z "$OPENXR_LOADER" && -f "$BUNDLED_LOADER" ]] && OPENXR_LOADER="$BUNDLED_LOADER"
 SCENE_DIR=""
 
-ANDROID_PLATFORM_VER="${ANDROID_PLATFORM_VER:-35}"
 BUILD_TOOLS="$ANDROID_HOME/build-tools/$BUILD_TOOLS_VER"
-PLATFORM="$ANDROID_HOME/platforms/android-$ANDROID_PLATFORM_VER"
+PLATFORM=$(ls -1d "$ANDROID_HOME/platforms/android-"* 2>/dev/null | sort -V | tail -n1)
 JNI_DIR="$SCRIPT_DIR/jni/arm64-v8a"
 BUILD_DIR="$SCRIPT_DIR/build"
 
@@ -59,10 +66,15 @@ done
 # Validate prerequisites
 check_cmd() { command -v "$1" &>/dev/null || { echo "ERROR: '$1' not found. $2"; exit 1; }; }
 check_cmd cargo-ndk "Install with: cargo install cargo-ndk"
-check_cmd aapt      "Install Android build-tools via Android Studio SDK Manager"
+[[ -f "$BUILD_TOOLS/aapt" ]] || { echo "ERROR: aapt not found at $BUILD_TOOLS. Check BUILD_TOOLS_VER (currently: $BUILD_TOOLS_VER)"; exit 1; }
+[[ -n "$PLATFORM" && -f "$PLATFORM/android.jar" ]] || { echo "ERROR: No Android platform found in $ANDROID_HOME/platforms. Install one via Android Studio SDK Manager."; exit 1; }
 
 [[ -n "$NDK_HOME" ]] || { echo "ERROR: Android NDK not found. Install via Android Studio SDK Manager or set ANDROID_NDK_HOME."; exit 1; }
-LIB_CPP_SHARED="$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so"
+case "$(uname -s)" in
+    Darwin) NDK_HOST="darwin-x86_64" ;;
+    *)      NDK_HOST="linux-x86_64"  ;;
+esac
+LIB_CPP_SHARED="$NDK_HOME/toolchains/llvm/prebuilt/$NDK_HOST/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so"
 [[ -f "$LIB_CPP_SHARED" ]] || { echo "ERROR: libc++_shared.so not found at: $LIB_CPP_SHARED"; exit 1; }
 
 [[ -n "$OPENXR_LOADER" ]] || {
@@ -84,6 +96,7 @@ fi
 echo "==> Build configuration"
 echo "    Android SDK    : $ANDROID_HOME"
 echo "    Build tools    : $BUILD_TOOLS_VER"
+echo "    Platform       : $(basename "$PLATFORM")"
 echo "    OpenXR loader  : $OPENXR_LOADER"
 DEFAULT_SCENE="$WORKSPACE_ROOT/res/default.json"
 if [[ -n "$SCENE_DIR" ]]; then
@@ -190,7 +203,7 @@ echo "==> Done: $BUILD_DIR/xrds-app.apk"
 echo ""
 echo "Install:"
 echo "  adb install -r $BUILD_DIR/xrds-app.apk"
-echo "  adb shell am start -n $PACKAGE_NAME/.MainActivity"
+echo "  adb shell am start -n $PACKAGE_NAME/android.app.NativeActivity"
 
 if [[ -z "$SCENE_DIR" && ! -f "$DEFAULT_SCENE" ]]; then
     echo ""

@@ -4,23 +4,22 @@ Targets Quest 3 and Quest Pro (API 32+) via OpenXR. Quest 2 is not supported.
 
 ## Prerequisites
 
-See [../README.md](../README.md) for full shared toolchain details. Quick summary:
+- **Rust via rustup** — install from [rustup.rs](https://rustup.rs) (do **not** use Homebrew `rust` on macOS — it lacks cross-compilation support).
+  Then add the Android target:
 
-```sh
-# Rust cross-compilation target
-rustup target add aarch64-linux-android
+  ```sh
+  rustup target add aarch64-linux-android
+  ```
 
-# NDK linker wrapper
-cargo install cargo-ndk
+- **cargo-ndk** — Cargo wrapper for the Android NDK toolchain:
 
-# Android NDK (r27+) — install via Android Studio SDK Manager, then:
-export ANDROID_NDK_HOME=$HOME/Android/Sdk/ndk/27.2.12479018  # adjust version
+  ```sh
+  cargo install cargo-ndk
+  ```
 
-# Android build-tools — add to PATH (aapt, zipalign, apksigner)
-export PATH="$PATH:$ANDROID_HOME/build-tools/35.0.0"
-```
-
-Additionally you need:
+- **Android SDK** — install via [Android Studio](https://developer.android.com/studio) SDK Manager.
+  Required components: NDK, any build-tools, any android platform.
+  The build scripts auto-detect the SDK location and pick the latest installed NDK, build-tools, and platform.
 
 - **OpenXR loader** — fetch the Khronos prebuilt (Apache 2.0) with one command:
 
@@ -42,8 +41,6 @@ Additionally you need:
   Alternatively, copy `libopenxr_loader.so` from the Meta OpenXR Mobile SDK
   (`OpenXR/Libs/Android/arm64-v8a/Release/`) into the same directory, or set
   `OPENXR_LOADER` to override the path entirely.
-
-- **Android SDK** with build-tools 35.0.0 and platform 35 (`aapt`, `apksigner`, `zipalign`)
 
 ## Building the APK
 
@@ -87,13 +84,14 @@ Output: `android/quest/build/xrds-app.apk`
 
 ### Customising the build
 
-| Variable            | Default (Linux/macOS)       | Default (Windows)                        | Description                   |
-|---------------------|-----------------------------|------------------------------------------|-------------------------------|
-| `OPENXR_LOADER`     | *(required)*                | *(required)*                             | Path to `libopenxr_loader.so` |
-| `ANDROID_HOME`      | `~/Android/Sdk`             | `%LOCALAPPDATA%\Android\Sdk`             | Android SDK root              |
-| `BUILD_TOOLS_VER`   | `35.0.0`                    | `35.0.0`                                 | `build-tools` version to use  |
-| `KEYSTORE`          | `~/.android/debug.keystore` | `%USERPROFILE%\.android\debug.keystore`  | Signing keystore              |
-| `KEYSTORE_PASS`     | `android`                   | `android`                                | Keystore password             |
+| Variable          | Default (Linux/macOS)              | Default (Windows)                       | Description                   |
+|-------------------|------------------------------------|-----------------------------------------|-------------------------------|
+| `OPENXR_LOADER`   | *(auto if fetch script was run)*   | *(auto if fetch script was run)*        | Path to `libopenxr_loader.so` |
+| `ANDROID_HOME`    | `~/Library/Android/sdk` (macOS)    | `%LOCALAPPDATA%\Android\Sdk`            | Android SDK root              |
+|                   | `~/Android/Sdk` (Linux)            |                                         |                               |
+| `BUILD_TOOLS_VER` | *(auto: latest installed)*         | *(auto: latest installed)*              | `build-tools` version to use  |
+| `KEYSTORE`        | `~/.android/debug.keystore`        | `%USERPROFILE%\.android\debug.keystore` | Signing keystore              |
+| `KEYSTORE_PASS`   | `android`                          | `android`                               | Keystore password             |
 
 ## Install and run
 
@@ -137,6 +135,58 @@ adb shell dumpsys activity | grep openxrds   # check if app is running
 ```
 
 ## Troubleshooting
+
+### Build errors
+
+**`Failed to load signer` / `debug.keystore not found`**
+
+`apksigner` needs a keystore. Generate the standard Android debug one:
+
+```sh
+# macOS / Linux
+keytool -genkeypair -keystore ~/.android/debug.keystore \
+  -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 \
+  -keypass android -storepass android \
+  -dname "CN=Android Debug,O=Android,C=US"
+```
+
+```powershell
+# Windows
+keytool -genkeypair -keystore "$HOME\.android\debug.keystore" `
+  -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 `
+  -keypass android -storepass android `
+  -dname "CN=Android Debug,O=Android,C=US"
+```
+
+**`apksigner: command not found` or Java errors**
+
+`apksigner` requires Java. Install the JDK:
+
+```sh
+# macOS
+brew install --cask temurin
+
+# Ubuntu
+sudo apt install default-jdk
+```
+
+```powershell
+# Windows
+winget install EclipseAdoptium.Temurin.21.JDK
+```
+
+### Install errors
+
+**`INSTALL_FAILED_UPDATE_INCOMPATIBLE: signatures do not match`**
+
+The device has an existing install signed with a different key. Uninstall it first:
+
+```sh
+adb uninstall org.openxrds.devicesdk
+adb install -r android/quest/build/xrds-app.apk
+```
+
+### Runtime symptoms
 
 | Symptom                            | Likely cause                                              |
 |------------------------------------|-----------------------------------------------------------|
