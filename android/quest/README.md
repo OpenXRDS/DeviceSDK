@@ -4,7 +4,21 @@ Targets Quest 3 and Quest Pro (API 32+) via OpenXR. Quest 2 is not supported.
 
 ## Prerequisites
 
-See [../README.md](../README.md) for shared toolchain setup (NDK, cargo-ndk, Rust target).
+See [../README.md](../README.md) for full shared toolchain details. Quick summary:
+
+```sh
+# Rust cross-compilation target
+rustup target add aarch64-linux-android
+
+# NDK linker wrapper
+cargo install cargo-ndk
+
+# Android NDK (r27+) — install via Android Studio SDK Manager, then:
+export ANDROID_NDK_HOME=$HOME/Android/Sdk/ndk/27.2.12479018  # adjust version
+
+# Android build-tools — add to PATH (aapt, zipalign, apksigner)
+export PATH="$PATH:$ANDROID_HOME/build-tools/35.0.0"
+```
 
 Additionally you need:
 
@@ -86,7 +100,7 @@ Output: `android/quest/build/xrds-app.apk`
 ```sh
 # Enable developer mode on the headset first
 adb install -r android/quest/build/xrds-app.apk
-adb shell am start -n org.openxrds.devicesdk/.MainActivity
+adb shell am start -n org.openxrds.devicesdk/android.app.NativeActivity
 ```
 
 ## Two runtime modes
