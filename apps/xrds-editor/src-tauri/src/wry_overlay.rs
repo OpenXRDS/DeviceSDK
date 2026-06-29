@@ -184,6 +184,20 @@ fn last_region_params() -> &'static Mutex<Option<(u32, u32, u32, u32, u32, u32)>
     S.get_or_init(|| Mutex::new(None))
 }
 
+/// Container X window ID for XShapeCombineRectangles.
+#[cfg(target_os = "linux")]
+fn container_xwin_val() -> &'static Mutex<u32> {
+    static S: OnceLock<Mutex<u32>> = OnceLock::new();
+    S.get_or_init(|| Mutex::new(0))
+}
+
+/// Last applied region parameters on Linux — mirrors the Windows version.
+#[cfg(target_os = "linux")]
+fn last_region_params() -> &'static Mutex<Option<(u32, u32, u32, u32, u32, u32)>> {
+    static S: OnceLock<Mutex<Option<(u32, u32, u32, u32, u32, u32)>>> = OnceLock::new();
+    S.get_or_init(|| Mutex::new(None))
+}
+
 // ---------------------------------------------------------------------------
 // Approximate viewport geometry helpers
 // ---------------------------------------------------------------------------
@@ -234,6 +248,20 @@ pub fn try_attach_wry_editor(world: &mut World) {
         #[cfg(windows)]
         let before = win32::direct_children(win32::parent_hwnd(parent));
 
+        // ── On Linux/X11: init connection and snapshot child X windows before ─
+        #[cfg(target_os = "linux")]
+        let linux_state = {
+            use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+            x11::init_conn();
+            let parent_xwin: Option<u32> = match parent.window_handle().map(|h| h.as_raw()) {
+                Ok(RawWindowHandle::Xcb(h))  => Some(h.window.get()),
+                Ok(RawWindowHandle::Xlib(h)) => Some(h.window as u32),
+                _ => None,
+            };
+            let before = parent_xwin.map(|pw| x11::query_children(pw)).unwrap_or_default();
+            (parent_xwin, before)
+        };
+
         // ── Build the WebView ─────────────────────────────────────────────────
         let full_bounds = wry::Rect {
             position: wry::dpi::LogicalPosition::new(0.0, 0.0).into(),
@@ -280,6 +308,23 @@ pub fn try_attach_wry_editor(world: &mut World) {
                 info!("[wry] container HWND {hwnd} — initial SetWindowRgn applied");
             } else {
                 warn!("[wry] could not find container HWND — SetWindowRgn skipped");
+            }
+        }
+
+        // ── On Linux/X11: find new child X window and apply XShape region ────
+        #[cfg(target_os = "linux")]
+        {
+            let (parent_xwin, before) = linux_state;
+            if let Some(pxwin) = parent_xwin {
+                let after = x11::query_children(pxwin);
+                if let Some(xwin) = after.into_iter().find(|w| !before.contains(w)) {
+                    *container_xwin_val().lock().unwrap() = xwin;
+                    let (vx, vy, vw, vh) = approx_vp_phys(win_w, win_h, 1.0);
+                    x11::apply_region(xwin, win_w, win_h, vx, vy, vw, vh);
+                    info!("[wry] container X window {xwin:#010x} — initial XShape applied");
+                } else {
+                    warn!("[wry] could not find container X window — XShape skipped");
+                }
             }
         }
 
@@ -337,12 +382,33 @@ pub fn focus_viewport_on_click(
     }
 }
 
-/// Update system: exit immediately when the user closes the window, before Bevy destroys
-/// the parent HWND. Destroying the parent HWND triggers synchronous WebView2 COM teardown
-/// which tries to pump the winit message loop — but winit is still inside its event dispatch
-/// at that point, causing a deadlock. Exiting here avoids that sequence entirely.
+/// Update system: drain pending GTK/GLib events so webkit2gtk can paint and process input.
+/// webkit2gtk renders through the GLib main loop; without this pump the WebView shows nothing.
+/// Runs every frame after WryEditorReady — registered only on Linux.
+#[cfg(target_os = "linux")]
+pub fn pump_gtk_events(_main: NonSend<EditorWvMarker>) {
+    while gtk::events_pending() {
+        gtk::main_iteration_do(false);
+    }
+}
+
+/// Update system: exit immediately when the user closes the window.
+///
+/// On Windows: exits before Bevy destroys the parent HWND, which would trigger synchronous
+/// WebView2 COM teardown that tries to re-enter the winit message loop (deadlock).
+///
+/// On Linux: uses `libc::_exit` (direct exit_group syscall) instead of
+/// `std::process::exit`. The latter runs thread-local destructors, which drops
+/// `EDITOR_WV` → wry::WebView → webkit2gtk/GDK teardown outside the GTK event
+/// loop → segfault. `_exit` bypasses all destructors; the OS reclaims every
+/// resource cleanly.
 pub fn force_exit_on_close(mut close: MessageReader<WindowCloseRequested>) {
     if close.read().next().is_some() {
+        #[cfg(target_os = "linux")]
+        // SAFETY: intentional immediate process termination to avoid webkit2gtk
+        // segfault in its destructor when called outside the GTK event loop.
+        unsafe { libc::_exit(0); }
+        #[cfg(not(target_os = "linux"))]
         std::process::exit(0);
     }
 }
@@ -403,7 +469,15 @@ pub fn drain_responses_and_viewport(
             win32::apply_region(hwnd_val, pw, ph, phys_x, phys_y, phys_w, phys_h);
         }
     }
-    let _ = (pw, ph); // suppress unused on non-windows
+    #[cfg(target_os = "linux")]
+    {
+        let xwin_val = *container_xwin_val().lock().unwrap();
+        if xwin_val != 0 {
+            *last_region_params().lock().unwrap() = Some((pw, ph, phys_x, phys_y, phys_w, phys_h));
+            x11::apply_region(xwin_val, pw, ph, phys_x, phys_y, phys_w, phys_h);
+        }
+    }
+    let _ = (pw, ph); // suppress unused on platforms without region support (e.g. macOS)
 }
 
 /// Update system: resize the WebView and update camera viewport + SetWindowRgn.
@@ -451,6 +525,14 @@ pub fn handle_editor_resize(
         if hwnd_val != 0 {
             *last_region_params().lock().unwrap() = Some((pw, ph, phys_x, phys_y, phys_w, phys_h));
             win32::apply_region(hwnd_val, pw, ph, phys_x, phys_y, phys_w, phys_h);
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let xwin_val = *container_xwin_val().lock().unwrap();
+        if xwin_val != 0 {
+            *last_region_params().lock().unwrap() = Some((pw, ph, phys_x, phys_y, phys_w, phys_h));
+            x11::apply_region(xwin_val, pw, ph, phys_x, phys_y, phys_w, phys_h);
         }
     }
 }
@@ -513,6 +595,22 @@ fn ipc_handler(req: wry::http::Request<String>, inbound: &Arc<Mutex<VecDeque<Edi
                     }
                 }
             }
+            #[cfg(target_os = "linux")]
+            {
+                let xwin_val = *container_xwin_val().lock().unwrap();
+                if xwin_val != 0 {
+                    let enabled = msg["enabled"].as_bool().unwrap_or(true);
+                    if enabled {
+                        if let Some((pw, ph, vx, vy, vw, vh)) =
+                            *last_region_params().lock().unwrap()
+                        {
+                            x11::apply_region(xwin_val, pw, ph, vx, vy, vw, vh);
+                        }
+                    } else {
+                        x11::clear_region(xwin_val);
+                    }
+                }
+            }
         }
 
         Some("viewport_bounds") => {
@@ -572,6 +670,94 @@ fn run_file_dialog(kind: &str) -> Option<String> {
             .pick_folder()
             .map(|p| p.to_string_lossy().into_owned()),
         _ => None,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// X11/Shape helpers (Linux only)
+// ---------------------------------------------------------------------------
+
+#[cfg(target_os = "linux")]
+mod x11 {
+    use std::sync::OnceLock;
+    use x11rb::connection::Connection as _;
+    use x11rb::protocol::shape::{self, ConnectionExt as _};
+    use x11rb::protocol::xproto::{ClipOrdering, ConnectionExt as _, Rectangle};
+    use x11rb::rust_connection::RustConnection;
+
+    fn conn() -> Option<&'static RustConnection> {
+        static S: OnceLock<Option<RustConnection>> = OnceLock::new();
+        S.get_or_init(|| x11rb::connect(None).ok().map(|(c, _)| c)).as_ref()
+    }
+
+    /// Eagerly initialise the X connection (called before WebView creation).
+    pub fn init_conn() { let _ = conn(); }
+
+    /// List direct children of `xwin`.  Returns empty vec on any error.
+    pub fn query_children(xwin: u32) -> Vec<u32> {
+        let Some(c) = conn() else { return vec![] };
+        let Ok(cookie) = c.query_tree(xwin) else {
+            log::warn!("[x11] query_tree send failed for {xwin:#010x}");
+            return vec![];
+        };
+        match cookie.reply() {
+            Ok(r)  => r.children,
+            Err(e) => { log::warn!("[x11] query_tree reply failed: {e}"); vec![] }
+        }
+    }
+
+    /// Apply the viewport-hole shape to `xwin` using XShapeCombineRectangles.
+    /// Sets both ShapeBounding (visual clip) and ShapeInput (mouse event clip).
+    /// All coordinates are physical pixels relative to the container window.
+    pub fn apply_region(xwin: u32, win_w: u32, win_h: u32,
+                        vp_x: u32, vp_y: u32, vp_w: u32, vp_h: u32) {
+        let Some(c) = conn() else { return };
+        let rects = frame_rects(win_w, win_h, vp_x, vp_y, vp_w, vp_h);
+        if rects.is_empty() { return; }
+        for kind in [shape::SK::BOUNDING, shape::SK::INPUT] {
+            let _ = c.shape_rectangles(
+                shape::SO::SET, kind, ClipOrdering::UNSORTED, xwin, 0, 0, &rects,
+            );
+        }
+        let _ = c.flush();
+    }
+
+    /// Remove the shape mask so the WebView paints the full window (modal open).
+    pub fn clear_region(xwin: u32) {
+        let Some(c) = conn() else { return };
+        // source_bitmap = 0 (NONE) resets the window shape to its full bounding box.
+        for kind in [shape::SK::BOUNDING, shape::SK::INPUT] {
+            let _ = c.shape_mask(shape::SO::SET, kind, xwin, 0, 0, 0u32);
+        }
+        let _ = c.flush();
+    }
+
+    /// Build the four frame rectangles (top bar, left sidebar, right inspector,
+    /// bottom palette) that the WebView should remain visible/interactive in.
+    /// The viewport hole is the gap between these four rectangles.
+    fn frame_rects(win_w: u32, win_h: u32, vp_x: u32, vp_y: u32, vp_w: u32, vp_h: u32) -> Vec<Rectangle> {
+        let vp_x2 = vp_x + vp_w;
+        let vp_y2 = vp_y + vp_h;
+        let mut v = Vec::with_capacity(4);
+        // top bar (full width, above viewport)
+        if vp_y > 0 {
+            v.push(Rectangle { x: 0, y: 0, width: win_w as u16, height: vp_y as u16 });
+        }
+        // left sidebar
+        if vp_x > 0 {
+            v.push(Rectangle { x: 0, y: vp_y as i16, width: vp_x as u16, height: vp_h as u16 });
+        }
+        // right inspector
+        if vp_x2 < win_w {
+            v.push(Rectangle { x: vp_x2 as i16, y: vp_y as i16,
+                               width: (win_w - vp_x2) as u16, height: vp_h as u16 });
+        }
+        // bottom palette (full width, below viewport)
+        if vp_y2 < win_h {
+            v.push(Rectangle { x: 0, y: vp_y2 as i16,
+                               width: win_w as u16, height: (win_h - vp_y2) as u16 });
+        }
+        v
     }
 }
 

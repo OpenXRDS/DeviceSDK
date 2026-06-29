@@ -22,9 +22,19 @@ use bridge::EditorBridge;
 use bevy_scene::run_bevy_viewport;
 
 pub fn run() {
+    // Initialize GTK before wgpu creates its X11 surface.
+    // If GTK is initialized later (e.g. inside the Bevy event loop), it changes X11
+    // display properties that invalidate the already-created wgpu swap chain surface.
+    #[cfg(target_os = "linux")]
+    gtk::init().expect("gtk::init failed — cannot start editor on Linux");
+
     let bridge = Arc::new(EditorBridge::new());
     run_bevy_viewport(bridge);
-    // WebView2 COM teardown deadlocks if the winit message loop is already gone.
-    // Exiting immediately after Bevy's event loop ends avoids the hang.
+    // After the Bevy event loop ends: bypass all destructors to prevent webkit2gtk/GDK
+    // from segfaulting during teardown (Linux) or WebView2 COM from deadlocking (Windows).
+    #[cfg(target_os = "linux")]
+    // SAFETY: intentional immediate termination; OS reclaims all resources.
+    unsafe { libc::_exit(0); }
+    #[cfg(not(target_os = "linux"))]
     std::process::exit(0);
 }

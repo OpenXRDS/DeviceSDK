@@ -23,6 +23,8 @@ use crate::wry_overlay::{
     try_attach_wry_editor, push_snapshot_to_webview, drain_responses_and_viewport,
     handle_editor_resize, focus_viewport_on_click, force_exit_on_close,
 };
+#[cfg(target_os = "linux")]
+use crate::wry_overlay::pump_gtk_events;
 use crate::viewport_gizmo::{
     floor_grid_system, fov_overlay_system, interaction_zone_gizmo_system, light_rays_system,
     physics_collider_gizmo_system, player_spawn_gizmo_system, spawn_zone_gizmo_system,
@@ -91,6 +93,13 @@ impl XrdsApp for XrdsEditorTauriApp {
         app.add_systems(Update, try_attach_wry_editor);
         app.add_systems(Update,
             (drain_responses_and_viewport, handle_editor_resize, focus_viewport_on_click)
+                .run_if(resource_exists::<WryEditorReady>)
+                .after(try_attach_wry_editor),
+        );
+        // Pump the GLib/GTK event loop so webkit2gtk can paint — Linux only.
+        #[cfg(target_os = "linux")]
+        app.add_systems(Update,
+            pump_gtk_events
                 .run_if(resource_exists::<WryEditorReady>)
                 .after(try_attach_wry_editor),
         );

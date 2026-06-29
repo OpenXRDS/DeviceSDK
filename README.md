@@ -79,3 +79,21 @@ cargo build
 ## Project structure
 
 ![project_structure](res/module_deps.svg?raw=true)
+
+## Editor on Linux
+
+The editor is supported on Linux (X11, Vulkan).  A few platform-specific notes:
+
+### Running from VS Code
+
+`.cargo/config.toml` includes a custom runner that strips VS Code Snap's GTK module paths (they point to glibc 2.31 loaders that fail on Ubuntu 22.04+) and sets `WEBKIT_DISABLE_DMABUF_RENDERER=1` to prevent a webkit2gtk/NVIDIA GLX conflict.  `cargo run -p xrds-editor` picks this up automatically — no manual setup needed.
+
+For running the compiled binary directly (e.g. a release build), use:
+
+```shell
+./run-editor.sh
+```
+
+### Window resize stutter
+
+Dragging the window border causes the Vulkan swap chain to report "surface changed" on each resize event — this is a Vulkan/X11 limitation and Bevy recovers by dropping the affected frames.  It does not affect normal operation.  Avoid slow edge-drags during screen recording or demos; use the window manager's keyboard shortcut (e.g. `Super+←/→`) to snap the window to a new size instead.
