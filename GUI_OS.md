@@ -111,30 +111,50 @@ objc2-foundation  = { version = "0.2", features = ["NSArray"] }
 
 ### macOS implementation steps
 
-- [ ] **Handle extraction** — match `RawWindowHandle::AppKit { ns_view }` from Bevy's winit window. This is the Bevy window's root `NSView`.
-- [ ] **Child view detection** — after `WebViewBuilder::new().build()`, enumerate `ns_view.subviews()` to find the newly added `WKWebView` container view. Store its pointer in `container_nsview_val()` OnceLock.
-- [ ] **Enable layer backing** on the container view: `container_view.setWantsLayer(YES)`.
-- [ ] **`apply_region(ns_view, win_w, win_h, vp_x, vp_y, vp_w, vp_h)`**:
+- [x] **Handle extraction** — `appkit::parent_ns_view()` matches `RawWindowHandle::AppKit { ns_view }`.
+- [x] **Child view detection** — `appkit::snapshot_subview_count()` before / `appkit::detect_container()` after: takes `lastObject` of the subview diff.
+- [x] **Enable layer backing** — `setWantsLayer:true` in `detect_container`.
+- [x] **`apply_region(win_w, win_h, vp_x, vp_y, vp_w, vp_h, sf)`**:
+  - Builds four `CGRect`s in CoreGraphics coords (Y-flipped: `cg_vy = lh - vy - vh`).
+  - Updates a persistent `CAShapeLayer` path via `setPath:` (transmuted `objc_msgSend`).
+  - Sets `container.layer().setMask(shapeLayer)`.
+- [x] **`clear_region()`** — `setMask: nil`, clears `vp_hole` so hitTest passthrough is disabled.
+- [x] **Mouse passthrough** — `class_replaceMethod` on the WKWebView container class replaces `hitTest:` with `hit_test_imp`, which returns nil for viewport-area points and calls the saved original IMP otherwise. Approach used: `class_replaceMethod` FFI (saves original IMP) instead of `declare_class!`, avoids objc2 trait-bound issues with `CGPoint` arguments.
+- [x] **Thread safety** — all calls are in Bevy main-thread systems (`NonSend<EditorWvMarker>` or exclusive world systems).
+- [x] **Wire into existing hooks** — `drain_responses_and_viewport`, `handle_editor_resize`, `set_viewport_hole` IPC handler.
+- [x] **New dep** — `objc2 = "0.5"` added to `[target.'cfg(target_os = "macos")'.dependencies]`.
 
-  - Build a `CGMutablePath` that covers the four frame rectangles (the area to KEEP visible).
-  - **Y-flip**: macOS NSView uses bottom-left origin; convert: `mac_vp_y = win_h - vp_y - vp_h`.
-  - Create a `CAShapeLayer` with that path as `shapeLayer.path`.
-  - Set `container_view.layer().setMask(shapeLayer)`.
-  - Store the `CAShapeLayer` in an `OnceLock<Mutex<Option<*mut CAShapeLayer>>>` so subsequent calls update the existing layer's path instead of recreating.
-- [ ] **`clear_region(ns_view)`** — set `container_view.layer().setMask(nil)`.
-- [ ] **Mouse passthrough (hit-testing)**:
+### Open questions (resolved)
 
-  - `CALayer.mask` clips rendering but mouse events are still delivered based on the NSView frame, not the mask shape. Clicks in the viewport hole still go to the WebView.
-  - Fix: override `hitTest:` on the container view to return `nil` when the click point is inside the viewport rectangle. With `objc2` this uses the `declare_class!` macro (~30 lines).
-  - Alternative: place a transparent `NSView` overlay on top of the viewport hole in the Bevy window and forward events — more complex and can interfere with Bevy's input.
-- [ ] **Thread safety** — all `CALayer` / `NSView` calls must run on the main thread. Bevy exclusive systems and `try_attach_wry_editor` already run on the main thread. Resize handlers must dispatch via a main-thread channel if called from a background thread.
-- [ ] **Wire into existing hooks** — same three call sites as Linux: `drain_responses_and_viewport`, `handle_editor_resize`, `set_viewport_hole` IPC.
+- `objc2 0.5` is already in Cargo.lock via wry; no version conflict.
+- hitTest: override implemented via `class_replaceMethod` FFI instead of `declare_class!` — avoids `EncodeArgument` constraints on `CGPoint`.
+  - **Coordinate system**: winit's `NSView` has `isFlipped = YES` (y=0 at top), so the `hitTest:`
+    point is in top-down coordinates — same as `vy_top`. **No Y-flip needed.** An earlier version
+    applied `appkit_y = lh - vy_top` (assuming y=0 at bottom), shifting the passthrough zone 108 px
+    below the visual hole. Fixed by comparing `point.y` directly against `vy_top..vy_top+vh`.
+- **`CAShapeLayer.fillColor` must be set explicitly** — `.new` starts with `fillColor = nil` (transparent),
+  making the entire mask invisible. Fixed by calling `CGColorCreateGenericRGB(1,1,1,1)` via raw
+  `transmute(objc_msgSend)` (same pattern as `setPath:`/`setMask:`; `msg_send!` panics on `*mut c_void`).
+- **Class name logging**: `msg_send![cls, name]` panics in objc2 0.5 (no `name` selector on `AnyClass`).
+  Use `class_getName()` C-runtime API instead.
+- **CALayer coordinate system**: `WKWebView` is a flipped NSView (`isFlipped = YES`), so its backing
+  `CALayer` has `geometryFlipped = YES` — layer y=0 is at the **top**, not the CoreGraphics default
+  bottom. Mask path rects must use top-down coordinates. The original Y-flip (`cg_vy = lh - vy - vh`)
+  caused the hole to be 108 px too low, bleeding into the palette. **Fixed** by removing the CG flip
+  and using `vy` directly as the top-of-hole coordinate.
+- **`msg_send![cls, name]` for class name** → replaced with `class_getName()` (stable C runtime API).
+- `objc2 0.5` and `0.6` coexist safely because the code only uses raw pointer casts, not typed objects
+  across versions.
+- **Blank WebView Rendering**: Backing layer changes on macOS (like `setMask:`) do not trigger automatic NSView redraws. The WebView remained invisible until Web Inspector was opened. **Fixed** by explicitly sending `setNeedsDisplay: true` to the container view during both mask allocation (`apply_region`) and deallocation (`clear_region`).
+- **Mac Keyboard Drift**: Key release events (`keyUp`) are swallowed by `WKWebView` when input focus is directed to a panel. When returning the cursor to the Bevy viewport, Bevy still registers the key as held down. **Fixed** by resetting movement keys (`WASD`, `E`, `Q`) in `orbit_camera_system` (`viewport_camera.rs`) when a cursor re-entry transition (`prev_in_vp = false` -> `in_vp = true`) is detected.
 
-### Open questions
+### Run requirement
 
-- `objc2-quartz-core` version compatibility with the `objc2-app-kit` version wry uses — verify in Cargo.lock after adding.
-- Whether `declare_class!` for the `hitTest:` override works without a separate `.m` file with current objc2 0.5 API (it should, but needs a test build).
-
+> [!IMPORTANT]
+> `cargo run -p xrds-editor` **must be launched from the workspace root** (`DeviceSDK/`).
+> Running from `apps/xrds-editor/` causes the asset path resolution to fail because
+> `CARGO_MANIFEST_DIR` is baked in at compile time but relative traversal depends on CWD for
+> some Bevy internal paths. Always use `cargo run -p xrds-editor` from `DeviceSDK/`.
 ---
 
 ## Shared refactor in `wry_overlay.rs`
@@ -153,9 +173,9 @@ unwieldy.
 - [x] Linux/X11: modal dialogs (APK export, keyboard shortcuts) clear the hole correctly.
 - [x] Linux/X11: window resize updates region.
 - [x] Wayland: decision made — X11 forced via `WINIT_UNIX_BACKEND=x11` in launcher.
-- [ ] macOS: UI panels render, viewport hole visible, visual mask correct.
-- [ ] macOS: Y-flip coordinates verified (hole aligns with actual Bevy viewport).
-- [ ] macOS: mouse clicks in hole reach Bevy (`hitTest:` override works).
-- [ ] macOS: modal overlay clears mask.
-- [ ] macOS: window resize updates `CAShapeLayer` path.
-- [x] Windows: no regression confirmed.
+- [x] macOS: UI panels render, viewport hole visible, visual mask correct.
+- [x] macOS: Y-flip coordinates verified (hole aligns with actual Bevy viewport).
+- [x] macOS: mouse clicks in hole reach Bevy (`hitTest:` override works).
+- [x] macOS: modal overlay clears mask.
+- [x] macOS: window resize updates `CAShapeLayer` path.
+- [ ] All three platforms: no regression on Windows build.

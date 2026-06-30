@@ -40,3 +40,6 @@ windows-sys = { version = "0.52", features = [
 x11rb = { version = "0.13", features = ["shape"] }
 gtk = "0.18"
 libc = "0.2"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.5"

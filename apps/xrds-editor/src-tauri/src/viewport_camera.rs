@@ -140,14 +140,17 @@ pub fn apply_camera_selection_system(
 }
 
 pub fn orbit_camera_system(
-    mut cam:          ResMut<EditorCameraState>,
-    mouse_buttons:    Res<ButtonInput<MouseButton>>,
-    keyboard:         Res<ButtonInput<KeyCode>>,
-    mut mouse_motion: MessageReader<MouseMotion>,
-    mut mouse_wheel:  MessageReader<MouseWheel>,
-    mut camera_q:     Query<&mut Transform, With<EditorCameraMarker>>,
-    mut editor_state: ResMut<EditorState>,
-    session:          Res<EditorSession>,
+    mut cam:              ResMut<EditorCameraState>,
+    mouse_buttons:        Res<ButtonInput<MouseButton>>,
+    mut keyboard:         ResMut<ButtonInput<KeyCode>>,  // ResMut so we can reset stuck keys
+    mut mouse_motion:     MessageReader<MouseMotion>,
+    mut mouse_wheel:      MessageReader<MouseWheel>,
+    mut camera_q:         Query<&mut Transform, With<EditorCameraMarker>>,
+    mut editor_state:     ResMut<EditorState>,
+    session:              Res<EditorSession>,
+    windows:              Query<&bevy::window::Window, With<bevy::window::PrimaryWindow>>,
+    vp:                   Res<ViewportRect>,
+    mut prev_cursor_in_vp: Local<bool>,
 ) {
     if editor_state.is_playing {
         for _ in mouse_motion.read() {}
@@ -211,7 +214,35 @@ pub fn orbit_camera_system(
     let fwd   = rot * -Vec3::Z;
     let rgt   = rot * Vec3::X;
 
-    if !ctrl {
+    // Only move the camera with keyboard when the cursor is inside the 3D
+    // viewport.  This prevents drift caused by WASD being "stuck" pressed
+    // in Bevy's ButtonInput when the user clicks a WebView panel: the
+    // WebView absorbs the keyUp event on macOS without forwarding it to
+    // Bevy, so the viewport cursor-guard is the primary fix.
+    let cursor_in_vp = windows.single()
+        .ok()
+        .and_then(|w| w.cursor_position())
+        .map(|pos| vp.contains(pos))
+        .unwrap_or(false);
+
+    // Secondary fix: when the cursor RE-ENTERS the viewport after having left,
+    // reset all movement keys.  If a keyUp was absorbed by the WKWebView while
+    // the cursor was outside, Bevy's ButtonInput still shows it as "pressed".
+    // Clearing the keys at the moment of re-entry removes phantom movement
+    // without affecting intentional key holds (the OS will re-deliver the
+    // keyDown on the next frame if the key is still physically held).
+    #[cfg(target_os = "macos")]
+    if !*prev_cursor_in_vp && cursor_in_vp {
+        for key in [
+            KeyCode::KeyW, KeyCode::KeyA, KeyCode::KeyS, KeyCode::KeyD,
+            KeyCode::KeyE, KeyCode::KeyQ,
+        ] {
+            keyboard.reset(key);
+        }
+    }
+    *prev_cursor_in_vp = cursor_in_vp;
+
+    if !ctrl && cursor_in_vp {
         if keyboard.pressed(KeyCode::KeyW) { cam.pivot += fwd * speed; }
         if keyboard.pressed(KeyCode::KeyS) { cam.pivot -= fwd * speed; }
         if keyboard.pressed(KeyCode::KeyA) { cam.pivot -= rgt * speed; }

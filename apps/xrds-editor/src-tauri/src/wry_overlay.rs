@@ -30,7 +30,7 @@ use crate::bridge::EditorCommand;
 pub const LEFT_W:  u32 = 240;
 pub const RIGHT_W: u32 = 280;
 pub const TOP_H:   u32 = 62;
-pub const BOT_H:   u32 = 130;   // palette height estimate until React reports exact bounds
+pub const BOT_H:   u32 = 170;   // palette max-height 160px + small buffer; React corrects exact bounds
 
 // Custom protocol name and origin used when serving the pre-built dist/ bundle.
 const PROTO: &str      = "xrds";
@@ -262,6 +262,13 @@ pub fn try_attach_wry_editor(world: &mut World) {
             (parent_xwin, before)
         };
 
+        // ── On macOS: snapshot subview count before WebView creation ──────────
+        #[cfg(target_os = "macos")]
+        let (mac_ns_view, mac_before_count) = {
+            let v = appkit::parent_ns_view(parent);
+            (v, appkit::snapshot_subview_count(v))
+        };
+
         // ── Build the WebView ─────────────────────────────────────────────────
         let full_bounds = wry::Rect {
             position: wry::dpi::LogicalPosition::new(0.0, 0.0).into(),
@@ -326,6 +333,16 @@ pub fn try_attach_wry_editor(world: &mut World) {
                     warn!("[wry] could not find container X window — XShape skipped");
                 }
             }
+        }
+
+        // ── On macOS: find the new NSView container and configure it ─────────
+        #[cfg(target_os = "macos")]
+        {
+            appkit::detect_container(mac_ns_view, mac_before_count);
+            let sf = 1.0f32; // approximate; refined once React sends exact bounds
+            let (vx, vy, vw, vh) = approx_vp_phys(win_w, win_h, sf);
+            appkit::apply_region(win_w, win_h, vx, vy, vw, vh, sf);
+            info!("[wry] macOS container NSView — initial CAShapeLayer mask applied");
         }
 
         EDITOR_WV.with_borrow_mut(|slot| *slot = Some(webview));
@@ -477,7 +494,13 @@ pub fn drain_responses_and_viewport(
             x11::apply_region(xwin_val, pw, ph, phys_x, phys_y, phys_w, phys_h);
         }
     }
-    let _ = (pw, ph); // suppress unused on platforms without region support (e.g. macOS)
+    #[cfg(target_os = "macos")]
+    {
+        *appkit::last_region().lock().unwrap() =
+            Some((pw, ph, phys_x, phys_y, phys_w, phys_h, sf));
+        appkit::apply_region(pw, ph, phys_x, phys_y, phys_w, phys_h, sf);
+    }
+    let _ = (pw, ph);
 }
 
 /// Update system: resize the WebView and update camera viewport + SetWindowRgn.
@@ -534,6 +557,12 @@ pub fn handle_editor_resize(
             *last_region_params().lock().unwrap() = Some((pw, ph, phys_x, phys_y, phys_w, phys_h));
             x11::apply_region(xwin_val, pw, ph, phys_x, phys_y, phys_w, phys_h);
         }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        *appkit::last_region().lock().unwrap() =
+            Some((pw, ph, phys_x, phys_y, phys_w, phys_h, sf));
+        appkit::apply_region(pw, ph, phys_x, phys_y, phys_w, phys_h, sf);
     }
 }
 
@@ -609,6 +638,19 @@ fn ipc_handler(req: wry::http::Request<String>, inbound: &Arc<Mutex<VecDeque<Edi
                     } else {
                         x11::clear_region(xwin_val);
                     }
+                }
+            }
+            #[cfg(target_os = "macos")]
+            {
+                let enabled = msg["enabled"].as_bool().unwrap_or(true);
+                if enabled {
+                    if let Some((pw, ph, vx, vy, vw, vh, sf)) =
+                        *appkit::last_region().lock().unwrap()
+                    {
+                        appkit::apply_region(pw, ph, vx, vy, vw, vh, sf);
+                    }
+                } else {
+                    appkit::clear_region();
                 }
             }
         }
@@ -758,6 +800,253 @@ mod x11 {
                                width: win_w as u16, height: (win_h - vp_y2) as u16 });
         }
         v
+    }
+}
+
+// ---------------------------------------------------------------------------
+// AppKit helpers (macOS only)
+// ---------------------------------------------------------------------------
+
+#[cfg(target_os = "macos")]
+pub mod appkit {
+    use std::ffi::{c_char, c_void};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Mutex, OnceLock};
+
+    use log::{info, warn};
+    use objc2::runtime::{AnyClass, AnyObject, Sel};
+    use objc2::{class, msg_send, sel};
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+    // ── CoreGraphics / QuartzCore FFI ─────────────────────────────────────────
+
+    #[repr(C)]
+    #[derive(Copy, Clone)]
+    struct CGPoint { x: f64, y: f64 }
+    #[repr(C)]
+    #[derive(Copy, Clone)]
+    struct CGSize  { width: f64, height: f64 }
+    #[repr(C)]
+    #[derive(Copy, Clone)]
+    struct CGRect  { origin: CGPoint, size: CGSize }
+
+    /// NSPoint and CGPoint are identical on all Apple platforms ({x:f64, y:f64}).
+    #[repr(C)]
+    #[derive(Copy, Clone)]
+    pub struct NSPoint { pub x: f64, pub y: f64 }
+
+    #[link(name = "CoreGraphics", kind = "framework")]
+    extern "C" {
+        fn CGPathCreateMutable() -> *mut c_void;
+        fn CGPathAddRect(path: *mut c_void, xf: *const c_void, rect: CGRect);
+        fn CGPathRelease(path: *mut c_void);
+        /// Creates a CGColor with RGBA components in the Generic RGB color space.
+        /// The returned color must be released by the caller, but for a mask that
+        /// lives for the process lifetime a deliberate "leak" is fine.
+        fn CGColorCreateGenericRGB(r: f64, g: f64, b: f64, a: f64) -> *mut c_void;
+    }
+
+    #[link(name = "QuartzCore", kind = "framework")]
+    extern "C" {}
+
+    extern "C" {
+        fn class_replaceMethod(
+            cls: *const c_void,
+            name: Sel,
+            imp: *const c_void,
+            types: *const c_char,
+        ) -> *const c_void;
+        /// Returns the name of a class as a C string (stable ObjC runtime API).
+        fn class_getName(cls: *const c_void) -> *const c_char;
+    }
+    extern "C" { fn objc_msgSend(); }
+
+    // ── Shared state ──────────────────────────────────────────────────────────
+
+    fn container_ptr() -> &'static Mutex<usize> {
+        static S: OnceLock<Mutex<usize>> = OnceLock::new();
+        S.get_or_init(|| Mutex::new(0))
+    }
+
+    fn mask_layer_ptr() -> &'static Mutex<usize> {
+        static S: OnceLock<Mutex<usize>> = OnceLock::new();
+        S.get_or_init(|| Mutex::new(0))
+    }
+
+    pub fn last_region() -> &'static Mutex<Option<(u32, u32, u32, u32, u32, u32, f32)>> {
+        static S: OnceLock<Mutex<Option<(u32, u32, u32, u32, u32, u32, f32)>>> = OnceLock::new();
+        S.get_or_init(|| Mutex::new(None))
+    }
+
+    fn vp_hole() -> &'static Mutex<(f64, f64, f64, f64, f64)> {
+        static S: OnceLock<Mutex<(f64, f64, f64, f64, f64)>> = OnceLock::new();
+        // (vx, vy_topdown, vw, vh, lh) — vy_topdown is y from top (screen coords);
+        // lh is logical window height needed to convert to AppKit's bottom-up Y.
+        S.get_or_init(|| Mutex::new((0.0, 0.0, 0.0, 0.0, 0.0)))
+    }
+
+    static ORIG_HIT_TEST_IMP: AtomicUsize = AtomicUsize::new(0);
+
+    // ── Public interface ──────────────────────────────────────────────────────
+
+    pub fn parent_ns_view(win: &impl HasWindowHandle) -> *mut AnyObject {
+        match win.window_handle().map(|h| h.as_raw()) {
+            Ok(RawWindowHandle::AppKit(h)) => h.ns_view.as_ptr() as *mut AnyObject,
+            _ => std::ptr::null_mut(),
+        }
+    }
+
+    pub fn snapshot_subview_count(parent: *mut AnyObject) -> usize {
+        unsafe {
+            let subs: *mut AnyObject = msg_send![parent, subviews];
+            msg_send![subs, count]
+        }
+    }
+
+    pub fn detect_container(parent: *mut AnyObject, before_count: usize) {
+        unsafe {
+            let subs: *mut AnyObject = msg_send![parent, subviews];
+            let count: usize = msg_send![subs, count];
+            if count <= before_count {
+                warn!("[appkit] no new subview after WebView build — skipping");
+                return;
+            }
+            let view: *mut AnyObject = msg_send![subs, lastObject];
+            if view.is_null() { return; }
+            *container_ptr().lock().unwrap() = view as usize;
+
+            let _: () = msg_send![view, setWantsLayer: true];
+
+            // Log the ObjC class name via class_getName (stable runtime API).
+            // msg_send![cls, name] does NOT work — AnyClass has no `name` selector.
+            let cls_name = class_getName((*view).class() as *const _ as *const c_void);
+            let cls_str = std::ffi::CStr::from_ptr(cls_name).to_string_lossy();
+            info!("[appkit] container view class: {cls_str}");
+
+            let shape: *mut AnyObject = msg_send![class!(CAShapeLayer), new];
+            let shape: *mut AnyObject = msg_send![shape, retain];
+
+            // CAShapeLayer.new starts with fillColor = nil (transparent).
+            // A mask layer clips using its alpha channel, so fillColor must be opaque.
+            // We use white (1,1,1,1) — the colour does not matter, only the alpha.
+            // Must use raw objc_msgSend: msg_send! panics in objc2 0.5 when the
+            // argument encoding (*mut c_void) doesn't match CGColorRef.
+            let opaque_color = CGColorCreateGenericRGB(1.0, 1.0, 1.0, 1.0);
+            {
+                type SetFillColorFn = unsafe extern "C" fn(*mut AnyObject, Sel, *mut c_void);
+                let f: SetFillColorFn = std::mem::transmute(objc_msgSend as *const ());
+                f(shape, sel!(setFillColor:), opaque_color);
+            }
+
+            *mask_layer_ptr().lock().unwrap() = shape as usize;
+
+            install_hittest_override(view);
+            info!("[appkit] container NSView {:p} configured with opaque CAShapeLayer mask", view);
+        }
+    }
+
+    /// Apply the viewport hole mask.  All dimensions are physical pixels; `sf`
+    /// converts to CoreGraphics logical points.
+    pub fn apply_region(win_w: u32, win_h: u32,
+                        vp_x: u32, vp_y: u32, vp_w: u32, vp_h: u32,
+                        sf: f32) {
+        let container = *container_ptr().lock().unwrap() as *mut AnyObject;
+        let shape     = *mask_layer_ptr().lock().unwrap() as *mut AnyObject;
+        if container.is_null() || shape.is_null() { return; }
+
+        let sf = sf as f64;
+        let lw = win_w as f64 / sf;
+        let lh = win_h as f64 / sf;
+        let vx = vp_x as f64 / sf;
+        let vy = vp_y as f64 / sf;
+        let vw = vp_w as f64 / sf;
+        let vh = vp_h as f64 / sf;
+
+        *vp_hole().lock().unwrap() = (vx, vy, vw, vh, lh);
+
+        // WKWebView is a flipped NSView (isFlipped = YES), which means its backing
+        // CALayer has geometryFlipped = YES: layer y=0 is at the TOP, y increases
+        // downward.  CoreGraphics default (y=0 at bottom) does NOT apply here.
+        // Use top-down coordinates directly — no Y-flip needed.
+        let rects = [
+            CGRect { origin: CGPoint { x: 0.0,    y: 0.0    }, size: CGSize { width: lw,          height: vy       } }, // top bar
+            CGRect { origin: CGPoint { x: 0.0,    y: vy + vh }, size: CGSize { width: lw,          height: lh-vy-vh } }, // bottom panel
+            CGRect { origin: CGPoint { x: 0.0,    y: vy     }, size: CGSize { width: vx,          height: vh       } }, // left panel
+            CGRect { origin: CGPoint { x: vx + vw, y: vy    }, size: CGSize { width: lw - vx - vw, height: vh      } }, // right panel
+        ];
+
+        unsafe {
+            let path = CGPathCreateMutable();
+            for r in &rects {
+                if r.size.width > 0.0 && r.size.height > 0.0 {
+                    CGPathAddRect(path, std::ptr::null(), *r);
+                }
+            }
+            type SetPathFn = unsafe extern "C" fn(*mut AnyObject, Sel, *const c_void);
+            let set_path: SetPathFn = std::mem::transmute(objc_msgSend as *const ());
+            set_path(shape, sel!(setPath:), path as *const c_void);
+            CGPathRelease(path);
+
+            let layer: *mut AnyObject = msg_send![container, layer];
+            type SetMaskFn = unsafe extern "C" fn(*mut AnyObject, Sel, *mut AnyObject);
+            let set_mask: SetMaskFn = std::mem::transmute(objc_msgSend as *const ());
+            set_mask(layer, sel!(setMask:), shape);
+
+            let _: () = msg_send![container, setNeedsDisplay: true];
+        }
+    }
+
+    pub fn clear_region() {
+        let container = *container_ptr().lock().unwrap() as *mut AnyObject;
+        if container.is_null() { return; }
+        unsafe {
+            let layer: *mut AnyObject = msg_send![container, layer];
+            type SetMaskFn = unsafe extern "C" fn(*mut AnyObject, Sel, *mut AnyObject);
+            let set_mask: SetMaskFn = std::mem::transmute(objc_msgSend as *const ());
+            set_mask(layer, sel!(setMask:), std::ptr::null_mut());
+
+            let _: () = msg_send![container, setNeedsDisplay: true];
+        }
+        *vp_hole().lock().unwrap() = (0.0, 0.0, 0.0, 0.0, 0.0);
+    }
+
+    // ── hitTest: override ─────────────────────────────────────────────────────
+
+    fn install_hittest_override(view: *mut AnyObject) {
+        unsafe {
+            let cls = (*view).class() as *const AnyClass as *const c_void;
+            let enc = b"@32@0:8{CGPoint=dd}16\0";
+            let orig = class_replaceMethod(
+                cls, sel!(hitTest:),
+                hit_test_imp as *const c_void,
+                enc.as_ptr() as *const c_char,
+            );
+            ORIG_HIT_TEST_IMP.store(orig as usize, Ordering::SeqCst);
+        }
+    }
+
+    unsafe extern "C" fn hit_test_imp(
+        this: *mut AnyObject,
+        cmd: Sel,
+        point: NSPoint,
+    ) -> *mut AnyObject {
+        let (vx, vy_top, vw, vh, _lh) = *vp_hole().lock().unwrap();
+        if vw > 0.0 {
+            // winit's NSView has isFlipped = YES, so the superview's coordinate
+            // system is top-down (y=0 at top), matching WKWebView's own layout.
+            // WKWebView is placed at origin (0,0) = top-left of the superview,
+            // so point.y maps directly to vy_top — no Y-flip needed.
+            if point.x >= vx && point.x < vx + vw
+                && point.y >= vy_top && point.y < vy_top + vh
+            {
+                return std::ptr::null_mut(); // hole: let click fall through to Bevy
+            }
+        }
+        let orig = ORIG_HIT_TEST_IMP.load(Ordering::Relaxed);
+        if orig == 0 { return this; }
+        type HitTestFn = unsafe extern "C" fn(*mut AnyObject, Sel, NSPoint) -> *mut AnyObject;
+        let f: HitTestFn = std::mem::transmute(orig);
+        f(this, cmd, point)
     }
 }
 
