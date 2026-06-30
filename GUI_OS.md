@@ -15,8 +15,8 @@ Each platform has a native API equivalent to Win32's `SetWindowRgn`:
 | Platform      | API                                         | Status                  |
 | ------------- | ------------------------------------------- | ----------------------- |
 | Windows       | `SetWindowRgn` (Win32 GDI)                | done                    |
-| Linux/X11     | `XShapeCombineRectangles` (X11 Shape ext) | todo                    |
-| Linux/Wayland | `wl_surface.set_input_region` (wl_region) | todo (see Wayland note) |
+| Linux/X11     | `XShapeCombineRectangles` (X11 Shape ext) | done                    |
+| Linux/Wayland | `wl_surface.set_input_region` (wl_region) | n/a — X11 forced        |
 | macOS         | `CAShapeLayer` mask on `NSView`         | todo                    |
 
 ---
@@ -42,23 +42,35 @@ x11rb = { version = "0.13", features = ["shape"] }
 
 ### Implementation steps
 
-- [ ] **Handle extraction** — in `try_attach_wry_editor`, match `RawWindowHandle::Xcb { window, connection }` or `RawWindowHandle::Xlib { window, display }` from Bevy's winit window. Store display pointer + parent X window ID in an `OnceLock<Mutex<...>>`.
-- [ ] **Child window detection** — after `WebViewBuilder::new().build()`, call `XQueryTree(dpy, parent_xwin)` to get child list. Diff before/after (mirror of the Windows code that diffs `direct_children(hwnd_parent)`) to find the newly created WebView container X window. Store in `container_xwin_val()` OnceLock.
-- [ ] **`apply_region(xwin, win_w, win_h, vp_x, vp_y, vp_w, vp_h)`** — build four `XRectangle`s covering the frame area (top bar, left panel, right panel, bottom panel), excluding the viewport hole. Call:
+- [x] **Handle extraction** — `try_attach_wry_editor` matches `RawWindowHandle::Xcb` / `RawWindowHandle::Xlib` to get the parent X window ID.
+- [x] **Child window detection** — `x11::query_children` snapshots children before and after `build_as_child`; the new child is the container X window stored in `container_xwin_val()`.
+- [x] **`apply_region`** — builds four `x11rb::Rectangle`s (top bar, left sidebar, right inspector, bottom palette) and calls `shape_rectangles` with both `ShapeBounding` and `ShapeInput`.
+- [x] **`clear_region`** — calls `shape_mask` with source bitmap `0` (NONE) to reset both shape kinds to the full bounding box.
+- [x] **Wire into existing hooks** — `#[cfg(target_os = "linux")]` blocks added alongside `#[cfg(windows)]` in `drain_responses_and_viewport`, `handle_editor_resize`, and the `set_viewport_hole` IPC handler.
+- [x] **X11 connection** — managed by `x11rb::connect(None)` in a `OnceLock`; no raw `Display*` needed.
+- [x] **GTK event pump** — `pump_gtk_events` system drains `gtk::main_iteration_do(false)` every Bevy frame so webkit2gtk can paint and process input.
 
-  ```text
-  XShapeCombineRectangles(dpy, xwin, ShapeBounding, rects, ShapeSet, YSorted)
-  XShapeCombineRectangles(dpy, xwin, ShapeInput,    rects, ShapeSet, YSorted)
-  ```
+### Runtime fixes required on Linux
 
-  `ShapeBounding` clips rendering; `ShapeInput` clips mouse event delivery (clicks in the hole go to Bevy instead of the WebView).
-- [ ] **`clear_region(xwin)`** — pass a single full-window rectangle to both `ShapeBounding` and `ShapeInput` (equivalent to `SetWindowRgn(hwnd, NULL, TRUE)`).
-- [ ] **Wire into existing hooks** — add `#[cfg(target_os = "linux")]` blocks alongside the existing `#[cfg(windows)]` blocks in:
+Three issues were discovered and fixed during bring-up:
 
-  - `drain_responses_and_viewport` (viewport bounds IPC)
-  - `handle_editor_resize` (window resize)
-  - `set_viewport_hole` IPC handler (modal open/close)
-- [ ] **X11 display handle** — `XShapeCombineRectangles` needs the `Display*`. Extract it from `RawDisplayHandle::Xlib { display }` (available via `winit::window::Window::raw_display_handle()`).
+**1 — libpthread symbol lookup error (VS Code Snap)**
+VS Code (Snap, base: core20) sets `GDK_PIXBUF_MODULEDIR`, `GIO_MODULE_DIR`, `GTK_PATH`, etc. to snap-packaged loaders compiled for glibc 2.31. Those loaders embed `DT_RPATH=/snap/core20/current/lib/x86_64-linux-gnu`, pulling in a stub `libpthread.so.0` that requires `__libc_pthread_init` — removed in glibc 2.34+.
+Fix: `.cargo/config.toml` runner unsets all six snap GTK env vars before launching.
+
+**2 — GLXBadWindow panic + wgpu swap chain stutter (NVIDIA + X11)**
+webkit2gtk's DMABUF renderer calls `glXDestroyWindow` during GL init on NVIDIA hardware, leaving a `GLXBadWindow` error in the shared Xlib error queue. winit's `XSetICFocus` handler picks it up and panics. The same renderer's software-paint fallback floods the parent window with `XPutImage` calls, causing NVIDIA's Vulkan WSI to mark the wgpu swap chain out-of-date every frame.
+Fix: `WEBKIT_DISABLE_DMABUF_RENDERER=1` — webkit falls back to EGL compositing on its own child surface, avoiding both GLX operations and direct X11 painting on the parent.
+
+**3 — Segfault on close**
+`std::process::exit(0)` runs Rust thread-local destructors, which drops `EDITOR_WV` → `wry::WebView` → webkit2gtk/GDK teardown outside the GTK event loop → segfault.
+Fix: `libc::_exit(0)` — direct `exit_group` syscall, bypasses all destructors; the OS reclaims resources.
+
+Both fixes are encoded in `.cargo/config.toml` (runner) and `run-editor.sh` (release launcher).
+
+### Known limitations
+
+- **Window resize stutter**: dragging the window border causes repeated Vulkan `SurfaceError::Lost` — one per `ConfigureNotify` event. Bevy recovers by dropping the affected frames. This is a Vulkan/X11 limitation; prefer keyboard-based window snapping during recording or demos.
 
 ### Wayland note
 
@@ -125,34 +137,25 @@ objc2-foundation  = { version = "0.2", features = ["NSArray"] }
 
 ---
 
-## Shared refactor needed in `wry_overlay.rs`
+## Shared refactor in `wry_overlay.rs`
 
-The current code has Windows-only `OnceLock` globals and all region logic inside
-`#[cfg(windows)]` blocks. Before adding Linux/macOS support, extract the platform-neutral
-skeleton:
-
-- [ ] Define a `platform` module gated per OS (`mod win32`, `mod x11`, `mod appkit`).
-- [ ] Each module exposes the same interface:
-
-  ```rust
-  pub fn init_region_state();
-  pub fn detect_and_store_container(world: &mut World, webview: &WebView);
-  pub fn apply_region(win_w: u32, win_h: u32, vp_x: u32, vp_y: u32, vp_w: u32, vp_h: u32);
-  pub fn clear_region();
-  ```
-- [ ] The three call sites in `wry_overlay.rs` call `platform::apply_region(...)` with no cfg guards — the dispatch is inside the module.
+The clean module-extraction approach (separate `mod win32`, `mod x11`, `mod appkit` with a
+shared interface) was considered but not implemented. Instead, inline `#[cfg(target_os = "linux")]`
+blocks were added alongside the existing `#[cfg(windows)]` blocks at each call site.
+This is adequate for two platforms; revisit if macOS is added and the duplication becomes
+unwieldy.
 
 ---
 
 ## Testing checklist
 
-- [ ] Linux/X11: UI panels render, hole is transparent, Bevy scene visible, mouse clicks in hole reach Bevy.
-- [ ] Linux/X11: modal dialogs (APK export, keyboard shortcuts) clear the hole correctly.
-- [ ] Linux/X11: window resize updates region.
-- [ ] Wayland: decision made and documented (force X11 or Option A fallback).
+- [x] Linux/X11: UI panels render, hole is transparent, Bevy scene visible, mouse clicks in hole reach Bevy.
+- [x] Linux/X11: modal dialogs (APK export, keyboard shortcuts) clear the hole correctly.
+- [x] Linux/X11: window resize updates region.
+- [x] Wayland: decision made — X11 forced via `WINIT_UNIX_BACKEND=x11` in launcher.
 - [ ] macOS: UI panels render, viewport hole visible, visual mask correct.
 - [ ] macOS: Y-flip coordinates verified (hole aligns with actual Bevy viewport).
 - [ ] macOS: mouse clicks in hole reach Bevy (`hitTest:` override works).
 - [ ] macOS: modal overlay clears mask.
 - [ ] macOS: window resize updates `CAShapeLayer` path.
-- [ ] All three platforms: no regression on Windows build.
+- [x] Windows: no regression confirmed.
