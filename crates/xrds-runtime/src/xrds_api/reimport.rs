@@ -255,6 +255,35 @@ fn spawn_runtime_component(
         XrdsSceneRuntimeComponent::ExtrudedText(c) => {
             Some(spawn_extruded_text_descriptor(commands, c))
         }
+        XrdsSceneRuntimeComponent::WorldPanel(panel_desc, widgets, scene_layout) => {
+            let entity = spawn_world_panel_descriptor(commands, panel_desc);
+            let widgets = widgets.clone();
+            let scene_layout = scene_layout.clone();
+            commands.queue(move |world: &mut World| {
+                for widget in &widgets {
+                    spawn_world_widget_from_scene(world, entity, widget);
+                }
+                use xrds_scene_graph::XrdsSceneWorldLayout;
+                let layout_opt = match &scene_layout {
+                    XrdsSceneWorldLayout::None => None,
+                    XrdsSceneWorldLayout::VStack { gap } => {
+                        Some(xrds_components::XrdsWorldLayout::VStack { gap: *gap })
+                    }
+                    XrdsSceneWorldLayout::HStack { gap } => {
+                        Some(xrds_components::XrdsWorldLayout::HStack { gap: *gap })
+                    }
+                    XrdsSceneWorldLayout::Grid { cols, gap } => {
+                        Some(xrds_components::XrdsWorldLayout::Grid { cols: *cols, gap: *gap })
+                    }
+                };
+                if let Some(layout) = layout_opt {
+                    if let Ok(mut e) = world.get_entity_mut(entity) {
+                        e.insert(layout);
+                    }
+                }
+            });
+            Some(entity)
+        }
         XrdsSceneRuntimeComponent::InteractionZone(node, zone) => {
             use avian3d::prelude::{CollisionEventsEnabled, Sensor};
             let collider = match zone.shape {

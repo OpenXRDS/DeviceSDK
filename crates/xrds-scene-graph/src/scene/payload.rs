@@ -23,6 +23,7 @@ pub enum XrdsSceneNodePayload {
     Text(XrdsSceneText),
     ExtrudedText(XrdsSceneExtrudedText),
     PlayerSpawnZone(XrdsScenePlayerSpawnZone),
+    WorldPanel(XrdsSceneWorldPanel),
 }
 
 impl XrdsSceneNodePayload {
@@ -49,6 +50,7 @@ impl XrdsSceneNodePayload {
             Self::Text(_)            => XrdsGltfExportClass::NodeOnly,
             Self::ExtrudedText(_)    => XrdsGltfExportClass::NodeOnly,
             Self::PlayerSpawnZone(_) => XrdsGltfExportClass::NodeOnly,
+            Self::WorldPanel(_)      => XrdsGltfExportClass::NodeOnly,
         }
     }
 }
@@ -1182,6 +1184,203 @@ impl Default for XrdsSceneExtrudedText {
             color: [1.0, 1.0, 1.0, 1.0],
             depth: 0.1,
             alignment: XrdsSceneTextAlignment::Center,
+        }
+    }
+}
+
+// ── World-space UI (Phase 5) ──────────────────────────────────────────────────
+
+/// Serialisable layout policy for [`XrdsSceneWorldPanel`].
+///
+/// Mirrors [`xrds_components::XrdsWorldLayout`] but is serde-compatible for document storage.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum XrdsSceneWorldLayout {
+    /// Manual positioning — each widget uses its `local_position` as authored.
+    None,
+    /// Stack top-to-bottom, horizontally centred.
+    VStack { gap: f32 },
+    /// Stack left-to-right, vertically centred.
+    HStack { gap: f32 },
+    /// Arrange in a `cols`-wide grid; `gap` is `[x_gap, y_gap]` in metres.
+    Grid { cols: usize, gap: [f32; 2] },
+}
+
+impl Default for XrdsSceneWorldLayout {
+    fn default() -> Self { Self::None }
+}
+
+impl XrdsSceneWorldLayout {
+    pub fn is_none(&self) -> bool { matches!(self, Self::None) }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct XrdsSceneWorldLabel {
+    pub text: String,
+    /// Em size in metres. 0.05 ≈ 5 cm.
+    pub font_size: f32,
+    /// RGBA 0–1.
+    pub color: [f32; 4],
+    /// Panel-local position in metres (X right, Y up from centre).
+    pub local_position: [f32; 2],
+    /// Slot size [width, height] metres for layout system. Default 20 cm × 6 cm.
+    pub layout_size: [f32; 2],
+}
+
+impl Default for XrdsSceneWorldLabel {
+    fn default() -> Self {
+        Self {
+            text: String::new(),
+            font_size: 0.05,
+            color: [1.0, 1.0, 1.0, 1.0],
+            local_position: [0.0, 0.0],
+            layout_size: [0.20, 0.06],
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct XrdsSceneWorldButton {
+    pub label: String,
+    pub font_size: f32,
+    pub label_color: [f32; 4],
+    pub size: [f32; 2],
+    pub local_position: [f32; 2],
+    pub normal_color: [f32; 4],
+    pub hover_color: [f32; 4],
+    pub pressed_color: [f32; 4],
+}
+
+impl Default for XrdsSceneWorldButton {
+    fn default() -> Self {
+        Self {
+            label: String::new(),
+            font_size: 0.04,
+            label_color: [1.0, 1.0, 1.0, 1.0],
+            size: [0.18, 0.06],
+            local_position: [0.0, 0.0],
+            normal_color:  [0.20, 0.20, 0.50, 1.0],
+            hover_color:   [0.30, 0.30, 0.70, 1.0],
+            pressed_color: [0.10, 0.10, 0.30, 1.0],
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct XrdsSceneWorldImage {
+    pub asset_path: String,
+    pub size: [f32; 2],
+    pub local_position: [f32; 2],
+    /// RGBA tint multiplier.
+    pub tint: [f32; 4],
+}
+
+impl Default for XrdsSceneWorldImage {
+    fn default() -> Self {
+        Self {
+            asset_path: String::new(),
+            size: [0.10, 0.10],
+            local_position: [0.0, 0.0],
+            tint: [1.0, 1.0, 1.0, 1.0],
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct XrdsSceneWorldSlider {
+    pub min: f32,
+    pub max: f32,
+    pub value: f32,
+    /// Track dimensions [width, height] in metres.
+    pub size: [f32; 2],
+    pub local_position: [f32; 2],
+    pub track_color: [f32; 4],
+    pub fill_color: [f32; 4],
+    pub thumb_color: [f32; 4],
+    pub thumb_size: f32,
+}
+
+impl Default for XrdsSceneWorldSlider {
+    fn default() -> Self {
+        Self {
+            min: 0.0,
+            max: 1.0,
+            value: 0.5,
+            size: [0.24, 0.012],
+            local_position: [0.0, 0.0],
+            track_color: [0.25, 0.25, 0.25, 1.0],
+            fill_color:  [0.30, 0.50, 0.90, 1.0],
+            thumb_color: [0.90, 0.90, 0.90, 1.0],
+            thumb_size: 0.022,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct XrdsSceneWorldToggle {
+    pub checked: bool,
+    /// Toggle pill dimensions [width, height] in metres.
+    pub size: [f32; 2],
+    pub local_position: [f32; 2],
+    pub track_off_color: [f32; 4],
+    pub track_on_color: [f32; 4],
+    pub thumb_color: [f32; 4],
+}
+
+impl Default for XrdsSceneWorldToggle {
+    fn default() -> Self {
+        Self {
+            checked: false,
+            size: [0.07, 0.04],
+            local_position: [0.0, 0.0],
+            track_off_color: [0.35, 0.35, 0.35, 1.0],
+            track_on_color:  [0.20, 0.65, 0.30, 1.0],
+            thumb_color:     [1.00, 1.00, 1.00, 1.0],
+        }
+    }
+}
+
+/// Child widget of a [`XrdsSceneWorldPanel`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum XrdsSceneWorldWidget {
+    Label(XrdsSceneWorldLabel),
+    Button(XrdsSceneWorldButton),
+    Image(XrdsSceneWorldImage),
+    Slider(XrdsSceneWorldSlider),
+    Toggle(XrdsSceneWorldToggle),
+}
+
+fn is_zero(v: &f32) -> bool { v.abs() < 1e-9 }
+
+/// Authored world-space UI panel with optional child widgets and layout.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct XrdsSceneWorldPanel {
+    /// Panel dimensions [width, height] in metres.
+    pub size: [f32; 2],
+    /// Background RGBA in 0–1 range.
+    pub color: [f32; 4],
+    /// Reserved for future rounded-corner shader; 0.0 = sharp corners.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub corner_radius: f32,
+    /// Overall opacity multiplier (1.0 = fully opaque).
+    #[serde(default = "default_one", skip_serializing_if = "is_one")]
+    pub opacity: f32,
+    /// Optional auto-layout applied to child widgets.
+    #[serde(default, skip_serializing_if = "XrdsSceneWorldLayout::is_none")]
+    pub layout: XrdsSceneWorldLayout,
+    /// Ordered list of child widgets.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub widgets: Vec<XrdsSceneWorldWidget>,
+}
+
+impl Default for XrdsSceneWorldPanel {
+    fn default() -> Self {
+        Self {
+            size: [0.4, 0.3],
+            color: [0.08, 0.08, 0.08, 0.92],
+            corner_radius: 0.0,
+            opacity: 1.0,
+            layout: XrdsSceneWorldLayout::None,
+            widgets: Vec::new(),
         }
     }
 }

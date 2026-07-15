@@ -1,4 +1,5 @@
-pub use xrds_internal::*;
+pub use xrds_openxr::*;
+pub use xrds_runtime::*;
 
 /// Authored scene-document layer.
 /// Use this for save/load, import/export, and stable scene data; normal runtime-first SDK code

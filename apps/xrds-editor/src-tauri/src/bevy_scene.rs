@@ -28,10 +28,11 @@ use crate::wry_overlay::pump_gtk_events;
 use crate::viewport_gizmo::{
     floor_grid_system, fov_overlay_system, interaction_zone_gizmo_system, light_rays_system,
     physics_collider_gizmo_system, player_spawn_gizmo_system, spawn_zone_gizmo_system,
-    transform_gizmo_system,
+    transform_gizmo_system, world_panel_gizmo_system,
     update_selection_outline, GridGizmoGroup,
 };
 use crate::viewport_gizmo_interaction::gizmo_interaction_system;
+use crate::play_pointer::mouse_world_ui_input_system;
 use crate::viewport_player::{
     despawn_player_pawn_system, init_anchor_poses_system, pawn_locomotion_system,
     player_anchor_key_system, spawn_player_pawn_system, switch_player_anchor_system,
@@ -85,6 +86,11 @@ impl XrdsApp for XrdsEditorTauriApp {
 
         // Relay keyboard shortcuts to the inbound command queue when Bevy has focus.
         app.add_systems(Update, keyboard_shortcut_system);
+
+        // Play-mode mouse → world-UI pointer bridge. PreUpdate (after input processing)
+        // so the runtime's Update-scheduled world-UI systems read fresh state.
+        app.add_systems(bevy::app::PreUpdate,
+            mouse_world_ui_input_system.after(bevy::input::InputSystems));
         app.add_systems(Update, raycast_debug_system);
 
         // Wry editor overlay — try_attach_wry_editor is exclusive-world and retries
@@ -143,6 +149,7 @@ impl XrdsApp for XrdsEditorTauriApp {
                 interaction_zone_gizmo_system,
                 player_spawn_gizmo_system,
                 spawn_zone_gizmo_system,
+                world_panel_gizmo_system,
                 physics_collider_gizmo_system,
                 fov_overlay_system,
                 update_selection_outline,
@@ -220,7 +227,12 @@ impl XrdsApp for XrdsEditorTauriApp {
                 }
             }
 
-            if let Some(doc) = ctx.resource::<EditorSession>().map(|s| s.0.document().clone()) {
+            if let Some((mut doc, save_path)) = ctx.resource::<EditorSession>()
+                .map(|s| (s.0.document().clone(), s.0.save_path().map(|p| p.to_path_buf())))
+            {
+                if let Some(scene_dir) = save_path.as_deref().and_then(|p| p.parent()) {
+                    absolutize_doc_asset_uris(&mut doc, scene_dir);
+                }
                 bevy::log::info!("[update] reimporting {} nodes", doc.nodes.len());
                 match ctx.reimport_scene(&doc) {
                     Ok(ids) => bevy::log::info!("[update] reimport ok ({} entities)", ids.len()),
@@ -444,11 +456,52 @@ impl XrdsApp for XrdsEditorTauriApp {
     }
 }
 
+/// Rewrite relative asset URIs in a document clone to absolute paths anchored
+/// at the opened scene's directory, so the runtime loads the files that sit
+/// next to the scene file rather than whatever happens to share a name under
+/// the editor's own asset root.
+///
+/// Only used on the transient copy passed to reimport — the session document
+/// (and anything saved to disk) keeps its portable relative URIs.
+///
+/// Search order per URI: `<scene_dir>/<uri>`, then `<scene_dir>/assets/<uri>`
+/// (the layout produced by Export Application / dev-mode pushes).
+fn absolutize_doc_asset_uris(doc: &mut XrdsSceneDocument, scene_dir: &std::path::Path) {
+    let resolve = |uri: &str| -> Option<String> {
+        if uri.is_empty() || std::path::Path::new(uri).is_absolute() {
+            return None;
+        }
+        [scene_dir.join(uri), scene_dir.join("assets").join(uri)]
+            .into_iter()
+            .find(|c| c.is_file())
+            .map(|c| c.to_string_lossy().replace('\\', "/"))
+    };
+
+    for asset in &mut doc.assets {
+        if let Some(abs) = resolve(&asset.uri) {
+            asset.uri = abs;
+        }
+    }
+    for node in &mut doc.nodes {
+        if let XrdsSceneNodePayload::GltfAsset(gltf) = &mut node.payload {
+            if let Some(abs) = resolve(&gltf.asset_uri) {
+                gltf.asset_uri = abs;
+            }
+        }
+    }
+}
+
 pub fn run_bevy_viewport(bridge: Arc<EditorBridge>) {
     // CARGO_MANIFEST_DIR = apps/xrds-editor/src-tauri
     // Workspace assets live three levels up at <workspace_root>/assets.
-    let asset_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../assets")
+    // Normalize away the `..` segments so the runtime can compare authored
+    // absolute asset paths against this root textually.
+    let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let asset_path = manifest_dir
+        .ancestors()
+        .nth(3)
+        .unwrap_or(&manifest_dir)
+        .join("assets")
         .to_string_lossy()
         .into_owned();
 

@@ -114,6 +114,8 @@ pub enum XrdsSceneRuntimeComponent {
     ExtrudedText(XrdsExtrudedText),
     /// Carries the base node (name/transform/visible) plus zone-specific data.
     InteractionZone(XrdsNode, xrds_components::XrdsInteractionZone),
+    /// World-space UI panel with ordered child widgets and optional layout policy.
+    WorldPanel(xrds_components::XrdsWorldPanel, Vec<XrdsSceneWorldWidget>, XrdsSceneWorldLayout),
 }
 
 impl XrdsSceneNode {
@@ -481,6 +483,28 @@ impl XrdsSceneNode {
                         XrdsSceneTextAlignment::Right => XrdsExtrudedTextAlignment::Right,
                     },
                 }),
+                material: None,
+                editor,
+                gltf_node_authoring: None,
+            },
+            // World-space UI panel: carries the full panel descriptor and its child widgets.
+            XrdsSceneNodePayload::WorldPanel(panel) => XrdsSceneRuntimeNode {
+                id: self.id.into(),
+                parent_id: self.parent_id.map(Into::into),
+                component: XrdsSceneRuntimeComponent::WorldPanel(
+                    xrds_components::XrdsWorldPanel {
+                        name: self.name.clone(),
+                        enabled: self.enabled,
+                        visible: self.visible,
+                        transform,
+                        size: panel.size,
+                        color: panel.color,
+                        corner_radius: panel.corner_radius,
+                        opacity: panel.opacity,
+                    },
+                    panel.widgets.clone(),
+                    panel.layout.clone(),
+                ),
                 material: None,
                 editor,
                 gltf_node_authoring: None,

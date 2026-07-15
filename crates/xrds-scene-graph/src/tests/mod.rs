@@ -7,6 +7,7 @@ mod assets;
 mod core;
 mod editing;
 mod session;
+mod world_ui;
 
 pub(super) fn asset_fixture_path(relative_path: &str) -> String {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))

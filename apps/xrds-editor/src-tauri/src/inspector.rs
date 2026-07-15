@@ -4,9 +4,13 @@ use xrds_scene_graph::{
     XrdsHudAnchor, XrdsSceneDocument, XrdsSceneNodeId, XrdsSceneNodePayload,
     XrdsSceneMaterial, XrdsSceneCameraProjection, XrdsSceneTextAlignment, XrdsSceneTextAnchor,
     XrdsScenePlayerSpawnZone,
+    XrdsSceneWorldLayout, XrdsSceneWorldWidget,
+    XrdsSceneWorldLabel, XrdsSceneWorldButton, XrdsSceneWorldImage,
+    XrdsSceneWorldSlider, XrdsSceneWorldToggle,
 };
 use crate::bridge::{
     EditorCommand, MaterialParamsDto, NodeInspectorDto, NodePayloadDto,
+    WorldLayoutDto, WorldWidgetDto,
 };
 use crate::editor_state::{EditorSession, EditorState};
 
@@ -132,6 +136,16 @@ fn build_payload_dto(
         XrdsSceneNodePayload::PlayerSpawnZone(z) =>
             NodePayloadDto::PlayerSpawnZone { size: z.size, player_node_id: z.player_node_id },
 
+        XrdsSceneNodePayload::WorldPanel(p) =>
+            NodePayloadDto::WorldPanel {
+                size: p.size,
+                color: p.color,
+                corner_radius: p.corner_radius,
+                opacity: p.opacity,
+                layout: world_layout_dto(&p.layout),
+                widgets: p.widgets.iter().map(world_widget_dto).collect(),
+            },
+
         _ => NodePayloadDto::Other { kind: payload_kind_name(payload).to_owned() },
     }
 }
@@ -159,6 +173,7 @@ fn payload_kind_name(p: &XrdsSceneNodePayload) -> &'static str {
         XrdsSceneNodePayload::PlayerSpawnZone(_) => "PlayerSpawnZone",
         XrdsSceneNodePayload::Player(_)          => "Player",
         XrdsSceneNodePayload::PlayerAnchor(_)    => "PlayerAnchor",
+        XrdsSceneNodePayload::WorldPanel(_)      => "WorldPanel",
     }
 }
 
@@ -530,6 +545,139 @@ pub fn apply_inspector_command(
             true // ECS XrdsAnchorExposure component must be updated
         }
 
+        // ── World Panel ──────────────────────────────────────────────────────
+        EditorCommand::SetWorldPanelParams { id, size, color, corner_radius, opacity } => {
+            let id = XrdsSceneNodeId(*id);
+            let size = *size;
+            let color = *color;
+            let corner_radius = *corner_radius;
+            let opacity = *opacity;
+            match session.0.edit(|doc| {
+                if let Some(node) = doc.node_mut(id) {
+                    if let XrdsSceneNodePayload::WorldPanel(ref mut p) = node.payload {
+                        p.size = size;
+                        p.color = color;
+                        p.corner_radius = corner_radius;
+                        p.opacity = opacity;
+                    }
+                }
+            }) {
+                Ok(_) => {}
+                Err(e) => error!("[inspector] SetWorldPanelParams failed: {:?}", e),
+            }
+            true
+        }
+
+        EditorCommand::AddWorldPanelWidget { id, kind } => {
+            let id = XrdsSceneNodeId(*id);
+            let Some(widget) = default_widget_for_kind(kind) else {
+                error!("[inspector] AddWorldPanelWidget: unknown kind {kind:?}");
+                return true;
+            };
+            match session.0.edit(|doc| {
+                if let Some(node) = doc.node_mut(id) {
+                    if let XrdsSceneNodePayload::WorldPanel(ref mut p) = node.payload {
+                        p.widgets.push(widget);
+                    }
+                }
+            }) {
+                Ok(_) => {}
+                Err(e) => error!("[inspector] AddWorldPanelWidget failed: {:?}", e),
+            }
+            true
+        }
+
+        EditorCommand::RemoveWorldPanelWidget { id, index } => {
+            let id = XrdsSceneNodeId(*id);
+            let index = *index;
+            match session.0.edit(|doc| {
+                if let Some(node) = doc.node_mut(id) {
+                    if let XrdsSceneNodePayload::WorldPanel(ref mut p) = node.payload {
+                        if index < p.widgets.len() {
+                            p.widgets.remove(index);
+                        }
+                    }
+                }
+            }) {
+                Ok(_) => {}
+                Err(e) => error!("[inspector] RemoveWorldPanelWidget failed: {:?}", e),
+            }
+            true
+        }
+
+        EditorCommand::MoveWorldPanelWidget { id, index, delta } => {
+            let id = XrdsSceneNodeId(*id);
+            let index = *index;
+            let delta = *delta;
+            match session.0.edit(|doc| {
+                if let Some(node) = doc.node_mut(id) {
+                    if let XrdsSceneNodePayload::WorldPanel(ref mut p) = node.payload {
+                        let len = p.widgets.len() as i64;
+                        let target = index as i64 + delta as i64;
+                        if (index as i64) < len && target >= 0 && target < len {
+                            p.widgets.swap(index, target as usize);
+                        }
+                    }
+                }
+            }) {
+                Ok(_) => {}
+                Err(e) => error!("[inspector] MoveWorldPanelWidget failed: {:?}", e),
+            }
+            true
+        }
+
+        EditorCommand::SetWorldPanelWidget { id, index, widget } => {
+            let id = XrdsSceneNodeId(*id);
+            let index = *index;
+            let widget = world_widget_from_dto(widget);
+            match session.0.edit(|doc| {
+                if let Some(node) = doc.node_mut(id) {
+                    if let XrdsSceneNodePayload::WorldPanel(ref mut p) = node.payload {
+                        if let Some(slot) = p.widgets.get_mut(index) {
+                            *slot = widget;
+                        }
+                    }
+                }
+            }) {
+                Ok(_) => {}
+                Err(e) => error!("[inspector] SetWorldPanelWidget failed: {:?}", e),
+            }
+            true
+        }
+
+        EditorCommand::SetWorldPanelWidgets { id, widgets } => {
+            let id = XrdsSceneNodeId(*id);
+            let widgets: Vec<XrdsSceneWorldWidget> =
+                widgets.iter().map(world_widget_from_dto).collect();
+            match session.0.edit(|doc| {
+                if let Some(node) = doc.node_mut(id) {
+                    if let XrdsSceneNodePayload::WorldPanel(ref mut p) = node.payload {
+                        p.widgets = widgets;
+                    }
+                }
+            }) {
+                Ok(_) => {}
+                Err(e) => error!("[inspector] SetWorldPanelWidgets failed: {:?}", e),
+            }
+            true
+        }
+
+        EditorCommand::SetWorldPanelLayout { id, layout } => {
+            let id = XrdsSceneNodeId(*id);
+            let layout = world_layout_from_dto(layout);
+            match session.0.edit(|doc| {
+                if let Some(node) = doc.node_mut(id) {
+                    if let XrdsSceneNodePayload::WorldPanel(ref mut p) = node.payload {
+                        p.layout = layout;
+                    }
+                }
+            }) {
+                Ok(_) => {}
+                Err(e) => error!("[inspector] SetWorldPanelLayout failed: {:?}", e),
+            }
+            true
+        }
+
         // ── GLTF animation ───────────────────────────────────────────────────
         EditorCommand::PlayGltfAnimation { id, clip_index, speed, .. } => {
             state.pending_gltf_play = Some((XrdsSceneNodeId(*id), *clip_index, *speed));
@@ -723,4 +871,107 @@ fn set_node_material(node: &mut xrds_scene_graph::XrdsSceneNode, mat: XrdsSceneM
         XrdsSceneNodePayload::Tetrahedron(c) => c.material = mat,
         _ => {}
     }
+}
+
+// ---------------------------------------------------------------------------
+// World Panel widget/layout DTO conversion
+// ---------------------------------------------------------------------------
+
+fn world_layout_dto(l: &XrdsSceneWorldLayout) -> WorldLayoutDto {
+    match l {
+        XrdsSceneWorldLayout::None            => WorldLayoutDto::None,
+        XrdsSceneWorldLayout::VStack { gap }  => WorldLayoutDto::VStack { gap: *gap },
+        XrdsSceneWorldLayout::HStack { gap }  => WorldLayoutDto::HStack { gap: *gap },
+        XrdsSceneWorldLayout::Grid { cols, gap } => WorldLayoutDto::Grid { cols: *cols, gap: *gap },
+    }
+}
+
+fn world_layout_from_dto(l: &WorldLayoutDto) -> XrdsSceneWorldLayout {
+    match l {
+        WorldLayoutDto::None            => XrdsSceneWorldLayout::None,
+        WorldLayoutDto::VStack { gap }  => XrdsSceneWorldLayout::VStack { gap: *gap },
+        WorldLayoutDto::HStack { gap }  => XrdsSceneWorldLayout::HStack { gap: *gap },
+        WorldLayoutDto::Grid { cols, gap } => XrdsSceneWorldLayout::Grid { cols: *cols, gap: *gap },
+    }
+}
+
+fn world_widget_dto(w: &XrdsSceneWorldWidget) -> WorldWidgetDto {
+    match w {
+        XrdsSceneWorldWidget::Label(l) => WorldWidgetDto::Label {
+            text: l.text.clone(), font_size: l.font_size, color: l.color,
+            local_position: l.local_position, layout_size: l.layout_size,
+        },
+        XrdsSceneWorldWidget::Button(b) => WorldWidgetDto::Button {
+            label: b.label.clone(), font_size: b.font_size, label_color: b.label_color,
+            size: b.size, local_position: b.local_position,
+            normal_color: b.normal_color, hover_color: b.hover_color, pressed_color: b.pressed_color,
+        },
+        XrdsSceneWorldWidget::Image(i) => WorldWidgetDto::Image {
+            asset_path: i.asset_path.clone(), size: i.size,
+            local_position: i.local_position, tint: i.tint,
+        },
+        XrdsSceneWorldWidget::Slider(s) => WorldWidgetDto::Slider {
+            min: s.min, max: s.max, value: s.value,
+            size: s.size, local_position: s.local_position,
+            track_color: s.track_color, fill_color: s.fill_color,
+            thumb_color: s.thumb_color, thumb_size: s.thumb_size,
+        },
+        XrdsSceneWorldWidget::Toggle(t) => WorldWidgetDto::Toggle {
+            checked: t.checked, size: t.size, local_position: t.local_position,
+            track_off_color: t.track_off_color, track_on_color: t.track_on_color,
+            thumb_color: t.thumb_color,
+        },
+    }
+}
+
+fn world_widget_from_dto(w: &WorldWidgetDto) -> XrdsSceneWorldWidget {
+    match w {
+        WorldWidgetDto::Label { text, font_size, color, local_position, layout_size } =>
+            XrdsSceneWorldWidget::Label(XrdsSceneWorldLabel {
+                text: text.clone(), font_size: *font_size, color: *color,
+                local_position: *local_position, layout_size: *layout_size,
+            }),
+        WorldWidgetDto::Button { label, font_size, label_color, size, local_position,
+                                 normal_color, hover_color, pressed_color } =>
+            XrdsSceneWorldWidget::Button(XrdsSceneWorldButton {
+                label: label.clone(), font_size: *font_size, label_color: *label_color,
+                size: *size, local_position: *local_position,
+                normal_color: *normal_color, hover_color: *hover_color, pressed_color: *pressed_color,
+            }),
+        WorldWidgetDto::Image { asset_path, size, local_position, tint } =>
+            XrdsSceneWorldWidget::Image(XrdsSceneWorldImage {
+                asset_path: asset_path.clone(), size: *size,
+                local_position: *local_position, tint: *tint,
+            }),
+        WorldWidgetDto::Slider { min, max, value, size, local_position,
+                                 track_color, fill_color, thumb_color, thumb_size } =>
+            XrdsSceneWorldWidget::Slider(XrdsSceneWorldSlider {
+                min: *min, max: *max, value: *value,
+                size: *size, local_position: *local_position,
+                track_color: *track_color, fill_color: *fill_color,
+                thumb_color: *thumb_color, thumb_size: *thumb_size,
+            }),
+        WorldWidgetDto::Toggle { checked, size, local_position,
+                                 track_off_color, track_on_color, thumb_color } =>
+            XrdsSceneWorldWidget::Toggle(XrdsSceneWorldToggle {
+                checked: *checked, size: *size, local_position: *local_position,
+                track_off_color: *track_off_color, track_on_color: *track_on_color,
+                thumb_color: *thumb_color,
+            }),
+    }
+}
+
+fn default_widget_for_kind(kind: &str) -> Option<XrdsSceneWorldWidget> {
+    Some(match kind {
+        "Label"  => XrdsSceneWorldWidget::Label(XrdsSceneWorldLabel {
+            text: "Label".to_string(), ..Default::default()
+        }),
+        "Button" => XrdsSceneWorldWidget::Button(XrdsSceneWorldButton {
+            label: "Button".to_string(), ..Default::default()
+        }),
+        "Image"  => XrdsSceneWorldWidget::Image(XrdsSceneWorldImage::default()),
+        "Slider" => XrdsSceneWorldWidget::Slider(XrdsSceneWorldSlider::default()),
+        "Toggle" => XrdsSceneWorldWidget::Toggle(XrdsSceneWorldToggle::default()),
+        _ => return None,
+    })
 }

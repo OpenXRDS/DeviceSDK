@@ -9,7 +9,7 @@ mod context;
 #[path = "xrds_api/environment.rs"]
 mod environment;
 #[path = "xrds_api/gltf.rs"]
-mod gltf;
+pub(crate) mod gltf;
 #[path = "xrds_api/helper.rs"]
 mod helper;
 #[path = "xrds_api/hierarchy.rs"]
@@ -43,6 +43,16 @@ mod billboard;
 mod updaters;
 #[path = "xrds_api/zone.rs"]
 mod zone;
+#[path = "xrds_api/world_ui_pointer.rs"]
+mod world_ui_pointer;
+#[path = "xrds_api/world_ui_button.rs"]
+mod world_ui_button;
+#[path = "xrds_api/world_ui_slider.rs"]
+mod world_ui_slider;
+#[path = "xrds_api/world_ui_toggle.rs"]
+mod world_ui_toggle;
+#[path = "xrds_api/world_ui_layout.rs"]
+mod world_ui_layout;
 
 pub use anchor::{
     ActivePlayerAnchorEntity, PlayerAnchorCameraPose,
@@ -90,6 +100,18 @@ pub use context::XrdsUpdateContext;
 pub use xrds_components::{XrDropEvent, XrGrabEvent, XrGrabHand, XrGrabbable, XrGrabbed, XrRayhit, XrdsPlayerSpawnZone};
 pub use xrds_components::XrdsPhysicsBody;
 pub use xrds_components::{XrdsGrabType, XrdsInteractionZone, XrdsInteractionZoneShape, XrZoneEnterEvent, XrZoneExitEvent};
+pub use xrds_components::{
+    XrdsWorldButton, XrdsWorldButtonParams, XrdsWorldButtonState,
+    XrdsWorldImage, XrdsWorldImageParams,
+    XrdsWorldLabel, XrdsWorldLabelParams,
+    XrdsWorldLayout,
+    XrdsWorldPanel, XrdsWorldPointerCursors, XrdsWorldPointerHit, XrdsWorldPointerState,
+    XrdsWorldSlider, XrdsWorldSliderParams,
+    XrdsWorldSurface, XrdsWorldToggle, XrdsWorldToggleParams,
+    XrWorldButtonPressEvent, XrWorldButtonReleaseEvent,
+    XrWorldHoverEnterEvent, XrWorldHoverExitEvent,
+    XrWorldSliderChangeEvent, XrWorldToggleEvent,
+};
 pub use environment::XrdsReceivesEnvironment;
 /// Read-only entity→id index exposed for viewport picking systems.
 /// Access as `Res<XrdsIdIndex>` in Bevy systems: `id_index.id_of(entity)`
@@ -114,6 +136,10 @@ use registry::*;
 use spawn::*;
 use state::*;
 use updaters::*;
+use world_ui_pointer::*;
+use world_ui_button::*;
+use world_ui_slider::*;
+use world_ui_toggle::*;
 
 #[derive(Debug, Clone)]
 pub enum XrdsGeometrySource {

@@ -94,6 +94,18 @@ pub enum EditorCommand {
     SetGravityScale { id: u64, value: f32 },
     SetMass         { id: u64, value: f32 },
 
+    // --- World Panel ---
+    SetWorldPanelParams { id: u64, size: [f32; 2], color: [f32; 4], corner_radius: f32, opacity: f32 },
+    /// kind: "Label" | "Button" | "Image" | "Slider" | "Toggle" — appends a default widget.
+    AddWorldPanelWidget    { id: u64, kind: String },
+    RemoveWorldPanelWidget { id: u64, index: usize },
+    /// Reorder a widget within the panel's list by ±1.
+    MoveWorldPanelWidget   { id: u64, index: usize, delta: i32 },
+    SetWorldPanelWidget    { id: u64, index: usize, widget: WorldWidgetDto },
+    /// Replace the whole widget list at once (used by the panel editor's Cancel/revert).
+    SetWorldPanelWidgets   { id: u64, widgets: Vec<WorldWidgetDto> },
+    SetWorldPanelLayout    { id: u64, layout: WorldLayoutDto },
+
     // --- Player / PlayerAnchor / SpawnZone ---
     SetPlayerAnchorFov      { id: u64, fov_deg: f32 },
     SetPlayerAnchorInitial  { id: u64, is_initial: bool },
@@ -301,7 +313,48 @@ pub enum NodePayloadDto {
     Player,
     PlayerAnchor  { fov_deg: f32, is_initial: bool, hud_template_id: Option<u64>, exposure: Option<f32> },
     PlayerSpawnZone { size: [f32; 3], player_node_id: Option<u64> },
+    WorldPanel {
+        size: [f32; 2], color: [f32; 4], corner_radius: f32, opacity: f32,
+        layout: WorldLayoutDto, widgets: Vec<WorldWidgetDto>,
+    },
     Other     { kind: String },
+}
+
+/// Mirrors `xrds_scene_graph::XrdsSceneWorldLayout` for the webview.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+#[serde(tag = "type")]
+pub enum WorldLayoutDto {
+    None,
+    VStack { gap: f32 },
+    HStack { gap: f32 },
+    Grid   { cols: usize, gap: [f32; 2] },
+}
+
+/// Mirrors `xrds_scene_graph::XrdsSceneWorldWidget` for the webview.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+#[serde(tag = "type")]
+pub enum WorldWidgetDto {
+    Label {
+        text: String, font_size: f32, color: [f32; 4],
+        local_position: [f32; 2], layout_size: [f32; 2],
+    },
+    Button {
+        label: String, font_size: f32, label_color: [f32; 4],
+        size: [f32; 2], local_position: [f32; 2],
+        normal_color: [f32; 4], hover_color: [f32; 4], pressed_color: [f32; 4],
+    },
+    Image {
+        asset_path: String, size: [f32; 2], local_position: [f32; 2], tint: [f32; 4],
+    },
+    Slider {
+        min: f32, max: f32, value: f32,
+        size: [f32; 2], local_position: [f32; 2],
+        track_color: [f32; 4], fill_color: [f32; 4], thumb_color: [f32; 4], thumb_size: f32,
+    },
+    Toggle {
+        checked: bool, size: [f32; 2], local_position: [f32; 2],
+        track_off_color: [f32; 4], track_on_color: [f32; 4], thumb_color: [f32; 4],
+    },
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]

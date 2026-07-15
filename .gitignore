@@ -4,6 +4,7 @@ crates/xrds-net/
 .cargo
 .vscode
 .claude
+.VSCodeCounter
 games/*
 CLAUDE.md
 SHORTTERM_GOAL.md

@@ -57,7 +57,7 @@ pub(super) fn raycast_world(
 /// Converts the local-space AABB to a world-space one by multiplying the local
 /// half-extents by the absolute values of the GlobalTransform rotation columns
 /// (exact for axis-aligned transforms, conservative for rotated ones).
-fn ray_vs_world_aabb(
+pub(super) fn ray_vs_world_aabb(
     origin: Vec3,
     dir: Vec3,
     aabb: &Aabb,
@@ -95,7 +95,7 @@ fn ray_vs_world_aabb(
 }
 
 /// Walk the `ChildOf` chain from `entity` upward until an entry in `XrdsIdIndex` is found.
-fn find_xrds_ancestor(world: &World, mut entity: Entity) -> Option<XrdsId> {
+pub(super) fn find_xrds_ancestor(world: &World, mut entity: Entity) -> Option<XrdsId> {
     let id_index = world.resource::<XrdsIdIndex>();
     loop {
         if let Some(id) = id_index.id_of(entity) {

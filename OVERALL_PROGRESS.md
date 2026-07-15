@@ -1,6 +1,6 @@
 # DeviceSDK Overall Progress
 
-Last updated: 2026-05-27
+Last updated: 2026-06-30
 
 ## Project Goal
 
@@ -12,7 +12,7 @@ Provide a non-expert-first SDK to build XR applications, with:
 
 ## Overall Completion (Estimated)
 
-Estimated overall progress toward a strong SDK basement for XR applications: **93%**.
+Estimated overall progress toward a strong SDK basement for XR applications: **95%**.
 
 ## General 3D Editor Progress
 
@@ -45,6 +45,7 @@ What still keeps the editor from being fully polished:
 | Scene document model (`xrds-scene-graph`) | All asset kinds, 11 payload types, hierarchy, materials, audio, round-trips | **95%** |
 | Runtime projection (`xrds-runtime`) | All built-in types, audio playback, environment, export | **90%** |
 | Scene environment policy | IBL + skybox + exposure + linear fog; document-driven and runtime-driven | **97%** |
+| Physics | avian3d v0.4; Static/Dynamic/None bodies; per-primitive colliders; grab/throw; raycasting; interaction zone sensors; scene-doc serialized | **90%** |
 | Asset workflow | Gltf, Texture, EnvironmentMap, Audio — catalog, validation, diagnostics, runtime | **92%** |
 | GUI editor | Functional editor with all core panels; text3d and texture-slot UI gaps remain | **88%** |
 | Export pipeline | Export as Application (Windows/Linux/macOS validated); GLB export | **95%** |
@@ -68,6 +69,11 @@ What still keeps the editor from being fully polished:
 - Every XRDS camera automatically becomes the spatial audio listener (`SpatialListener`).
 - SVG icon system integrated into editor panels.
 - Performance stats overlay (FPS, frame time, mesh/vertex/texture counts).
+- Physics system (avian3d v0.4): `XrdsPhysicsBody` (Static/Dynamic/None), per-shape colliders (sphere, cuboid, cylinder, half-space, mesh), gravity scale, mass, SweptCcd tunneling prevention.
+- Grab/throw system: XR controller raycast pick-up, kinematic hold, velocity-based throw (clamped 25 m/s).
+- Interaction zones: sensor-based AABB triggers, `XrZoneEnterEvent` / `XrZoneExitEvent`, Sphere and Box shapes.
+- Runtime physics API: `set_gravity_scale_for_node`, `set_mass_for_node` — live updates without scene reimport.
+- Physics properties serialized in `XrdsSceneDocument` (physics_body, gravity_scale, mass on all primitive payload types).
 
 ## Missing Parts / Remaining Work
 
@@ -86,7 +92,7 @@ What still keeps the editor from being fully polished:
 
 ### 3) Feature breadth for a fuller primitive palette
 
-- `XrdsCapsule` for character/physics workflows (evaluate if target apps need it)
+- `XrdsCapsule` for character/physics workflows — capsule collider shape useful for character controllers
 - No other primitive gaps currently flagged as blocking
 
 ### 4) `Video` asset kind
@@ -104,3 +110,22 @@ What still keeps the editor from being fully polished:
 1. Fix `Text3D` runtime rendering — replace `Text2d` with a billboard mesh or deferred 3D text approach so exported apps show text nodes.
 2. Wire material texture slot UI in the inspector panel — browse catalog textures and assign to BaseColor/Normal/MetallicRoughness/Occlusion/Emissive slots.
 3. Begin documentation pass now that the feature set has stabilized through Phase 4 QA.
+
+## Gap Analysis vs. Mature 3D Engines
+
+Features present in engines like Unity, Godot, or Unreal that are not yet in DeviceSDK:
+
+| Feature | Priority | Notes |
+| --- | --- | --- |
+| **Particle systems / VFX** | High | No emitter, trail, or burst effects; needed for almost all interactive XR apps |
+| **In-world UI** (3D panels, buttons) | High | World-space canvas/widget surfaces beyond Text3D; critical for XR menus |
+| **Animation state machine** | Medium | Playback + morph sliders exist; no blend trees, transition graphs, or IK |
+| **Post-processing stack** | Medium | Exposure present; no bloom, DOF, SSAO, color grading |
+| **NavMesh / pathfinding** | Medium | AI agent navigation; needed for NPC-driven XR experiences |
+| **LOD system** | Medium | Performance at scene scale; no automatic LOD generation or selection |
+| **Video playback** | Low | Deferred; pattern established via `Audio` / `EnvironmentMap` |
+| **Capsule primitive** | Low | Useful character/physics shape; `XrdsCapsule` not yet added |
+| **Networking / multiplayer** | Low | Social XR use cases; large scope, deferred |
+| **Terrain system** | Low | Heightmaps, large world; not a near-term XR target |
+
+Already covered that engines also provide: scene graph, PBR materials, lights, cameras, spatial audio, animation playback, physics (rigid body, colliders, raycasting, grab/throw), GLTF pipeline, environment (IBL/fog/skybox), export, interaction zones, editor.

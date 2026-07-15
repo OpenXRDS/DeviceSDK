@@ -5,7 +5,7 @@ use xrds_scene_graph::{
     XrdsSceneHudText, XrdsSceneInteractionZone, XrdsSceneNode, XrdsSceneNodeId,
     XrdsSceneNodePayload, XrdsScenePlane3D, XrdsScenePlayer, XrdsScenePlayerAnchor,
     XrdsScenePlayerSpawn, XrdsScenePlayerSpawnZone, XrdsScenePointLight, XrdsSceneSpotLight,
-    XrdsSceneSphere, XrdsSceneTetrahedron, XrdsSceneText, XrdsSceneTransform,
+    XrdsSceneSphere, XrdsSceneTetrahedron, XrdsSceneText, XrdsSceneTransform, XrdsSceneWorldPanel,
 };
 use bevy::log::error;
 use crate::bridge::{AssetCatalogEntry, EditorCommand};
@@ -168,6 +168,7 @@ fn build_primitive_node(
         "PlayerSpawnZone" => XrdsSceneNodePayload::PlayerSpawnZone(XrdsScenePlayerSpawnZone::default()),
         "Player"          => XrdsSceneNodePayload::Player(XrdsScenePlayer::default()),
         "PlayerAnchor"    => XrdsSceneNodePayload::PlayerAnchor(XrdsScenePlayerAnchor::default()),
+        "WorldPanel"      => XrdsSceneNodePayload::WorldPanel(XrdsSceneWorldPanel::default()),
         _ => return None,
     };
 
@@ -214,6 +215,8 @@ pub fn default_transform_for_payload(
         // PlayerAnchor defaults to eye height (1.6 m) — correct whether it is a child
         // of a ground-level Player node or placed standalone in world space.
         XrdsSceneNodePayload::PlayerAnchor(_) => [0.0, 1.6, 0.0],
+        // World panels default to eye height, slightly in front of the user.
+        XrdsSceneNodePayload::WorldPanel(_) => [0.0, 1.5, -1.0],
         _ => [0.0, 0.0, 0.0],
     };
 

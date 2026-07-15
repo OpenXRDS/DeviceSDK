@@ -52,11 +52,23 @@ pub(super) fn install_xrds(app: &mut App) {
     app.init_resource::<ActiveGltfAnimationStates>();
     app.init_resource::<PendingGltfMorphTargetOverrideRequests>();
     app.init_resource::<crate::xrds_api::grab::XrGrabState>();
+    app.init_resource::<xrds_components::XrdsWorldPointerState>();
+    app.init_resource::<xrds_components::XrdsWorldPointerCursors>();
+    // Always present so world-UI systems run on desktop too (the OpenXR plugin only
+    // initialises it when an XR runtime is attached). Desktop hosts (e.g. the editor's
+    // play mode) drive it synthetically from mouse input.
+    app.init_resource::<xrds_openxr::XrInput>();
     app.init_resource::<crate::xrds_api::environment::XrdsAnchorExposureOverride>();
     app.add_message::<xrds_components::XrGrabEvent>();
     app.add_message::<xrds_components::XrDropEvent>();
     app.add_message::<xrds_components::XrZoneEnterEvent>();
     app.add_message::<xrds_components::XrZoneExitEvent>();
+    app.add_message::<xrds_components::XrWorldHoverEnterEvent>();
+    app.add_message::<xrds_components::XrWorldHoverExitEvent>();
+    app.add_message::<xrds_components::XrWorldButtonPressEvent>();
+    app.add_message::<xrds_components::XrWorldButtonReleaseEvent>();
+    app.add_message::<xrds_components::XrWorldSliderChangeEvent>();
+    app.add_message::<xrds_components::XrWorldToggleEvent>();
 
     {
         let mut registry = app.world_mut().resource_mut::<SurfaceInterpreterRegistry>();
@@ -169,8 +181,34 @@ pub(super) fn install_xrds(app: &mut App) {
         sync_imported_scene_environment_policy_system
             .after(apply_pending_gltf_morph_target_override_requests_system),
     );
+    // NoFrustumCulling (used on primitives, text anchors, and world-UI meshes to
+    // survive XR multi-view culling) makes Bevy's calculate_bounds skip the entity,
+    // so it never receives an Aabb — and every Aabb-based feature (grab raycast,
+    // XrdsAPI::raycast, zones) silently stops seeing it. Backfill the Aabb from
+    // the mesh ourselves; NoFrustumCulling still disables culling either way.
+    app.add_systems(Update, ensure_aabbs_for_unculled_meshes_system);
     app.add_systems(Update, crate::xrds_api::grab::grab_system);
     app.add_systems(Update, crate::xrds_api::zone::zone_collision_system);
+    app.add_systems(Update, crate::xrds_api::world_ui_pointer::world_ui_pointer_system);
+    app.add_systems(Startup, crate::xrds_api::world_ui_pointer::spawn_world_ui_cursors_system);
+    // Layout runs after the pointer system (so pointer state is fresh) but before the
+    // button/slider/toggle interaction systems — ensuring `local_position` is correct
+    // when those systems do their per-widget hit-tests.
+    app.add_systems(
+        Update,
+        crate::xrds_api::world_ui_layout::world_ui_layout_system
+            .after(crate::xrds_api::world_ui_pointer::world_ui_pointer_system),
+    );
+    // Button, slider, toggle systems run after layout so positions are stable.
+    app.add_systems(
+        Update,
+        (
+            crate::xrds_api::world_ui_button::world_ui_button_system,
+            crate::xrds_api::world_ui_slider::world_ui_slider_system,
+            crate::xrds_api::world_ui_toggle::world_ui_toggle_system,
+        )
+            .after(crate::xrds_api::world_ui_layout::world_ui_layout_system),
+    );
     // Runs in PreUpdate — before Bevy's audio sink creation — so that entities whose
     // rodio decoder would panic are removed before Bevy ever tries to play them.
     app.add_systems(PreUpdate, pre_validate_audio_decoders_system);
@@ -405,6 +443,34 @@ fn ensure_visibility_on_scene_instance_ready(
         }
         if let Ok(children) = children_query.get(entity) {
             stack.extend(children);
+        }
+    }
+}
+
+/// Backfill `Aabb` on mesh entities that opted out of frustum culling.
+///
+/// Bevy's `calculate_bounds` skips `NoFrustumCulling` entities entirely, so they
+/// never get an `Aabb` — which silently removes them from every Aabb-based
+/// feature in the SDK (grab hover/raycast, `XrdsAPI` raycasts, zone checks).
+/// Computing the box from the mesh keeps those features working; culling stays
+/// disabled because `NoFrustumCulling` takes precedence over a present `Aabb`.
+fn ensure_aabbs_for_unculled_meshes_system(
+    mut commands: Commands,
+    meshes: Res<Assets<Mesh>>,
+    query: Query<
+        (Entity, &Mesh3d),
+        (
+            With<bevy::camera::visibility::NoFrustumCulling>,
+            Without<bevy::camera::primitives::Aabb>,
+        ),
+    >,
+) {
+    use bevy::camera::primitives::MeshAabb;
+    for (entity, mesh3d) in &query {
+        // Mesh may still be loading — retried automatically next frame.
+        let Some(mesh) = meshes.get(&mesh3d.0) else { continue };
+        if let Some(aabb) = mesh.compute_aabb() {
+            commands.entity(entity).insert(aabb);
         }
     }
 }

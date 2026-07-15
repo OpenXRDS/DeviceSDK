@@ -7,6 +7,7 @@ mod patches;
 pub mod primitives;
 mod values;
 pub mod world;
+pub mod world_ui;
 
 pub use camera_params::{
     CameraKind, CameraProjectionParams, OrthographicCameraParams, PerspectiveCameraParams,
@@ -26,6 +27,18 @@ pub use light_params::{
     AmbientLightParams, DirectionalLightParams, LightKind, PointLightParams, SpotLightParams,
 };
 pub use world::audio::XrdsAudioClip;
+pub use world_ui::{
+    XrdsWorldButton, XrdsWorldButtonParams, XrdsWorldButtonState,
+    XrdsWorldImage, XrdsWorldImageParams,
+    XrdsWorldLabel, XrdsWorldLabelParams,
+    XrdsWorldLayout,
+    XrdsWorldPanel, XrdsWorldPointerCursors, XrdsWorldPointerHit, XrdsWorldPointerState,
+    XrdsWorldSlider, XrdsWorldSliderParams,
+    XrdsWorldSurface, XrdsWorldToggle, XrdsWorldToggleParams,
+    XrWorldButtonPressEvent, XrWorldButtonReleaseEvent,
+    XrWorldHoverEnterEvent, XrWorldHoverExitEvent,
+    XrWorldSliderChangeEvent, XrWorldToggleEvent,
+};
 pub use patches::{
     CameraLookAtPatch, CameraProjectionPatch, ExtrudedTextParams, GltfAssetSourcePatch, NamePatch,
     ParentPatch, TextParams, VisibilityPatch,

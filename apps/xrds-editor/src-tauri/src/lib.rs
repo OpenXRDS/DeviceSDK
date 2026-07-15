@@ -9,6 +9,7 @@ mod inspector;
 mod io;
 mod keyboard_shortcuts;
 mod palette;
+mod play_pointer;
 mod toolbar;
 mod viewport_camera;
 mod viewport_gizmo;

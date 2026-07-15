@@ -280,6 +280,46 @@ pub(super) fn spawn_sphere_descriptor(commands: &mut Commands, sphere: &XrdsSphe
     entity
 }
 
+pub(super) fn spawn_world_panel_descriptor(commands: &mut Commands, panel: &XrdsWorldPanel) -> Entity {
+    let entity    = commands.spawn_empty().id();
+    let descriptor = panel.clone();
+    let name      = panel.name.clone();
+    let transform = panel.transform;
+    let visible   = panel.visible;
+    let size      = panel.size;
+    let color     = panel.color;
+    let opacity   = panel.opacity;
+
+    commands.queue(move |world: &mut World| {
+        // Flat quad mesh on the XY plane; normals point local +Z (front face).
+        let mesh = {
+            let mut meshes = world.resource_mut::<Assets<Mesh>>();
+            meshes.add(Mesh::from(bevy::math::primitives::Rectangle::new(size[0], size[1])))
+        };
+
+        let effective_alpha = color[3] * opacity;
+        let material = XrdsMaterialParams {
+            base_color: XrdsColor { rgba: [color[0], color[1], color[2], effective_alpha] },
+            unlit: true,
+            ..XrdsMaterialParams::default()
+        };
+
+        use bevy::camera::visibility::NoFrustumCulling;
+        world.entity_mut(entity).insert((
+            Name::new(name),
+            Mesh3d(mesh),
+            build_transform(&transform),
+            build_visibility_hierarchy_components(visible),
+            XrdsStored(descriptor),
+            XrdsWorldSurface::new(size[0], size[1]),
+            NoFrustumCulling,
+        ));
+        apply_authored_material_to_entity(world, entity, material);
+    });
+
+    entity
+}
+
 pub(super) fn spawn_plane_descriptor(commands: &mut Commands, plane: &XrdsPlane3D) -> Entity {
     let entity = commands.spawn_empty().id();
     let descriptor = plane.clone();
@@ -769,6 +809,490 @@ pub(super) fn spawn_hud_instance_for_anchor(
     }
 
     super::state::XrdsStoredHudInstance { items: item_pairs }
+}
+
+// ── World-space widget spawn functions ────────────────────────────────────────
+
+/// Runtime component that caches the three pre-created material handles for a button so
+/// the button system can swap colours without rebuilding assets each frame.
+#[derive(bevy::prelude::Component)]
+pub(super) struct XrdsWorldButtonMaterials {
+    pub normal:  bevy::prelude::Handle<StandardMaterial>,
+    pub hover:   bevy::prelude::Handle<StandardMaterial>,
+    pub pressed: bevy::prelude::Handle<StandardMaterial>,
+}
+
+/// Spawn a world-space label as a child of `panel_entity`.
+pub(super) fn spawn_world_label_entity(
+    world: &mut World,
+    panel_entity: Entity,
+    params: &xrds_components::XrdsWorldLabelParams,
+) -> Entity {
+    use bevy::render::alpha::AlphaMode;
+    use bevy_rich_text3d::{Text3d, Text3dStyling, TextAtlas};
+    use bevy::color::Srgba;
+    use bevy::camera::visibility::NoFrustumCulling;
+    use bevy::light::NotShadowCaster;
+
+    let [lx, ly]  = params.local_position;
+    let [r, g, b, a] = params.color;
+    let font_size    = params.font_size;
+    let text         = params.text.clone();
+
+    let entity = world.spawn_empty().id();
+
+    let material_handle = {
+        let mut materials = world.resource_mut::<Assets<StandardMaterial>>();
+        materials.add(StandardMaterial {
+            base_color_texture: Some(TextAtlas::DEFAULT_IMAGE.clone()),
+            alpha_mode: AlphaMode::Mask(0.5),
+            unlit: true,
+            cull_mode: None,
+            ..Default::default()
+        })
+    };
+
+    world.entity_mut(entity).insert((
+        bevy::prelude::Name::new(format!("WLabel:{text}")),
+        Text3d::new(text),
+        Text3dStyling {
+            size: 128.0,
+            world_scale: Some(bevy::math::Vec2::splat(font_size * 0.01)),
+            color: Srgba::new(r, g, b, a),
+            ..Default::default()
+        },
+        Mesh3d::default(),
+        MeshMaterial3d(material_handle),
+        Transform::from_xyz(lx, ly, 0.001),
+        build_visibility_hierarchy_components(true),
+        xrds_components::XrdsWorldLabel { local_position: [lx, ly], layout_size: params.layout_size },
+        ChildOf(panel_entity),
+        NotShadowCaster,
+        NoFrustumCulling,
+    ));
+
+    entity
+}
+
+/// Spawn a world-space button (background quad + text child) as a child of `panel_entity`.
+pub(super) fn spawn_world_button_entity(
+    world: &mut World,
+    panel_entity: Entity,
+    params: &xrds_components::XrdsWorldButtonParams,
+) -> Entity {
+    use bevy::render::alpha::AlphaMode;
+    use bevy_rich_text3d::{Text3d, Text3dStyling, TextAtlas};
+    use bevy::color::{Color, Srgba};
+    use bevy::camera::visibility::NoFrustumCulling;
+    use bevy::light::NotShadowCaster;
+
+    let [lx, ly]        = params.local_position;
+    let [bw, bh]        = params.size;
+    let [nr, ng, nb, na] = params.normal_color;
+    let [hr, hg, hb, ha] = params.hover_color;
+    let [pr, pg, pb, pa] = params.pressed_color;
+    let [lr, lg, lb, la] = params.label_color;
+    let font_size        = params.font_size;
+    let label_text       = params.label.clone();
+
+    // — Button background entity —
+    let button_entity = world.spawn_empty().id();
+
+    let (mesh, normal_mat, hover_mat, pressed_mat) = {
+        let mesh = {
+            let mut meshes = world.resource_mut::<Assets<Mesh>>();
+            meshes.add(Mesh::from(bevy::math::primitives::Rectangle::new(bw, bh)))
+        };
+        let mut mats = world.resource_mut::<Assets<StandardMaterial>>();
+        let nm = mats.add(StandardMaterial {
+            base_color: Color::srgba(nr, ng, nb, na),
+            unlit: true,
+            alpha_mode: AlphaMode::Blend,
+            ..Default::default()
+        });
+        let hm = mats.add(StandardMaterial {
+            base_color: Color::srgba(hr, hg, hb, ha),
+            unlit: true,
+            alpha_mode: AlphaMode::Blend,
+            ..Default::default()
+        });
+        let pm = mats.add(StandardMaterial {
+            base_color: Color::srgba(pr, pg, pb, pa),
+            unlit: true,
+            alpha_mode: AlphaMode::Blend,
+            ..Default::default()
+        });
+        (mesh, nm, hm, pm)
+    };
+
+    world.entity_mut(button_entity).insert((
+        bevy::prelude::Name::new(format!("WButton:{label_text}")),
+        Mesh3d(mesh),
+        MeshMaterial3d(normal_mat.clone()),
+        Transform::from_xyz(lx, ly, 0.001),
+        build_visibility_hierarchy_components(true),
+        xrds_components::XrdsWorldButton {
+            local_position: [lx, ly],
+            size: [bw, bh],
+            normal_color:  params.normal_color,
+            hover_color:   params.hover_color,
+            pressed_color: params.pressed_color,
+        },
+        xrds_components::XrdsWorldButtonState::default(),
+        XrdsWorldButtonMaterials { normal: normal_mat, hover: hover_mat, pressed: pressed_mat },
+        ChildOf(panel_entity),
+        NoFrustumCulling,
+    ));
+
+    // — Label text child —
+    let text_entity = world.spawn_empty().id();
+
+    let text_mat = {
+        let mut materials = world.resource_mut::<Assets<StandardMaterial>>();
+        materials.add(StandardMaterial {
+            base_color_texture: Some(TextAtlas::DEFAULT_IMAGE.clone()),
+            alpha_mode: AlphaMode::Mask(0.5),
+            unlit: true,
+            cull_mode: None,
+            ..Default::default()
+        })
+    };
+
+    world.entity_mut(text_entity).insert((
+        bevy::prelude::Name::new(format!("WButton_Text:{label_text}")),
+        Text3d::new(label_text),
+        Text3dStyling {
+            size: 128.0,
+            world_scale: Some(bevy::math::Vec2::splat(font_size * 0.01)),
+            color: Srgba::new(lr, lg, lb, la),
+            ..Default::default()
+        },
+        Mesh3d::default(),
+        MeshMaterial3d(text_mat),
+        Transform::from_xyz(0.0, 0.0, 0.001),
+        build_visibility_hierarchy_components(true),
+        ChildOf(button_entity),
+        NotShadowCaster,
+        NoFrustumCulling,
+    ));
+
+    button_entity
+}
+
+/// Spawn a world-space image (textured quad) as a child of `panel_entity`.
+pub(super) fn spawn_world_image_entity(
+    world: &mut World,
+    panel_entity: Entity,
+    params: &xrds_components::XrdsWorldImageParams,
+) -> Entity {
+    use bevy::render::alpha::AlphaMode;
+    use bevy::color::Color;
+    use bevy::camera::visibility::NoFrustumCulling;
+
+    let [lx, ly]        = params.local_position;
+    let [iw, ih]        = params.size;
+    let [tr, tg, tb, ta] = params.tint;
+    let asset_path      = params.asset_path.clone();
+
+    let entity = world.spawn_empty().id();
+
+    let (mesh, material_handle) = {
+        let mesh = {
+            let mut meshes = world.resource_mut::<Assets<Mesh>>();
+            meshes.add(Mesh::from(bevy::math::primitives::Rectangle::new(iw, ih)))
+        };
+        let texture = world
+            .resource::<bevy::asset::AssetServer>()
+            .load(asset_path);
+        let mat = {
+            let mut materials = world.resource_mut::<Assets<StandardMaterial>>();
+            materials.add(StandardMaterial {
+                base_color_texture: Some(texture),
+                base_color: Color::srgba(tr, tg, tb, ta),
+                unlit: true,
+                alpha_mode: AlphaMode::Blend,
+                ..Default::default()
+            })
+        };
+        (mesh, mat)
+    };
+
+    world.entity_mut(entity).insert((
+        bevy::prelude::Name::new("WImage"),
+        Mesh3d(mesh),
+        MeshMaterial3d(material_handle),
+        Transform::from_xyz(lx, ly, 0.001),
+        build_visibility_hierarchy_components(true),
+        xrds_components::XrdsWorldImage { local_position: [lx, ly], size: [iw, ih] },
+        ChildOf(panel_entity),
+        NoFrustumCulling,
+    ));
+
+    entity
+}
+
+/// Spawn a world-space slider (track quad + thumb quad) as a child of `panel_entity`.
+pub(super) fn spawn_world_slider_entity(
+    world: &mut World,
+    panel_entity: Entity,
+    params: &xrds_components::XrdsWorldSliderParams,
+) -> Entity {
+    use bevy::render::alpha::AlphaMode;
+    use bevy::color::Color;
+    use bevy::camera::visibility::NoFrustumCulling;
+    use super::world_ui_slider::XrdsWorldSliderParts;
+
+    let [lx, ly]         = params.local_position;
+    let [tw, th]         = params.size;
+    let [trr, trg, trb, tra] = params.track_color;
+    let [tmr, tmg, tmb, tma] = params.thumb_color;
+    let ts               = params.thumb_size;
+
+    // Root entity — invisible transform anchor.
+    let root = world.spawn_empty().id();
+
+    // Track mesh + material.
+    let (track_mesh, track_mat) = {
+        let mesh = world.resource_mut::<Assets<Mesh>>()
+            .add(Mesh::from(bevy::math::primitives::Rectangle::new(tw, th)));
+        let mat = world.resource_mut::<Assets<StandardMaterial>>()
+            .add(StandardMaterial {
+                base_color: Color::srgba(trr, trg, trb, tra),
+                unlit: true,
+                alpha_mode: AlphaMode::Blend,
+                ..Default::default()
+            });
+        (mesh, mat)
+    };
+
+    // Thumb mesh + material.
+    let (thumb_mesh, thumb_mat) = {
+        let mesh = world.resource_mut::<Assets<Mesh>>()
+            .add(Mesh::from(bevy::math::primitives::Rectangle::new(ts, ts)));
+        let mat = world.resource_mut::<Assets<StandardMaterial>>()
+            .add(StandardMaterial {
+                base_color: Color::srgba(tmr, tmg, tmb, tma),
+                unlit: true,
+                alpha_mode: AlphaMode::Blend,
+                ..Default::default()
+            });
+        (mesh, mat)
+    };
+
+    // Track entity.
+    let track_entity = world.spawn_empty().id();
+    world.entity_mut(track_entity).insert((
+        bevy::prelude::Name::new("WSlider_Track"),
+        Mesh3d(track_mesh),
+        MeshMaterial3d(track_mat),
+        Transform::from_xyz(0.0, 0.0, 0.0),
+        build_visibility_hierarchy_components(true),
+        ChildOf(root),
+        NoFrustumCulling,
+    ));
+
+    // Thumb entity — initial X position from value.
+    let slider = xrds_components::XrdsWorldSlider {
+        local_position: params.local_position,
+        size:          params.size,
+        min:           params.min,
+        max:           params.max,
+        value:         params.value,
+        track_color:   params.track_color,
+        fill_color:    params.fill_color,
+        thumb_color:   params.thumb_color,
+        thumb_size:    params.thumb_size,
+        dragging_hand: None,
+    };
+    let thumb_x = slider.thumb_x();
+
+    let thumb_entity = world.spawn_empty().id();
+    world.entity_mut(thumb_entity).insert((
+        bevy::prelude::Name::new("WSlider_Thumb"),
+        Mesh3d(thumb_mesh),
+        MeshMaterial3d(thumb_mat),
+        Transform::from_xyz(thumb_x, 0.0, 0.001),
+        build_visibility_hierarchy_components(true),
+        ChildOf(root),
+        NoFrustumCulling,
+    ));
+
+    // Root entity.
+    world.entity_mut(root).insert((
+        bevy::prelude::Name::new("WSlider"),
+        Transform::from_xyz(lx, ly, 0.001),
+        build_visibility_hierarchy_components(true),
+        slider,
+        XrdsWorldSliderParts { thumb: thumb_entity },
+        ChildOf(panel_entity),
+        NoFrustumCulling,
+    ));
+
+    root
+}
+
+/// Spawn a world-space toggle (track quad + thumb quad) as a child of `panel_entity`.
+pub(super) fn spawn_world_toggle_entity(
+    world: &mut World,
+    panel_entity: Entity,
+    params: &xrds_components::XrdsWorldToggleParams,
+) -> Entity {
+    use bevy::render::alpha::AlphaMode;
+    use bevy::color::Color;
+    use bevy::camera::visibility::NoFrustumCulling;
+    use super::world_ui_toggle::XrdsWorldToggleParts;
+
+    let [lx, ly]           = params.local_position;
+    let [tw, th]           = params.size;
+    let [or_, og, ob, oa]  = params.track_off_color;
+    let [nr, ng, nb, na]   = params.track_on_color;
+    let [tmr, tmg, tmb, tma] = params.thumb_color;
+    let thumb_side = th * 0.85;
+
+    // Single track material — colour updated in-place at runtime via Assets<StandardMaterial>.
+    let initial_color = if params.checked {
+        Color::srgba(nr, ng, nb, na)
+    } else {
+        Color::srgba(or_, og, ob, oa)
+    };
+    let track_mat = world.resource_mut::<Assets<StandardMaterial>>()
+        .add(StandardMaterial {
+            base_color: initial_color,
+            unlit: true,
+            alpha_mode: AlphaMode::Blend,
+            ..Default::default()
+        });
+
+    let track_mesh = world.resource_mut::<Assets<Mesh>>()
+        .add(Mesh::from(bevy::math::primitives::Rectangle::new(tw, th)));
+    let thumb_mesh = world.resource_mut::<Assets<Mesh>>()
+        .add(Mesh::from(bevy::math::primitives::Rectangle::new(thumb_side, thumb_side)));
+    let thumb_mat = world.resource_mut::<Assets<StandardMaterial>>()
+        .add(StandardMaterial {
+            base_color: Color::srgba(tmr, tmg, tmb, tma),
+            unlit: true,
+            alpha_mode: AlphaMode::Blend,
+            ..Default::default()
+        });
+
+    let root = world.spawn_empty().id();
+
+    // Track entity.
+    let track_entity = world.spawn_empty().id();
+    world.entity_mut(track_entity).insert((
+        bevy::prelude::Name::new("WToggle_Track"),
+        Mesh3d(track_mesh),
+        MeshMaterial3d(track_mat),
+        Transform::from_xyz(0.0, 0.0, 0.0),
+        build_visibility_hierarchy_components(true),
+        ChildOf(root),
+        NoFrustumCulling,
+    ));
+
+    // Thumb entity.
+    let thumb_entity = world.spawn_empty().id();
+    let travel = tw * 0.5 - thumb_side * 0.5;
+    let thumb_x = if params.checked { travel } else { -travel };
+    world.entity_mut(thumb_entity).insert((
+        bevy::prelude::Name::new("WToggle_Thumb"),
+        Mesh3d(thumb_mesh),
+        MeshMaterial3d(thumb_mat),
+        Transform::from_xyz(thumb_x, 0.0, 0.001),
+        build_visibility_hierarchy_components(true),
+        ChildOf(root),
+        NoFrustumCulling,
+    ));
+
+    // Root entity.
+    world.entity_mut(root).insert((
+        bevy::prelude::Name::new("WToggle"),
+        Transform::from_xyz(lx, ly, 0.001),
+        build_visibility_hierarchy_components(true),
+        xrds_components::XrdsWorldToggle {
+            local_position: params.local_position,
+            size:           params.size,
+            checked:        params.checked,
+            track_off_color: params.track_off_color,
+            track_on_color:  params.track_on_color,
+            thumb_color:     params.thumb_color,
+        },
+        XrdsWorldToggleParts { track: track_entity, thumb: thumb_entity },
+        ChildOf(panel_entity),
+        NoFrustumCulling,
+    ));
+
+    root
+}
+
+/// Spawn a single world-UI widget from a serialised [`XrdsSceneWorldWidget`] definition.
+///
+/// Called by `import_runtime_nodes` when a `WorldPanel` scene node is imported.
+/// The widget becomes a direct child of `panel_entity`.
+pub(super) fn spawn_world_widget_from_scene(
+    world: &mut World,
+    panel_entity: Entity,
+    widget: &xrds_scene_graph::XrdsSceneWorldWidget,
+) {
+    use xrds_components::{
+        XrdsWorldButtonParams, XrdsWorldImageParams, XrdsWorldLabelParams,
+        XrdsWorldSliderParams, XrdsWorldToggleParams,
+    };
+    use xrds_scene_graph::XrdsSceneWorldWidget;
+
+    match widget {
+        XrdsSceneWorldWidget::Label(l) => {
+            spawn_world_label_entity(world, panel_entity, &XrdsWorldLabelParams {
+                text:           l.text.clone(),
+                font_size:      l.font_size,
+                color:          l.color,
+                local_position: l.local_position,
+                layout_size:    l.layout_size,
+            });
+        }
+        XrdsSceneWorldWidget::Button(b) => {
+            spawn_world_button_entity(world, panel_entity, &XrdsWorldButtonParams {
+                label:          b.label.clone(),
+                font_size:      b.font_size,
+                label_color:    b.label_color,
+                size:           b.size,
+                local_position: b.local_position,
+                normal_color:   b.normal_color,
+                hover_color:    b.hover_color,
+                pressed_color:  b.pressed_color,
+            });
+        }
+        XrdsSceneWorldWidget::Image(i) => {
+            spawn_world_image_entity(world, panel_entity, &XrdsWorldImageParams {
+                asset_path:     i.asset_path.clone(),
+                size:           i.size,
+                local_position: i.local_position,
+                tint:           i.tint,
+            });
+        }
+        XrdsSceneWorldWidget::Slider(s) => {
+            spawn_world_slider_entity(world, panel_entity, &XrdsWorldSliderParams {
+                min:            s.min,
+                max:            s.max,
+                value:          s.value,
+                size:           s.size,
+                local_position: s.local_position,
+                track_color:    s.track_color,
+                fill_color:     s.fill_color,
+                thumb_color:    s.thumb_color,
+                thumb_size:     s.thumb_size,
+            });
+        }
+        XrdsSceneWorldWidget::Toggle(t) => {
+            spawn_world_toggle_entity(world, panel_entity, &XrdsWorldToggleParams {
+                checked:         t.checked,
+                size:            t.size,
+                local_position:  t.local_position,
+                track_off_color: t.track_off_color,
+                track_on_color:  t.track_on_color,
+                thumb_color:     t.thumb_color,
+            });
+        }
+    }
 }
 
 pub(super) fn build_scene_asset_path(path: &str, scene_index: usize) -> String {

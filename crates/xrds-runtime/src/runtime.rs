@@ -168,6 +168,45 @@ pub(crate) fn build_bevy_app(params: &RuntimeParameters) -> App {
         asset_plugin.file_path = path.clone();
     }
 
+    // Let relativize_asset_path strip exactly this root from absolute asset
+    // URIs (instead of guessing from an "/assets/" path segment). Resolve a
+    // relative root against the CWD so authored absolute paths can match it.
+    {
+        let configured_root = params.asset_path.as_deref().map(|p| {
+            let pb = std::path::PathBuf::from(p);
+            if pb.is_absolute() {
+                pb
+            } else {
+                std::env::current_dir().map(|d| d.join(&pb)).unwrap_or(pb)
+            }
+        });
+        crate::xrds_api::gltf::set_configured_asset_root(
+            configured_root.as_ref().and_then(|p| p.to_str()),
+        );
+    }
+
+    // On Android, Bevy's default asset source reads from INSIDE the APK via
+    // AAssetManager and treats `file_path` as a path within the APK's assets/ —
+    // an asset_path pointing at a real directory (external storage in dev mode,
+    // extracted cache in APK mode) is silently ignored and every load fails with
+    // AssetReaderError(NotFound). Replace the default source with a filesystem
+    // reader rooted at that directory so both modes read the files that actually
+    // exist on disk.
+    #[cfg(target_os = "android")]
+    if let Some(ref path) = params.asset_path {
+        use bevy::asset::io::{AssetSource, AssetSourceId, file::FileAssetReader};
+        let root = std::path::PathBuf::from(path);
+        if root.is_absolute() && root.is_dir() {
+            let reader_root = root.clone();
+            app.register_asset_source(
+                AssetSourceId::Default,
+                AssetSource::build()
+                    .with_reader(move || Box::new(FileAssetReader::new(reader_root.clone()))),
+            );
+            info!("XRDS: Android asset source overridden to filesystem dir '{}'", root.display());
+        }
+    }
+
     // Pre-configure bundled fonts so bevy_rich_text3d can find them regardless of the
     // working directory at runtime.
     //

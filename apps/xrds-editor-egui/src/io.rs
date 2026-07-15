@@ -350,6 +350,40 @@ pub(crate) fn do_export_app(
         asset.uri = new_uri;
     }
 
+    // Rewrite node payload asset URIs to match the relativised catalog.
+    //
+    // GltfAsset payloads store a fallback `asset_uri` alongside the catalog
+    // `asset_id`. A save on the authoring machine leaves the machine-local
+    // absolute path there; if it leaked into the export, any consumer that hits
+    // the fallback path (missing/renamed catalog entry) would resolve a path
+    // that only exists on the authoring PC. Point the fallback at the same
+    // relative URI as the catalog entry, or flatten it like catalog URIs when
+    // no catalog entry matches.
+    let catalog: std::collections::HashMap<String, String> = export_doc
+        .assets
+        .iter()
+        .map(|a| (a.id.clone(), a.uri.clone()))
+        .collect();
+    for node in &mut export_doc.nodes {
+        if let XrdsSceneNodePayload::GltfAsset(gltf) = &mut node.payload {
+            if let Some(uri) = gltf.asset_id.as_ref().and_then(|id| catalog.get(id)) {
+                gltf.asset_uri = uri.clone();
+            } else if Path::new(&gltf.asset_uri).is_absolute() {
+                let abs = resolve_asset_uri(&gltf.asset_uri, save_path);
+                let new_uri = abs
+                    .file_name()
+                    .map(|f| f.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "asset".to_string());
+                let dest = assets_dir.join(&new_uri);
+                if abs.exists() && !dest.exists() {
+                    std::fs::copy(&abs, &dest)
+                        .map_err(|e| format!("Cannot copy '{}': {e}", abs.display()))?;
+                }
+                gltf.asset_uri = new_uri;
+            }
+        }
+    }
+
     // Write the re-patched scene document.
     export_doc
         .save_json(assets_dir.join("scene.xrds"))

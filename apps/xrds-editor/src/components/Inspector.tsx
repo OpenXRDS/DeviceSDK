@@ -5,6 +5,7 @@ import { rgbaToHex, hexToRgba } from "../types/bridge";
 interface Props {
   snapshot: EditorSnapshot;
   send:     (cmd: EditorCommand) => void;
+  onEditWorldPanel: (id: number) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -177,7 +178,7 @@ function ColorRow({ label, color, onLive, onCommit }: {
 // ---------------------------------------------------------------------------
 // Main Inspector
 // ---------------------------------------------------------------------------
-export function Inspector({ snapshot, send }: Props) {
+export function Inspector({ snapshot, send, onEditWorldPanel }: Props) {
   const node = snapshot.selected_node;
   const prevId = useRef<number | null>(null);
 
@@ -256,14 +257,16 @@ export function Inspector({ snapshot, send }: Props) {
           onLive={v  => { isDragging.current = true;  setRVal(v); send({ type: "SetRotationEuler", payload: { id, degrees: v } }); }}
           onCommit={v => { isDragging.current = false; setRVal(v); commitTf(tVal, v, sVal); }}
         />
-        <Vec3Row rowClass="tf-s" rowLabel="S" values={sVal}
-          onLive={v  => { isDragging.current = true;  setSVal(v); send({ type: "SetScale",         payload: { id, value: v } }); }}
-          onCommit={v => { isDragging.current = false; setSVal(v); commitTf(tVal, rVal, v); }}
-        />
+        {/* WorldPanel size is authored via Width/Height — scale would double-apply */}
+        {node.payload.type !== "WorldPanel" &&
+          <Vec3Row rowClass="tf-s" rowLabel="S" values={sVal}
+            onLive={v  => { isDragging.current = true;  setSVal(v); send({ type: "SetScale",         payload: { id, value: v } }); }}
+            onCommit={v => { isDragging.current = false; setSVal(v); commitTf(tVal, rVal, v); }}
+          />}
       </div>}
 
       {/* Payload-specific sections — key forces remount on node change so useState re-initialises */}
-      <PayloadSection key={node.id} node={node} send={send} isPlaying={snapshot.is_playing} snapshot={snapshot} />
+      <PayloadSection key={node.id} node={node} send={send} isPlaying={snapshot.is_playing} snapshot={snapshot} onEditWorldPanel={onEditWorldPanel} />
     </div>
   );
 }
@@ -368,7 +371,7 @@ function SceneEnvironmentSection({ env, send }: { env: EnvironmentDto | null; se
   );
 }
 
-function PayloadSection({ node, send, isPlaying, snapshot }: { node: NodeInspector; send: (c: EditorCommand) => void; isPlaying: boolean; snapshot: EditorSnapshot }) {
+function PayloadSection({ node, send, isPlaying, snapshot, onEditWorldPanel }: { node: NodeInspector; send: (c: EditorCommand) => void; isPlaying: boolean; snapshot: EditorSnapshot; onEditWorldPanel: (id: number) => void }) {
   const { id, payload } = node;
 
   // Tetrahedron is mapped to Cube DTO on the Rust side
@@ -411,6 +414,9 @@ function PayloadSection({ node, send, isPlaying, snapshot }: { node: NodeInspect
   }
   if (payload.type === "PlayerSpawnZone") {
     return <SpawnZoneSection id={id} p={payload} send={send} snapshot={snapshot} />;
+  }
+  if (payload.type === "WorldPanel") {
+    return <WorldPanelSection id={id} p={payload} send={send} onEditWidgets={onEditWorldPanel} />;
   }
   return null;
 }
@@ -860,6 +866,72 @@ function TextSection({ id, p, parentKind, send }: { id: number; p: any; parentKi
           Move this node under a PlayerAnchor child — it will not follow the camera at runtime.
         </div>
       )}
+    </div>
+  );
+}
+
+function WorldPanelSection({ id, p, send, onEditWidgets }: { id: number; p: any; send: (c: EditorCommand) => void; onEditWidgets: (id: number) => void }) {
+  const [w, setW]   = useState<number>(p.size?.[0] ?? 0.5);
+  const [h, setH]   = useState<number>(p.size?.[1] ?? 0.35);
+  const [color, setColor] = useState<[number,number,number,number]>(p.color ?? [0.1, 0.1, 0.1, 0.9]);
+  const [alpha, setAlpha] = useState<number>(p.color?.[3] ?? 0.9);
+  const [radius, setRadius] = useState<number>(p.corner_radius ?? 0.0);
+  const isDragging = useRef(false);
+
+  // Use primitive values as deps — arrays change reference every snapshot frame,
+  // so depending on p.size/p.color directly would reset sliders at 60 fps.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (isDragging.current) return;
+    setW(p.size?.[0] ?? 0.5);
+    setH(p.size?.[1] ?? 0.35);
+    setColor(p.color ?? [0.1, 0.1, 0.1, 0.9]);
+    setAlpha(p.color?.[3] ?? 0.9);
+    setRadius(p.corner_radius ?? 0.0);
+  }, [p.size?.[0], p.size?.[1], p.color?.[0], p.color?.[1], p.color?.[2], p.color?.[3], p.corner_radius]);
+
+  // opacity is a master-fade field reserved for runtime animation; the editor
+  // passes the stored value through unchanged (background alpha covers styling).
+  const commit = (
+    nw = w, nh = h,
+    nc: [number,number,number,number] = color, na = alpha,
+    nr = radius
+  ) => send({
+    type: "SetWorldPanelParams",
+    payload: { id, size: [nw, nh], color: [nc[0], nc[1], nc[2], na], corner_radius: nr, opacity: p.opacity ?? 1.0 },
+  });
+
+  return (
+    <div className="insp-section">
+      <h4>World Panel</h4>
+      <SliderRow label="Width (m)"  value={w} min={0.05} max={5.0} step={0.01}
+        onLive={v  => { isDragging.current = true;  setW(v); }}
+        onCommit={v => { isDragging.current = false; setW(v); commit(v, h, color, alpha, radius); }} />
+      <SliderRow label="Height (m)" value={h} min={0.05} max={5.0} step={0.01}
+        onLive={v  => { isDragging.current = true;  setH(v); }}
+        onCommit={v => { isDragging.current = false; setH(v); commit(w, v, color, alpha, radius); }} />
+      <ColorRow label="Color" color={color}
+        onLive={v => setColor(v)}
+        onCommit={v => { setColor(v); commit(w, h, v, alpha, radius); }} />
+      <SliderRow label="Alpha" value={alpha} min={0.0} max={1.0} step={0.01}
+        onLive={v  => { isDragging.current = true;  setAlpha(v); }}
+        onCommit={v => { isDragging.current = false; setAlpha(v); commit(w, h, color, v, radius); }} />
+      <SliderRow label="Corner radius" value={radius} min={0.0} max={0.5} step={0.005}
+        onLive={v  => { isDragging.current = true;  setRadius(v); }}
+        onCommit={v => { isDragging.current = false; setRadius(v); commit(w, h, color, alpha, v); }} />
+
+      <h4>Widgets</h4>
+      <div className="insp-row" style={{ justifyContent: "space-between" }}>
+        <span style={{ fontSize: 10, color: "var(--overlay0)" }}>
+          {(p.widgets?.length ?? 0)} widget{(p.widgets?.length ?? 0) !== 1 ? "s" : ""}
+          {(p.layout?.type ?? "None") !== "None" ? ` · layout: ${p.layout.type}` : ""}
+        </span>
+        <button className="tb-btn" style={{ fontSize: 11, padding: "3px 10px" }}
+          title="Open the panel canvas editor to add, drag, and edit widgets"
+          onClick={() => onEditWidgets(id)}>
+          Edit Widgets ↗
+        </button>
+      </div>
     </div>
   );
 }

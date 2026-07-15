@@ -58,6 +58,9 @@ pub(super) fn register_default_interpreters(registry: &mut SurfaceInterpreterReg
             material: XrdsMaterialParams::default(),
         }
     });
+    registry.register_entity::<XrdsWorldPanel, _>(|panel, commands, _asset_server| {
+        spawn_world_panel_descriptor(commands, panel)
+    });
     registry.register_entity::<XrdsAudioClip, _>(|audio, commands, _asset_server| {
         spawn_audio_clip_descriptor(commands, audio)
     });

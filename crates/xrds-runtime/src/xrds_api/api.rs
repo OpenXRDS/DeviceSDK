@@ -498,6 +498,38 @@ impl XrdsAPI<'_> {
                     reserve_runtime_id_in_world(self.app.world_mut(), id)?;
                     spawn_interaction_zone_entity(self.app.world_mut(), id, &node, &zone)
                 }
+                XrdsSceneRuntimeComponent::WorldPanel(panel_desc, widgets, scene_layout) => {
+                    // spawn_with_id applies the command queue immediately, so the panel entity
+                    // is fully initialised (mesh, XrdsWorldSurface, etc.) on return.
+                    let panel_entity = self.spawn_with_id(id, &panel_desc)?.entity();
+
+                    // Spawn every widget as a direct child of the panel.
+                    for widget in &widgets {
+                        spawn_world_widget_from_scene(self.app.world_mut(), panel_entity, widget);
+                    }
+
+                    // Apply optional layout policy.
+                    use xrds_scene_graph::XrdsSceneWorldLayout;
+                    let xrds_layout = match &scene_layout {
+                        XrdsSceneWorldLayout::None => None,
+                        XrdsSceneWorldLayout::VStack { gap } => {
+                            Some(xrds_components::XrdsWorldLayout::VStack { gap: *gap })
+                        }
+                        XrdsSceneWorldLayout::HStack { gap } => {
+                            Some(xrds_components::XrdsWorldLayout::HStack { gap: *gap })
+                        }
+                        XrdsSceneWorldLayout::Grid { cols, gap } => {
+                            Some(xrds_components::XrdsWorldLayout::Grid { cols: *cols, gap: *gap })
+                        }
+                    };
+                    if let Some(layout) = xrds_layout {
+                        if let Ok(mut e) = self.app.world_mut().get_entity_mut(panel_entity) {
+                            e.insert(layout);
+                        }
+                    }
+
+                    panel_entity
+                }
             };
 
             self.app
@@ -914,6 +946,161 @@ impl XrdsAPI<'_> {
     ///
     /// Update the text at runtime with [`Self::set_text_params`] (in setup) or
     /// [`XrdsUpdateContext::set_text_params`] (in update).
+    /// Spawn a world-space UI panel at the given world transform.
+    ///
+    /// The panel is a flat quad mesh anchored at a fixed world position.
+    /// Unlike the HUD, it does not follow the player; the player points at it
+    /// with an XR controller ray to interact (diegetic / world-space UI).
+    ///
+    /// Returns a handle you can pass to `set_transform`, `spawn_world_button`, etc.
+    ///
+    /// # Example
+    /// ```ignore
+    /// let panel = api.spawn_world_panel(
+    ///     XrdsWorldPanel::new()
+    ///         .with_size(0.6, 0.4)
+    ///         .with_color(0.1, 0.1, 0.1, 0.9),
+    /// );
+    /// api.set_transform(&panel, Transform::from_xyz(0.0, 1.5, -1.0));
+    /// ```
+    pub fn spawn_world_panel(&mut self, descriptor: XrdsWorldPanel) -> Handle<XrdsWorldPanel> {
+        self.spawn(&descriptor)
+    }
+
+    /// Spawn a text label as a child of the given panel.
+    ///
+    /// The returned handle's `.entity()` refers to the label entity; pass it to
+    /// `ctx.set_world_label_text(handle, "...")` to update text at runtime.
+    ///
+    /// # Example
+    /// ```ignore
+    /// let lbl = api.spawn_world_label(&panel, XrdsWorldLabelParams {
+    ///     text: "Score: 0".to_string(),
+    ///     font_size: 0.05,
+    ///     local_position: [0.0, 0.1],
+    ///     ..default()
+    /// });
+    /// ```
+    pub fn spawn_world_label(
+        &mut self,
+        panel: &Handle<XrdsWorldPanel>,
+        params: XrdsWorldLabelParams,
+    ) -> Handle<XrdsWorldLabel> {
+        let panel_entity = panel.entity();
+        let world = self.app.world_mut();
+        let entity = spawn_world_label_entity(world, panel_entity, &params);
+        Handle::from(entity)
+    }
+
+    /// Spawn a pressable button as a child of the given panel.
+    ///
+    /// Listen for presses via `ctx.world_button_presses()` and compare
+    /// `ev.button_entity == btn.entity()`.
+    ///
+    /// # Example
+    /// ```ignore
+    /// let btn = api.spawn_world_button(&panel, XrdsWorldButtonParams {
+    ///     label: "Start".to_string(),
+    ///     size: [0.2, 0.06],
+    ///     local_position: [0.0, -0.1],
+    ///     ..default()
+    /// });
+    /// ```
+    pub fn spawn_world_button(
+        &mut self,
+        panel: &Handle<XrdsWorldPanel>,
+        params: XrdsWorldButtonParams,
+    ) -> Handle<XrdsWorldButton> {
+        let panel_entity = panel.entity();
+        let world = self.app.world_mut();
+        let entity = spawn_world_button_entity(world, panel_entity, &params);
+        Handle::from(entity)
+    }
+
+    /// Spawn a textured image quad as a child of the given panel.
+    ///
+    /// # Example
+    /// ```ignore
+    /// let img = api.spawn_world_image(&panel, XrdsWorldImageParams {
+    ///     asset_path: "textures/logo.png".to_string(),
+    ///     size: [0.12, 0.12],
+    ///     local_position: [0.0, 0.15],
+    ///     ..default()
+    /// });
+    /// ```
+    pub fn spawn_world_image(
+        &mut self,
+        panel: &Handle<XrdsWorldPanel>,
+        params: XrdsWorldImageParams,
+    ) -> Handle<XrdsWorldImage> {
+        let panel_entity = panel.entity();
+        let world = self.app.world_mut();
+        let entity = spawn_world_image_entity(world, panel_entity, &params);
+        Handle::from(entity)
+    }
+
+    /// Spawn a drag-to-scrub slider as a child of the given panel.
+    ///
+    /// # Example
+    /// ```ignore
+    /// let sld = api.spawn_world_slider(&panel, XrdsWorldSliderParams {
+    ///     min: 0.0, max: 1.0, value: 0.5,
+    ///     local_position: [0.0, -0.05],
+    ///     ..default()
+    /// });
+    /// ```
+    pub fn spawn_world_slider(
+        &mut self,
+        panel: &Handle<XrdsWorldPanel>,
+        params: XrdsWorldSliderParams,
+    ) -> Handle<XrdsWorldSlider> {
+        let panel_entity = panel.entity();
+        let world = self.app.world_mut();
+        let entity = spawn_world_slider_entity(world, panel_entity, &params);
+        Handle::from(entity)
+    }
+
+    /// Spawn a binary on/off toggle as a child of the given panel.
+    ///
+    /// # Example
+    /// ```ignore
+    /// let tog = api.spawn_world_toggle(&panel, XrdsWorldToggleParams {
+    ///     checked: false,
+    ///     local_position: [0.15, 0.05],
+    ///     ..default()
+    /// });
+    /// ```
+    pub fn spawn_world_toggle(
+        &mut self,
+        panel: &Handle<XrdsWorldPanel>,
+        params: XrdsWorldToggleParams,
+    ) -> Handle<XrdsWorldToggle> {
+        let panel_entity = panel.entity();
+        let world = self.app.world_mut();
+        let entity = spawn_world_toggle_entity(world, panel_entity, &params);
+        Handle::from(entity)
+    }
+
+    /// Set (or replace) the layout policy on a world panel.
+    ///
+    /// Inserts an [`XrdsWorldLayout`] component on the panel entity. The layout system then
+    /// repositions child widgets every frame. Call with [`XrdsWorldLayout::None`] to revert
+    /// to manual positioning.
+    ///
+    /// ```ignore
+    /// api.set_world_panel_layout(&panel, XrdsWorldLayout::vstack(0.01));
+    /// ```
+    pub fn set_world_panel_layout(
+        &mut self,
+        panel: &Handle<XrdsWorldPanel>,
+        layout: xrds_components::XrdsWorldLayout,
+    ) {
+        let entity = panel.entity();
+        if let Ok(mut e) = self.app.world_mut().get_entity_mut(entity) {
+            e.insert(layout);
+        }
+    }
+
     pub fn spawn_hud_label(&mut self, text: &str, offset: Vec3) -> Handle<XrdsText> {
         let descriptor = XrdsText {
             name: "HudLabel".to_string(),

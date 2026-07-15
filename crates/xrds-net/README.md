@@ -2,10 +2,14 @@
 
 XRDS network library
 
-## Supported Platform/Architecture
+## Target Platform/Architecture
 
 - Linux x86/x64
 - Android arm/arm64
+- Windows x86/x64
+
+## Supported Platform/Architecture
+
 - Windows x86/x64
 
 ## Supported Protocols

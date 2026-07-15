@@ -860,11 +860,34 @@ fn android_main(android_app: winit::platform::android::activity::AndroidApp) {
     );
     let external_scene = external_dir.join("scene.json");
 
-    let (scene_path, opt_asset_path) = if external_scene.exists() {
+    let (scene_path, opt_asset_path, font_paths) = if external_scene.exists() {
         // Dev mode — scene and assets are on external storage; no extraction needed.
         log::info!("[xrds-app] dev mode: loading scene from external storage");
-        let ap = external_dir.join("assets").to_string_lossy().into_owned();
-        (external_scene, Some(ap))
+        let assets_dir = external_dir.join("assets");
+
+        // Set CWD to the external assets dir so validate_gltf_source (which resolves
+        // relative paths against CWD) can find pushed GLB/GLTF files by bare filename,
+        // mirroring what APK mode does with cache_dir below.
+        if let Err(e) = std::env::set_current_dir(&assets_dir) {
+            log::warn!("[xrds-app] could not set CWD to '{}': {e}", assets_dir.display());
+        }
+
+        // Fonts: prefer pushed fonts (auto-discovered from asset_path/fonts/); if the
+        // push omitted them, fall back to the APK-bundled fonts extracted to cache.
+        // Without any font, cosmic-text panics at the first text render and the app
+        // appears to hang with no frames submitted.
+        let font_paths = if assets_dir.join("fonts").join("NotoSans-Regular.ttf").exists() {
+            None
+        } else {
+            log::info!(
+                "[xrds-app] no fonts under '{}/fonts' — extracting APK-bundled fonts",
+                assets_dir.display()
+            );
+            extract_apk_fonts(&android_app, PACKAGE)
+        };
+
+        let ap = assets_dir.to_string_lossy().into_owned();
+        (external_scene, Some(ap), font_paths)
     } else {
         // APK-bundled mode — extract all bundled assets from the APK to the internal
         // cache directory, then point Bevy's AssetServer at that directory.
@@ -959,7 +982,7 @@ fn android_main(android_app: winit::platform::android::activity::AndroidApp) {
         }
 
         let cache_dir_str = cache_dir.to_string_lossy().into_owned();
-        (cached_scene, Some(cache_dir_str))
+        (cached_scene, Some(cache_dir_str), None)
     };
 
     // Give bevy_winit the AndroidApp handle before App::run() is called.
@@ -972,8 +995,65 @@ fn android_main(android_app: winit::platform::android::activity::AndroidApp) {
         enable_xr: true,
         asset_path: opt_asset_path,
         allow_unapproved_paths: true,
+        font_paths,
         ..Default::default()
     })
     .run_xrds(SceneFileApp { scene_path, gltf_node_ids: Vec::new(), hud_handle: None, loading_hud: None })
     .expect("runtime error");
+}
+
+/// Extract the APK-bundled NotoSans fonts to internal cache and return their paths.
+///
+/// Used by dev mode as a fallback when the pushed external assets have no fonts/
+/// directory. Returns `None` if nothing could be extracted (the runtime then falls
+/// back to system font scanning).
+#[cfg(target_os = "android")]
+fn extract_apk_fonts(
+    android_app: &winit::platform::android::activity::AndroidApp,
+    package: &str,
+) -> Option<Vec<String>> {
+    use std::io::Read;
+
+    let fonts_cache = std::path::PathBuf::from(format!("/data/data/{package}/cache/fonts"));
+    if let Err(e) = std::fs::create_dir_all(&fonts_cache) {
+        log::warn!("[xrds-app] cannot create '{}': {e}", fonts_cache.display());
+        return None;
+    }
+
+    let font_names = [
+        "NotoSans-Regular.ttf",
+        "NotoSans-Bold.ttf",
+        "NotoSans-Italic.ttf",
+        "NotoSans-BoldItalic.ttf",
+    ];
+    let mut extracted = Vec::new();
+    for name in font_names {
+        let dest = fonts_cache.join(name);
+        if !dest.exists() {
+            let rel = format!("fonts/{name}");
+            let Ok(cstr) = std::ffi::CString::new(rel.as_str()) else { continue };
+            let Some(mut f) = android_app.asset_manager().open(&cstr) else {
+                log::warn!("[xrds-app] font not bundled in APK: {rel}");
+                continue;
+            };
+            let mut bytes = Vec::new();
+            if let Err(e) = f.read_to_end(&mut bytes) {
+                log::warn!("[xrds-app] failed to read APK font '{rel}': {e}");
+                continue;
+            }
+            if let Err(e) = std::fs::write(&dest, &bytes) {
+                log::warn!("[xrds-app] failed to write '{}': {e}", dest.display());
+                continue;
+            }
+        }
+        extracted.push(dest.to_string_lossy().into_owned());
+    }
+
+    if extracted.is_empty() {
+        log::warn!("[xrds-app] no APK fonts extracted — text rendering may fail");
+        None
+    } else {
+        log::info!("[xrds-app] using {} APK-bundled font(s) from cache", extracted.len());
+        Some(extracted)
+    }
 }

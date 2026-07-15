@@ -873,4 +873,130 @@ impl XrdsUpdateContext<'_> {
     pub fn teleport_player(&mut self, position: Vec3) {
         teleport_player_in_world(self.world, position);
     }
+
+    // ── World-space UI ────────────────────────────────────────────────────────
+
+    /// Iterate button press events fired this frame.
+    ///
+    /// Compare `ev.button_entity == btn.entity()` to identify the source button.
+    ///
+    /// # Example
+    /// ```ignore
+    /// for ev in ctx.world_button_presses() {
+    ///     if ev.button_entity == start_btn.entity() {
+    ///         ctx.set_world_label_text(&status_lbl, "Started!");
+    ///     }
+    /// }
+    /// ```
+    pub fn world_button_presses(
+        &self,
+    ) -> impl Iterator<Item = &xrds_components::XrWorldButtonPressEvent> {
+        use bevy::ecs::message::Messages;
+        self.world
+            .get_resource::<Messages<xrds_components::XrWorldButtonPressEvent>>()
+            .into_iter()
+            .flat_map(|m| m.iter_current_update_messages())
+    }
+
+    /// Iterate button release events fired this frame.
+    pub fn world_button_releases(
+        &self,
+    ) -> impl Iterator<Item = &xrds_components::XrWorldButtonReleaseEvent> {
+        use bevy::ecs::message::Messages;
+        self.world
+            .get_resource::<Messages<xrds_components::XrWorldButtonReleaseEvent>>()
+            .into_iter()
+            .flat_map(|m| m.iter_current_update_messages())
+    }
+
+    /// Replace the text content of a world-space label.
+    ///
+    /// The label entity is re-meshed by `bevy_rich_text3d` on the next frame.
+    pub fn set_world_label_text(
+        &mut self,
+        handle: &Handle<xrds_components::XrdsWorldLabel>,
+        text: impl Into<String>,
+    ) {
+        use bevy_rich_text3d::Text3d;
+        let entity = handle.entity();
+        if let Ok(mut e) = self.world.get_entity_mut(entity) {
+            e.insert(Text3d::new(text.into()));
+        }
+    }
+
+    /// Iterate slider change events fired this frame.
+    ///
+    /// # Example
+    /// ```ignore
+    /// for ev in ctx.world_slider_changes() {
+    ///     if ev.slider_entity == vol_slider.entity() {
+    ///         set_volume(ev.value);
+    ///     }
+    /// }
+    /// ```
+    pub fn world_slider_changes(
+        &self,
+    ) -> impl Iterator<Item = &xrds_components::XrWorldSliderChangeEvent> {
+        use bevy::ecs::message::Messages;
+        self.world
+            .get_resource::<Messages<xrds_components::XrWorldSliderChangeEvent>>()
+            .into_iter()
+            .flat_map(|m| m.iter_current_update_messages())
+    }
+
+    /// Iterate toggle state-change events fired this frame.
+    ///
+    /// # Example
+    /// ```ignore
+    /// for ev in ctx.world_toggle_events() {
+    ///     if ev.toggle_entity == shadows_tog.entity() {
+    ///         ctx.set_shadows_enabled(ev.checked);
+    ///     }
+    /// }
+    /// ```
+    pub fn world_toggle_events(
+        &self,
+    ) -> impl Iterator<Item = &xrds_components::XrWorldToggleEvent> {
+        use bevy::ecs::message::Messages;
+        self.world
+            .get_resource::<Messages<xrds_components::XrWorldToggleEvent>>()
+            .into_iter()
+            .flat_map(|m| m.iter_current_update_messages())
+    }
+
+    /// Set a slider to a specific value and reposition its thumb immediately.
+    ///
+    /// Does not fire [`XrWorldSliderChangeEvent`].
+    pub fn set_world_slider_value(
+        &mut self,
+        handle: &Handle<xrds_components::XrdsWorldSlider>,
+        value: f32,
+    ) {
+        super::world_ui_slider::set_slider_value_in_world(self.world, handle.entity(), value);
+    }
+
+    /// Set a toggle's checked state and update visuals immediately.
+    ///
+    /// Does not fire [`XrWorldToggleEvent`].
+    pub fn set_world_toggle(
+        &mut self,
+        handle: &Handle<xrds_components::XrdsWorldToggle>,
+        checked: bool,
+    ) {
+        super::world_ui_toggle::set_toggle_in_world(self.world, handle.entity(), checked);
+    }
+
+    /// Change the layout policy on a world panel at runtime.
+    ///
+    /// Takes effect on the next frame when the layout system runs.
+    pub fn set_world_panel_layout(
+        &mut self,
+        panel: &Handle<xrds_components::XrdsWorldPanel>,
+        layout: xrds_components::XrdsWorldLayout,
+    ) {
+        let entity = panel.entity();
+        if let Ok(mut e) = self.world.get_entity_mut(entity) {
+            e.insert(layout);
+        }
+    }
 }

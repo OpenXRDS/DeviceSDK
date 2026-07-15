@@ -250,7 +250,8 @@ pub fn apply_io_command(
 
             // Prepare a portable copy of the document with relative asset URIs.
             let doc = session.0.document().clone();
-            let (exported_doc, copy_errors) = prepare_export_document(&doc, out);
+            let scene_dir = session.0.save_path().and_then(|p| p.parent()).map(|p| p.to_path_buf());
+            let (exported_doc, copy_errors) = prepare_export_document(&doc, out, scene_dir.as_deref());
 
             let scene_path = out.join("scene.json");
             if let Err(e) = exported_doc.save_json(&scene_path) {
@@ -334,7 +335,8 @@ pub fn apply_io_command(
             }
 
             let doc = session.0.document().clone();
-            let (exported_doc, copy_errors) = prepare_export_document(&doc, &staging);
+            let scene_dir = session.0.save_path().and_then(|p| p.parent()).map(|p| p.to_path_buf());
+            let (exported_doc, copy_errors) = prepare_export_document(&doc, &staging, scene_dir.as_deref());
             for e in &copy_errors { error!("[io/apk] asset copy: {}", e); }
 
             let scene_path = staging.join("scene.json");
@@ -348,6 +350,15 @@ pub fn apply_io_command(
 
             // Shared log + result for the background thread.
             let log    = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+            // Surface asset staging problems in the build log — a scene that
+            // references missing files otherwise produces an APK with no models
+            // and no visible explanation.
+            {
+                let mut log_lines = log.lock().unwrap();
+                for e in &copy_errors {
+                    log_lines.push(format!("[err] asset staging: {e}"));
+                }
+            }
             let result = std::sync::Arc::new(std::sync::Mutex::new(
                 None::<Result<String, String>>
             ));
@@ -417,7 +428,19 @@ pub fn apply_io_command(
                 });
                 std::thread::spawn(move || {
                     for line in BufReader::new(stderr).lines().flatten() {
-                        log_err.lock().unwrap().push(format!("[err] {line}"));
+                        // cargo/gradle write ALL diagnostics to stderr — progress,
+                        // warnings, and errors alike. Tag only real errors so the
+                        // build log doesn't present routine output as failures.
+                        let trimmed = line.trim_start();
+                        let tagged = if trimmed.starts_with("error")
+                            || trimmed.contains("error:")
+                            || trimmed.contains("error[")
+                        {
+                            format!("[err] {line}")
+                        } else {
+                            line
+                        };
+                        log_err.lock().unwrap().push(tagged);
                     }
                     let _ = tx2.send(());
                 });
@@ -574,28 +597,64 @@ fn check_apk_prerequisites() -> Vec<ApkPrerequisite> {
 
 /// Clone the document, copy referenced assets to `output_dir/assets/`, and
 /// replace absolute URIs with relative ones so the exported app is self-contained.
+///
+/// `scene_dir` is the directory of the opened scene file (save path parent);
+/// relative catalog URIs are resolved against it (`<scene_dir>/<uri>`, then
+/// `<scene_dir>/assets/<uri>`) so portable scenes stage their files too — a
+/// relative URI whose file cannot be found is reported in the error list.
 fn prepare_export_document(
     doc: &xrds_scene_graph::XrdsSceneDocument,
     output_dir: &Path,
+    scene_dir: Option<&Path>,
 ) -> (xrds_scene_graph::XrdsSceneDocument, Vec<String>) {
     let assets_dir = output_dir.join("assets");
     let _ = std::fs::create_dir_all(&assets_dir);
     let mut new_doc = doc.clone();
     let mut errors  = Vec::new();
 
-    // Pass 1: rewrite catalog URIs (absolute → bare filename) and copy files.
-    // URI = plain filename (no "assets/" prefix); the runtime's asset server is
-    // configured to look in exe_dir/assets/ (desktop) or the APK assets/ directory
-    // (Android), so bare filenames resolve correctly in both contexts.
+    // Pass 1: copy every catalog file into assets/ and make its URI relative.
+    // Absolute URIs are flattened to a bare filename; relative URIs keep their
+    // subdirectory structure (e.g. "environment_maps/diffuse.ktx2"). URIs carry
+    // no "assets/" prefix; the runtime's asset server root is exe_dir/assets/
+    // (desktop) or the extracted APK assets root (Android), so these relative
+    // URIs resolve correctly in both contexts.
     for asset in &mut new_doc.assets {
         let src = Path::new(&asset.uri);
-        if src.is_absolute() && src.exists() {
-            let filename = src.file_name().unwrap_or_default().to_string_lossy();
-            let dst = assets_dir.join(filename.as_ref());
-            if let Err(e) = std::fs::copy(src, &dst) {
-                errors.push(format!("copy '{}': {e}", src.display()));
+        if src.is_absolute() {
+            if src.exists() {
+                let filename = src.file_name().unwrap_or_default().to_string_lossy();
+                let dst = assets_dir.join(filename.as_ref());
+                if let Err(e) = std::fs::copy(src, &dst) {
+                    errors.push(format!("copy '{}': {e}", src.display()));
+                } else {
+                    asset.uri = filename.to_string();
+                }
             } else {
-                asset.uri = filename.to_string();
+                errors.push(format!("asset '{}' not found: {}", asset.id, asset.uri));
+            }
+        } else {
+            let resolved = scene_dir.and_then(|d| {
+                [d.join(&asset.uri), d.join("assets").join(&asset.uri)]
+                    .into_iter()
+                    .find(|c| c.is_file())
+            });
+            match resolved {
+                Some(found) => {
+                    let rel = asset.uri.replace('\\', "/");
+                    let dst = assets_dir.join(rel.replace('/', std::path::MAIN_SEPARATOR_STR));
+                    if let Some(parent) = dst.parent() {
+                        let _ = std::fs::create_dir_all(parent);
+                    }
+                    if let Err(e) = std::fs::copy(&found, &dst) {
+                        errors.push(format!("copy '{}': {e}", found.display()));
+                    } else {
+                        asset.uri = rel;
+                    }
+                }
+                None => errors.push(format!(
+                    "asset '{}' not found near the scene file: {}",
+                    asset.id, asset.uri
+                )),
             }
         }
     }
@@ -770,5 +829,106 @@ fn copy_dir_recursive(src: &Path, dst: &Path) {
         } else {
             let _ = std::fs::copy(entry.path(), dst_path);
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use xrds_scene_graph::{XrdsSceneAsset, XrdsSceneGltfAsset, XrdsSceneNode, XrdsSceneNodeId};
+
+    /// Regression: a scene with RELATIVE catalog URIs (the portable layout
+    /// produced by export / dev-mode pushes) must still stage its asset files
+    /// when re-exported. Before the fix only absolute URIs were copied, so the
+    /// APK shipped with scene.json but no models.
+    #[test]
+    fn prepare_export_stages_relative_uri_assets() {
+        let base = std::env::temp_dir()
+            .join(format!("xrds-export-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let scene_dir = base.join("scene");
+        let out_dir = base.join("out");
+        std::fs::create_dir_all(scene_dir.join("assets/environment_maps")).unwrap();
+        std::fs::write(scene_dir.join("assets/drone.glb"), b"stub").unwrap();
+        std::fs::write(scene_dir.join("assets/environment_maps/diffuse.ktx2"), b"stub").unwrap();
+
+        let doc = XrdsSceneDocument {
+            assets: vec![
+                XrdsSceneAsset {
+                    id: "drone".into(),
+                    uri: "drone.glb".into(),
+                    kind: XrdsSceneAssetKind::Gltf,
+                },
+                XrdsSceneAsset {
+                    id: "env_diffuse".into(),
+                    uri: "environment_maps/diffuse.ktx2".into(),
+                    kind: XrdsSceneAssetKind::EnvironmentMap,
+                },
+            ],
+            nodes: vec![XrdsSceneNode {
+                id: XrdsSceneNodeId(1),
+                parent_id: None,
+                name: "drone".into(),
+                enabled: true,
+                visible: true,
+                grabbable: false,
+                transform: Default::default(),
+                payload: XrdsSceneNodePayload::GltfAsset(XrdsSceneGltfAsset {
+                    asset_id: Some("drone".into()),
+                    asset_uri: "C:/somewhere/else/drone.glb".into(),
+                    scene_index: 0,
+                    export_policy: xrds_scene_graph::XrdsGltfAssetExportPolicy::KeepExternalReference,
+                }),
+                editor: Default::default(),
+            }],
+            ..Default::default()
+        };
+
+        let (exported, errors) = prepare_export_document(&doc, &out_dir, Some(&scene_dir));
+
+        assert!(errors.is_empty(), "unexpected staging errors: {errors:?}");
+        assert!(out_dir.join("assets/drone.glb").is_file());
+        assert!(out_dir.join("assets/environment_maps/diffuse.ktx2").is_file());
+        assert_eq!(exported.assets[0].uri, "drone.glb");
+        assert_eq!(exported.assets[1].uri, "environment_maps/diffuse.ktx2");
+        // Payload fallback URI must be rewritten to the catalog's portable URI.
+        let XrdsSceneNodePayload::GltfAsset(gltf) = &exported.nodes[0].payload else {
+            panic!("expected gltf payload");
+        };
+        assert_eq!(gltf.asset_uri, "drone.glb");
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A relative URI whose file cannot be found near the scene must produce a
+    /// staging error (surfaced in the build log) instead of silently exporting
+    /// an APK without the asset.
+    #[test]
+    fn prepare_export_reports_missing_relative_assets() {
+        let base = std::env::temp_dir()
+            .join(format!("xrds-export-missing-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let scene_dir = base.join("scene");
+        let out_dir = base.join("out");
+        std::fs::create_dir_all(&scene_dir).unwrap();
+
+        let doc = XrdsSceneDocument {
+            assets: vec![XrdsSceneAsset {
+                id: "ghost".into(),
+                uri: "ghost.glb".into(),
+                kind: XrdsSceneAssetKind::Gltf,
+            }],
+            ..Default::default()
+        };
+
+        let (_, errors) = prepare_export_document(&doc, &out_dir, Some(&scene_dir));
+        assert_eq!(errors.len(), 1, "expected one staging error: {errors:?}");
+        assert!(errors[0].contains("ghost.glb"));
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

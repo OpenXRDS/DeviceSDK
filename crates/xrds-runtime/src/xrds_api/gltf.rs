@@ -17,26 +17,57 @@ fn resolve_gltf_document_path(path: &str) -> Option<PathBuf> {
     candidates.into_iter().find(|candidate| candidate.is_file())
 }
 
+/// The asset root directory the runtime's `AssetServer` was configured with.
+/// Set once by `build_bevy_app`; consulted by `relativize_asset_path`.
+static CONFIGURED_ASSET_ROOT: std::sync::RwLock<Option<String>> = std::sync::RwLock::new(None);
+
+/// Record the AssetServer root so `relativize_asset_path` can strip exactly
+/// that prefix (and nothing else) from absolute asset paths.
+pub(crate) fn set_configured_asset_root(root: Option<&str>) {
+    let normalized = root.map(|r| r.replace('\\', "/").trim_end_matches('/').to_string());
+    *CONFIGURED_ASSET_ROOT.write().unwrap() = normalized;
+}
+
+/// Strip `root` from the front of `normalized` (both forward-slash form).
+/// Case-insensitive on Windows. Returns None if `normalized` is not under `root`.
+fn strip_asset_root_prefix(normalized: &str, root: &str) -> Option<String> {
+    let matches_prefix = if cfg!(windows) {
+        normalized.len() > root.len()
+            && normalized[..root.len()].eq_ignore_ascii_case(root)
+    } else {
+        normalized.starts_with(root)
+    };
+    if !matches_prefix {
+        return None;
+    }
+    let rest = normalized[root.len()..].trim_start_matches('/');
+    (!rest.is_empty()).then(|| rest.to_string())
+}
+
 /// Convert a raw catalog URI (which may be an absolute path when the scene
-/// has not yet been saved) to a path relative to the `assets/` root that
-/// Bevy's `AssetServer` can accept.
+/// has not yet been saved) to a path that Bevy's `AssetServer` can accept.
 ///
 /// Rules:
-/// - If the path is already relative → return as-is.
-/// - If it is absolute and contains `/assets/` → strip everything up to and
-///   including that segment.
-/// - Otherwise (absolute but no `/assets/` anchor) → return as-is and let
-///   the caller handle the error.
+/// - If the path is already relative → return as-is (resolved against the
+///   AssetServer root).
+/// - If it is absolute and lies under the configured asset root → strip the
+///   root prefix so it resolves as a normal relative asset path.
+/// - Otherwise → keep the absolute path. With `UnapprovedPathMode::Allow`
+///   the file reader loads absolute paths directly; anchoring on an arbitrary
+///   `/assets/` segment (the old heuristic) rewrote foreign paths like
+///   `C:/…/example/assets/foo.glb` into the app's own asset root, where the
+///   file does not exist.
 pub(super) fn relativize_asset_path(path: &str) -> String {
     let normalized = path.replace('\\', "/");
     if !std::path::Path::new(&normalized).is_absolute() {
         return normalized;
     }
-    if let Some(idx) = normalized.find("/assets/") {
-        normalized[idx + "/assets/".len()..].to_string()
-    } else {
-        normalized
+    if let Some(root) = CONFIGURED_ASSET_ROOT.read().unwrap().as_deref() {
+        if let Some(rel) = strip_asset_root_prefix(&normalized, root) {
+            return rel;
+        }
     }
+    normalized
 }
 
 
@@ -119,4 +150,37 @@ mod tests {
     }
 
     // magic_wand_rejected_too_many_morph_targets test removed — file was deleted.
+
+    #[test]
+    fn relative_paths_pass_through_unchanged() {
+        assert_eq!(relativize_asset_path("phoenix_bird.glb"), "phoenix_bird.glb");
+        assert_eq!(
+            relativize_asset_path("models\\animated\\phoenix_bird.glb"),
+            "models/animated/phoenix_bird.glb"
+        );
+    }
+
+    #[test]
+    fn strip_asset_root_prefix_strips_only_under_root() {
+        // Under the root → stripped.
+        assert_eq!(
+            strip_asset_root_prefix("F:/ws/assets/models/a.glb", "F:/ws/assets"),
+            Some("models/a.glb".to_string())
+        );
+        // Case difference on Windows drive/dir → still stripped there.
+        if cfg!(windows) {
+            assert_eq!(
+                strip_asset_root_prefix("f:/WS/Assets/a.glb", "F:/ws/assets"),
+                Some("a.glb".to_string())
+            );
+        }
+        // A foreign absolute path containing "/assets/" is NOT under the root
+        // and must stay intact (the old heuristic broke this case).
+        assert_eq!(
+            strip_asset_root_prefix("C:/Users/u/example/assets/a.glb", "F:/ws/assets"),
+            None
+        );
+        // Root itself (no trailing file) → None, not an empty string.
+        assert_eq!(strip_asset_root_prefix("F:/ws/assets", "F:/ws/assets"), None);
+    }
 }

@@ -59,7 +59,23 @@ export type NodePayload =
   | { type: "Player" }
   | { type: "PlayerAnchor"; fov_deg: number; is_initial: boolean; hud_template_id: number | null; exposure: number | null }
   | { type: "PlayerSpawnZone"; size: [number, number, number]; player_node_id: number | null }
+  | { type: "WorldPanel"; size: [number, number]; color: [number,number,number,number]; corner_radius: number; opacity: number; layout: WorldLayout; widgets: WorldWidget[] }
   | { type: "Other";        kind: string };
+
+export type RGBA = [number, number, number, number];
+
+export type WorldLayout =
+  | { type: "None" }
+  | { type: "VStack"; gap: number }
+  | { type: "HStack"; gap: number }
+  | { type: "Grid"; cols: number; gap: [number, number] };
+
+export type WorldWidget =
+  | { type: "Label";  text: string; font_size: number; color: RGBA; local_position: [number, number]; layout_size: [number, number] }
+  | { type: "Button"; label: string; font_size: number; label_color: RGBA; size: [number, number]; local_position: [number, number]; normal_color: RGBA; hover_color: RGBA; pressed_color: RGBA }
+  | { type: "Image";  asset_path: string; size: [number, number]; local_position: [number, number]; tint: RGBA }
+  | { type: "Slider"; min: number; max: number; value: number; size: [number, number]; local_position: [number, number]; track_color: RGBA; fill_color: RGBA; thumb_color: RGBA; thumb_size: number }
+  | { type: "Toggle"; checked: boolean; size: [number, number]; local_position: [number, number]; track_off_color: RGBA; track_on_color: RGBA; thumb_color: RGBA };
 
 export interface NodeInspector {
   id: number;
@@ -215,6 +231,13 @@ export type EditorCommand =
   | { type: "SetPlayerAnchorExposure"; payload: { id: number; ev100: number | null } }
   | { type: "SetSpawnZoneSize";        payload: { id: number; size: [number, number, number] } }
   | { type: "SetSpawnZonePlayer";      payload: { id: number; player_node_id: number | null } }
+  | { type: "SetWorldPanelParams";     payload: { id: number; size: [number, number]; color: [number,number,number,number]; corner_radius: number; opacity: number } }
+  | { type: "AddWorldPanelWidget";     payload: { id: number; kind: string } }
+  | { type: "RemoveWorldPanelWidget";  payload: { id: number; index: number } }
+  | { type: "MoveWorldPanelWidget";    payload: { id: number; index: number; delta: number } }
+  | { type: "SetWorldPanelWidget";     payload: { id: number; index: number; widget: WorldWidget } }
+  | { type: "SetWorldPanelWidgets";    payload: { id: number; widgets: WorldWidget[] } }
+  | { type: "SetWorldPanelLayout";     payload: { id: number; layout: WorldLayout } }
   | { type: "SetPhysicsBody";          payload: { id: number; physics_body: string } }
   | { type: "SetGravityScale";         payload: { id: number; value: number } }
   | { type: "SetMass";                 payload: { id: number; value: number } }
@@ -279,5 +302,6 @@ export const KIND_ICON: Record<string, string> = {
   AmbientLight: "🌤", GltfAsset: "📦", Text: "T", ExtrudedText: "E³", Billboard: "📋",
   HudText: "HUD", AudioClip: "♪", InteractionZone: "⬡", PlayerSpawn: "🧍", PlayerSpawnZone: "◻",
   Player: "🎮", PlayerAnchor: "📍",
+  WorldPanel: "🪟",
   Empty: "○",
 };

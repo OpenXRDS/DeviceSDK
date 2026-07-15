@@ -36,6 +36,8 @@ const PALETTE_META: Record<string, ItemMeta> = {
   ExtrudedText:     { label: "Extruded Text",  tip: "3-D extruded text mesh." },
   Billboard:        { label: "Billboard",      tip: "Sprite-like quad that always faces the camera." },
   HudText:          { label: "HUD Text",       tip: "Head-locked text element. Use the HUD Library panel to manage HUD layouts instead of placing these individually." },
+  // XR
+  WorldPanel:       { label: "World Panel",    tip: "Flat interactive UI panel anchored at a world-space position. Add buttons, labels, sliders, and toggles as child widgets." },
 };
 
 const PRIMITIVE_GROUPS = [
@@ -44,6 +46,7 @@ const PRIMITIVE_GROUPS = [
   { label: "Scene",    items: ["Camera","AudioClip","InteractionZone"] },
   { label: "Player",   items: ["PlayerSpawn","PlayerSpawnZone","Player","PlayerAnchor"] },
   { label: "Text",     items: ["Text","ExtrudedText","Billboard","HudText"] },
+  { label: "XR",       items: ["WorldPanel"] },
 ];
 
 export function Palette({ snapshot, send }: Props) {

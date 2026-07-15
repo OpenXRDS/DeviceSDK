@@ -344,6 +344,28 @@ pub fn spawn_zone_gizmo_system(
     }
 }
 
+/// Draw a wireframe rectangle for each WorldPanel node.
+/// Blue-tinted when unselected, bright cyan when selected.
+pub fn world_panel_gizmo_system(
+    mut gizmos:   Gizmos,
+    editor_state: Res<EditorState>,
+    session:      Res<EditorSession>,
+) {
+    let doc = session.0.document();
+    for node in &doc.nodes {
+        let XrdsSceneNodePayload::WorldPanel(panel) = &node.payload else { continue; };
+        let is_selected = editor_state.selection.contains(node.id);
+        let color = if is_selected { Color::srgba(0.2, 0.85, 1.0, 0.95) }
+                    else           { Color::srgba(0.3, 0.6, 0.85, 0.35) };
+        let pos = Vec3::from_array(node.transform.translation);
+        let [qx, qy, qz, qw] = node.transform.rotation_quat_xyzw;
+        let rot = Quat::from_xyzw(qx, qy, qz, qw);
+        // Represent the panel as a very thin cuboid (depth ≈ 0) so the gizmo shows width × height.
+        let scale = Vec3::new(panel.size[0], panel.size[1], 0.002);
+        gizmos.cuboid(Transform::from_translation(pos).with_rotation(rot).with_scale(scale), color);
+    }
+}
+
 fn circle_normal_rotation(normal: Vec3) -> Quat {
     if (normal + Vec3::Z).length_squared() < 1e-5 { Quat::from_rotation_x(std::f32::consts::PI) }
     else { Quat::from_rotation_arc(Vec3::Z, normal) }

@@ -10,6 +10,7 @@ import { PlayerPanel } from "./components/PlayerPanel";
 import { ViewportCanvas } from "./components/ViewportCanvas";
 import { KeyboardShortcutsModal } from "./components/KeyboardShortcutsModal";
 import { HudCanvasOverlay } from "./components/HudCanvasOverlay";
+import { WorldPanelCanvasOverlay } from "./components/WorldPanelCanvasOverlay";
 import { HudLibraryPanel } from "./components/HudLibraryPanel";
 import { ApkExportDialog } from "./components/ApkExportDialog";
 import type { EditorCommand } from "./types/bridge";
@@ -41,6 +42,7 @@ export default function App() {
   const centerRef       = useRef<HTMLDivElement>(null);
   const [showShortcuts,  setShowShortcuts]  = useState(false);
   const [hudTemplateId,  setHudTemplateId]  = useState<number | null>(null);
+  const [worldPanelId,   setWorldPanelId]   = useState<number | null>(null);
   const [showApkExport,  setShowApkExport]  = useState(false);
 
   // Report exact viewport bounds to Rust whenever the layout changes.
@@ -166,7 +168,7 @@ export default function App() {
           <div className="editor-center" ref={centerRef}>
             <ViewportCanvas send={send} />
           </div>
-          <Inspector snapshot={snapshot} send={send} />
+          <Inspector snapshot={snapshot} send={send} onEditWorldPanel={id => setWorldPanelId(id)} />
         </div>
 
         <Palette snapshot={snapshot} send={send} />
@@ -187,6 +189,15 @@ export default function App() {
           snapshot={snapshot}
           send={send}
           onClose={() => setHudTemplateId(null)}
+        />
+      )}
+      {worldPanelId !== null && (
+        <WorldPanelCanvasOverlay
+          panelId={worldPanelId}
+          snapshot={snapshot}
+          send={send}
+          onPickAsset={() => ipcDialog("pick_texture")}
+          onClose={() => setWorldPanelId(null)}
         />
       )}
     </>

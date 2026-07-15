@@ -701,6 +701,12 @@ fn run_file_dialog(kind: &str) -> Option<String> {
             .add_filter("All Files",   &["*"])
             .pick_file()
             .map(|p| p.to_string_lossy().into_owned()),
+        "pick_texture" => rfd::FileDialog::new()
+            .set_title("Choose Image")
+            .add_filter("Images",    &["png","jpg","jpeg","webp","ktx2"])
+            .add_filter("All Files", &["*"])
+            .pick_file()
+            .map(|p| p.to_string_lossy().into_owned()),
         "export_glb" => rfd::FileDialog::new()
             .set_title("Export GLB")
             .set_file_name("scene.glb")
