@@ -1,6 +1,6 @@
 mod tests {
-    use crate::client::media::VideoTrackHandler;
-    use crate::client::xrds_webrtc::webrtc_client::{StreamSource, WebRTCClient};
+    use crate::client::media::{VideoSource, VideoTrackHandler};
+    use crate::client::xrds_webrtc::webrtc_client::WebRTCClient;
     use crate::client::ClientBuilder;
     use crate::common::append_to_path;
     use crate::common::data_structure::FtpPayload;
@@ -22,6 +22,7 @@ mod tests {
     static CRYPTO_INIT: OnceCell<()> = OnceCell::new();
     static LAST_HTTP3_TEST: Mutex<Option<Instant>> = Mutex::new(None);
     static DEFAULT_DEBUG_FILE_PATH: &str = "test_output";
+
     pub struct CustomVideoProcessor {}
 
     impl VideoTrackHandler for CustomVideoProcessor {
@@ -881,8 +882,9 @@ mod tests {
         let sample_file_path = "samples/sample_video.h264";
         let file = std::fs::read(sample_file_path).expect("Failed to read sample file");
 
+        let video_file = std::fs::File::open(sample_file_path).expect("Failed to open sample file");
         let _ = publisher
-            .start_streaming(Some(StreamSource::File(sample_file_path.to_string())))
+            .start_stream(VideoSource::new(Box::new(video_file)), None)
             .await
             .expect("Failed to start file streaming");
 
@@ -924,7 +926,7 @@ mod tests {
 
         // 연결이 완료된 상태에서 스트리밍 시작
         let _ = publisher
-            .start_streaming(Some(StreamSource::Webcam(0)))
+            .start_stream(VideoSource::new(Box::new(std::fs::File::open("samples/sample_video.h264").expect("Failed to open sample file"))), None)
             .await
             .expect("Failed to start streaming");
 
@@ -972,8 +974,10 @@ mod tests {
             .await
             .expect("Failed to establish connection with custom handler");
 
+        let video_file = std::fs::File::open("samples/sample_video.h264")
+            .expect("Failed to open sample file");
         let _ = publisher
-            .start_streaming(Some(StreamSource::Webcam(0)))
+            .start_stream(VideoSource::new(Box::new(video_file)), None)
             .await
             .expect("Failed to start streaming");
 
@@ -999,8 +1003,10 @@ mod tests {
             .await
             .expect("Failed to establish connection");
 
+        let video_file = std::fs::File::open("samples/sample_video.h264")
+            .expect("Failed to open sample file");
         let _ = publisher
-            .start_streaming(Some(StreamSource::Webcam(0)))
+            .start_stream(VideoSource::new(Box::new(video_file)), None)
             .await
             .expect("Failed to start streaming");
 

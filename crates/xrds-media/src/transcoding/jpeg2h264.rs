@@ -3,8 +3,6 @@ use ffmpeg::{
     codec, color, decoder, encoder, format, frame, util::error::Error, Dictionary, Packet,
 };
 use ffmpeg_next::{self as ffmpeg, Rational};
-extern crate log;
-extern crate pretty_env_logger;
 
 pub struct H264Packet {
     pub data: Vec<u8>,
@@ -28,8 +26,19 @@ impl Jpeg2H264Transcoder {
             ffmpeg::ffi::av_log_set_level(ffmpeg::ffi::AV_LOG_ERROR);
         }
 
-        // H.264 encoder setup with more flexible settings
-        let encoder_codec = find(codec::Id::H264).ok_or(Error::EncoderNotFound)?;
+        // Prefer the software libx264 encoder explicitly. `find(H264)` alone
+        // returns whatever encoder ffmpeg registered first for this codec ID —
+        // on Windows builds with Media Foundation support that's the hardware
+        // `h264_mf` encoder, which conflicts with nokhwa's own Media
+        // Foundation/COM usage for camera capture when both run in the same
+        // process (`COM must not be in STA mode`). The encoder options below
+        // (preset/r/g) are libx264-specific anyway, so libx264 is what this
+        // was actually written for; fall back to the default lookup only if
+        // this ffmpeg build doesn't have libx264 (e.g. a minimal build).
+        let encoder_codec = encoder::find_by_name("libx264")
+            .or_else(|| find(codec::Id::H264))
+            .ok_or(Error::EncoderNotFound)?;
+        log::info!("jpeg2h264: using encoder '{}'", encoder_codec.name());
         let encoder_ctx = codec::context::Context::new_with_codec(encoder_codec);
 
         let fps_rational = Rational::new(fps as i32, 1);
@@ -524,6 +533,7 @@ fn get_jpeg_files(input_spec: &str) -> Result<Vec<String>, Box<dyn std::error::E
     }
 }
 
+#[cfg(test)]
 #[tokio::test]
 async fn test_client_jpeg_to_h264() {
     std::env::set_var("RUST_LOG", "trace");

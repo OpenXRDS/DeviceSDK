@@ -1,4 +1,4 @@
-use crate::client::xrds_webrtc::media::transcoding::jpeg2h264::H264Packet;
+use crate::transcoding::jpeg2h264::H264Packet;
 use ffmpeg::{codec, encoder, format, util::error::Error, Packet};
 use ffmpeg_next::{self as ffmpeg, Rational};
 

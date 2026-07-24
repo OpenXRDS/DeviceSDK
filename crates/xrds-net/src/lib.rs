@@ -25,7 +25,11 @@ pub use plugin_net_bevy::{
     process_net_commands, NetClientState, NetCommand, NetOutput, NetPlugin, NetPluginConfig,
 };
 
-pub use client::{webrtc_client::WebRTCClient, ClientBuilder};
+pub use client::{
+    media::{AudioSource, VideoSource},
+    webrtc_client::WebRTCClient,
+    ClientBuilder,
+};
 
 pub use common::enums::{FtpCommands, PROTOCOLS};
 

@@ -3,9 +3,6 @@ use std::time::Instant;
 
 use ffmpeg::{codec, color, encoder, format, frame, media, Dictionary, Packet, Rational};
 
-extern crate log;
-extern crate pretty_env_logger;
-
 #[allow(dead_code)]
 const DEFAULT_X264_OPTS: &str = "preset=medium";
 

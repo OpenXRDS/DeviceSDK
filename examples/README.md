@@ -69,6 +69,7 @@ These show the open extension model. Use them when built-in XRDS components are 
 | [generic_update.rs](./generic_update.rs) | Custom descriptor plus custom patch type while still realizing through XRDS-owned geometry/material paths. |
 | [net.rs](./net.rs) | XRDS networking path without dropping into engine-shaped app structure. |
 | [net_bevy.rs](./net_bevy.rs) | Networking example closer to direct Bevy integration. |
+| [webrtc_webcam_stream.rs](./webrtc_webcam_stream.rs) | Live webcam + microphone streamed over WebRTC — `xrds-media` owns device access, `xrds-net` only transcodes/transports the injected `VideoSource`/`AudioSource`. See `docs/xrds-net-capture-decoupling.md`. |
 
 ## Expert Escape Hatch
 

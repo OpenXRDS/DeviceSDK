@@ -12,6 +12,7 @@ docs/done/*
 docs/EDITOR_TODO.md
 apps/xrds-editor/node_modules/*
 apps/xrds-editor/dist/*
+test_output
 
 # cargo artifacts in patched crates
 patches/**/.cargo-ok
