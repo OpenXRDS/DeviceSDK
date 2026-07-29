@@ -10,17 +10,14 @@ Targets Quest 3 and Quest Pro (API 32+) via OpenXR. Quest 2 is not supported.
   ```sh
   rustup target add aarch64-linux-android
   ```
-
 - **cargo-ndk** — Cargo wrapper for the Android NDK toolchain:
 
   ```sh
   cargo install cargo-ndk
   ```
-
 - **Android SDK** — install via [Android Studio](https://developer.android.com/studio) SDK Manager.
   Required components: NDK, any build-tools, any android platform.
   The build scripts auto-detect the SDK location and pick the latest installed NDK, build-tools, and platform.
-
 - **OpenXR loader** — fetch the Khronos prebuilt (Apache 2.0) with one command:
 
   ```powershell
@@ -73,25 +70,25 @@ Output: `android/quest/build/xrds-app.apk`
 
 ### What the script does
 
-| Step | Description                                                       |
-|------|-------------------------------------------------------------------|
-| 1    | Build `libxrds_app.so` via `cargo ndk -t arm64-v8a`               |
-| 2    | Copy `libopenxr_loader.so` from Meta OpenXR Mobile SDK            |
-| 3    | Stage SDK assets: fonts, shaders, env maps, sound, textures       |
-| 4    | If `--scene-dir` given: add `scene.json` + user assets to staging |
-| 5    | Package staged files into APK via `aapt`                          |
-| 6    | Zipalign + sign → `xrds-app.apk`                                  |
+| Step | Description                                                          |
+| ---- | -------------------------------------------------------------------- |
+| 1    | Build`libxrds_app.so` via `cargo ndk -t arm64-v8a`               |
+| 2    | Copy`libopenxr_loader.so` from Meta OpenXR Mobile SDK              |
+| 3    | Stage SDK assets: fonts, shaders, env maps, sound, textures          |
+| 4    | If`--scene-dir` given: add `scene.json` + user assets to staging |
+| 5    | Package staged files into APK via`aapt`                            |
+| 6    | Zipalign + sign →`xrds-app.apk`                                   |
 
 ### Customising the build
 
-| Variable          | Default (Linux/macOS)              | Default (Windows)                       | Description                   |
-|-------------------|------------------------------------|-----------------------------------------|-------------------------------|
-| `OPENXR_LOADER`   | *(auto if fetch script was run)*   | *(auto if fetch script was run)*        | Path to `libopenxr_loader.so` |
-| `ANDROID_HOME`    | `~/Library/Android/sdk` (macOS)    | `%LOCALAPPDATA%\Android\Sdk`            | Android SDK root              |
-|                   | `~/Android/Sdk` (Linux)            |                                         |                               |
-| `BUILD_TOOLS_VER` | *(auto: latest installed)*         | *(auto: latest installed)*              | `build-tools` version to use  |
-| `KEYSTORE`        | `~/.android/debug.keystore`        | `%USERPROFILE%\.android\debug.keystore` | Signing keystore              |
-| `KEYSTORE_PASS`   | `android`                          | `android`                               | Keystore password             |
+| Variable            | Default (Linux/macOS)              | Default (Windows)                         | Description                    |
+| ------------------- | ---------------------------------- | ----------------------------------------- | ------------------------------ |
+| `OPENXR_LOADER`   | *(auto if fetch script was run)* | *(auto if fetch script was run)*        | Path to`libopenxr_loader.so` |
+| `ANDROID_HOME`    | `~/Library/Android/sdk` (macOS)  | `%LOCALAPPDATA%\Android\Sdk`            | Android SDK root               |
+|                     | `~/Android/Sdk` (Linux)          |                                           |                                |
+| `BUILD_TOOLS_VER` | *(auto: latest installed)*       | *(auto: latest installed)*              | `build-tools` version to use |
+| `KEYSTORE`        | `~/.android/debug.keystore`      | `%USERPROFILE%\.android\debug.keystore` | Signing keystore               |
+| `KEYSTORE_PASS`   | `android`                        | `android`                               | Keystore password              |
 
 ## Install and run
 
@@ -105,10 +102,10 @@ adb shell am start -n org.openxrds.devicesdk/android.app.NativeActivity
 
 The app selects its asset mode automatically at startup:
 
-| Condition                     | Mode        | What happens                                   |
-|-------------------------------|-------------|------------------------------------------------|
-| External `scene.json` present | Dev         | Reads scene + assets from external storage     |
-| No external `scene.json`      | APK-bundled | Reads scene from APK; Bevy uses AAssetManager  |
+| Condition                      | Mode        | What happens                                  |
+| ------------------------------ | ----------- | --------------------------------------------- |
+| External`scene.json` present | Dev         | Reads scene + assets from external storage    |
+| No external`scene.json`      | APK-bundled | Reads scene from APK; Bevy uses AAssetManager |
 
 ### Dev mode (push scene separately)
 
@@ -188,11 +185,11 @@ adb install -r android/quest/build/xrds-app.apk
 
 ### Runtime symptoms
 
-| Symptom                            | Likely cause                                              |
-|------------------------------------|-----------------------------------------------------------|
-| Black screen, no crash             | `libopenxr_loader.so` missing from APK                    |
-| `dlopen` error                     | lib_name in manifest doesn't match Cargo `[lib] name`     |
-| OpenXR `XR_ERROR_RUNTIME_FAILURE`  | Missing `com.oculus.intent.category.XR` in manifest       |
-| App not visible in Quest library   | Missing XR intent category                                |
-| Hand tracking unavailable          | Missing `com.oculus.permission.HAND_TRACKING`             |
-| "scene.json not found" in logcat   | No external scene pushed and no `--scene-dir` at build    |
+| Symptom                            | Likely cause                                            |
+| ---------------------------------- | ------------------------------------------------------- |
+| Black screen, no crash             | `libopenxr_loader.so` missing from APK                |
+| `dlopen` error                   | lib_name in manifest doesn't match Cargo`[lib] name`  |
+| OpenXR`XR_ERROR_RUNTIME_FAILURE` | Missing`com.oculus.intent.category.XR` in manifest    |
+| App not visible in Quest library   | Missing XR intent category                              |
+| Hand tracking unavailable          | Missing`com.oculus.permission.HAND_TRACKING`          |
+| "scene.json not found" in logcat   | No external scene pushed and no`--scene-dir` at build |

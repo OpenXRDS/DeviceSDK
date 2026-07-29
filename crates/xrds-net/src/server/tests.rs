@@ -22,8 +22,11 @@ limitations under the License.
 mod tests {
     use crate::client::webrtc_client::WebRTCClient;
     use crate::client::{Client, ClientBuilder};
+    #[cfg(feature = "ftp-server")]
     use crate::common::data_structure::FtpPayload;
-    use crate::common::enums::{FtpCommands, PROTOCOLS};
+    #[cfg(feature = "ftp-server")]
+    use crate::common::enums::FtpCommands;
+    use crate::common::enums::PROTOCOLS;
     use crate::common::{append_to_path, payload_str_to_vector_str};
     use crate::server::XRNetServer;
     use tokio::time::{sleep, Duration};
@@ -52,6 +55,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "ftp-server")]
     fn connect_ftp_client(port: u32) -> Client {
         let client = ClientBuilder::new()
             .set_protocol(PROTOCOLS::FTP)
@@ -70,6 +74,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "ftp-server")]
     fn run_ftp_server(port: u32) -> tokio::task::JoinHandle<()> {
         let protocols = vec![PROTOCOLS::FTP];
         let ports = vec![port];
@@ -103,6 +108,7 @@ mod tests {
         server_handle
     }
 
+    #[cfg(feature = "ftp-server")]
     #[tokio::test]
     async fn test_server_run_multiple() {
         let current_line = line!();
@@ -122,6 +128,7 @@ mod tests {
         server_handle.await.unwrap();
     }
 
+    #[cfg(feature = "ftp-server")]
     #[tokio::test]
     async fn test_server_ftp_connection() {
         let current_line = line!() + 8000;
@@ -138,6 +145,7 @@ mod tests {
         assert!(true);
     }
 
+    #[cfg(feature = "ftp-server")]
     #[tokio::test]
     async fn test_server_ftp_list() {
         let current_line = line!() + 8000; // To avoid duplicate port number for each test
@@ -170,6 +178,7 @@ mod tests {
         server_handle.abort();
     }
 
+    #[cfg(feature = "ftp-server")]
     #[tokio::test]
     async fn test_server_ftp_noop() {
         let current_line = line!() + 8000; // To avoid duplicate port number for each test
@@ -207,6 +216,7 @@ mod tests {
      * - CDUP
      * - RMD: can remove empty directory only
      */
+    #[cfg(feature = "ftp-server")]
     #[tokio::test]
     async fn test_server_ftp_crud() {
         let current_line = line!(); // To avoid duplicate port number for each test
@@ -373,7 +383,7 @@ mod tests {
 
             let msg = "test".as_bytes().to_vec();
             let result = client.send(msg, None);
-            println!("client send result: {:?}", result.clone());
+            println!("client send result: {:?}", result.is_ok());
             assert_eq!(result.is_ok(), true);
 
             let close_result = result.unwrap().close();
@@ -384,6 +394,37 @@ mod tests {
         ws_client_handle.await.unwrap();
         // ws_server_handle.await.unwrap();
         server_handle.abort();
+    }
+
+    // Bidirectional WS *session* via the public `XrdsNet::open` / `NetChannel`
+    // — send and receive the reply on the SAME connection, round-tripped
+    // against the built-in WS echo server. This exercises the tokio-tungstenite
+    // session backend end to end. `multi_thread` so the blocking client work
+    // (run on a blocking thread) doesn't starve the server task.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_ws_session_round_trip_open() {
+        use crate::client::XrdsNet;
+
+        let current_line = line!() + 8000;
+        let server_handle = run_server(PROTOCOLS::WS, current_line);
+        sleep(Duration::from_secs(2)).await; // let the server bind
+
+        let url = format!("ws://127.0.0.1:{}/", current_line);
+        let outcome = tokio::task::spawn_blocking(move || {
+            // `XrdsNet::open` is blocking (WS handshake) — run it off the async
+            // test thread.
+            let mut chan = XrdsNet::open(&url).expect("ws session open should succeed");
+            chan.send(b"hello ws session".to_vec()).expect("send on the session");
+            let echoed = chan
+                .recv_timeout(Duration::from_secs(5))
+                .expect("should receive the echo back on the same connection");
+            assert_eq!(echoed.payload, b"hello ws session".to_vec());
+            let _ = chan.close();
+        })
+        .await;
+
+        server_handle.abort();
+        outcome.expect("client session task panicked");
     }
 
     #[tokio::test]

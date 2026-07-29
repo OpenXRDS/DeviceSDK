@@ -13,7 +13,10 @@ fn example_http() {
     let client = ClientBuilder::new().set_protocol(PROTOCOLS::HTTP).build();
 
     let result = client.set_url("https://httpbin.org").request();
-    println!("HTTP request result: {}", result.status_code);
+    match result {
+        Ok(response) => println!("HTTP request result: {}", response.status_code),
+        Err(e) => println!("HTTP request failed: {e}"),
+    }
 }
 
 fn example_ftp() {
@@ -52,7 +55,10 @@ fn example_file_download() {
         .set_url("https://files.keti.xrds.kr/s/enS7MQox7zk2FA4")
         .request();
 
-    println!("File download response: {:?}", response.status_code);
+    match response {
+        Ok(response) => println!("File download response: {:?}", response.status_code),
+        Err(e) => println!("File download failed: {e}"),
+    }
 }
 
 pub fn main() {

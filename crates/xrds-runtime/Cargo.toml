@@ -6,6 +6,17 @@ edition = "2021"
 [lib]
 crate-type = ["lib"]
 
+[features]
+default = ["ftp-server"]
+# Forwards to xrds-net's FTP *server* (never needed by an XR client app, and
+# the only reason to ever turn it off — see crates/xrds-net/Cargo.toml).
+# Cargo unifies a shared dependency's features workspace-wide, so this can't
+# be varied per platform via `[target.'cfg(...)'.dependencies]` alone — the
+# Android build explicitly passes `--no-default-features` at the xrds-app
+# level (see android/quest/build.sh) instead. See
+# docs/xrds-net-android-shipping.md Phase 3.
+ftp-server = ["xrds-net/ftp-server"]
+
 [dependencies]
 log.workspace = true
 env_logger.workspace = true
@@ -35,16 +46,18 @@ bevy_fontmesh = { workspace = true }
 bevy_mod_outline = "0.11.0"
 gltf = "1.4.1"
 
+# xrds-net's client networking (http/https, ws/wss, quic, mqtt, ftp/sftp
+# client, coap) cross-compiles for Android — see
+# docs/xrds-net-android-shipping.md. `default-features = false` here (the
+# `ftp-server` feature above forwards it back on for the default/desktop
+# case); WebRTC stays out of this path entirely regardless of platform.
+xrds-net = { workspace = true, default-features = false }
+
 [build-dependencies]
 cbindgen = "0.27.0"
 
 [target.'cfg(unix)'.dependencies]
 winit = { version = "0.30.5" }
-
-# xrds-net has desktop-only C deps (curl, ffmpeg, quiche, webrtc, libunftp).
-# Exclude it from Android where none of those are available or needed.
-[target.'cfg(not(target_os = "android"))'.dependencies]
-xrds-net = { workspace = true }
 
 [target.'cfg(target_os = "android")'.dependencies]
 winit = { version = "0.30.5", features = ["android-native-activity"] }

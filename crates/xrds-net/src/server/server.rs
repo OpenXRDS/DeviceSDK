@@ -1,3 +1,4 @@
+#[cfg(feature = "ftp-server")]
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -11,6 +12,7 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 
+#[cfg(feature = "ftp-server")]
 use unftp_sbe_fs::ServerExt;
 
 // const MAX_DATAGRAM_SIZE: usize = 1350;
@@ -96,12 +98,19 @@ impl XRNetServer {
 
         for i in 0..self.protocol.len() {
             match self.protocol[i] {
+                #[cfg(feature = "ftp-server")]
                 PROTOCOLS::FTP | PROTOCOLS::SFTP => {
                     let server = Arc::clone(&server);
                     let port = self.port[i];
                     tokio::spawn(async move {
                         server.run_ftp_server(port).await;
                     });
+                }
+                #[cfg(not(feature = "ftp-server"))]
+                PROTOCOLS::FTP | PROTOCOLS::SFTP => {
+                    log::warn!(
+                        "FTP server requested but not built in (feature `ftp-server` disabled)"
+                    );
                 }
                 PROTOCOLS::HTTP | PROTOCOLS::HTTPS => {
                     // self.run_http_server();
@@ -143,6 +152,7 @@ impl XRNetServer {
         }
     }
 
+    #[cfg(feature = "ftp-server")]
     async fn run_ftp_server(&self, port: u32) {
         println!("FTP server started");
 

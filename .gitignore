@@ -1,6 +1,5 @@
 target
 build
-crates/xrds-net/
 .cargo
 .vscode
 .claude
@@ -24,3 +23,4 @@ patches/**/Cargo.lock
 android/quest/build/
 android/quest/jni/
 android/quest/libs/**/*.so
+

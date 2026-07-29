@@ -32,6 +32,9 @@
     <!-- Permissions -->
     <uses-permission android:name="com.oculus.permission.HAND_TRACKING" />
     <uses-permission android:name="com.oculus.permission.USE_SCENE" />
+    <!-- Required for xrds-net (http/ws/quic/mqtt/ftp) — see docs/xrds-net-android-shipping.md -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
     <application
         android:label="@string/app_name"

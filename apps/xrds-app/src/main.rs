@@ -263,6 +263,7 @@ impl XrdsApp for SceneFileApp {
             "P: play/stop  H: haptic L  J: haptic R",
             Vec3::new(0.0, -0.15, -0.5),
         ));
+
     }
 
     fn update(&mut self, ctx: &mut XrdsUpdateContext<'_>) {

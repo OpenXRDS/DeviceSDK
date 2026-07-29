@@ -71,8 +71,9 @@ check_cmd cargo-ndk "Install with: cargo install cargo-ndk"
 
 [[ -n "$NDK_HOME" ]] || { echo "ERROR: Android NDK not found. Install via Android Studio SDK Manager or set ANDROID_NDK_HOME."; exit 1; }
 case "$(uname -s)" in
-    Darwin) NDK_HOST="darwin-x86_64" ;;
-    *)      NDK_HOST="linux-x86_64"  ;;
+    Darwin)           NDK_HOST="darwin-x86_64"  ;;
+    MINGW*|MSYS*|CYGWIN*) NDK_HOST="windows-x86_64" ;;
+    *)                NDK_HOST="linux-x86_64"   ;;
 esac
 LIB_CPP_SHARED="$NDK_HOME/toolchains/llvm/prebuilt/$NDK_HOST/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so"
 [[ -f "$LIB_CPP_SHARED" ]] || { echo "ERROR: libc++_shared.so not found at: $LIB_CPP_SHARED"; exit 1; }
@@ -114,8 +115,30 @@ echo "==> Step 1: Building libxrds_app.so..."
 mkdir -p "$JNI_DIR"
 # Absolute path so the linker (cargo-ndk proxy) can find libopenxr_loader.so.
 export CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS="-L $SCRIPT_DIR/libs/arm64-v8a -C link-arg=-Wl,--allow-shlib-undefined"
-(cd "$WORKSPACE_ROOT" && cargo ndk -t arm64-v8a -o "$SCRIPT_DIR/jni" build --release -p xrds-app)
+
+# Force CMake onto Ninja for quiche's vendored BoringSSL build (quiche is the
+# only remaining native/CMake dependency — everything else is rustls; see
+# docs/xrds-net-crypto-consolidation.md). On Windows hosts, CMake's default
+# generator can be hijacked by a stale Visual Studio "Android Application"
+# toolset (old NDK bundled with a VS Android workload) instead of our
+# NDK/cargo-ndk toolchain.
+export CMAKE_GENERATOR="Ninja"
+if command -v ninja &>/dev/null; then
+    CMAKE_MAKE_PROGRAM="$(command -v ninja)"
+elif [[ -n "${ANDROID_HOME:-}" ]] && ls "$ANDROID_HOME"/cmake/*/bin/ninja* &>/dev/null; then
+    CMAKE_MAKE_PROGRAM="$(ls "$ANDROID_HOME"/cmake/*/bin/ninja* | sort -V | tail -1)"
+fi
+export CMAKE_MAKE_PROGRAM="${CMAKE_MAKE_PROGRAM:-}"
+
+# --no-default-features drops xrds-app's `ftp-server` feature (forwarded
+# through xrds-runtime to xrds-net) — an XR client never hosts FTP, and that
+# feature's dependency chain (libunftp -> aws-lc-sys) isn't cross-compile
+# proven for Android. See docs/xrds-net-android-shipping.md Phase 3 for why
+# this can't be expressed as a per-target Cargo.toml default instead.
+(cd "$WORKSPACE_ROOT" && cargo ndk -t arm64-v8a -P 32 -o "$SCRIPT_DIR/jni" build --release -p xrds-app --no-default-features)
+
 unset CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS
+unset CMAKE_GENERATOR CMAKE_MAKE_PROGRAM
 echo "    Built: $JNI_DIR/libxrds_app.so"
 
 # Step 2: Copy OpenXR loader

@@ -14,12 +14,20 @@ rust-version = "1.77.2"
 name = "app_lib"
 crate-type = ["rlib"]
 
+[features]
+default = ["xrds-runtime/ftp-server"]
+
 [dependencies]
 serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 log = "0.4"
 tokio = { workspace = true }
-xrds-runtime = { workspace = true }
+# default-features = false + the forward above: the editor is desktop-only
+# and keeps ftp-server, but an un-gated default-featured edge here would leak
+# into Android's shared feature resolution for xrds-runtime/xrds-net even
+# though the editor itself never targets Android — see
+# docs/xrds-net-android-shipping.md Phase 3.
+xrds-runtime = { workspace = true, default-features = false }
 xrds-scene-graph = { workspace = true }
 xrds-gltf = { workspace = true }
 bevy = { workspace = true }

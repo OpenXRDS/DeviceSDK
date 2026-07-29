@@ -67,9 +67,13 @@ These show the open extension model. Use them when built-in XRDS components are 
 | Example | Purpose |
 | --- | --- |
 | [generic_update.rs](./generic_update.rs) | Custom descriptor plus custom patch type while still realizing through XRDS-owned geometry/material paths. |
-| [net.rs](./net.rs) | XRDS networking path without dropping into engine-shaped app structure. |
-| [net_bevy.rs](./net_bevy.rs) | Networking example closer to direct Bevy integration. |
-| [webrtc_webcam_stream.rs](./webrtc_webcam_stream.rs) | Live webcam + microphone streamed over WebRTC — `xrds-media` owns device access, `xrds-net` only transcodes/transports the injected `VideoSource`/`AudioSource`. See `docs/xrds-net-capture-decoupling.md`. |
+| [net_app.rs](./net_app.rs) | **Networking inside an `XrdsApp`** — the recommended in-app path. Kicks off a one-shot (`request_async` → poll with `Option<XrdsNetTask>::take_ready()`) and an ongoing stream (`NetFeed::try_recv`/`take_error`) from `setup`/`update`, all off the frame thread. Start here if you're networking from a running app. See `docs/done/xrds-net-devicesdk-integration.md`. |
+| [net_intent.rs](./net_intent.rs) | The same four intent verbs (`request`/`dispatch`/`listen`/`transfer`) called **synchronously**, standalone (no runtime) — fine for scripts/tests; would block a frame if used in-app. See `docs/done/xrds-net-protocol-handler.md`. |
+| [net.rs](./net.rs) | Expert `ClientBuilder`/`Client` session API `XrdsNet` is built on — protocol-aware (`set_protocol`, `.connect()`/`.request()`/`.send()`/`.rcv()`) for when you need lower-level control. |
+| [net_protocols.rs](./net_protocols.rs) | Focused: a **capability tour** — one supported verb per protocol (HTTP/CoAP `request`, WS `dispatch`, MQTT `dispatch`+`listen` round-trip, FTP `transfer`), all through the intent verbs. See MANUAL.md §12. |
+| [net_errors.rs](./net_errors.rs) | Focused: the structured **`NetError`** model — one case per variant (`UnrecognizedScheme`/`Capability`/`MissingInput`/`Network`/`Protocol`) and how to react. Mostly network-free. See MANUAL.md §6. |
+| [net_backpressure.rs](./net_backpressure.rs) | Focused: **`listen` buffering** — `ListenOptions` + `Overflow` (lossless `Block` vs live `DropOldest`), the knob a video-rate feed needs. See MANUAL.md §7. |
+| [webrtc_webcam_stream.rs](./webrtc_webcam_stream.rs) | Live webcam + microphone streamed over WebRTC — `xrds-media` owns device access, `xrds-net` only transcodes/transports the injected `VideoSource`/`AudioSource`. See `docs/done/xrds-net-capture-decoupling.md`. |
 
 ## Expert Escape Hatch
 

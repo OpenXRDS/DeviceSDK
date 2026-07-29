@@ -120,12 +120,37 @@ Push-Location $WorkspaceRoot
 # Tell the linker (via cargo-ndk's proxy) where libopenxr_loader.so lives.
 # Must be absolute — cargo-ndk's linker proxy has an unpredictable working directory.
 $env:CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS = "-L $ScriptDir\libs\arm64-v8a -C link-arg=-Wl,--allow-shlib-undefined"
+
+# Force CMake onto Ninja for quiche's vendored BoringSSL build (quiche is the
+# only remaining native/CMake dependency — everything else is rustls; see
+# docs/xrds-net-crypto-consolidation.md). On Windows hosts, CMake's default
+# generator can be hijacked by a stale Visual Studio "Android Application"
+# toolset (old NDK bundled with a VS Android workload) instead of our
+# NDK/cargo-ndk toolchain.
+$env:CMAKE_GENERATOR = "Ninja"
+$NinjaCmd = Get-Command ninja -ErrorAction SilentlyContinue
+if ($NinjaCmd) {
+    $env:CMAKE_MAKE_PROGRAM = $NinjaCmd.Source
+} else {
+    $sdkNinja = Get-ChildItem "$AndroidHome\cmake\*\bin\ninja.exe" -ErrorAction SilentlyContinue |
+        Sort-Object FullName | Select-Object -Last 1
+    if ($sdkNinja) { $env:CMAKE_MAKE_PROGRAM = $sdkNinja.FullName }
+}
+
 try {
-    cargo ndk -t arm64-v8a -o "$ScriptDir\jni" build --release -p xrds-app
+    # --no-default-features drops xrds-app's `ftp-server` feature (forwarded
+    # through xrds-runtime to xrds-net) — an XR client never hosts FTP, and
+    # that feature's dependency chain (libunftp -> aws-lc-sys) isn't
+    # cross-compile proven for Android. -P 32 matches the OpenSSL prebuilt's
+    # API level and the Quest 3/Pro baseline. See
+    # docs/xrds-net-android-shipping.md Phase 3.
+    cargo ndk -t arm64-v8a -P 32 -o "$ScriptDir\jni" build --release -p xrds-app --no-default-features
     if ($LASTEXITCODE -ne 0) { throw "cargo ndk failed" }
 } finally {
     Pop-Location
     Remove-Item Env:CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS -ErrorAction SilentlyContinue
+    Remove-Item Env:CMAKE_GENERATOR -ErrorAction SilentlyContinue
+    Remove-Item Env:CMAKE_MAKE_PROGRAM -ErrorAction SilentlyContinue
 }
 Write-Host "    Built: $JniDir\libxrds_app.so"
 

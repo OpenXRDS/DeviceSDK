@@ -30,6 +30,16 @@ path = "./crates/xrds-components"
 [workspace.dependencies.xrds-net]
 package = "xrds-net"
 path = "./crates/xrds-net"
+# Explicit `false` (not omitted, and not `true`) so member crates can opt
+# back IN to specific features (e.g. `xrds-net/ftp-server`) without hitting
+# Cargo's silent-ignore rule: a member's `default-features = false` override
+# is ignored unless the workspace dependency's own default-features is
+# ALSO false — Cargo only allows members to be MORE restrictive than (or
+# equal to) the workspace baseline, never less. Named-feature activation
+# (`workspace-dep/feature-name`) still works regardless of this flag; each
+# consumer re-enables what it needs via its own [features] forwarding. See
+# docs/xrds-net-android-shipping.md Phase 3.
+default-features = false
 
 [workspace.dependencies.xrds-media]
 package = "xrds-media"
@@ -42,6 +52,8 @@ path = "./crates/xrds-openxr"
 [workspace.dependencies.xrds-runtime]
 package = "xrds-runtime"
 path = "./crates/xrds-runtime"
+# See the xrds-net entry above for why this must be `false`, not omitted/true.
+default-features = false
 
 [workspace.dependencies.xrds-scene-graph]
 package = "xrds-scene-graph"
@@ -82,9 +94,33 @@ winreg = { version = "0.55.0" }
 
 [patch.crates-io]
 bevy_winit = { path = "patches/bevy_winit" }
+# Fixes quiche's build.rs BoringSSL output-dir detection: it guesses a
+# Visual-Studio-style "build/<Config>" subdir whenever the HOST is MSVC,
+# regardless of which CMake generator is actually used for the (Android)
+# TARGET build. Forcing CMAKE_GENERATOR=Ninja for Android cross-compiles
+# (needed to avoid a stale VS "Android Application" toolset hijacking the
+# default generator) leaves libssl.a/libcrypto.a directly under "build/" with
+# no subfolder, which this patch adds as a fallback.
+#
+# Considered upgrading to quiche 0.29.3 (which drops this vendored-cmake path
+# entirely for the `boring` crate) instead of patching 0.24.6, but boring-sys
+# hits a different, OPEN upstream Windows/CMake bug on this same host/target
+# combo (cargo-ndk's CC/CXX env vars lack the .exe suffix CMake's compiler
+# validation requires; no fix as of cloudflare/quiche#2020). Staying on
+# 0.24.6 + this patch, which is fully verified working end-to-end.
+# See docs/xrds-net-android-shipping.md §2c.
+quiche = { path = "patches/quiche" }
+
+[features]
+default = ["xrds-runtime/ftp-server"]
 
 [dependencies]
-xrds-runtime = { workspace = true }
+# default-features = false + the forward above: this root package (desktop
+# sample binaries/examples) keeps ftp-server, but an un-gated default-featured
+# edge here would leak into Android's shared feature resolution for
+# xrds-runtime/xrds-net even though this package never targets Android — see
+# docs/xrds-net-android-shipping.md Phase 3.
+xrds-runtime = { workspace = true, default-features = false }
 xrds-openxr = { workspace = true }
 xrds-scene-graph = { workspace = true }
 
@@ -92,8 +128,19 @@ xrds-scene-graph = { workspace = true }
 bevy = { workspace = true }
 wgpu = { workspace = true }
 rand = { version = "0.9.2" }
-xrds-net = { workspace = true }
 xrds-media = { workspace = true, features = ["transcoding"] }
 rustls = { version = "0.23.10", default-features = false, features = ["std", "ring"] }
 env_logger = { workspace = true }
 tokio = { workspace = true, features = ["time"] }
+
+# xrds-net examples (net.rs, net_app.rs, ...) are desktop-only dev tooling and
+# never built for Android. Gated by target (rather than left unconditioned)
+# because Cargo's feature resolver unifies features for a shared dependency
+# across ALL workspace members' manifests for a given target — even when
+# building a single crate with `-p` — so an un-gated default-featured
+# xrds-net here was pulling `ftp-server` (and its libunftp -> aws-lc-sys
+# chain, which doesn't cross-compile) into `xrds-runtime`'s Android build
+# despite xrds-runtime's own Android-specific `default-features = false`.
+# See docs/xrds-net-android-shipping.md Phase 3.
+[target.'cfg(not(target_os = "android"))'.dev-dependencies]
+xrds-net = { workspace = true }
