@@ -254,6 +254,10 @@ name = "net_app"
 path = "examples/networking/net_app.rs"
 
 [[example]]
+name = "net_app_publisher"
+path = "examples/networking/net_app_publisher.rs"
+
+[[example]]
 name = "net_intent"
 path = "examples/networking/net_intent.rs"
 

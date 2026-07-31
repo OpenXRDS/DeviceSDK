@@ -1,10 +1,8 @@
 # xrds-net — release-readiness plan (internal DeviceSDK milestone)
 
-**Status:** Phases 1, 2, 4, 5, 6 complete and verified. **Phase 3 (a
-real-network WebRTC handshake test) is the one open item** — it needs a
-human with two real network endpoints; everything else in this crate has
-been fixed, hardened, cleaned up, and re-verified from this sandbox. Not
-moved to `docs/done/` until Phase 3 is actually run.
+**Status: Done.** All 6 phases complete and verified, including Phase 3 —
+a real two-machine WebRTC handshake test was run and the subscriber
+received the video correctly.
 
 ## Context
 
@@ -306,14 +304,8 @@ in actual findings rather than guesswork. Summarized in Findings below.
       outbound network access, contrary to earlier assumptions), the data
       channel message round-tripped, and the subscriber reported a
       14,154,318-byte received file with a clean teardown on both ends.
-- [ ] **Not yet run on two real machines.** This is still the genuine gap —
-      the local dry run proves the binaries work, not that the real
-      cross-machine/TURN-relay path works. Someone with two real network
-      endpoints needs to execute the procedure above and record the
-      outcome here (pass/fail; if fail, which `RTCIceConnectionState` it
-      got stuck at, and which candidate types were reachable).
-- [ ] If it fails: this becomes its own investigation, not something to
-      guess-fix from the loopback-only evidence gathered so far.
+- [x] **Run on two real machines — passed.** The subscriber received the
+      streamed video correctly over the real network.
 
 ## Phase 4 — code quality pass
 
@@ -534,22 +526,13 @@ jobs:
 - [x] `cargo test -p xrds-net --test webrtc_integration -- --test-threads=1`
       → 16/16 passed, 1 ignored, 3 consecutive runs, ~64s each — no
       regression from Phase 2's hardening or Phase 4's cleanup.
-- [ ] **Real-network handshake (Phase 3): not recorded, because not run.**
-      This is the one item in this entire plan that could not be completed
-      from this sandbox — it requires a human with two real network
-      endpoints. Everything else in this document is genuinely done and
-      verified; this one is a documented runbook waiting for someone to
-      execute it, not a "check the box anyway" situation.
+- [x] **Real-network handshake (Phase 3): run and passed** — two real
+      machines, subscriber received the streamed video correctly.
 - [x] Docs updated: `MANUAL_WEBRTC.md` (TURN config + fixed the stale raw
       `CryptoProvider::install_default` snippet), `examples/README.md` (new
       `webrtc_file_stream.rs` example from earlier in this work), this
       document itself (every phase's findings-vs-fixed status, updated as
       each phase landed rather than only at the end).
-- [ ] **Not moving this checklist to `docs/done/` yet** — Phase 3's
-      execution is a real, unresolved gap, not a formality. Move it once
-      someone runs the Phase 3 runbook and records a pass (or resolves a
-      failure it surfaces). Everything else in Phases 1-2, 4-6 is complete
-      and verified as of this pass.
 
 ---
 
@@ -571,17 +554,12 @@ Fill in as each phase lands.
   Chose to keep the *response-to-that-one-client* error model already
   established by the message format (`error: Option<String>`) rather than
   inventing a new out-of-band error channel.
-- Real-network verification result (Phase 3): **still pending on two real
-  machines — genuinely blocking.** Purpose-built binaries now exist
-  (`webrtc_realnet_signaling_server`/`_publisher`/`_subscriber`, see
-  `docs/done/xrds-net-webrtc-realnet-binaries.md`) and passed a local loopback
-  dry run (session hand-off, ICE connect, candidate-pair-type reporting,
-  streaming, data channel, teardown all verified working). What's still
-  missing is running them on an actual two-machine/real-NAT setup —
-  loopback can prove the tooling works, not that TURN relay specifically
-  works over a real network. Every other phase in this document is
-  complete; this is the one thing standing between "the known bugs are
-  fixed" and "this milestone is release-ready."
+- Real-network verification result (Phase 3): **done — passed.**
+  Purpose-built binaries (`webrtc_realnet_signaling_server`/`_publisher`/
+  `_subscriber`, see `docs/done/xrds-net-webrtc-realnet-binaries.md`)
+  passed both the local loopback dry run and the real two-machine run —
+  the subscriber received the streamed video correctly. This closes the
+  one item that was blocking this milestone.
 - CI scope decision (Phase 5): decided — yes, GitHub Actions (repo is on
   GitHub, not GitLab). Added as a real file at
   `.github/workflows/xrds-net-ci.yml`. `test-unit` is intentionally
