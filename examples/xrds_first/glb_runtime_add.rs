@@ -137,6 +137,7 @@ impl GlbRuntimeAddApp {
                     }),
                     editor: XrdsEditorMetadata::default(),
                     grabbable: false,
+                    triggers: Vec::new(),
                 },
                 XrdsSceneNode {
                     id: ID_LIGHT,
@@ -156,6 +157,7 @@ impl GlbRuntimeAddApp {
                     }),
                     editor: XrdsEditorMetadata::default(),
                     grabbable: false,
+                    triggers: Vec::new(),
                 },
             ],
             ..Default::default()

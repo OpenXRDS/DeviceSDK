@@ -104,6 +104,7 @@ fn authored_scene_document() -> XrdsSceneDocument {
                 payload: XrdsSceneNodePayload::Empty,
                 editor: XrdsEditorMetadata::default(),
                 grabbable: false,
+                triggers: Vec::new(),
             },
             XrdsSceneNode {
                 id: XrdsSceneNodeId(2),
@@ -129,6 +130,7 @@ fn authored_scene_document() -> XrdsSceneDocument {
                 }),
                 editor: XrdsEditorMetadata::default(),
                 grabbable: false,
+                triggers: Vec::new(),
             },
         ],
         ..Default::default()
