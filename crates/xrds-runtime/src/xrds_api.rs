@@ -119,8 +119,8 @@ pub use xrds_components::{
 };
 pub use environment::XrdsReceivesEnvironment;
 pub use trigger_action::{
-    XrdsCustomTriggerEvent, XrdsGltfAnimationCompleteEvent, XrdsHealth, XrdsSequenceAgent,
-    XrdsTriggerBindings, XrdsTriggerEvent, XrdsTriggerValue,
+    consume_triggers, XrdsCustomTriggerEvent, XrdsGltfAnimationCompleteEvent, XrdsHealth,
+    XrdsSequenceAgent, XrdsTriggerBindings, XrdsTriggerEvent, XrdsTriggerRef, XrdsTriggerValue,
 };
 /// Read-only entity→id index exposed for viewport picking systems.
 /// Access as `Res<XrdsIdIndex>` in Bevy systems: `id_index.id_of(entity)`

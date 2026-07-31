@@ -90,11 +90,37 @@ pub struct XrdsSequence {
 /// the design doc's "open/pluggable trigger mechanism" section for why
 /// that's cheap (one trait impl + one system registration, no changes
 /// here).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+/// Not `Copy`: the `Custom` variant carries a `String`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum XrdsTriggerKind {
+    // --- Interaction zones ---
     #[default]
     ZoneEnter,
     ZoneExit,
+
+    // --- XR grab interaction ---
+    /// This entity was picked up by a controller.
+    Grabbed,
+    /// This entity was released.
+    Dropped,
+
+    // --- World-space UI ---
+    /// A pointer ray entered this panel's surface.
+    HoverEnter,
+    /// A pointer ray left this panel's surface.
+    HoverExit,
+    /// This world-UI button was pressed.
+    ButtonPress,
+    /// This world-UI button was released.
+    ButtonRelease,
+    /// This world-UI slider's value changed. **The new value is not
+    /// currently reachable from a sequence** — see the note on
+    /// `XrdsActionValue::FromTriggerSource`.
+    SliderChange,
+    /// This world-UI toggle flipped. Same value caveat as `SliderChange`.
+    ToggleChange,
+
+    // --- Animation ---
     /// Every glTF animation on this node has finished playing. Never fires
     /// for `Loop` playback (a looping clip has no completion, by
     /// definition) nor for playback ended by an explicit stop — only for
@@ -104,6 +130,26 @@ pub enum XrdsTriggerKind {
     /// expressible: put the follow-up in a second binding keyed on this
     /// kind, rather than needing the first sequence to block.
     AnimationComplete,
+
+    /// An application-defined trigger, matched by name.
+    ///
+    /// The inbound counterpart to [`XrdsAction::FireCustomEvent`]: that
+    /// lets a sequence call *out* to app code, this lets app code fire a
+    /// sequence *in*. App code defines its own message type, implements
+    /// `XrdsTriggerEvent` returning `Custom("its-name")`, and registers
+    /// `consume_triggers::<ItsEvent>` — no SDK change needed.
+    ///
+    /// **This is also how continuous state becomes a trigger.** Values
+    /// like rotation angle or position have no natural "moment" — they
+    /// change every frame — so they are deliberately not modeled as
+    /// trigger kinds. Gameplay code watches the value, decides when it
+    /// matters (the threshold is domain knowledge the SDK cannot have),
+    /// and fires a `Custom` trigger at that point.
+    ///
+    /// Trade-off accepted knowingly: this is string-matched, so a typo
+    /// silently never fires. It stays a plain *name* rather than a query
+    /// path or expression, so it cannot grow into a scripting surface.
+    Custom(String),
 }
 
 /// "When trigger kind K fires for this node, run sequence S." A node can

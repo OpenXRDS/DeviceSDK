@@ -272,12 +272,27 @@ node-graph, or any codegen. Design rationale:
    whose bindings to check, `source()` = what caused it, `kind()`), then
    registering one `consume_triggers::<E>` system. Adding a new trigger
    source costs one trait impl plus one registration — the data model
-   doesn't change. Three sources ship today: `ZoneEnter`, `ZoneExit`, and
-   `AnimationComplete` (every glTF animation on the node ran to its end —
-   never fires for `Loop` playback, which has no completion, nor for an
-   explicit stop). `AnimationComplete` is how "play an animation, *then* do
-   X" is expressed: put the follow-up in a second binding rather than
-   having the first sequence block.
+   doesn't change. Eleven sources ship today: `ZoneEnter`/`ZoneExit`,
+   `Grabbed`/`Dropped`, `HoverEnter`/`HoverExit`,
+   `ButtonPress`/`ButtonRelease`, `SliderChange`, `ToggleChange`, and
+   `AnimationComplete`. Plus `Custom(String)` for app-defined triggers.
+
+   `AnimationComplete` is how "play an animation, *then* do X" is
+   expressed: put the follow-up in a second binding rather than having the
+   first sequence block. It never fires for `Loop` playback (no
+   completion) nor for an explicit stop.
+
+**Continuous state is deliberately not modeled as triggers.** Values like
+rotation angle, position, or scale have no natural "moment" — they change
+every frame — and the threshold that makes one *matter* is domain
+knowledge the SDK cannot have (45° is meaningful for a valve puzzle and
+meaningless for a spinning fan). No mainstream engine models this
+declaratively either. Instead: gameplay code watches the value, decides
+when it matters, and fires an `XrdsTriggerKind::Custom` trigger. That's
+also the pattern for anything the built-in vocabulary doesn't cover —
+define a message, implement `XrdsTriggerEvent`, register
+`consume_triggers::<E>`, no SDK change required. `Custom` is the inbound
+counterpart to `XrdsAction::FireCustomEvent`.
 2. **Sequencing** — an ordered action queue built on
    `bevy-sequential-actions`. **Each firing spawns its own ephemeral agent
    entity**, despawned when its queue drains. This is deliberate: two

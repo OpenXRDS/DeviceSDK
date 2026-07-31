@@ -376,6 +376,155 @@ fn target_despawned_mid_sequence_does_not_panic() {
     );
 }
 
+#[test]
+fn grab_event_fires_its_authored_sequence() {
+    // XrGrabEvent carries an XrdsId, so this exercises the
+    // XrdsTriggerRef::Id resolution path.
+    let mut app = xrds_test_app();
+
+    let entity = import_node_with_triggers(
+        &mut app,
+        950,
+        vec![XrdsTriggerBinding {
+            trigger: XrdsTriggerKind::Grabbed,
+            sequence: XrdsSequence {
+                steps: vec![XrdsAction::Teleport { destination: [2.0, 0.0, 0.0] }],
+            },
+        }],
+    );
+
+    app.world_mut().write_message(xrds_components::XrGrabEvent {
+        id: XrdsId(950),
+        hand: xrds_components::XrGrabHand::Right,
+    });
+
+    pump(&mut app, 3);
+
+    assert_eq!(
+        app.world().get::<Transform>(entity).map(|t| t.translation),
+        Some(Vec3::new(2.0, 0.0, 0.0)),
+        "Grabbed should have fired its authored sequence"
+    );
+}
+
+#[test]
+fn button_press_fires_via_the_entity_ref_path() {
+    // XrWorldButtonPressEvent carries a raw Entity rather than an XrdsId —
+    // the other half of XrdsTriggerRef, and the reason that enum exists.
+    let mut app = xrds_test_app();
+
+    let entity = import_node_with_triggers(
+        &mut app,
+        951,
+        vec![XrdsTriggerBinding {
+            trigger: XrdsTriggerKind::ButtonPress,
+            sequence: XrdsSequence {
+                steps: vec![XrdsAction::Teleport { destination: [0.0, 7.0, 0.0] }],
+            },
+        }],
+    );
+
+    app.world_mut()
+        .write_message(xrds_components::XrWorldButtonPressEvent {
+            button_entity: entity,
+            hand: xrds_components::XrGrabHand::Left,
+        });
+
+    pump(&mut app, 3);
+
+    assert_eq!(
+        app.world().get::<Transform>(entity).map(|t| t.translation),
+        Some(Vec3::new(0.0, 7.0, 0.0)),
+        "ButtonPress should resolve through XrdsTriggerRef::Entity and fire"
+    );
+}
+
+/// An app-defined trigger source: exactly what third-party gameplay code
+/// would write to fire a sequence from its own conditions (including a
+/// threshold crossed by some continuous value).
+#[derive(bevy::prelude::Message, Debug, Clone)]
+struct ValveOpenedEvent {
+    node_id: XrdsId,
+}
+
+impl crate::xrds_api::trigger_action::XrdsTriggerEvent for ValveOpenedEvent {
+    fn target(&self) -> crate::xrds_api::trigger_action::XrdsTriggerRef {
+        crate::xrds_api::trigger_action::XrdsTriggerRef::Id(self.node_id)
+    }
+    fn kind(&self) -> XrdsTriggerKind {
+        XrdsTriggerKind::Custom("valve_opened".to_string())
+    }
+}
+
+#[test]
+fn app_defined_custom_trigger_fires_without_any_sdk_change() {
+    // Proves the escape hatch works end to end: a message type defined
+    // outside the SDK's vocabulary drives an authored sequence purely by
+    // implementing the trait and registering the generic consumer.
+    let mut app = xrds_test_app();
+    app.add_message::<ValveOpenedEvent>();
+    app.add_systems(
+        Update,
+        crate::xrds_api::trigger_action::consume_triggers::<ValveOpenedEvent>,
+    );
+
+    let entity = import_node_with_triggers(
+        &mut app,
+        952,
+        vec![XrdsTriggerBinding {
+            trigger: XrdsTriggerKind::Custom("valve_opened".to_string()),
+            sequence: XrdsSequence {
+                steps: vec![XrdsAction::Teleport { destination: [8.0, 0.0, 0.0] }],
+            },
+        }],
+    );
+
+    app.world_mut()
+        .write_message(ValveOpenedEvent { node_id: XrdsId(952) });
+
+    pump(&mut app, 3);
+
+    assert_eq!(
+        app.world().get::<Transform>(entity).map(|t| t.translation),
+        Some(Vec3::new(8.0, 0.0, 0.0)),
+        "an app-defined Custom trigger should fire its authored sequence"
+    );
+}
+
+#[test]
+fn custom_trigger_with_a_different_name_does_not_fire() {
+    // Custom is matched by name, so a non-matching name must be inert —
+    // the flip side of the string-matching trade-off.
+    let mut app = xrds_test_app();
+    app.add_message::<ValveOpenedEvent>();
+    app.add_systems(
+        Update,
+        crate::xrds_api::trigger_action::consume_triggers::<ValveOpenedEvent>,
+    );
+
+    let entity = import_node_with_triggers(
+        &mut app,
+        953,
+        vec![XrdsTriggerBinding {
+            trigger: XrdsTriggerKind::Custom("some_other_name".to_string()),
+            sequence: XrdsSequence {
+                steps: vec![XrdsAction::Teleport { destination: [8.0, 0.0, 0.0] }],
+            },
+        }],
+    );
+
+    app.world_mut()
+        .write_message(ValveOpenedEvent { node_id: XrdsId(953) });
+
+    pump(&mut app, 3);
+
+    assert_eq!(
+        app.world().get::<Transform>(entity).map(|t| t.translation),
+        Some(Vec3::ZERO),
+        "a Custom binding with a different name must not fire"
+    );
+}
+
 /// Builds a node with an `AnimationPlayer` on a child (matching real glTF
 /// structure — `animation_player_entities_for_root_in_world` walks
 /// `Children` and does not consider the root itself), playing a short clip

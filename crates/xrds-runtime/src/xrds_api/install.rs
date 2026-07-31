@@ -213,11 +213,32 @@ pub(super) fn install_xrds(app: &mut App) {
         (
             crate::xrds_api::trigger_action::consume_triggers::<xrds_components::XrZoneEnterEvent>,
             crate::xrds_api::trigger_action::consume_triggers::<xrds_components::XrZoneExitEvent>,
-            // Third trigger source — note this cost exactly one trait impl
-            // plus this one line, which is the whole point of the pluggable
-            // XrdsTriggerEvent design.
             crate::xrds_api::trigger_action::consume_triggers::<
                 crate::xrds_api::trigger_action::XrdsGltfAnimationCompleteEvent,
+            >,
+            // XR grab interaction.
+            crate::xrds_api::trigger_action::consume_triggers::<xrds_components::XrGrabEvent>,
+            crate::xrds_api::trigger_action::consume_triggers::<xrds_components::XrDropEvent>,
+            // World-space UI. Every registration here is the same one line
+            // plus a ~5-line trait impl — the whole point of the pluggable
+            // XrdsTriggerEvent design.
+            crate::xrds_api::trigger_action::consume_triggers::<
+                xrds_components::XrWorldHoverEnterEvent,
+            >,
+            crate::xrds_api::trigger_action::consume_triggers::<
+                xrds_components::XrWorldHoverExitEvent,
+            >,
+            crate::xrds_api::trigger_action::consume_triggers::<
+                xrds_components::XrWorldButtonPressEvent,
+            >,
+            crate::xrds_api::trigger_action::consume_triggers::<
+                xrds_components::XrWorldButtonReleaseEvent,
+            >,
+            crate::xrds_api::trigger_action::consume_triggers::<
+                xrds_components::XrWorldSliderChangeEvent,
+            >,
+            crate::xrds_api::trigger_action::consume_triggers::<
+                xrds_components::XrWorldToggleEvent,
             >,
         )
             .after(crate::xrds_api::zone::zone_collision_system),

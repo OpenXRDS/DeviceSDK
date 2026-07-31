@@ -7,10 +7,11 @@ shaped the way it is) and [`xrds-trigger-action-backlog.md`](xrds-trigger-action
 This doc is the *how and in what order* — phased, with checkboxes, in the
 same style as `docs/done/xrds-net-release-readiness.md`.
 
-**Status:** Phases 0-5 complete and verified — `xrds-runtime` 85/85,
+**Status:** Phases 0-5 complete and verified — `xrds-runtime` 89/89,
 `xrds-scene-graph` 73/73, `cargo check --workspace` clean, and the Phase 5
 example visually confirmed by a human. No v1 gaps remain open. Phase 6
-(editor UI) is tracked but deliberately unscheduled.
+(editor UI) is tracked but deliberately unscheduled. Phase 7 (below)
+completed the trigger-source surface after the initial commit.
 
 ## Priority
 
@@ -344,3 +345,72 @@ what's settled vs. still open:
   (glTF-style external references are reserved for heavy binary assets,
   not small structured data like this).
 - Priority: build this before other new SDK components.
+
+## Phase 7 — completing the trigger-source surface
+
+Added after the initial commit (`8e02bce`). Prompted by the question of how
+to handle the many entity states one might want to watch — grabbed,
+visible, rotated-by-how-much — without the trigger vocabulary exploding.
+
+**The resolution: split discrete from continuous.**
+
+- *Discrete* state changes ("this happened at this moment") fit the
+  existing model, and eight such events already existed in the codebase,
+  registered but unconsumed. Wiring each cost ~5 lines plus one
+  registration.
+- *Continuous* values (rotation angle, position, scale) have no natural
+  moment and no SDK-knowable threshold — 45° matters for a valve puzzle and
+  is meaningless for a spinning fan. No mainstream engine models these
+  declaratively either. **Deliberately not modeled as trigger kinds.**
+
+- [x] Wired all eight remaining existing events as trigger sources:
+      `Grabbed`/`Dropped` (the canonical XR interaction pair),
+      `HoverEnter`/`HoverExit`, `ButtonPress`/`ButtonRelease`,
+      `SliderChange`, `ToggleChange`. Wiring all eight rather than a
+      need-driven subset: leaving most of an SDK's interaction surface
+      unbindable would be an arbitrary gap ("why can I trigger on grab but
+      not hover?"), and inconsistency in a pick-from-a-list vocabulary is
+      its own cost.
+- [x] **Required a trait refactor, discovered while implementing:** the
+      world-UI button/slider/toggle events carry a raw Bevy `Entity`, while
+      zone/grab/hover events carry an `XrdsId`. `XrdsTriggerEvent`'s
+      methods returned `XrdsId`, so **three of the eight could not
+      implement the trait at all.** Introduced `XrdsTriggerRef` (`Id` |
+      `Entity`) with a `resolve(&XrdsIdIndex)` method; events report
+      whichever they have and `consume_triggers` normalizes. Chosen over
+      changing the event types themselves, which already have other
+      consumers.
+- [x] Added `XrdsTriggerKind::Custom(String)` — the inbound counterpart to
+      `XrdsAction::FireCustomEvent`. Without it, app code could implement
+      `XrdsTriggerEvent` but had to return an existing SDK variant from
+      `kind()`, so **no new trigger kind could be introduced without
+      editing the SDK.** Sequences could call out to app code but app code
+      couldn't call in. This is also the mechanism for continuous state:
+      gameplay watches the value and fires a `Custom` trigger when its own
+      threshold is crossed.
+      Trade-off accepted knowingly: string-matched, so a typo silently
+      never fires. It stays a *name*, not a query path or expression, so it
+      cannot grow into a scripting surface. Worth an editor picker rather
+      than free text in Phase 6.
+      Note: this drops `Copy` from `XrdsTriggerKind` (String payload);
+      nothing depended on it.
+- [x] Tests: `grab_event_fires_its_authored_sequence` (the `Id` ref path),
+      `button_press_fires_via_the_entity_ref_path` (the `Entity` ref path —
+      the reason `XrdsTriggerRef` exists),
+      `app_defined_custom_trigger_fires_without_any_sdk_change` (a message
+      type defined outside the SDK driving a sequence end to end), and
+      `custom_trigger_with_a_different_name_does_not_fire` (the flip side
+      of string matching).
+- [ ] **Known limitation:** `SliderChange`/`ToggleChange` fire correctly,
+      but the event's *value* (`slider.value`, `toggle.checked`) is not
+      reachable from a sequence — `XrdsActionValue::FromTriggerSource`
+      reads the `XrdsTriggerValue` component off the source entity, not the
+      event payload. Deliberately not "fixed" by having
+      `consume_triggers` write `XrdsTriggerValue`: that slot is documented
+      as gameplay-owned, so clobbering it as a side effect would break
+      that contract. Needs its own small design pass if a real use case
+      appears.
+
+**Deliberately not built:** any generic property-watcher, reflection-based
+path, or threshold-expression mechanism for continuous state. That is the
+Blueprint slide, and it is the one thing this whole design exists to avoid.

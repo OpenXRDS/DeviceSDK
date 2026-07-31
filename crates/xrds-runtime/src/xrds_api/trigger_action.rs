@@ -90,8 +90,8 @@ pub struct XrdsGltfAnimationCompleteEvent {
 }
 
 impl XrdsTriggerEvent for XrdsGltfAnimationCompleteEvent {
-    fn target(&self) -> XrdsId {
-        self.node_id
+    fn target(&self) -> XrdsTriggerRef {
+        XrdsTriggerRef::Id(self.node_id)
     }
     fn kind(&self) -> XrdsTriggerKind {
         XrdsTriggerKind::AnimationComplete
@@ -134,24 +134,44 @@ pub struct XrdsSequenceAgent {
     pub source: Option<Entity>,
 }
 
+/// How a trigger event names an entity.
+///
+/// Existing XRDS events are split on this: zone/grab/hover events carry a
+/// stable `XrdsId`, while the world-UI button/slider/toggle events carry a
+/// raw Bevy `Entity`. Rather than force every event to normalize (which
+/// would mean changing types that already have other consumers), the trait
+/// reports whichever it has and [`consume_triggers`] resolves it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum XrdsTriggerRef {
+    Id(XrdsId),
+    Entity(Entity),
+}
+
+impl XrdsTriggerRef {
+    /// Resolves to a live entity, going through the id index only when
+    /// needed.
+    pub fn resolve(self, index: &XrdsIdIndex) -> Option<Entity> {
+        match self {
+            Self::Id(id) => index.entity_of(id),
+            Self::Entity(entity) => Some(entity),
+        }
+    }
+}
+
 /// Any message that should be able to fire an authored sequence
 /// implements this. Adding a new trigger source (e.g. an `avian3d`
-/// collision event) is one trait impl plus one
-/// `consume_triggers::<E>` registration — the data model and consumer
+/// collision event, or an app's own gameplay event) is one trait impl plus
+/// one `consume_triggers::<E>` registration — the data model and consumer
 /// logic never change.
-///
-/// Methods work in `XrdsId`, not `Entity`, because the existing zone
-/// events carry stable XRDS ids; [`consume_triggers`] resolves them
-/// through [`XrdsIdIndex`].
 pub trait XrdsTriggerEvent: Message {
     /// Whose bindings to check — the node the sequence is authored on.
-    fn target(&self) -> XrdsId;
+    fn target(&self) -> XrdsTriggerRef;
 
     /// What *caused* the trigger, when meaningfully distinct from the
     /// target (e.g. the bullet that hit the player). Defaults to the
     /// target so sources with no separate cause — a timer, say — don't
     /// have to think about it.
-    fn source(&self) -> XrdsId {
+    fn source(&self) -> XrdsTriggerRef {
         self.target()
     }
 
@@ -159,11 +179,11 @@ pub trait XrdsTriggerEvent: Message {
 }
 
 impl XrdsTriggerEvent for xrds_components::XrZoneEnterEvent {
-    fn target(&self) -> XrdsId {
-        self.zone_id
+    fn target(&self) -> XrdsTriggerRef {
+        XrdsTriggerRef::Id(self.zone_id)
     }
-    fn source(&self) -> XrdsId {
-        self.entity_id
+    fn source(&self) -> XrdsTriggerRef {
+        XrdsTriggerRef::Id(self.entity_id)
     }
     fn kind(&self) -> XrdsTriggerKind {
         XrdsTriggerKind::ZoneEnter
@@ -171,14 +191,92 @@ impl XrdsTriggerEvent for xrds_components::XrZoneEnterEvent {
 }
 
 impl XrdsTriggerEvent for xrds_components::XrZoneExitEvent {
-    fn target(&self) -> XrdsId {
-        self.zone_id
+    fn target(&self) -> XrdsTriggerRef {
+        XrdsTriggerRef::Id(self.zone_id)
     }
-    fn source(&self) -> XrdsId {
-        self.entity_id
+    fn source(&self) -> XrdsTriggerRef {
+        XrdsTriggerRef::Id(self.entity_id)
     }
     fn kind(&self) -> XrdsTriggerKind {
         XrdsTriggerKind::ZoneExit
+    }
+}
+
+// --- XR interaction: grab / drop -----------------------------------------
+// The canonical XR interaction pair (Unity XRI's SelectEntered/SelectExited
+// equivalent). `hand` is not an entity, so source defaults to target.
+
+impl XrdsTriggerEvent for xrds_components::XrGrabEvent {
+    fn target(&self) -> XrdsTriggerRef {
+        XrdsTriggerRef::Id(self.id)
+    }
+    fn kind(&self) -> XrdsTriggerKind {
+        XrdsTriggerKind::Grabbed
+    }
+}
+
+impl XrdsTriggerEvent for xrds_components::XrDropEvent {
+    fn target(&self) -> XrdsTriggerRef {
+        XrdsTriggerRef::Id(self.id)
+    }
+    fn kind(&self) -> XrdsTriggerKind {
+        XrdsTriggerKind::Dropped
+    }
+}
+
+// --- World-space UI ------------------------------------------------------
+
+impl XrdsTriggerEvent for xrds_components::XrWorldHoverEnterEvent {
+    fn target(&self) -> XrdsTriggerRef {
+        XrdsTriggerRef::Id(self.panel_id)
+    }
+    fn kind(&self) -> XrdsTriggerKind {
+        XrdsTriggerKind::HoverEnter
+    }
+}
+
+impl XrdsTriggerEvent for xrds_components::XrWorldHoverExitEvent {
+    fn target(&self) -> XrdsTriggerRef {
+        XrdsTriggerRef::Id(self.panel_id)
+    }
+    fn kind(&self) -> XrdsTriggerKind {
+        XrdsTriggerKind::HoverExit
+    }
+}
+
+impl XrdsTriggerEvent for xrds_components::XrWorldButtonPressEvent {
+    fn target(&self) -> XrdsTriggerRef {
+        XrdsTriggerRef::Entity(self.button_entity)
+    }
+    fn kind(&self) -> XrdsTriggerKind {
+        XrdsTriggerKind::ButtonPress
+    }
+}
+
+impl XrdsTriggerEvent for xrds_components::XrWorldButtonReleaseEvent {
+    fn target(&self) -> XrdsTriggerRef {
+        XrdsTriggerRef::Entity(self.button_entity)
+    }
+    fn kind(&self) -> XrdsTriggerKind {
+        XrdsTriggerKind::ButtonRelease
+    }
+}
+
+impl XrdsTriggerEvent for xrds_components::XrWorldSliderChangeEvent {
+    fn target(&self) -> XrdsTriggerRef {
+        XrdsTriggerRef::Entity(self.slider_entity)
+    }
+    fn kind(&self) -> XrdsTriggerKind {
+        XrdsTriggerKind::SliderChange
+    }
+}
+
+impl XrdsTriggerEvent for xrds_components::XrWorldToggleEvent {
+    fn target(&self) -> XrdsTriggerRef {
+        XrdsTriggerRef::Entity(self.toggle_entity)
+    }
+    fn kind(&self) -> XrdsTriggerKind {
+        XrdsTriggerKind::ToggleChange
     }
 }
 
@@ -193,13 +291,13 @@ pub fn consume_triggers<E: XrdsTriggerEvent>(
     mut commands: Commands,
 ) {
     for event in events.read() {
-        let Some(target) = id_index.entity_of(event.target()) else {
+        let Some(target) = event.target().resolve(&id_index) else {
             continue;
         };
         let Ok(node_bindings) = bindings.get(target) else {
             continue;
         };
-        let source = id_index.entity_of(event.source());
+        let source = event.source().resolve(&id_index);
         let kind = event.kind();
 
         for binding in node_bindings.0.iter().filter(|b| b.trigger == kind) {
