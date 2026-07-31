@@ -81,6 +81,7 @@ bevy = { version = "0.17.2", default-features = false, features = [
   "jpeg", "mp3", "wav",
 ] }
 avian3d = { version = "0.4", features = ["3d", "parry-f32"] }
+bevy-sequential-actions = "0.14"
 wgpu = { version = "26.0.1", default-features = false, features = ["wgsl", "vulkan", "vulkan-portability"] }
 wgpu-hal = { version = "26.0.1", features = ["vulkan"] }
 ash = "0.38.0"
@@ -126,6 +127,7 @@ xrds-scene-graph = { workspace = true }
 
 [dev-dependencies]
 bevy = { workspace = true }
+bevy-sequential-actions = { workspace = true }
 wgpu = { workspace = true }
 rand = { version = "0.9.2" }
 xrds-media = { workspace = true, features = ["transcoding"] }
@@ -200,6 +202,10 @@ path = "examples/xrds_first/load_gltf_animated.rs"
 [[example]]
 name = "scene_document_import"
 path = "examples/xrds_first/scene_document_import.rs"
+
+[[example]]
+name = "trigger_action_sequence"
+path = "examples/xrds_first/trigger_action_sequence.rs"
 
 [[example]]
 name = "scene_document_environment_import"
@@ -300,6 +306,10 @@ path = "examples/webrtc/webrtc_realnet_subscriber.rs"
 [[example]]
 name = "direct_bevy"
 path = "examples/expert/direct_bevy.rs"
+
+[[example]]
+name = "sequential_actions_spike"
+path = "examples/expert/sequential_actions_spike.rs"
 
 [[example]]
 name = "2d_bloom"

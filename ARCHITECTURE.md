@@ -257,3 +257,76 @@ Scene environment policy currently supports IBL, skybox, manual exposure, and li
 
 - Document-driven: author in `XrdsSceneDocument`, import into runtime.
 - Runtime-driven: call `merge_scene_assets(...)`, `set_scene_environment(...)`, and `clear_scene_environment(...)`.
+
+## Trigger-Action Sequencing
+
+Lets an authored scene say "when trigger T fires on this node, run this
+ordered list of actions" — without a scripting language, a visual
+node-graph, or any codegen. Design rationale:
+`docs/xrds-scenegraph-trigger-action-sequencing.md`.
+
+**Two collaborating but separate systems:**
+
+1. **Trigger-action** — an open, pluggable mechanism. Any message type can
+   fire a sequence by implementing `XrdsTriggerEvent` (`target()` =
+   whose bindings to check, `source()` = what caused it, `kind()`), then
+   registering one `consume_triggers::<E>` system. Adding a new trigger
+   source costs one trait impl plus one registration — the data model
+   doesn't change. Three sources ship today: `ZoneEnter`, `ZoneExit`, and
+   `AnimationComplete` (every glTF animation on the node ran to its end —
+   never fires for `Loop` playback, which has no completion, nor for an
+   explicit stop). `AnimationComplete` is how "play an animation, *then* do
+   X" is expressed: put the follow-up in a second binding rather than
+   having the first sequence block.
+2. **Sequencing** — an ordered action queue built on
+   `bevy-sequential-actions`. **Each firing spawns its own ephemeral agent
+   entity**, despawned when its queue drains. This is deliberate: two
+   different sources firing the same trigger are independent events and
+   run concurrently rather than queueing behind each other, matching
+   Unity/Unreal/Godot's convention that the detection layer never
+   suppresses.
+
+**Authoring (document layer, `xrds-scene-graph`):** `XrdsSceneNode` has a
+top-level `triggers: Vec<XrdsTriggerBinding>` field — deliberately *not*
+nested inside `XrdsInteractionZone`, so any node can carry bindings
+regardless of payload kind (a plain physics body can react to a collision
+trigger without being an interaction zone). `#[serde(default)]`, so older
+saved documents load unaffected.
+
+```rust
+XrdsSceneNode {
+    // ...
+    triggers: vec![XrdsTriggerBinding {
+        trigger: XrdsTriggerKind::ZoneEnter,
+        sequence: XrdsSequence {
+            steps: vec![
+                XrdsAction::SetVisible(false),
+                XrdsAction::Wait { seconds: 0.35 },
+                XrdsAction::SetVisible(true),
+                XrdsAction::Teleport { destination: [1.5, 0.5, 0.0] },
+            ],
+        },
+    }],
+}
+```
+
+`XrdsAction` is a **closed vocabulary** — that's what keeps this from
+becoming a scripting language. v1: `PlayGltfAnimation`,
+`StopGltfAnimation`, `SetVisible`, `Teleport`, `ModifyHealth`, `Wait`,
+`FireCustomEvent`. Candidate future variants (audio, materials, physics,
+networking) are parked in `docs/xrds-trigger-action-backlog.md`.
+
+**Scope boundary:** this layer applies short, parameterized effects. It is
+*not* a game-logic engine — gameplay state, physics, input, AI, and
+anything needing to branch on live state stay as ordinary Bevy
+systems. If a sequence wants `if HP < 20% then X else Y`, that's the
+signal to use `FireCustomEvent` and handle it in the expert layer rather
+than growing `XrdsAction`.
+
+**Dynamic values:** `XrdsActionValue::FromTriggerSource` reads a generic
+`XrdsTriggerValue(f32)` component off the triggering entity — gameplay
+code populates it (e.g. a bullet's fire-system setting its damage), this
+layer only reads it. Missing slot degrades to `0.0` with a warning, never
+a panic.
+
+Runnable example: `examples/xrds_first/trigger_action_sequence.rs`.

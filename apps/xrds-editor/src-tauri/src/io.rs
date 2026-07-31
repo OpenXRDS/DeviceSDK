@@ -884,6 +884,7 @@ mod tests {
                     export_policy: xrds_scene_graph::XrdsGltfAssetExportPolicy::KeepExternalReference,
                 }),
                 editor: Default::default(),
+                triggers: Vec::new(),
             }],
             ..Default::default()
         };

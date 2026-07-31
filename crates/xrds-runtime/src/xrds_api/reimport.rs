@@ -105,6 +105,9 @@ pub(super) fn reimport_scene_in_world(
     // ── 4d. Tag spawn zone entities ───────────────────────────────────────────
     tag_spawn_zone_entities(world, document);
 
+    // ── 4e. Tag trigger-binding entities ──────────────────────────────────────
+    tag_trigger_binding_entities(world, document);
+
     // ── 5. Apply materials ────────────────────────────────────────────────────
     for (entity, mat) in material_updates {
         set_material_params_for_entity_in_world(world, entity, mat);
@@ -515,6 +518,27 @@ pub(super) fn tag_grabbable_entities(world: &mut World, document: &XrdsSceneDocu
             e.insert(xrds_components::XrGrabbable);
         } else {
             e.remove::<xrds_components::XrGrabbable>();
+        }
+    }
+}
+
+/// Insert [`crate::xrds_api::trigger_action::XrdsTriggerBindings`] on every entity whose
+/// scene document node has non-empty `triggers` data. Remove it from any that have none
+/// (handles a toggle from the editor, same as [`tag_grabbable_entities`]). This spawns the
+/// authored *definition* only — nothing is enqueued onto a `bevy-sequential-actions` queue
+/// here; that only happens when a matching trigger event actually fires (Phase 3).
+pub(super) fn tag_trigger_binding_entities(world: &mut World, document: &XrdsSceneDocument) {
+    for node in &document.nodes {
+        let Some(entity) = world.resource::<XrdsIdIndex>().entity_of(node.id.into()) else {
+            continue;
+        };
+        let Ok(mut e) = world.get_entity_mut(entity) else { continue; };
+        if node.triggers.is_empty() {
+            e.remove::<crate::xrds_api::trigger_action::XrdsTriggerBindings>();
+        } else {
+            e.insert(crate::xrds_api::trigger_action::XrdsTriggerBindings(
+                node.triggers.clone(),
+            ));
         }
     }
 }

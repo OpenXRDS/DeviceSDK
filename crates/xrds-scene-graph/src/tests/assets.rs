@@ -23,6 +23,7 @@ fn runtime_projection_resolves_gltf_asset_uri_from_catalog_reference() {
             }),
             grabbable: false,
             editor: XrdsEditorMetadata::default(),
+            triggers: Vec::new(),
         }],
         ..Default::default()
     };
@@ -63,6 +64,7 @@ fn runtime_projection_falls_back_to_embedded_gltf_uri_when_catalog_entry_is_miss
             }),
             grabbable: false,
             editor: XrdsEditorMetadata::default(),
+            triggers: Vec::new(),
         }],
         ..Default::default()
     };
@@ -97,6 +99,7 @@ fn document_place_gltf_asset_uses_catalog_reference_and_allocates_node_id() {
             payload: XrdsSceneNodePayload::Empty,
             grabbable: false,
             editor: XrdsEditorMetadata::default(),
+            triggers: Vec::new(),
         }],
         ..Default::default()
     };
@@ -306,6 +309,7 @@ fn remove_asset_rejects_when_policy_requires_no_references() {
             }),
             grabbable: false,
             editor: XrdsEditorMetadata::default(),
+            triggers: Vec::new(),
         }],
         ..Default::default()
     };
@@ -356,6 +360,7 @@ fn remove_asset_can_detach_references_and_keep_fallback_uri() {
                 }),
                 ..Default::default()
             },
+            triggers: Vec::new(),
         }],
         ..Default::default()
     };
@@ -418,6 +423,7 @@ fn rebind_gltf_asset_updates_catalog_and_referencing_node_fallbacks() {
             }),
             grabbable: false,
             editor: XrdsEditorMetadata::default(),
+            triggers: Vec::new(),
         }],
         ..Default::default()
     };
@@ -486,6 +492,7 @@ fn rename_asset_id_rewrites_catalog_references_and_editor_metadata() {
                 }),
                 ..Default::default()
             },
+            triggers: Vec::new(),
         }],
         ..Default::default()
     };
@@ -568,6 +575,7 @@ fn gltf_node_health_reports_catalog_resolved_missing_and_detached_states() {
                 }),
                 grabbable: false,
                 editor: XrdsEditorMetadata::default(),
+                triggers: Vec::new(),
             },
             XrdsSceneNode {
                 id: XrdsSceneNodeId(2),
@@ -584,6 +592,7 @@ fn gltf_node_health_reports_catalog_resolved_missing_and_detached_states() {
                 }),
                 grabbable: false,
                 editor: XrdsEditorMetadata::default(),
+                triggers: Vec::new(),
             },
             XrdsSceneNode {
                 id: XrdsSceneNodeId(3),
@@ -600,6 +609,7 @@ fn gltf_node_health_reports_catalog_resolved_missing_and_detached_states() {
                 }),
                 grabbable: false,
                 editor: XrdsEditorMetadata::default(),
+                triggers: Vec::new(),
             },
         ],
         ..Default::default()
@@ -662,6 +672,7 @@ fn gltf_source_diagnostics_report_valid_missing_invalid_extension_and_bad_scene_
                 }),
                 grabbable: false,
                 editor: XrdsEditorMetadata::default(),
+                triggers: Vec::new(),
             },
             XrdsSceneNode {
                 id: XrdsSceneNodeId(2),
@@ -678,6 +689,7 @@ fn gltf_source_diagnostics_report_valid_missing_invalid_extension_and_bad_scene_
                 }),
                 grabbable: false,
                 editor: XrdsEditorMetadata::default(),
+                triggers: Vec::new(),
             },
             XrdsSceneNode {
                 id: XrdsSceneNodeId(3),
@@ -694,6 +706,7 @@ fn gltf_source_diagnostics_report_valid_missing_invalid_extension_and_bad_scene_
                 }),
                 grabbable: false,
                 editor: XrdsEditorMetadata::default(),
+                triggers: Vec::new(),
             },
             XrdsSceneNode {
                 id: XrdsSceneNodeId(4),
@@ -710,6 +723,7 @@ fn gltf_source_diagnostics_report_valid_missing_invalid_extension_and_bad_scene_
                 }),
                 grabbable: false,
                 editor: XrdsEditorMetadata::default(),
+                triggers: Vec::new(),
             },
         ],
         ..Default::default()
@@ -796,6 +810,7 @@ fn asset_usage_reports_reference_counts_for_catalog_assets() {
                 }),
                 grabbable: false,
                 editor: XrdsEditorMetadata::default(),
+                triggers: Vec::new(),
             },
             XrdsSceneNode {
                 id: XrdsSceneNodeId(2),
@@ -812,6 +827,7 @@ fn asset_usage_reports_reference_counts_for_catalog_assets() {
                 }),
                 grabbable: false,
                 editor: XrdsEditorMetadata::default(),
+                triggers: Vec::new(),
             },
         ],
         ..Default::default()
@@ -871,6 +887,7 @@ fn asset_diagnostics_summarize_node_health_and_unused_assets() {
                 }),
                 grabbable: false,
                 editor: XrdsEditorMetadata::default(),
+                triggers: Vec::new(),
             },
             XrdsSceneNode {
                 id: XrdsSceneNodeId(2),
@@ -896,6 +913,7 @@ fn asset_diagnostics_summarize_node_health_and_unused_assets() {
                 }),
                 grabbable: false,
                 editor: XrdsEditorMetadata::default(),
+                triggers: Vec::new(),
             },
             XrdsSceneNode {
                 id: XrdsSceneNodeId(3),
@@ -912,6 +930,7 @@ fn asset_diagnostics_summarize_node_health_and_unused_assets() {
                 }),
                 grabbable: false,
                 editor: XrdsEditorMetadata::default(),
+                triggers: Vec::new(),
             },
         ],
         ..Default::default()
@@ -1080,6 +1099,7 @@ fn document_validation_rejects_gltf_authoring_on_non_gltf_node() {
             payload: XrdsSceneNodePayload::Empty,
             grabbable: false,
             editor: XrdsEditorMetadata::default(),
+            triggers: Vec::new(),
         }],
         gltf_node_authoring: [(
             40,
@@ -1283,6 +1303,7 @@ fn audio_clip_node_references_audio_catalog_asset_and_drives_usage_tracking() {
                 }),
                 grabbable: false,
                 editor: XrdsEditorMetadata::default(),
+                triggers: Vec::new(),
             },
         ],
         ..Default::default()
@@ -1331,6 +1352,7 @@ fn audio_clip_node_validation_rejects_missing_and_wrong_kind_assets() {
             }),
             grabbable: false,
             editor: XrdsEditorMetadata::default(),
+            triggers: Vec::new(),
         }],
         ..Default::default()
     }
@@ -1365,6 +1387,7 @@ fn audio_clip_node_validation_rejects_missing_and_wrong_kind_assets() {
             }),
             grabbable: false,
             editor: XrdsEditorMetadata::default(),
+            triggers: Vec::new(),
         }],
         ..Default::default()
     }

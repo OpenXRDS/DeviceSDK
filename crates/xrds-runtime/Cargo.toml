@@ -40,6 +40,7 @@ xrds-components = { workspace = true }
 xrds-openxr = { workspace = true }
 xrds-scene-graph = { workspace = true }
 bevy = { workspace = true }
+bevy-sequential-actions = { workspace = true }
 avian3d = { workspace = true }
 bevy_rich_text3d = { workspace = true }
 bevy_fontmesh = { workspace = true }

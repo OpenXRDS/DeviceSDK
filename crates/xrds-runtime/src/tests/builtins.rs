@@ -443,6 +443,7 @@ fn gltf_source_is_readable_after_import() {
             }),
             grabbable: false,
             editor: XrdsEditorMetadata::default(),
+            triggers: Vec::new(),
         }],
         ..Default::default()
     };

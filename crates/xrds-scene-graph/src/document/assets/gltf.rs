@@ -355,6 +355,7 @@ impl XrdsSceneDocument {
                 export_policy: placement.export_policy,
             }),
             editor,
+            triggers: Vec::new(),
         });
 
         self.validate()

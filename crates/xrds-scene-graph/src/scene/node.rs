@@ -71,6 +71,13 @@ pub struct XrdsSceneNode {
     pub transform: XrdsSceneTransform,
     pub payload: XrdsSceneNodePayload,
     pub editor: XrdsEditorMetadata,
+    /// Trigger-action bindings for this node — "when trigger kind K
+    /// fires, run sequence S." Applies regardless of payload kind (any
+    /// node can carry these, not just `InteractionZone` — e.g. a plain
+    /// physics-body player node can bind a collision-sourced trigger).
+    /// See `docs/xrds-scenegraph-trigger-action-sequencing.md`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub triggers: Vec<XrdsTriggerBinding>,
 }
 
 #[derive(Debug, Clone)]
@@ -546,6 +553,7 @@ impl XrdsSceneNode {
             transform: transform.into(),
             payload,
             editor: XrdsEditorMetadata::default(),
+            triggers: Vec::new(),
         }
     }
 

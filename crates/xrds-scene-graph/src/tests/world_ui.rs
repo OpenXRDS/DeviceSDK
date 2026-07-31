@@ -84,6 +84,7 @@ fn make_world_panel_document() -> XrdsSceneDocument {
                     ],
                 }),
                 editor: XrdsEditorMetadata::default(),
+                triggers: Vec::new(),
             },
         ],
         ..Default::default()
@@ -113,6 +114,7 @@ fn make_minimal_world_panel_document() -> XrdsSceneDocument {
                     widgets: vec![],
                 }),
                 editor: XrdsEditorMetadata::default(),
+                triggers: Vec::new(),
             },
         ],
         ..Default::default()

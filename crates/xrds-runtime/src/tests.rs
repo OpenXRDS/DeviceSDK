@@ -20,18 +20,21 @@ use xrds_components::{
     XrdsMaterialTextureUvTransformMode,
 };
 use xrds_scene_graph::{
-    XrdsEditorMetadata, XrdsGltfAssetExportPolicy, XrdsSceneAmbientLight, XrdsSceneAnimationRepeatMode,
-    XrdsSceneAsset, XrdsSceneAssetKind, XrdsSceneAudioClip, XrdsSceneCamera, XrdsSceneCameraProjection,
-    XrdsSceneCube, XrdsSceneDirectionalLight, XrdsSceneDocument, XrdsSceneEnvironment,
-    XrdsSceneExposureEnvironment, XrdsSceneFogEnvironment, XrdsSceneGltfAnimationSelector,
-    XrdsSceneGltfAsset, XrdsSceneGltfMorphTargetOverride, XrdsSceneGltfMorphTargetSelector,
-    XrdsSceneGltfMorphTargetWeight, XrdsSceneGltfNodeAuthoring, XrdsSceneGltfNodeLocator,
-    XrdsSceneGltfPlayback, XrdsSceneIblEnvironment, XrdsSceneMaterial, XrdsSceneMaterialAlphaMode,
+    XrdsAction, XrdsActionTarget, XrdsActionValue, XrdsEditorMetadata, XrdsGltfAssetExportPolicy,
+    XrdsSceneAmbientLight,
+    XrdsSceneAnimationRepeatMode, XrdsSceneAsset, XrdsSceneAssetKind, XrdsSceneAudioClip,
+    XrdsSceneCamera, XrdsSceneCameraProjection, XrdsSceneCube, XrdsSceneDirectionalLight,
+    XrdsSceneDocument, XrdsSceneEnvironment, XrdsSceneExposureEnvironment, XrdsSceneFogEnvironment,
+    XrdsSceneGltfAnimationSelector, XrdsSceneGltfAsset, XrdsSceneGltfMorphTargetOverride,
+    XrdsSceneGltfMorphTargetSelector, XrdsSceneGltfMorphTargetWeight, XrdsSceneGltfNodeAuthoring,
+    XrdsSceneGltfNodeLocator, XrdsSceneGltfPlayback, XrdsSceneIblEnvironment,
+    XrdsSceneInteractionZone, XrdsSceneMaterial, XrdsSceneMaterialAlphaMode,
     XrdsSceneMaterialPbrParams, XrdsSceneMaterialTextureSlots, XrdsSceneMetadata, XrdsSceneNode,
     XrdsSceneNodeId, XrdsSceneNodePayload, XrdsScenePointLight, XrdsSceneSkyboxEnvironment,
     XrdsSceneSpotLight, XrdsSceneText, XrdsSceneTextAlignment, XrdsSceneTextureFilterMode,
     XrdsSceneTextureRef, XrdsSceneTextureSamplerParams, XrdsSceneTextureUvParams,
-    XrdsSceneTextureUvTransformMode, XrdsSceneTextureWrapMode, XrdsSceneTransform, XrdsSourceLink,
+    XrdsSceneTextureUvTransformMode, XrdsSceneTextureWrapMode, XrdsSceneTransform, XrdsSequence,
+    XrdsSourceLink, XrdsTriggerBinding, XrdsTriggerKind,
 };
 
 const VALID_GLTF_PATH: &str = "models/animated/buster_drone.glb";
@@ -77,6 +80,12 @@ fn xrds_test_app() -> App {
         bevy::animation::AnimationPlugin,
         ImagePlugin::default(),
         GltfPlugin::default(),
+        // avian3d's collider-constructor-hierarchy system requires
+        // Res<SceneSpawner> (added by ScenePlugin) once PhysicsPlugins is
+        // installed via install_xrds — matches xrds_real_asset_test_app
+        // and xrds_scene_ready_observer_test_app below, which already add
+        // this for the same reason.
+        ScenePlugin,
     ));
     app.init_asset::<Scene>();
     app.init_asset::<Mesh>();
@@ -232,6 +241,7 @@ fn imported_test_document() -> XrdsSceneDocument {
                         import_revision: Some("rev-a".to_string()),
                     }),
                 },
+                triggers: Vec::new(),
             },
             XrdsSceneNode {
                 id: XrdsSceneNodeId(101),
@@ -299,6 +309,7 @@ fn imported_test_document() -> XrdsSceneDocument {
                         import_revision: Some("rev-b".to_string()),
                     }),
                 },
+                triggers: Vec::new(),
             },
         ],
         ..Default::default()
@@ -330,6 +341,7 @@ fn imported_gltf_catalog_document() -> XrdsSceneDocument {
                     }),
                     ..Default::default()
                 },
+                triggers: Vec::new(),
             },
             XrdsSceneNode {
                 id: XrdsSceneNodeId(201),
@@ -346,6 +358,7 @@ fn imported_gltf_catalog_document() -> XrdsSceneDocument {
                 }),
                 grabbable: false,
                 editor: XrdsEditorMetadata::default(),
+                triggers: Vec::new(),
             },
             XrdsSceneNode {
                 id: XrdsSceneNodeId(202),
@@ -362,6 +375,7 @@ fn imported_gltf_catalog_document() -> XrdsSceneDocument {
                 }),
                 grabbable: false,
                 editor: XrdsEditorMetadata::default(),
+                triggers: Vec::new(),
             },
         ],
         ..Default::default()
@@ -544,3 +558,5 @@ mod gltf_runtime;
 mod gltf_samples;
 #[path = "tests/scene_environment.rs"]
 mod scene_environment;
+#[path = "tests/trigger_action.rs"]
+mod trigger_action;

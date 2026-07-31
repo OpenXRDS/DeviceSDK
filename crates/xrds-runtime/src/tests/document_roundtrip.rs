@@ -190,6 +190,7 @@ fn import_scene_document_json_loads_saved_document_into_runtime() {
             payload: XrdsSceneNodePayload::Camera(Default::default()),
             grabbable: false,
             editor: XrdsEditorMetadata::default(),
+            triggers: Vec::new(),
         }],
         ..Default::default()
     };
@@ -408,6 +409,7 @@ fn audio_clip_node_survives_import_export_round_trip() {
             }),
             grabbable: false,
             editor: XrdsEditorMetadata::default(),
+            triggers: Vec::new(),
         }],
         ..Default::default()
     };
@@ -633,6 +635,7 @@ fn light_nodes_survive_import_export_round_trip() {
                 }),
                 grabbable: false,
                 editor: XrdsEditorMetadata::default(),
+                triggers: Vec::new(),
             },
             XrdsSceneNode {
                 id: XrdsSceneNodeId(901),
@@ -653,6 +656,7 @@ fn light_nodes_survive_import_export_round_trip() {
                 }),
                 grabbable: false,
                 editor: XrdsEditorMetadata::default(),
+                triggers: Vec::new(),
             },
             XrdsSceneNode {
                 id: XrdsSceneNodeId(902),
@@ -671,6 +675,7 @@ fn light_nodes_survive_import_export_round_trip() {
                 }),
                 grabbable: false,
                 editor: XrdsEditorMetadata::default(),
+                triggers: Vec::new(),
             },
             XrdsSceneNode {
                 id: XrdsSceneNodeId(903),
@@ -686,6 +691,7 @@ fn light_nodes_survive_import_export_round_trip() {
                 }),
                 grabbable: false,
                 editor: XrdsEditorMetadata::default(),
+                triggers: Vec::new(),
             },
         ],
         ..Default::default()
@@ -768,6 +774,7 @@ fn camera_node_survives_import_export_round_trip() {
             }),
             grabbable: false,
             editor: XrdsEditorMetadata::default(),
+            triggers: Vec::new(),
         }],
         ..Default::default()
     };
@@ -801,6 +808,72 @@ fn camera_node_survives_import_export_round_trip() {
 }
 
 #[test]
+fn trigger_bindings_survive_import_export_round_trip() {
+    let mut app = xrds_test_app();
+
+    let bindings = vec![XrdsTriggerBinding {
+        trigger: XrdsTriggerKind::ZoneEnter,
+        sequence: XrdsSequence {
+            steps: vec![XrdsAction::Teleport { destination: [1.0, 0.0, 2.0] }],
+        },
+    }];
+
+    let document = XrdsSceneDocument {
+        nodes: vec![XrdsSceneNode {
+            id: XrdsSceneNodeId(920),
+            parent_id: None,
+            name: "TeleportPad".to_string(),
+            enabled: true,
+            visible: true,
+            transform: XrdsSceneTransform::default(),
+            // Deliberately Empty, not InteractionZone: triggers are meant to
+            // work on any node regardless of payload kind (that's the whole
+            // point of the top-level-field fix from earlier in this design
+            // track) — this also sidesteps a separate, pre-existing gap
+            // where InteractionZone payloads aren't yet round-trippable
+            // through export at all (export_scene_node_in_world in
+            // helper.rs has no case for XrdsInteractionZone), which isn't
+            // this test's concern to fix.
+            payload: XrdsSceneNodePayload::Empty,
+            grabbable: false,
+            editor: XrdsEditorMetadata::default(),
+            triggers: bindings.clone(),
+        }],
+        ..Default::default()
+    };
+
+    {
+        let mut xrds = XrdsAPI::attach(&mut app);
+        xrds.import_scene_document(&document)
+            .expect("trigger-binding node import should succeed");
+    }
+
+    app.update();
+
+    // The runtime component should exist regardless of export — this is the
+    // actual "spawn the definition, don't enqueue anything at import time"
+    // guarantee from the design doc.
+    {
+        let world = app.world();
+        let id_index = world.resource::<XrdsIdIndex>();
+        let entity = id_index.entity_of(XrdsId(920)).expect("entity should be indexed");
+        let stored = world
+            .get::<crate::xrds_api::trigger_action::XrdsTriggerBindings>(entity)
+            .expect("XrdsTriggerBindings should be spawned at import");
+        assert_eq!(stored.0, bindings);
+    }
+
+    let exported = {
+        let xrds = XrdsAPI::attach(&mut app);
+        xrds.export_scene_document()
+            .expect("export after trigger-binding import should succeed")
+    };
+
+    let node = exported.node(XrdsSceneNodeId(920)).expect("node should export");
+    assert_eq!(node.triggers, bindings);
+}
+
+#[test]
 fn text3d_node_survives_import_export_round_trip() {
     let mut app = xrds_test_app();
 
@@ -824,6 +897,7 @@ fn text3d_node_survives_import_export_round_trip() {
             }),
             grabbable: false,
             editor: XrdsEditorMetadata::default(),
+            triggers: Vec::new(),
         }],
         ..Default::default()
     };

@@ -542,6 +542,7 @@ fn scene_node(
         },
         payload,
         editor: XrdsEditorMetadata::default(),
+        triggers: Vec::new(),
     }
 }
 

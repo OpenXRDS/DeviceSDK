@@ -382,6 +382,11 @@ pub(super) fn export_scene_document_in_world(
         if world.get::<xrds_components::XrGrabbable>(entity).is_some() {
             node.grabbable = true;
         }
+        if let Some(bindings) =
+            world.get::<crate::xrds_api::trigger_action::XrdsTriggerBindings>(entity)
+        {
+            node.triggers = bindings.0.clone();
+        }
         if matches!(node.payload, XrdsSceneNodePayload::GltfAsset(_)) {
             let mut authoring = world
                 .get::<XrdsStoredSceneGltfNodeAuthoring>(entity)
@@ -955,7 +960,10 @@ fn descendant_entities_with_paths_in_world(
     descendants
 }
 
-fn animation_player_entities_for_root_in_world(world: &World, root: Entity) -> Vec<Entity> {
+pub(super) fn animation_player_entities_for_root_in_world(
+    world: &World,
+    root: Entity,
+) -> Vec<Entity> {
     descendant_entities_with_paths_in_world(world, root)
         .into_iter()
         .filter_map(|(entity, _)| world.get::<AnimationPlayer>(entity).map(|_| entity))
@@ -1786,4 +1794,70 @@ pub(super) fn teleport_player_in_world(world: &mut World, position: Vec3) {
     for mut tf in q.iter_mut(world) {
         tf.translation = position;
     }
+}
+
+/// Syncs XRDS's cached `XrdsGltfAnimationState.playing` from the live
+/// `AnimationPlayer`, and reports nodes whose playback just completed.
+///
+/// Fixes a real bug in the cached state: every other writer of
+/// `ActiveGltfAnimationStates` is an imperative API call (play/stop/pause/
+/// resume), so nothing ever cleared `playing` when a clip reached its
+/// natural end — `gltf_animation_state()` would report `playing: true`
+/// forever after a `Once` clip finished. This is the only writer driven by
+/// what the engine is actually doing.
+///
+/// Returns the roots that completed on this call, so the caller can turn
+/// them into `XrdsTriggerKind::AnimationComplete` trigger events.
+pub(super) fn sync_completed_gltf_animations_in_world(world: &mut World) -> Vec<Entity> {
+    // Only XRDS-tracked playback that we still believe is running. Paused
+    // playback is skipped: it isn't finished, it's suspended.
+    let tracked: Vec<Entity> = world
+        .resource::<ActiveGltfAnimationStates>()
+        .states
+        .iter()
+        .filter(|(_, state)| state.playing && !state.paused)
+        .map(|(entity, _)| *entity)
+        .collect();
+
+    let mut completed = Vec::new();
+    for root in tracked {
+        // `AnimationPlayer::all_finished()` is deliberately NOT used here:
+        // it's `.all()` over the active set, and `.all()` on an EMPTY set
+        // is `true` — so an asset that is still loading (playback queued,
+        // player not yet populated) would report "finished" immediately.
+        // Require at least one active animation as well.
+        let mut any_active = false;
+        let mut all_finished = true;
+        for player_entity in animation_player_entities_for_root_in_world(world, root) {
+            if let Some(player) = world.get::<AnimationPlayer>(player_entity) {
+                for (_, active) in player.playing_animations() {
+                    any_active = true;
+                    // `is_finished()` is always false for RepeatAnimation::Forever,
+                    // which is what XRDS's `Loop` maps to — so looping playback
+                    // correctly never completes.
+                    if !active.is_finished() {
+                        all_finished = false;
+                    }
+                }
+            }
+        }
+
+        if any_active && all_finished {
+            completed.push(root);
+        }
+    }
+
+    // Flip the cached flag so `gltf_animation_state()` starts telling the
+    // truth, and so this only reports each completion once.
+    for root in &completed {
+        if let Some(state) = world
+            .resource_mut::<ActiveGltfAnimationStates>()
+            .states
+            .get_mut(root)
+        {
+            state.playing = false;
+        }
+    }
+
+    completed
 }

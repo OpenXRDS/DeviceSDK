@@ -7,6 +7,7 @@ mod assets;
 mod core;
 mod editing;
 mod session;
+mod trigger_action;
 mod world_ui;
 
 pub(super) fn asset_fixture_path(relative_path: &str) -> String {
@@ -66,6 +67,7 @@ pub(super) fn persistence_test_document() -> XrdsSceneDocument {
                         import_revision: Some("rev-1".to_string()),
                     }),
                 },
+                triggers: Vec::new(),
             },
             XrdsSceneNode {
                 id: XrdsSceneNodeId(11),
@@ -102,6 +104,7 @@ pub(super) fn persistence_test_document() -> XrdsSceneDocument {
                         import_revision: Some("rev-2".to_string()),
                     }),
                 },
+                triggers: Vec::new(),
             },
         ],
         ..Default::default()

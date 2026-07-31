@@ -53,6 +53,11 @@ mod world_ui_slider;
 mod world_ui_toggle;
 #[path = "xrds_api/world_ui_layout.rs"]
 mod world_ui_layout;
+// Public: apps need to read XrdsCustomTriggerEvent for XrdsAction::FireCustomEvent
+// (the expert-layer escape hatch) to be usable at all, and to insert
+// XrdsTriggerValue/XrdsHealth from gameplay code.
+#[path = "xrds_api/trigger_action.rs"]
+pub mod trigger_action;
 
 pub use anchor::{
     ActivePlayerAnchorEntity, PlayerAnchorCameraPose,
@@ -113,6 +118,10 @@ pub use xrds_components::{
     XrWorldSliderChangeEvent, XrWorldToggleEvent,
 };
 pub use environment::XrdsReceivesEnvironment;
+pub use trigger_action::{
+    XrdsCustomTriggerEvent, XrdsGltfAnimationCompleteEvent, XrdsHealth, XrdsSequenceAgent,
+    XrdsTriggerBindings, XrdsTriggerEvent, XrdsTriggerValue,
+};
 /// Read-only entity→id index exposed for viewport picking systems.
 /// Access as `Res<XrdsIdIndex>` in Bevy systems: `id_index.id_of(entity)`
 /// returns the `XrdsId` for any entity that was spawned by an XRDS import.

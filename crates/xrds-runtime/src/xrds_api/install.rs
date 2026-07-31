@@ -13,9 +13,9 @@ pub(super) fn install_xrds(app: &mut App) {
     app.add_plugins(XrdsComponentsPlugin);
     app.add_plugins(MaterialPlugin::<XrdsRuntimeMaterial>::default());
     app.add_plugins(avian3d::prelude::PhysicsPlugins::default());
-    if !app.is_plugin_added::<bevy_mod_outline::OutlinePlugin>() {
-        app.add_plugins(bevy_mod_outline::OutlinePlugin);
-    }
+    // Execution substrate for the trigger-action sequencer — see
+    // docs/xrds-trigger-action-implementation-plan.md Phase 0.
+    app.add_plugins(bevy_sequential_actions::SequentialActionsPlugin);
     // Not added in test builds: cosmic-text panics in headless environments with no
     // system fonts. Round-trip tests only verify document serialization, not rendering.
     #[cfg(not(test))]
@@ -34,6 +34,17 @@ pub(super) fn install_xrds(app: &mut App) {
             ..Default::default()
         });
         app.add_plugins(bevy_fontmesh::FontMeshPlugin::<bevy::pbr::StandardMaterial>::default());
+    }
+    // Not added in test builds either: OutlinePlugin::build() calls
+    // .sub_app_mut(RenderApp), which unconditionally requires Bevy's render
+    // sub-app to already exist (normally created by bevy_render::RenderPlugin).
+    // The minimal headless xrds_test_app() harness never adds that, so this
+    // would panic in every test that calls XrdsAPI::attach. Real apps go
+    // through Runtime::build_bevy_app, which includes full DefaultPlugins
+    // (RenderPlugin included), so this is never skipped outside tests.
+    #[cfg(not(test))]
+    if !app.is_plugin_added::<bevy_mod_outline::OutlinePlugin>() {
+        app.add_plugins(bevy_mod_outline::OutlinePlugin);
     }
     app.init_resource::<crate::xrds_api::anchor::ActivePlayerAnchorEntity>();
     app.init_resource::<XrdsIdAllocator>();
@@ -69,6 +80,8 @@ pub(super) fn install_xrds(app: &mut App) {
     app.add_message::<xrds_components::XrWorldButtonReleaseEvent>();
     app.add_message::<xrds_components::XrWorldSliderChangeEvent>();
     app.add_message::<xrds_components::XrWorldToggleEvent>();
+    app.add_message::<crate::xrds_api::trigger_action::XrdsCustomTriggerEvent>();
+    app.add_message::<crate::xrds_api::trigger_action::XrdsGltfAnimationCompleteEvent>();
 
     {
         let mut registry = app.world_mut().resource_mut::<SurfaceInterpreterRegistry>();
@@ -189,6 +202,38 @@ pub(super) fn install_xrds(app: &mut App) {
     app.add_systems(Update, ensure_aabbs_for_unculled_meshes_system);
     app.add_systems(Update, crate::xrds_api::grab::grab_system);
     app.add_systems(Update, crate::xrds_api::zone::zone_collision_system);
+    // Trigger-action sequencing (docs/xrds-trigger-action-implementation-plan.md
+    // Phase 3). Explicitly ordered after zone_collision_system rather than
+    // relying on Bevy's event double-buffering to hide a missing constraint:
+    // this way a zone entered on frame N fires its sequence on frame N, not N+1.
+    // One consume_triggers registration per XrdsTriggerEvent implementor — adding
+    // a new trigger source later is one more line here plus one trait impl.
+    app.add_systems(
+        Update,
+        (
+            crate::xrds_api::trigger_action::consume_triggers::<xrds_components::XrZoneEnterEvent>,
+            crate::xrds_api::trigger_action::consume_triggers::<xrds_components::XrZoneExitEvent>,
+            // Third trigger source — note this cost exactly one trait impl
+            // plus this one line, which is the whole point of the pluggable
+            // XrdsTriggerEvent design.
+            crate::xrds_api::trigger_action::consume_triggers::<
+                crate::xrds_api::trigger_action::XrdsGltfAnimationCompleteEvent,
+            >,
+        )
+            .after(crate::xrds_api::zone::zone_collision_system),
+    );
+    // Both run in Last: by then Bevy's animation systems have advanced playback
+    // this frame, and SequentialActionsPlugin has advanced the action queues.
+    app.add_systems(
+        Last,
+        (
+            // Corrects the cached XrdsGltfAnimationState.playing flag and emits
+            // AnimationComplete triggers.
+            crate::xrds_api::trigger_action::sync_completed_gltf_animation_triggers,
+            // Reaps ephemeral per-firing agents once their queue drains.
+            crate::xrds_api::trigger_action::despawn_finished_sequence_agents,
+        ),
+    );
     app.add_systems(Update, crate::xrds_api::world_ui_pointer::world_ui_pointer_system);
     app.add_systems(Startup, crate::xrds_api::world_ui_pointer::spawn_world_ui_cursors_system);
     // Layout runs after the pointer system (so pointer state is fresh) but before the

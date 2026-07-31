@@ -79,6 +79,7 @@ pub fn apply_palette_command(
                         transform,
                         payload,
                         editor: XrdsEditorMetadata::default(),
+                        triggers: Vec::new(),
                     });
                 }
             }) {
@@ -182,6 +183,7 @@ fn build_primitive_node(
         transform: default_transform_for_payload(&payload, doc, parent_id),
         payload,
         editor: XrdsEditorMetadata::default(),
+        triggers: Vec::new(),
     })
 }
 

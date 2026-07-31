@@ -96,6 +96,16 @@ pub enum XrdsGrabType {
 
 /// Runtime marker placed on every interaction-zone entity.
 /// Carries the shape/behaviour data from the authored document.
+///
+/// `shape` alone already makes this a valid trigger-detection volume —
+/// `zone_collision_system` fires `XrZoneEnterEvent`/`XrZoneExitEvent` off
+/// `shape` independently of `grab_type`/`hoverable`. So `grab_type: None`,
+/// `hoverable: false` is the normal, expected shape for a zone that's
+/// meant only to be walked through (e.g. a teleport pad or damage zone),
+/// not a sign something's misconfigured — this type covers both "can be
+/// grabbed/hovered" and "fires enter/exit for trigger-action sequencing"
+/// (see `docs/xrds-scenegraph-trigger-action-sequencing.md`), and most
+/// zones only need one of the two.
 #[derive(bevy::prelude::Component, Debug, Clone, Copy)]
 pub struct XrdsInteractionZone {
     pub shape:     XrdsInteractionZoneShape,
