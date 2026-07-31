@@ -1,0 +1,77 @@
+name: xrds-net CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - "crates/xrds-net/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/xrds-net-ci.yml"
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: cargo check (workspace)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install native build deps (quiche/BoringSSL)
+        run: sudo apt-get update && sudo apt-get install -y cmake perl
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.95.0" # keep in sync with the repo's actual toolchain
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --workspace --tests
+
+  clippy:
+    name: clippy (xrds-net)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install native build deps (quiche/BoringSSL)
+        run: sudo apt-get update && sudo apt-get install -y cmake perl
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.95.0"
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy -p xrds-net --all-targets -- -D warnings
+
+  test-unit:
+    name: test (xrds-net --lib)
+    runs-on: ubuntu-latest
+    # Stopgap, not a fix: a large fraction of this suite hits live public
+    # servers (mosquitto/rebex/coap.me/echo.websocket.org) and isn't tagged
+    # #[ignore] the way the WebRTC slow test is, so it can't be cleanly
+    # split into blocking/non-blocking today. See docs/xrds-net-release-readiness.md
+    # Phase 5 — tagging those tests is the real fix, tracked as a follow-up.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install native build deps (quiche/BoringSSL)
+        run: sudo apt-get update && sudo apt-get install -y cmake perl
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.95.0"
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test -p xrds-net --lib
+
+  test-webrtc-integration:
+    name: test (xrds-net webrtc_integration)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install native build deps (quiche/BoringSSL)
+        run: sudo apt-get update && sudo apt-get install -y cmake perl
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.95.0"
+      - uses: Swatinem/rust-cache@v2
+      # `#[serial(webrtc)]`-serialized within the file — must run
+      # single-threaded, same as every manual run this session.
+      - run: cargo test -p xrds-net --test webrtc_integration -- --test-threads=1

@@ -335,7 +335,7 @@ Within the DeviceSDK the crate is re-exported as **`xrds::net`** (via
 on **desktop and Android** (Quest 3/Pro); only the FTP *server* and WebRTC are
 desktop-only. Standalone, depend on `xrds-net` and use `xrds_net::…`.
 
-Recommended in-app pattern (see [`examples/net_app.rs`](../../examples/net_app.rs)):
+Recommended in-app pattern (see [`examples/net_app.rs`](../../examples/networking/net_app.rs)):
 
 ```rust
 use xrds::net::{XrdsNet, XrdsNetTask, NetTaskSlot, NetFeed, RequestOptions, NetResponse};
@@ -504,7 +504,7 @@ provided by any crate yet; that is `xrds-media` + `XrdsAPI` future work.
 **Android** (Quest 3/Pro, arm64, min API 32) is supported — HTTPS and `wss://`
 are verified working on-device. Two caveats: the FTP **server** (`libunftp`) is
 excluded there (an XR client never hosts FTP — dropped via
-`--no-default-features`, see `docs/xrds-net-android-shipping.md`), and WebRTC
+`--no-default-features`, see `docs/done/xrds-net-android-shipping.md`), and WebRTC
 remains desktop-only. There is no Bevy dependency (removed) and no async
 runtime is required of the consumer.
 
@@ -564,6 +564,21 @@ A subset of integration tests hit **live public servers** —
 **flaky** under network conditions; that flaky set (WebRTC, file-download, and
 the public MQTT/WS/CoAP round-trips) is the known baseline, not a regression.
 Compare against it rather than expecting an all-green run.
+
+WebRTC's tests are genuine end-to-end integration tests (real signaling
+server, real ICE/DTLS handshake) and live separately in
+[`tests/webrtc_integration.rs`](../tests/webrtc_integration.rs) — see
+`docs/done/xrds-net-webrtc-test-restructure.md` for why and how they're
+structured (OS-assigned ports, polling instead of fixed sleeps, `#[serial]`
+within that file since Cargo only isolates *files* into separate processes,
+not functions within one). Pure logic that used to only be exercised
+indirectly through those E2E round-trips — ICE server URL construction,
+`WebRTCMessage` (de)serialization, session create/join/leave/list/close
+bookkeeping, H.264 start-code validation — now has direct, real, sub-second
+unit tests in the crate's own `#[cfg(test)]` modules instead. The slowest
+WebRTC test (`test_client_webrtc_send_video_file`, a full real-time file
+transfer, 60-120s) is `#[ignore]`d by default; run it explicitly with
+`cargo test -p xrds-net --test webrtc_integration -- --ignored`.
 
 ---
 

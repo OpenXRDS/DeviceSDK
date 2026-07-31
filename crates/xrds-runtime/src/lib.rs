@@ -13,7 +13,7 @@ pub use xrds_openxr::XrInput;
 // Networking, re-exported as `net` so app code reaches
 // `XrdsNet`/`XrdsNetTask`/`NetFeed`/… through the DeviceSDK facade
 // (`xrds::net::…`) with no direct xrds-net dependency. Cross-compiles for
-// Android (see docs/xrds-net-android-shipping.md); the FTP *server* and
+// Android (see docs/done/xrds-net-android-shipping.md); the FTP *server* and
 // WebRTC remain desktop-only (feature-gated / never wired in, respectively —
 // see crates/xrds-net/Cargo.toml and crates/xrds-runtime/Cargo.toml).
 // See docs/done/xrds-net-devicesdk-integration.md.

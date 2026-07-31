@@ -92,11 +92,10 @@ impl NetFeed {
     /// Stop the feed — non-blocking whether still connecting (drops the task)
     /// or streaming (immediate `EventStream::close()`).
     pub fn close(self) {
-        match self.state {
-            FeedState::Streaming(stream) => stream.close(),
-            // Connecting: dropping the task is non-blocking (detached worker);
-            // Ended: nothing to do.
-            _ => {}
+        // Connecting: dropping the task is non-blocking (detached worker);
+        // Ended: nothing to do.
+        if let FeedState::Streaming(stream) = self.state {
+            stream.close();
         }
     }
 }

@@ -29,7 +29,6 @@ use tokio_tungstenite::WebSocketStream as WsStream;
 use webrtc::api::interceptor_registry::register_default_interceptors;
 use webrtc::api::media_engine::MediaEngine;
 use webrtc::api::APIBuilder;
-use webrtc::ice_transport::ice_server::RTCIceServer;
 use webrtc::interceptor::registry::Registry;
 use webrtc::peer_connection::configuration::RTCConfiguration;
 use webrtc::peer_connection::policy::ice_transport_policy::RTCIceTransportPolicy;
@@ -72,7 +71,6 @@ pub struct Session {
     participants: Vec<String>, // a vector of client_ids
     offer: Option<String>,     // SDP offer from the creator. Participants will receive this.
     answers: Option<HashMap<String, String>>, // <client_id, SDP answer>
-    publisher_ice_candidates: Option<Vec<String>>, // json str of RTCIceCandidate
 }
 
 type WebSocketSenderType = Vec<(
@@ -125,29 +123,7 @@ impl WebRTCServer {
             .build();
 
         let rtc_config = RTCConfiguration {
-            ice_servers: vec![
-                // STUN servers for NAT discovery
-                RTCIceServer {
-                    urls: vec![
-                        // "stun:stun.l.google.com:19302".to_owned(),
-                        // "stun:stun1.l.google.com:19302".to_owned(),
-                        "stun:stun.keti.xrds.kr:13478".to_owned(),
-                        "stun:stun.keti.xrds.kr:13479".to_owned(),
-                    ],
-                    ..Default::default()
-                },
-                // TURN server for relay when direct connection fails
-                RTCIceServer {
-                    urls: vec![
-                        "turn:turn.keti.xrds.kr:13478".to_owned(),
-                        "turn:turn.keti.xrds.kr:13479".to_owned(),
-                        "turn:turn.keti.xrds.kr:13478?transport=tcp".to_owned(),
-                        "turn:turn.keti.xrds.kr:13479?transport=tcp".to_owned(),
-                    ],
-                    username: "gganjang".to_owned(),
-                    credential: "keti007".to_owned(),
-                },
-            ],
+            ice_servers: crate::webrtc_ice_config::build_ice_servers(),
             ice_transport_policy: RTCIceTransportPolicy::All,
             ..Default::default()
         };
@@ -174,12 +150,45 @@ impl WebRTCServer {
         drop(clients); // release the lock
     }
 
-    fn remove_client(&self, client_id: &String) {
-        let mut clients = self.clients.blocking_lock();
-        clients.remove(client_id);
+    /// Cleans up everything tracked for a client once its connection ends —
+    /// removes it from the client map, and from every session: as a
+    /// participant if it just joined others' sessions, or by removing the
+    /// whole session if it was the creator (nothing can publish to it
+    /// anymore). Called unconditionally once `handle_connection`'s read
+    /// loop ends, regardless of *how* it ended (graceful close, a read
+    /// error, or the stream just ending) — previously this only ran on an
+    /// explicit WS close frame, so a dropped connection (network blip, a
+    /// crashed client) leaked its session/participant entries forever. See
+    /// docs/xrds-net-release-readiness.md Phase 2.
+    async fn handle_client_disconnect(&self, client_id: &str) {
+        self.clients.lock().await.remove(client_id);
+
+        let mut sessions = self.sessions.lock().await;
+        let mut sessions_to_remove = Vec::new();
+        for (session_id, session) in sessions.iter_mut() {
+            if session.creator_id == client_id {
+                sessions_to_remove.push(session_id.clone());
+            } else {
+                session.participants.retain(|p| p != client_id);
+            }
+        }
+        for session_id in sessions_to_remove {
+            sessions.remove(&session_id);
+        }
     }
 
     pub async fn run(self: Arc<Self>, port: u32) -> Result<(), Box<dyn std::error::Error>> {
+        self.run_reporting_port(port, None).await
+    }
+
+    /// Same as `run`, but if `port_tx` is given, sends the actual bound port
+    /// (relevant when `port == 0`, letting the OS assign one) once the
+    /// listener is up and before entering the accept loop.
+    pub async fn run_reporting_port(
+        self: Arc<Self>,
+        port: u32,
+        port_tx: Option<tokio::sync::oneshot::Sender<u16>>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let host_addr = "0.0.0.0".to_owned() + ":" + &port.to_string();
         let try_socket = TcpListener::bind(host_addr.clone()).await;
         let listener = match try_socket {
@@ -192,6 +201,10 @@ impl WebRTCServer {
                 return Err(Box::new(e));
             }
         };
+
+        if let Some(tx) = port_tx {
+            let _ = tx.send(listener.local_addr()?.port());
+        }
 
         while let Ok((stream, addr)) = listener.accept().await {
             println!("Accepted connection from {}", addr); // temporal log
@@ -226,16 +239,33 @@ impl WebRTCServer {
         Ok(())
     }
 
+    /// Runs the connection's welcome + signaling-message loop, then always
+    /// cleans up the client's tracked state — regardless of which of the
+    /// inner function's return/break paths was taken. See
+    /// `handle_client_disconnect`'s docs for why "always" matters here.
     async fn handle_connection(&self, client_id: String) -> Result<(), Box<dyn std::error::Error>> {
+        // `handle_connection_inner`'s error is a plain `String` (rather than
+        // `Box<dyn Error>`) so it's `Send` and can be held across the
+        // `.await` below — a boxed `dyn Error` is not `Send` in general,
+        // which broke `tokio::spawn`'s `Send` requirement on the outer
+        // per-connection task.
+        let result = self.handle_connection_inner(&client_id).await;
+        self.handle_client_disconnect(&client_id).await;
+        result.map_err(|e| e.into())
+    }
+
+    async fn handle_connection_inner(&self, client_id: &str) -> Result<(), String> {
         let (sender, receiver) = {
             let clients = self.clients.lock().await;
-            let client = clients.get(&client_id).unwrap();
+            let Some(client) = clients.get(client_id) else {
+                return Err(format!("client {client_id} vanished immediately after connecting"));
+            };
             (Arc::clone(&client.sender), Arc::clone(&client.receiver))
         }; // lock on clients is released here
 
         // Send welcome message with the issued client id
         let welcome_msg = WebRTCMessage {
-            client_id: client_id.clone(),
+            client_id: client_id.to_string(),
             session_id: "".to_string(),
             message_type: WELCOME.to_string(),
             ice_candidates: None,
@@ -244,12 +274,12 @@ impl WebRTCServer {
         };
 
         let client_id_msg_json = serde_json::to_string(&welcome_msg).unwrap();
-        let client_id_msg = Message::text(client_id_msg_json.to_string());
+        let client_id_msg = Message::text(client_id_msg_json);
         {
-            let mut sender = sender.lock().await;
-            if let Err(e) = sender.send(client_id_msg).await {
+            let mut sender_guard = sender.lock().await;
+            if let Err(e) = sender_guard.send(client_id_msg).await {
                 println!("Error sending welcome message: {}", e);
-                return Err(Box::new(e));
+                return Err(e.to_string());
             }
         }
 
@@ -261,8 +291,8 @@ impl WebRTCServer {
                     Ok(msg) => msg,
                     Err(e) => {
                         log_error_connection(e);
-                        let mut sender = sender.lock().await;
-                        if let Err(close_err) = sender.send(Message::Close(None)).await {
+                        let mut sender_guard = sender.lock().await;
+                        if let Err(close_err) = sender_guard.send(Message::Close(None)).await {
                             println!("[Server]Failed to send close frame: {}", close_err);
                         }
                         break;
@@ -270,8 +300,6 @@ impl WebRTCServer {
                 };
 
                 if msg.is_close() {
-                    self.remove_client(&client_id);
-                    // TODO: remove the session if the client is the creator
                     println!("[Server]Connection closed by client");
                     break;
                 }
@@ -282,8 +310,8 @@ impl WebRTCServer {
                 if let Some(result) = result {
                     // send message in text since it's json only
                     let msg = Message::text(String::from_utf8_lossy(&result).to_string());
-                    let mut sender = sender.lock().await;
-                    if let Err(e) = sender.send(msg).await {
+                    let mut sender_guard = sender.lock().await;
+                    if let Err(e) = sender_guard.send(msg).await {
                         println!("Error sending message: {}", e);
                         continue;
                     }
@@ -300,9 +328,15 @@ impl WebRTCServer {
      */
     async fn signaling_handler(&self, input: Vec<u8>) -> Option<Vec<u8>> {
         // parse input
-        let msg = String::from_utf8_lossy(&input);
+        let raw = String::from_utf8_lossy(&input);
         // println!("Received message: {}", msg);  // temporal log
-        let msg: WebRTCMessage = serde_json::from_str(msg.as_ref()).unwrap();
+        let msg: WebRTCMessage = match serde_json::from_str(raw.as_ref()) {
+            Ok(msg) => msg,
+            Err(e) => {
+                log::warn!("Dropping malformed signaling message from client: {e}");
+                return None;
+            }
+        };
         let message_type = msg.clone().message_type;
 
         // handle message by matching message_types
@@ -347,6 +381,28 @@ impl WebRTCServer {
 
     /****************** Message Handler Functions **************** */
 
+    /// Builds an error response of the given message type — used instead of
+    /// panicking when a client references an unknown/stale session or client
+    /// id, or omits a required field. See docs/xrds-net-release-readiness.md
+    /// Phase 2: these lookups used to `.unwrap()` on client-supplied ids,
+    /// which let one malformed or out-of-order message from a single client
+    /// crash the whole signaling task.
+    fn error_response(
+        client_id: &str,
+        session_id: &str,
+        message_type: &str,
+        error: impl Into<String>,
+    ) -> WebRTCMessage {
+        WebRTCMessage {
+            client_id: client_id.to_string(),
+            session_id: session_id.to_string(),
+            message_type: message_type.to_string(),
+            ice_candidates: None,
+            sdp: None,
+            error: Some(error.into()),
+        }
+    }
+
     /**
      * This function handles the answer message from the subscriber.
      * It updates the session with the answer
@@ -356,43 +412,63 @@ impl WebRTCServer {
 
         let session_id = request.session_id.clone();
         let subscriber_id = request.client_id.clone();
-        let mut sessions = self.sessions.lock().await;
-        let session = sessions.get_mut(&session_id).unwrap();
 
-        if session.answers.is_none() {
-            session.answers = Some(HashMap::new());
-        }
-        // Store the corresponding answer in the session for each subscriber
-        session
-            .answers
-            .as_mut()
-            .unwrap()
-            .insert(subscriber_id.clone(), request.sdp.clone().unwrap());
-        println!(
-            "Number of answers in session {}: {}",
-            session_id,
-            session.answers.as_ref().unwrap().len()
-        );
+        let Some(sdp) = request.sdp.clone() else {
+            return Self::error_response(
+                &subscriber_id,
+                &session_id,
+                ANSWER,
+                "answer message missing sdp",
+            );
+        };
+
+        let publisher_id = {
+            let mut sessions = self.sessions.lock().await;
+            let Some(session) = sessions.get_mut(&session_id) else {
+                return Self::error_response(
+                    &subscriber_id,
+                    &session_id,
+                    ANSWER,
+                    format!("unknown session_id: {session_id}"),
+                );
+            };
+
+            if session.answers.is_none() {
+                session.answers = Some(HashMap::new());
+            }
+            // Store the corresponding answer in the session for each subscriber
+            session
+                .answers
+                .as_mut()
+                .unwrap()
+                .insert(subscriber_id.clone(), sdp.clone());
+            println!(
+                "Number of answers in session {}: {}",
+                session_id,
+                session.answers.as_ref().unwrap().len()
+            );
+
+            session.creator_id.clone()
+        };
 
         // send answer to the publisher
-        let publisher_id = session.creator_id.clone();
         println!("publisher id: {}", publisher_id); // temporal log
         let publisher_msg = WebRTCMessage {
             client_id: publisher_id.clone(),
             session_id: session_id.clone(),
             message_type: ANSWER.to_string(),
             ice_candidates: None,
-            sdp: request.sdp.clone(),
+            sdp: Some(sdp),
             error: None,
         };
 
-        self.broadcast_message(vec![publisher_id], publisher_msg.clone())
+        self.broadcast_message(vec![publisher_id], publisher_msg)
             .await;
 
         // response to the subscriber
         WebRTCMessage {
-            client_id: subscriber_id.clone(),
-            session_id: session_id.clone(),
+            client_id: subscriber_id,
+            session_id,
             message_type: ANSWER.to_string(),
             ice_candidates: None,
             sdp: None,
@@ -409,7 +485,6 @@ impl WebRTCServer {
             participants: vec![request.client_id.clone()],
             offer: None,
             answers: None,
-            publisher_ice_candidates: None,
         };
 
         self.sessions
@@ -449,16 +524,36 @@ impl WebRTCServer {
         // handle offer
         let session_id = request.session_id.clone();
         let publisher_id = request.client_id.clone();
-        let mut sessions = self.sessions.lock().await;
-        let session = sessions.get_mut(&session_id).unwrap();
-        session.offer = Some(request.sdp.clone().unwrap());
 
-        // send offer to all participants except the creator
-        let participants = session.participants.clone();
-        let participants = participants
-            .into_iter()
-            .filter(|x| x != &publisher_id)
-            .collect::<Vec<String>>();
+        let Some(sdp) = request.sdp.clone() else {
+            return Self::error_response(
+                &publisher_id,
+                &session_id,
+                OFFER,
+                "offer message missing sdp",
+            );
+        };
+
+        let participants = {
+            let mut sessions = self.sessions.lock().await;
+            let Some(session) = sessions.get_mut(&session_id) else {
+                return Self::error_response(
+                    &publisher_id,
+                    &session_id,
+                    OFFER,
+                    format!("unknown session_id: {session_id}"),
+                );
+            };
+            session.offer = Some(sdp.clone());
+
+            // participants to send the offer to, excluding the creator
+            session
+                .participants
+                .iter()
+                .filter(|x| *x != &publisher_id)
+                .cloned()
+                .collect::<Vec<String>>()
+        };
 
         let offer_msg = WebRTCMessage {
             // message to be sent to participants
@@ -466,21 +561,20 @@ impl WebRTCServer {
             session_id: session_id.clone(),
             message_type: OFFER.to_string(),
             ice_candidates: None,
-            sdp: session.offer.clone(),
+            sdp: Some(sdp.clone()),
             error: None,
         };
 
         // send offer to all participants except the creator
-        self.broadcast_message(participants, offer_msg.clone())
-            .await;
+        self.broadcast_message(participants, offer_msg).await;
 
         // make a result for publisher
         WebRTCMessage {
-            client_id: publisher_id.clone(),
-            session_id: session_id.clone(),
+            client_id: publisher_id,
+            session_id,
             message_type: OFFER.to_string(),
             ice_candidates: None,
-            sdp: session.offer.clone(),
+            sdp: Some(sdp),
             error: None,
         }
     }
@@ -509,17 +603,26 @@ impl WebRTCServer {
     }
 
     /**
-     * Subscriber joins the session
+     * Subscriber joins the session. Note: the server tracks *bookkeeping*
+     * only (participant lists, offer/answer relay) — it never holds a real
+     * `RTCPeerConnection` (those live entirely client-side; see
+     * `WebRTCClient::setup_webrtc`), so there's no server-side peer
+     * connection object to reset here.
      */
     async fn join_session(&self, session_id: String, client_id: &str) -> WebRTCMessage {
         let mut sessions = self.sessions.lock().await;
-        let session = sessions.get_mut(&session_id).unwrap();
+        let Some(session) = sessions.get_mut(&session_id) else {
+            return Self::error_response(
+                client_id,
+                &session_id,
+                JOIN_SESSION,
+                format!("unknown session_id: {session_id}"),
+            );
+        };
         if session.participants.contains(&client_id.to_string()) {
-            // reset the session for the client
-            // remove the client from the session
+            // Re-joining: reset bookkeeping for this client rather than
+            // duplicating it in the participant list.
             session.participants.retain(|x| x != client_id);
-            // TODO: remove the WebRTC connection too. (not implemented yet)
-            // setup the webrtc connection again
         }
 
         session.participants.push(client_id.to_string());
@@ -544,11 +647,16 @@ impl WebRTCServer {
 
     async fn leave_session(&self, session_id: String, client_id: &str) -> WebRTCMessage {
         let mut sessions = self.sessions.lock().await;
-        let session = sessions.get_mut(&session_id).unwrap();
+        let Some(session) = sessions.get_mut(&session_id) else {
+            return Self::error_response(
+                client_id,
+                &session_id,
+                LEAVE_SESSION,
+                format!("unknown session_id: {session_id}"),
+            );
+        };
 
         session.participants.retain(|x| x != client_id);
-
-        // TODO: remove the WebRTC connection too. (not implemented yet)
 
         WebRTCMessage {
             client_id: client_id.to_string(),
@@ -562,8 +670,15 @@ impl WebRTCServer {
 
     async fn list_participants(&self, session_id: &str) -> WebRTCMessage {
         let sessions = self.sessions.lock().await;
-        let session = sessions.get(session_id).unwrap();
-        let participants_str = session.participants.clone().join(",");
+        let Some(session) = sessions.get(session_id) else {
+            return Self::error_response(
+                "",
+                session_id,
+                LIST_PARTICIPANTS,
+                format!("unknown session_id: {session_id}"),
+            );
+        };
+        let participants_str = session.participants.join(",");
         WebRTCMessage {
             client_id: "".to_string(),
             session_id: session_id.to_string(),
@@ -579,21 +694,25 @@ impl WebRTCServer {
 
         // pass ice candidate to the subscriber
         let session_id = message.session_id.clone();
-        let sessions = self.sessions.lock().await;
-        let mut session = sessions.get(&session_id).unwrap().clone();
 
-        let ice_candidates_json = message.ice_candidates.clone().unwrap_or_default();
-        let ice_candidates: Vec<String> =
-            serde_json::from_str(&ice_candidates_json).unwrap_or_default();
-        // println!("ICE candidates: {:?}", ice_candidates);  // temporal log
-        session.publisher_ice_candidates = Some(ice_candidates.clone());
-
-        // collect client ids from the session
-        let participants = session.participants.clone();
-        let participants = participants
-            .into_iter()
-            .filter(|x| x != &message.client_id)
-            .collect::<Vec<String>>();
+        let participants = {
+            let sessions = self.sessions.lock().await;
+            let Some(session) = sessions.get(&session_id) else {
+                return Self::error_response(
+                    &message.client_id,
+                    &session_id,
+                    ICE_CANDIDATE,
+                    format!("unknown session_id: {session_id}"),
+                );
+            };
+            // collect client ids from the session, excluding the sender
+            session
+                .participants
+                .iter()
+                .filter(|x| *x != &message.client_id)
+                .cloned()
+                .collect::<Vec<String>>()
+        };
 
         println!(
             "Target clients: {:?}, {:?}",
@@ -604,7 +723,7 @@ impl WebRTCServer {
         // message back to the caller
         WebRTCMessage {
             client_id: message.client_id.clone(),
-            session_id: session_id.clone(),
+            session_id,
             message_type: ICE_CANDIDATE.to_string(),
             ice_candidates: None,
             sdp: None,
@@ -615,11 +734,19 @@ impl WebRTCServer {
     async fn handle_ice_candidate_ack(&self, message: WebRTCMessage) -> WebRTCMessage {
         // pass ice candidate ack to the publisher
         let session_id = message.session_id.clone();
-        let sessions = self.sessions.lock().await;
-        let session = sessions.get(&session_id).unwrap().clone();
 
-        // collect creator id from the session
-        let publisher_id = session.creator_id.clone();
+        let publisher_id = {
+            let sessions = self.sessions.lock().await;
+            let Some(session) = sessions.get(&session_id) else {
+                return Self::error_response(
+                    &message.client_id,
+                    &session_id,
+                    ICE_CANDIDATE_ACK,
+                    format!("unknown session_id: {session_id}"),
+                );
+            };
+            session.creator_id.clone()
+        };
         println!("Publisher id: {}", publisher_id); // temporal log
 
         // send ice candidate ack to the publisher
@@ -632,24 +759,37 @@ impl WebRTCServer {
             error: None,
         };
 
-        // get a sender of the publisher
-        let clients = self.clients.lock().await;
-        let publisher_sender = clients.get(&publisher_id).unwrap().sender.clone();
-        let mut publisher_sender = publisher_sender.lock().await;
+        // get a sender of the publisher, if it's still connected — it may
+        // have disconnected already (e.g. this ack raced its own
+        // disconnect), which is not a crash, just nothing to deliver to.
+        let publisher_sender = {
+            let clients = self.clients.lock().await;
+            clients.get(&publisher_id).map(|c| c.sender.clone())
+        };
 
-        println!(
-            "Ice candidate to publisher: {:?}",
-            publisher_msg.ice_candidates.clone()
-        ); // temporal log
-        let msg = Message::text(serde_json::to_string(&publisher_msg).unwrap());
-        if let Err(e) = publisher_sender.send(msg).await {
-            println!("Error sending ICE candidate ack to publisher: {}", e);
+        match publisher_sender {
+            Some(publisher_sender) => {
+                let mut publisher_sender = publisher_sender.lock().await;
+                println!(
+                    "Ice candidate to publisher: {:?}",
+                    publisher_msg.ice_candidates
+                ); // temporal log
+                let msg = Message::text(serde_json::to_string(&publisher_msg).unwrap());
+                if let Err(e) = publisher_sender.send(msg).await {
+                    println!("Error sending ICE candidate ack to publisher: {}", e);
+                }
+            }
+            None => {
+                println!(
+                    "Publisher {publisher_id} is no longer connected — dropping ICE candidate ack"
+                );
+            }
         }
 
         // message back to the subscriber
         WebRTCMessage {
             client_id: message.client_id.clone(),
-            session_id: session_id.clone(),
+            session_id,
             message_type: ICE_CANDIDATE_ACK.to_string(),
             ice_candidates: None,
             sdp: None,
@@ -705,5 +845,257 @@ fn log_error_connection(error: Error) {
         _ => {
             println!("Other WebSocket error: {}", error);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::common::payload_str_to_vector_str;
+
+    fn create_request(client_id: &str) -> WebRTCMessage {
+        WebRTCMessage {
+            client_id: client_id.to_string(),
+            session_id: String::new(),
+            message_type: CREATE_SESSION.to_string(),
+            ice_candidates: None,
+            sdp: None,
+            error: None,
+        }
+    }
+
+    // ICE server config (STUN/TURN URL scheme) is now unit-tested once, at
+    // its single source of truth — see
+    // crate::webrtc_ice_config::tests::build_ice_servers_uses_turns_scheme_for_the_tls_secured_port
+    // — rather than duplicated here against this module's copy.
+
+    #[tokio::test]
+    async fn create_session_registers_creator_as_sole_participant() {
+        let server = WebRTCServer::new();
+        let response = server.handle_create_session(create_request("client-1")).await;
+
+        assert_eq!(response.message_type, CREATE_SESSION);
+        assert!(uuid::Uuid::parse_str(&response.session_id).is_ok());
+
+        let participants = server.list_participants(&response.session_id).await;
+        assert_eq!(participants.ice_candidates.unwrap(), "client-1");
+    }
+
+    #[tokio::test]
+    async fn join_session_adds_a_new_participant() {
+        let server = WebRTCServer::new();
+        let session_id = server
+            .handle_create_session(create_request("creator"))
+            .await
+            .session_id;
+
+        server.join_session(session_id.clone(), "subscriber").await;
+
+        let participants = server.list_participants(&session_id).await;
+        let list = payload_str_to_vector_str(&participants.ice_candidates.unwrap());
+        assert_eq!(list.len(), 2);
+        assert!(list.contains(&"creator".to_string()));
+        assert!(list.contains(&"subscriber".to_string()));
+    }
+
+    #[tokio::test]
+    async fn joining_twice_resets_rather_than_duplicates_the_participant() {
+        let server = WebRTCServer::new();
+        let session_id = server
+            .handle_create_session(create_request("creator"))
+            .await
+            .session_id;
+
+        server.join_session(session_id.clone(), "subscriber").await;
+        server.join_session(session_id.clone(), "subscriber").await;
+
+        let participants = server.list_participants(&session_id).await;
+        let list = payload_str_to_vector_str(&participants.ice_candidates.unwrap());
+        assert_eq!(
+            list.iter().filter(|c| *c == "subscriber").count(),
+            1,
+            "joining the same session twice should not duplicate the participant: {list:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn leave_session_removes_the_participant() {
+        let server = WebRTCServer::new();
+        let session_id = server
+            .handle_create_session(create_request("creator"))
+            .await
+            .session_id;
+        server.join_session(session_id.clone(), "subscriber").await;
+
+        server.leave_session(session_id.clone(), "subscriber").await;
+
+        let participants = server.list_participants(&session_id).await;
+        let list = payload_str_to_vector_str(&participants.ice_candidates.unwrap());
+        assert_eq!(list, vec!["creator".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn close_session_removes_it_from_the_session_list() {
+        let server = WebRTCServer::new();
+        let session_id = server
+            .handle_create_session(create_request("creator"))
+            .await
+            .session_id;
+
+        let response = server.close_session(&session_id).await;
+        let remaining = payload_str_to_vector_str(&response.session_id);
+        assert!(
+            !remaining.contains(&session_id),
+            "closed session {session_id} should not appear in the remaining list: {remaining:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn list_session_reflects_every_created_session() {
+        let server = WebRTCServer::new();
+        let s1 = server
+            .handle_create_session(create_request("a"))
+            .await
+            .session_id;
+        let s2 = server
+            .handle_create_session(create_request("b"))
+            .await
+            .session_id;
+
+        let listed = server.handle_list_session(create_request("anyone")).await;
+        let ids = payload_str_to_vector_str(&listed.session_id);
+        assert_eq!(ids.len(), 2);
+        assert!(ids.contains(&s1));
+        assert!(ids.contains(&s2));
+    }
+
+    // These four exercise the crash-risk fix from
+    // docs/xrds-net-release-readiness.md Phase 2: every handler taking a
+    // client-supplied session_id used to `.unwrap()` the lookup, so an
+    // unknown/stale id panicked the whole signaling task instead of
+    // returning an error to that one client.
+
+    #[tokio::test]
+    async fn join_session_with_unknown_id_returns_error_instead_of_panicking() {
+        let server = WebRTCServer::new();
+        let response = server
+            .join_session("does-not-exist".to_string(), "client-1")
+            .await;
+        assert!(response.error.is_some());
+    }
+
+    #[tokio::test]
+    async fn leave_session_with_unknown_id_returns_error_instead_of_panicking() {
+        let server = WebRTCServer::new();
+        let response = server
+            .leave_session("does-not-exist".to_string(), "client-1")
+            .await;
+        assert!(response.error.is_some());
+    }
+
+    #[tokio::test]
+    async fn list_participants_with_unknown_id_returns_error_instead_of_panicking() {
+        let server = WebRTCServer::new();
+        let response = server.list_participants("does-not-exist").await;
+        assert!(response.error.is_some());
+    }
+
+    #[tokio::test]
+    async fn close_session_with_unknown_id_is_a_harmless_no_op() {
+        // `close_session` already used `HashMap::remove` (never panics on a
+        // missing key), unlike the other lookups — covered here mainly to
+        // document that it was already safe, not to fix a bug.
+        let server = WebRTCServer::new();
+        let response = server.close_session("does-not-exist").await;
+        assert!(response.error.is_none());
+    }
+
+    #[tokio::test]
+    async fn offer_and_answer_with_unknown_session_id_return_errors() {
+        let server = WebRTCServer::new();
+
+        let offer_request = WebRTCMessage {
+            client_id: "publisher".to_string(),
+            session_id: "does-not-exist".to_string(),
+            message_type: OFFER.to_string(),
+            ice_candidates: None,
+            sdp: Some("v=0".to_string()),
+            error: None,
+        };
+        assert!(server.handle_offer(offer_request).await.error.is_some());
+
+        let answer_request = WebRTCMessage {
+            client_id: "subscriber".to_string(),
+            session_id: "does-not-exist".to_string(),
+            message_type: ANSWER.to_string(),
+            ice_candidates: None,
+            sdp: Some("v=0".to_string()),
+            error: None,
+        };
+        assert!(server.handle_answer(answer_request).await.error.is_some());
+    }
+
+    #[tokio::test]
+    async fn offer_missing_sdp_returns_error_instead_of_panicking() {
+        let server = WebRTCServer::new();
+        let session_id = server
+            .handle_create_session(create_request("publisher"))
+            .await
+            .session_id;
+
+        let offer_request = WebRTCMessage {
+            client_id: "publisher".to_string(),
+            session_id,
+            message_type: OFFER.to_string(),
+            ice_candidates: None,
+            sdp: None, // missing — used to panic on request.sdp.clone().unwrap()
+            error: None,
+        };
+        assert!(server.handle_offer(offer_request).await.error.is_some());
+    }
+
+    // Disconnect cleanup (the resource-leak fix, same Phase 2 finding):
+    // previously only ran on an explicit WS close frame, and even then
+    // never touched session/participant bookkeeping (the "TODO: remove
+    // the session if the client is the creator" comment). Tested directly
+    // against `handle_client_disconnect` — no real WebSocket needed, since
+    // it's plain bookkeeping over the same maps the tests above exercise.
+
+    #[tokio::test]
+    async fn disconnect_removes_a_session_the_client_created() {
+        let server = WebRTCServer::new();
+        let session_id = server
+            .handle_create_session(create_request("creator"))
+            .await
+            .session_id;
+
+        server.handle_client_disconnect("creator").await;
+
+        let listed = server.handle_list_session(create_request("anyone")).await;
+        let ids = payload_str_to_vector_str(&listed.session_id);
+        assert!(
+            !ids.contains(&session_id),
+            "session created by a now-disconnected client should be removed: {ids:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn disconnect_removes_the_client_from_sessions_it_only_joined() {
+        let server = WebRTCServer::new();
+        let session_id = server
+            .handle_create_session(create_request("creator"))
+            .await
+            .session_id;
+        server.join_session(session_id.clone(), "subscriber").await;
+
+        server.handle_client_disconnect("subscriber").await;
+
+        let participants = server.list_participants(&session_id).await;
+        let list = payload_str_to_vector_str(&participants.ice_candidates.unwrap());
+        assert_eq!(
+            list,
+            vec!["creator".to_string()],
+            "disconnected participant should be gone, session (created by someone else) should survive"
+        );
     }
 }

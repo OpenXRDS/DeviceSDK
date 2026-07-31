@@ -78,10 +78,15 @@ WebRTC needs setup the rest of the crate doesn't:
    used — WebRTC's DTLS handshake needs it:
 
    ```rust
-   use rustls::crypto::{ring, CryptoProvider};
-   CryptoProvider::install_default(ring::default_provider())
-       .expect("install crypto provider");
+   xrds_net::common::ensure_rustls_crypto_provider();
    ```
+
+   This is a guarded, idempotent install — safe to call from every entry
+   point (it's a no-op if something else in the process already installed
+   one). Calling `rustls::crypto::ring::default_provider().install_default()`
+   directly instead is not recommended: it panics if called twice in the
+   same process, which is easy to hit once more than one part of an app
+   touches rustls (see docs/xrds-net-crypto-consolidation.md).
 
    Omitting this makes the DTLS handshake fail at runtime.
 3. **A reachable signaling server.** Either run the built-in one
@@ -89,6 +94,31 @@ WebRTC needs setup the rest of the crate doesn't:
    compatible one.
 4. **Desktop only.** Like the rest of `xrds-net`, the WebRTC path is excluded
    on Android (its native deps aren't available there).
+5. **TURN credentials, for relay across restrictive NATs (optional).** The
+   default ICE config (`WebRTCClient::new()`, no override) always includes
+   Google's + KETI's public STUN servers. The TURN relay entry (needed when
+   direct/STUN-assisted connections fail — e.g. symmetric NAT on one or
+   both sides) additionally requires credentials, read from environment
+   variables at the time a peer connection is created:
+
+   ```bash
+   export XRDS_TURN_USERNAME=your-turn-username
+   export XRDS_TURN_PASSWORD=your-turn-password
+   ```
+
+   If either is unset, the TURN entry is silently omitted (logged as a
+   `warn!`) and ICE falls back to STUN-only — connections between peers
+   that can reach each other directly (including same-machine/loopback
+   testing) still work, but there's no relay fallback for restrictive
+   NATs. There used to be a single hardcoded TURN username/password
+   committed in source; see docs/xrds-net-release-readiness.md Phase 1 for
+   why that changed.
+
+   For a loopback/local-testing scenario where you don't want *any* remote
+   STUN/TURN network calls (faster, and avoids depending on DNS/network
+   reachability to public servers), use
+   `WebRTCClient::set_ice_servers(vec![])` instead — see
+   `examples/webrtc_file_stream.rs`.
 
 ---
 
@@ -97,7 +127,7 @@ WebRTC needs setup the rest of the crate doesn't:
 Create a session, publish an offer, wait for a subscriber, exchange ICE, then
 stream already-encoded media. (Producing `VideoSource`/`AudioSource` — capture
 and encode — is `xrds-media`'s job; shown fully in
-[`examples/webrtc_webcam_stream.rs`](../../examples/webrtc_webcam_stream.rs).)
+[`examples/webrtc_webcam_stream.rs`](../../examples/webrtc/webrtc_webcam_stream.rs).)
 
 ```rust
 use xrds_net::{WebRTCClient, VideoSource, AudioSource};
@@ -256,7 +286,7 @@ WebRTCClient::new() -> Self
 
 ## 9. Complete example & related docs
 
-- [`examples/webrtc_webcam_stream.rs`](../../examples/webrtc_webcam_stream.rs)
+- [`examples/webrtc_webcam_stream.rs`](../../examples/webrtc/webrtc_webcam_stream.rs)
   — end-to-end: in-process signaling server + publisher (real webcam/mic,
   captured & encoded via `xrds-media`) + subscriber (saves the received stream).
   The canonical, runnable reference for everything above.

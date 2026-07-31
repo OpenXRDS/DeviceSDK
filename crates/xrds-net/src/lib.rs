@@ -16,21 +16,18 @@ limitations under the License.
 
 pub mod client;
 pub mod common;
-#[cfg(feature = "bevy_plugin")]
-pub mod plugin_net_bevy;
 pub mod server;
 
-#[cfg(feature = "bevy_plugin")]
-pub use plugin_net_bevy::{
-    process_net_commands, NetClientState, NetCommand, NetOutput, NetPlugin, NetPluginConfig,
-};
+mod webrtc_ice_config;
 
 pub use client::{
     media::{AudioSource, VideoSource},
     webrtc_client::WebRTCClient,
-    ClientBuilder,
+    ClientBuilder, Event, EventStream, ListenOptions, NetChannel, NetError, NetFeed, NetTaskSlot,
+    Overflow, RequestOptions, TransferOp, TransferResult, XrdsNet, XrdsNetTask,
 };
 
+pub use common::data_structure::NetResponse;
 pub use common::enums::{FtpCommands, PROTOCOLS};
 
 #[cfg(test)]

@@ -131,7 +131,7 @@ rand = { version = "0.9.2" }
 xrds-media = { workspace = true, features = ["transcoding"] }
 rustls = { version = "0.23.10", default-features = false, features = ["std", "ring"] }
 env_logger = { workspace = true }
-tokio = { workspace = true, features = ["time"] }
+tokio = { workspace = true, features = ["time", "signal"] }
 
 # xrds-net examples (net.rs, net_app.rs, ...) are desktop-only dev tooling and
 # never built for Android. Gated by target (rather than left unconditioned)
@@ -144,3 +144,235 @@ tokio = { workspace = true, features = ["time"] }
 # See docs/xrds-net-android-shipping.md Phase 3.
 [target.'cfg(not(target_os = "android"))'.dev-dependencies]
 xrds-net = { workspace = true }
+
+# Explicit [[example]] entries below: Cargo's example autodiscovery only
+# finds examples/*.rs (flat) or examples/*/main.rs (one level, must be
+# named main.rs) -- it does not recurse into examples/<category>/<name>.rs,
+# which is how these are now organized (see examples/README.md).
+[[example]]
+name = "simple_api"
+path = "examples/xrds_first/simple_api.rs"
+
+[[example]]
+name = "runtime_scene_environment"
+path = "examples/xrds_first/runtime_scene_environment.rs"
+
+[[example]]
+name = "environment_map_visual_check"
+path = "examples/xrds_first/environment_map_visual_check.rs"
+
+[[example]]
+name = "simple_scene"
+path = "examples/xrds_first/simple_scene.rs"
+
+[[example]]
+name = "simple_update"
+path = "examples/xrds_first/simple_update.rs"
+
+[[example]]
+name = "parent_child"
+path = "examples/xrds_first/parent_child.rs"
+
+[[example]]
+name = "parent_child_queued"
+path = "examples/xrds_first/parent_child_queued.rs"
+
+[[example]]
+name = "edit_material"
+path = "examples/xrds_first/edit_material.rs"
+
+[[example]]
+name = "active_compo_control"
+path = "examples/xrds_first/active_compo_control.rs"
+
+[[example]]
+name = "load_gltf"
+path = "examples/xrds_first/load_gltf.rs"
+
+[[example]]
+name = "load_gltf_fail_case"
+path = "examples/xrds_first/load_gltf_fail_case.rs"
+
+[[example]]
+name = "load_gltf_animated"
+path = "examples/xrds_first/load_gltf_animated.rs"
+
+[[example]]
+name = "scene_document_import"
+path = "examples/xrds_first/scene_document_import.rs"
+
+[[example]]
+name = "scene_document_environment_import"
+path = "examples/xrds_first/scene_document_environment_import.rs"
+
+[[example]]
+name = "scene_document_texture_uv_rotation_only"
+path = "examples/xrds_first/scene_document_texture_uv_rotation_only.rs"
+
+[[example]]
+name = "scene_document_texture_uv_validation"
+path = "examples/xrds_first/scene_document_texture_uv_validation.rs"
+
+[[example]]
+name = "editor_basement_flow"
+path = "examples/xrds_first/editor_basement_flow.rs"
+
+[[example]]
+name = "scene_document_export"
+path = "examples/xrds_first/scene_document_export.rs"
+
+[[example]]
+name = "scene_document_session_save_load"
+path = "examples/xrds_first/scene_document_session_save_load.rs"
+
+[[example]]
+name = "descriptor_gen"
+path = "examples/xrds_first/descriptor_gen.rs"
+
+[[example]]
+name = "glb_runtime_add"
+path = "examples/xrds_first/glb_runtime_add.rs"
+
+[[example]]
+name = "scene_document_audio_workflow"
+path = "examples/xrds_first/scene_document_audio_workflow.rs"
+
+[[example]]
+name = "scene_document_material_workflow"
+path = "examples/xrds_first/scene_document_material_workflow.rs"
+
+[[example]]
+name = "generic_update"
+path = "examples/extensions/generic_update.rs"
+
+[[example]]
+name = "net"
+path = "examples/networking/net.rs"
+
+[[example]]
+name = "net_app"
+path = "examples/networking/net_app.rs"
+
+[[example]]
+name = "net_intent"
+path = "examples/networking/net_intent.rs"
+
+[[example]]
+name = "net_protocols"
+path = "examples/networking/net_protocols.rs"
+
+[[example]]
+name = "net_errors"
+path = "examples/networking/net_errors.rs"
+
+[[example]]
+name = "net_backpressure"
+path = "examples/networking/net_backpressure.rs"
+
+[[example]]
+name = "webrtc_webcam_stream"
+path = "examples/webrtc/webrtc_webcam_stream.rs"
+
+[[example]]
+name = "webrtc_file_stream"
+path = "examples/webrtc/webrtc_file_stream.rs"
+
+# Standalone real-network verification binaries — see
+# docs/xrds-net-webrtc-realnet-binaries.md. examples/webrtc/realnet_common.rs
+# is shared support code (no `main`), included via `#[path]` in each of
+# these rather than registered as its own example.
+[[example]]
+name = "webrtc_realnet_signaling_server"
+path = "examples/webrtc/webrtc_realnet_signaling_server.rs"
+
+[[example]]
+name = "webrtc_realnet_publisher"
+path = "examples/webrtc/webrtc_realnet_publisher.rs"
+
+[[example]]
+name = "webrtc_realnet_subscriber"
+path = "examples/webrtc/webrtc_realnet_subscriber.rs"
+
+[[example]]
+name = "direct_bevy"
+path = "examples/expert/direct_bevy.rs"
+
+[[example]]
+name = "2d_bloom"
+path = "examples/rendering/2d_bloom.rs"
+
+[[example]]
+name = "2d_shapes"
+path = "examples/rendering/2d_shapes.rs"
+
+[[example]]
+name = "3d_bloom"
+path = "examples/rendering/3d_bloom.rs"
+
+[[example]]
+name = "3d_shapes"
+path = "examples/rendering/3d_shapes.rs"
+
+[[example]]
+name = "atmospheric_fog"
+path = "examples/rendering/atmospheric_fog.rs"
+
+[[example]]
+name = "custom_skinned_mesh"
+path = "examples/rendering/custom_skinned_mesh.rs"
+
+[[example]]
+name = "light_transmission"
+path = "examples/rendering/light_transmission.rs"
+
+[[example]]
+name = "morph_targets"
+path = "examples/rendering/morph_targets.rs"
+
+[[example]]
+name = "physical_based_rendering"
+path = "examples/rendering/physical_based_rendering.rs"
+
+[[example]]
+name = "postprocessing_builtin"
+path = "examples/rendering/postprocessing_builtin.rs"
+
+[[example]]
+name = "simple_xr_scene"
+path = "examples/rendering/simple_xr_scene.rs"
+
+[[example]]
+name = "skybox"
+path = "examples/rendering/skybox.rs"
+
+[[example]]
+name = "spherical_area_lights"
+path = "examples/rendering/spherical_area_lights.rs"
+
+[[example]]
+name = "split_screen"
+path = "examples/rendering/split_screen.rs"
+
+[[example]]
+name = "two_pass"
+path = "examples/rendering/two_pass.rs"
+
+[[example]]
+name = "vertex_color"
+path = "examples/rendering/vertex_color.rs"
+
+[[example]]
+name = "3d_text"
+path = "examples/rendering/3d_text.rs"
+
+[[example]]
+name = "extruded_text"
+path = "examples/rendering/extruded_text.rs"
+
+[[example]]
+name = "gltf_samples_check"
+path = "examples/rendering/gltf_samples_check.rs"
+
+[[example]]
+name = "original_morph"
+path = "examples/rendering/original_morph.rs"

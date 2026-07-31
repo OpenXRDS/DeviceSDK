@@ -2,6 +2,9 @@
 name = "xrds-net"
 version = "0.1.0"
 edition = "2021"
+license = "Apache-2.0"
+description = "Protocol-agnostic client networking for XR apps (HTTP/WS/MQTT/CoAP/QUIC/FTP + WebRTC), plus a signaling/WS/FTP server for local dev and testing."
+repository = "https://github.com/OpenXRDS/DeviceSDK"
 
 [lib]
 crate-type = ["lib"]

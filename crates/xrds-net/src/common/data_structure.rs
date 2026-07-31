@@ -122,3 +122,129 @@ pub struct WebRTCMessage {
     pub sdp: Option<String>,            // Session Description Protocol. base64 encoded
     pub error: Option<String>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Round-trips a `WebRTCMessage` for each signaling message type through
+    /// `serde_json`, asserting every field survives — this is exercised
+    /// today only indirectly, via full WebSocket round-trips in the
+    /// integration suite.
+    fn assert_round_trips(message: WebRTCMessage) {
+        let json = serde_json::to_string(&message).expect("serialize");
+        let decoded: WebRTCMessage = serde_json::from_str(&json).expect("deserialize");
+
+        assert_eq!(decoded.client_id, message.client_id);
+        assert_eq!(decoded.session_id, message.session_id);
+        assert_eq!(decoded.message_type, message.message_type);
+        assert_eq!(decoded.ice_candidates, message.ice_candidates);
+        assert_eq!(decoded.sdp, message.sdp);
+        assert_eq!(decoded.error, message.error);
+    }
+
+    #[test]
+    fn create_session_round_trips() {
+        assert_round_trips(WebRTCMessage {
+            client_id: "client-1".to_string(),
+            session_id: "".to_string(),
+            message_type: CREATE_SESSION.to_string(),
+            ice_candidates: None,
+            sdp: None,
+            error: None,
+        });
+    }
+
+    #[test]
+    fn join_session_round_trips() {
+        assert_round_trips(WebRTCMessage {
+            client_id: "client-2".to_string(),
+            session_id: "session-abc".to_string(),
+            message_type: JOIN_SESSION.to_string(),
+            ice_candidates: None,
+            sdp: Some("v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\n".to_string()),
+            error: None,
+        });
+    }
+
+    #[test]
+    fn offer_round_trips() {
+        assert_round_trips(WebRTCMessage {
+            client_id: "publisher".to_string(),
+            session_id: "session-abc".to_string(),
+            message_type: OFFER.to_string(),
+            ice_candidates: None,
+            sdp: Some("v=0\r\ns=offer\r\n".to_string()),
+            error: None,
+        });
+    }
+
+    #[test]
+    fn answer_round_trips() {
+        assert_round_trips(WebRTCMessage {
+            client_id: "subscriber".to_string(),
+            session_id: "session-abc".to_string(),
+            message_type: ANSWER.to_string(),
+            ice_candidates: None,
+            sdp: Some("v=0\r\ns=answer\r\n".to_string()),
+            error: None,
+        });
+    }
+
+    #[test]
+    fn ice_candidate_round_trips() {
+        assert_round_trips(WebRTCMessage {
+            client_id: "client-1".to_string(),
+            session_id: "session-abc".to_string(),
+            message_type: ICE_CANDIDATE.to_string(),
+            ice_candidates: Some("[\"candidate:1 1 UDP 2122252543 10.0.0.1 54321 typ host\"]".to_string()),
+            sdp: None,
+            error: None,
+        });
+    }
+
+    #[test]
+    fn list_participants_round_trips_with_multiple_ids() {
+        assert_round_trips(WebRTCMessage {
+            client_id: "".to_string(),
+            session_id: "session-abc".to_string(),
+            message_type: LIST_PARTICIPANTS.to_string(),
+            ice_candidates: Some("client-1,client-2".to_string()),
+            sdp: None,
+            error: None,
+        });
+    }
+
+    #[test]
+    fn error_field_round_trips() {
+        assert_round_trips(WebRTCMessage {
+            client_id: "client-1".to_string(),
+            session_id: "session-abc".to_string(),
+            message_type: OFFER.to_string(),
+            ice_candidates: None,
+            sdp: None,
+            error: Some("session not found".to_string()),
+        });
+    }
+
+    #[test]
+    fn default_message_has_empty_strings_and_no_optionals() {
+        let message = WebRTCMessage::default();
+        assert_eq!(message.client_id, "");
+        assert_eq!(message.session_id, "");
+        assert_eq!(message.message_type, "");
+        assert!(message.ice_candidates.is_none());
+        assert!(message.sdp.is_none());
+        assert!(message.error.is_none());
+    }
+
+    #[test]
+    fn deserializing_missing_optional_fields_defaults_to_none() {
+        let json = r#"{"client_id":"c","session_id":"s","message_type":"offer"}"#;
+        let decoded: WebRTCMessage = serde_json::from_str(json).expect("deserialize");
+        assert_eq!(decoded.client_id, "c");
+        assert!(decoded.ice_candidates.is_none());
+        assert!(decoded.sdp.is_none());
+        assert!(decoded.error.is_none());
+    }
+}

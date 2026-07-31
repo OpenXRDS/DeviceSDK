@@ -90,22 +90,22 @@ impl XrdsApp for MyApp {
 Within the DeviceSDK the crate is reached as `xrds::net::…` (no extra Cargo
 dependency; works on desktop **and** Android/Quest — only the FTP *server* and
 WebRTC are desktop-only). Standalone, use
-`xrds_net::…`. See [`examples/net_app.rs`](../../examples/net_app.rs) (in-app),
-[`examples/net_intent.rs`](../../examples/net_intent.rs) (standalone, sync),
-and [`examples/net.rs`](../../examples/net.rs) (expert API).
+`xrds_net::…`. See [`examples/net_app.rs`](../../examples/networking/net_app.rs) (in-app),
+[`examples/net_intent.rs`](../../examples/networking/net_intent.rs) (standalone, sync),
+and [`examples/net.rs`](../../examples/networking/net.rs) (expert API).
 
 ## Protocols
 
-| Scheme(s) | Protocol | request | dispatch | listen | transfer | open |
-| --- | --- | :-: | :-: | :-: | :-: | :-: |
-| `http` / `https` | HTTP/1.1 | ✅ | — | — | — | — |
-| `file` | FILE (byte GET) | ✅ | — | — | — | — |
-| `coap` | CoAP | ✅ | — | — | — | — |
-| `ws` / `wss` | WebSocket | — | ✅ | ✅ | — | ✅ |
-| `quic` | raw QUIC | — | ✅ | ✅ | — | ✅ |
-| `mqtt` | MQTT | ⚠️ opt-in | ✅ | ✅ | — | — |
-| `ftp` / `sftp` | FTP | — | — | — | ✅ | — |
-| (via expert API) | HTTP/3 | ✅ | — | — | — | — |
+| Scheme(s)            | Protocol        |   request   | dispatch | listen | transfer | open |
+| -------------------- | --------------- | :---------: | :------: | :----: | :------: | :--: |
+| `http` / `https` | HTTP/1.1        |     ✅     |    —    |   —   |    —    |  —  |
+| `file`             | FILE (byte GET) |     ✅     |    —    |   —   |    —    |  —  |
+| `coap`             | CoAP            |     ✅     |    —    |   —   |    —    |  —  |
+| `ws` / `wss`     | WebSocket       |     —     |    ✅    |   ✅   |    —    |  ✅  |
+| `quic`             | raw QUIC        |     —     |    ✅    |   ✅   |    —    |  ✅  |
+| `mqtt`             | MQTT            | ⚠️ opt-in |    ✅    |   ✅   |    —    |  —  |
+| `ftp` / `sftp`   | FTP             |     —     |    —    |   —   |    ✅    |  —  |
+| (via expert API)     | HTTP/3          |     ✅     |    —    |   —   |    —    |  —  |
 
 `open` is the bidirectional-session shape (one connection you both send on and
 read replies from). An unsupported verb returns a clear `NetError::Capability`
@@ -132,3 +132,22 @@ cargo test -p xrds-net
 Some tests hit live public servers (rust-lang.org, test.mosquitto.org,
 test.rebex.net, coap.me) and are flaky under network conditions; that flaky set
 is the known baseline. See [MANUAL.md](./MANUAL.md) for the full detail.
+
+WebRTC's tests are full end-to-end integration tests (real signaling server,
+real ICE/DTLS handshake) and live separately in
+[`tests/webrtc_integration.rs`](./tests/webrtc_integration.rs) rather than
+the crate's own unit-test modules — `cargo test -p xrds-net` above already
+runs them too, but they're slower (several take 10s) and require a
+network path to the configured STUN/TURN servers. To run only them:
+
+```bash
+cargo test -p xrds-net --test webrtc_integration
+```
+
+The slowest of those (`test_client_webrtc_send_video_file`, a full real-time
+H.264 file transfer, 60-120s) is `#[ignore]`d by default — run it explicitly
+with:
+
+```bash
+cargo test -p xrds-net --test webrtc_integration -- --ignored
+```

@@ -183,6 +183,17 @@ impl WebSocketServer {
     }
 
     pub async fn run(self: Arc<Self>, port: u32) -> Result<(), Box<dyn std::error::Error>> {
+        self.run_reporting_port(port, None).await
+    }
+
+    /// Same as `run`, but if `port_tx` is given, sends the actual bound port
+    /// (relevant when `port == 0`, letting the OS assign one) once the
+    /// listener is up and before entering the accept loop.
+    pub async fn run_reporting_port(
+        self: Arc<Self>,
+        port: u32,
+        port_tx: Option<tokio::sync::oneshot::Sender<u16>>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let host_addr = "0.0.0.0".to_owned() + ":" + &port.to_string();
         let try_socket = TcpListener::bind(host_addr.clone()).await;
         let listener = match try_socket {
@@ -195,6 +206,10 @@ impl WebSocketServer {
                 return Err(Box::new(e));
             }
         };
+
+        if let Some(tx) = port_tx {
+            let _ = tx.send(listener.local_addr()?.port());
+        }
 
         while let Ok((stream, addr)) = listener.accept().await {
             println!("Accepted connection from {}", addr); // temporal log

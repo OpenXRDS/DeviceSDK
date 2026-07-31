@@ -116,6 +116,14 @@ impl StreamReaderFactory {
     }
 }
 
+/// True if `data` contains an H.264 Annex B NAL unit start code (the 3- or
+/// 4-byte `00 00 01` / `00 00 00 01` marker). Used to sanity-check
+/// sent/received video payloads in tests without decoding the stream.
+pub fn is_valid_h264(data: &[u8]) -> bool {
+    data.windows(4).any(|w| w == [0x00, 0x00, 0x00, 0x01])
+        || data.windows(3).any(|w| w == [0x00, 0x00, 0x01])
+}
+
 type WsWriter = Arc<Mutex<SplitSink<WsStream<MaybeTlsStream<TcpStream>>, Message>>>;
 
 pub struct WebRTCClient {
@@ -129,6 +137,7 @@ pub struct WebRTCClient {
     pc: Option<Arc<RTCPeerConnection>>,
     api: Option<webrtc::api::API>,
     rtc_config: Option<RTCConfiguration>,
+    ice_servers_override: Option<Vec<RTCIceServer>>,
     offer: Option<RTCSessionDescription>,
     answer: Option<RTCSessionDescription>,
 
@@ -183,6 +192,7 @@ impl WebRTCClient {
             pc: None,
             api: None,
             rtc_config: None,
+            ice_servers_override: None,
             offer: None,
             answer: None,
 
@@ -212,6 +222,17 @@ impl WebRTCClient {
         }
     }
 
+    /// Overrides the STUN/TURN servers used for ICE gathering (default:
+    /// `webrtc_ice_config::build_ice_servers()`, the production set). Must
+    /// be called before `publish`/`join_session` (whichever triggers
+    /// `setup_webrtc` first) to take effect. Intended for scenarios where
+    /// remote STUN/TURN is unnecessary and only adds latency — e.g. two
+    /// peers on `127.0.0.1`, where host candidates alone connect — not for
+    /// production use.
+    pub fn set_ice_servers(&mut self, servers: Vec<RTCIceServer>) {
+        self.ice_servers_override = Some(servers);
+    }
+
     pub fn get_debug_video_file_path(&self) -> Option<&String> {
         self.debug_video_file_path.as_ref()
     }
@@ -234,6 +255,84 @@ impl WebRTCClient {
 
     pub fn get_offer(&self) -> Option<&RTCSessionDescription> {
         self.offer.as_ref()
+    }
+
+    /// Current ICE connection state, or `None` before a peer connection
+    /// exists. Lets a caller poll for readiness (e.g. wait until
+    /// `Connected` before starting a stream) instead of guessing with a
+    /// fixed sleep.
+    pub fn ice_connection_state(&self) -> Option<RTCIceConnectionState> {
+        self.pc.as_ref().map(|pc| pc.ice_connection_state())
+    }
+
+    /// Polls `ice_connection_state()` every 250ms until it reaches
+    /// `Connected`/`Completed` (`Ok`) or a terminal `Failed`/`Closed` state
+    /// (`Err`), up to `max_wait`. Exists so callers (tests, examples) can
+    /// wait for readiness without depending on the `webrtc` crate's
+    /// `RTCIceConnectionState` enum directly just to match its variants —
+    /// this used to be duplicated as a private test helper in
+    /// `tests/webrtc_integration.rs`; promoted here as the one copy.
+    pub async fn wait_for_ice_connected(&self, max_wait: Duration) -> Result<(), String> {
+        use webrtc::ice_transport::ice_connection_state::RTCIceConnectionState;
+
+        let start = std::time::Instant::now();
+        loop {
+            match self.ice_connection_state() {
+                Some(RTCIceConnectionState::Connected) | Some(RTCIceConnectionState::Completed) => {
+                    return Ok(())
+                }
+                Some(state @ RTCIceConnectionState::Failed)
+                | Some(state @ RTCIceConnectionState::Closed) => {
+                    return Err(format!("ICE reached terminal state {state:?}"))
+                }
+                _ => {}
+            }
+            if start.elapsed() > max_wait {
+                return Err(format!(
+                    "ICE did not connect within {max_wait:?} (last state: {:?})",
+                    self.ice_connection_state()
+                ));
+            }
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+    }
+
+    /// Human-readable summary of the currently *nominated* ICE candidate
+    /// pair — which candidate type (`host`/`srflx`/`prflx`/`relay`) won on
+    /// each side. `None` if there's no peer connection yet, or no pair has
+    /// been nominated yet (call after `ice_connection_state()` reaches
+    /// `Connected`/`Completed`).
+    ///
+    /// This is the actual answer to "did the TURN relay path get used, or
+    /// just direct/STUN?" — `ice_connection_state()` alone only says
+    /// *whether* ICE connected, not *how*. A `relay` type on either side is
+    /// the strongest evidence a TURN server was actually exercised, as
+    /// opposed to a direct or STUN-assisted connection that would have
+    /// worked without one. See docs/done/xrds-net-webrtc-realnet-binaries.md.
+    pub async fn active_candidate_pair_summary(&self) -> Option<String> {
+        let pc = self.pc.as_ref()?;
+        let stats = pc.get_stats().await;
+
+        let pair = stats.reports.values().find_map(|report| match report {
+            webrtc::stats::StatsReportType::CandidatePair(pair) if pair.nominated => Some(pair),
+            _ => None,
+        })?;
+
+        let candidate_type = |id: &str| -> String {
+            match stats.reports.get(id) {
+                Some(webrtc::stats::StatsReportType::LocalCandidate(c))
+                | Some(webrtc::stats::StatsReportType::RemoteCandidate(c)) => {
+                    format!("{:?}", c.candidate_type)
+                }
+                _ => "unknown".to_string(),
+            }
+        };
+
+        Some(format!(
+            "local={} remote={}",
+            candidate_type(&pair.local_candidate_id),
+            candidate_type(&pair.remote_candidate_id)
+        ))
     }
 
     /**
@@ -336,7 +435,13 @@ impl WebRTCClient {
             while let Some(msg) = read.next().await {
                 match msg {
                     Ok(Message::Text(text)) => {
-                        let msg: WebRTCMessage = serde_json::from_str(text.as_ref()).unwrap();
+                        let msg: WebRTCMessage = match serde_json::from_str(text.as_ref()) {
+                            Ok(msg) => msg,
+                            Err(e) => {
+                                log::warn!("Dropping malformed signaling message from server: {e}");
+                                continue;
+                            }
+                        };
 
                         if tx.send(msg).await.is_err() {
                             println!("Receiver dropped, stopping run task");
@@ -433,6 +538,18 @@ impl WebRTCClient {
     /**
      * Close the WebRTC connection and cleanup.
      */
+    /// Closes the peer connection, releasing its ICE agent and the mDNS
+    /// multicast socket it holds. `Drop` can't do this — the cleanup is
+    /// async — so without an explicit call the resources linger past the
+    /// client's lifetime, which matters when something else needs them
+    /// promptly (back-to-back tests all bind the same mDNS port).
+    pub async fn close_peer_connection(&mut self) -> Result<(), String> {
+        if let Some(pc) = self.pc.take() {
+            pc.close().await.map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    }
+
     pub async fn close_connection(&mut self) -> Result<(), Box<dyn Error>> {
         if let Some(write) = &self.write {
             let mut write_guard = write.lock().await;
@@ -851,32 +968,10 @@ impl WebRTCClient {
             .build();
 
         let rtc_config = RTCConfiguration {
-            ice_servers: vec![
-                // STUN servers for NAT discovery
-                RTCIceServer {
-                    urls: vec![
-                        "stun:stun.l.google.com:19302".to_owned(),
-                        "stun:stun1.l.google.com:3478".to_owned(),
-                        "stun:stun2.l.google.com:19302".to_owned(),
-                        "stun:stun.keti.xrds.kr:13478".to_owned(),
-                        "stun:stun.keti.xrds.kr:13478?transport=tcp".to_owned(),
-                        "stun:stun.keti.xrds.kr:13479".to_owned(),
-                        "stun:stun.keti.xrds.kr:13479?transport=tcp".to_owned(),
-                    ],
-                    ..Default::default()
-                },
-                // TURN server for relay when direct connection fails
-                RTCIceServer {
-                    urls: vec![
-                        "turn:turn.keti.xrds.kr:13478".to_owned(),
-                        "turn:turn.keti.xrds.kr:13478?transport=tcp".to_owned(),
-                        "turn:turn.keti.xrds.kr:13479".to_owned(),
-                        "turn:turn.keti.xrds.kr:13479?transport=tcp".to_owned(),
-                    ],
-                    username: "gganjang".to_owned(),
-                    credential: "keti007".to_owned(),
-                },
-            ],
+            ice_servers: self
+                .ice_servers_override
+                .clone()
+                .unwrap_or_else(crate::webrtc_ice_config::build_ice_servers),
             ice_transport_policy: RTCIceTransportPolicy::All, // Use this for testing
             ..Default::default()
         };
@@ -1610,6 +1705,19 @@ impl WebRTCClient {
                         candidates.push(candidate);
                     }
                     _ = &mut ice_complete_rx => {
+                        // `tokio::select!` picks pseudo-randomly among
+                        // already-ready branches, so the completion signal
+                        // can win a poll where a candidate is *also*
+                        // already sitting in the channel unread — drain
+                        // whatever's buffered before treating gathering as
+                        // done. This race was hidden when STUN/TURN made
+                        // gathering slow enough for the channel to always
+                        // drain naturally; without remote servers (fast
+                        // host-only gathering) it fires often enough to
+                        // matter.
+                        while let Ok(candidate) = candidate_rx.try_recv() {
+                            candidates.push(candidate);
+                        }
                         println!("ICE gathering completed with {} candidates", candidates.len());
                         break;
                     }
@@ -1955,5 +2063,52 @@ async fn save_audio_to_disk(
     );
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_valid_h264, WebRTCClient};
+
+    #[tokio::test]
+    async fn candidate_pair_summary_is_none_before_a_peer_connection_exists() {
+        let client = WebRTCClient::new();
+        assert!(client.active_candidate_pair_summary().await.is_none());
+    }
+
+    #[test]
+    fn detects_4_byte_start_code() {
+        assert!(is_valid_h264(&[0x00, 0x00, 0x00, 0x01, 0x67, 0x42]));
+    }
+
+    #[test]
+    fn detects_3_byte_start_code() {
+        assert!(is_valid_h264(&[0x00, 0x00, 0x01, 0x67, 0x42]));
+    }
+
+    #[test]
+    fn detects_start_code_mid_buffer() {
+        assert!(is_valid_h264(&[0xAB, 0xCD, 0x00, 0x00, 0x00, 0x01, 0x67]));
+    }
+
+    #[test]
+    fn rejects_data_with_no_start_code() {
+        assert!(!is_valid_h264(&[0x01, 0x02, 0x03, 0x04, 0x05]));
+    }
+
+    #[test]
+    fn rejects_empty_input() {
+        assert!(!is_valid_h264(&[]));
+    }
+
+    #[test]
+    fn rejects_truncated_start_code() {
+        assert!(!is_valid_h264(&[0x00, 0x00]));
+        assert!(!is_valid_h264(&[0x00]));
+    }
+
+    #[test]
+    fn accepts_a_bare_3_byte_start_code() {
+        assert!(is_valid_h264(&[0x00, 0x00, 0x01]));
+    }
 }
 

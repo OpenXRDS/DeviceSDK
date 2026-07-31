@@ -454,22 +454,47 @@ fn ensure_visibility_on_scene_instance_ready(
 /// feature in the SDK (grab hover/raycast, `XrdsAPI` raycasts, zone checks).
 /// Computing the box from the mesh keeps those features working; culling stays
 /// disabled because `NoFrustumCulling` takes precedence over a present `Aabb`.
+///
+/// Also refreshes the box when the mesh asset is modified in place (text meshes
+/// regenerate as their string changes) — Bevy only does that for culled entities,
+/// so without this a growing HUD label would keep its original smaller hitbox.
 fn ensure_aabbs_for_unculled_meshes_system(
     mut commands: Commands,
     meshes: Res<Assets<Mesh>>,
-    query: Query<
+    mut mesh_events: MessageReader<AssetEvent<Mesh>>,
+    missing: Query<
         (Entity, &Mesh3d),
         (
             With<bevy::camera::visibility::NoFrustumCulling>,
             Without<bevy::camera::primitives::Aabb>,
         ),
     >,
+    unculled: Query<(Entity, &Mesh3d), With<bevy::camera::visibility::NoFrustumCulling>>,
 ) {
     use bevy::camera::primitives::MeshAabb;
-    for (entity, mesh3d) in &query {
+
+    let compute = |mesh3d: &Mesh3d| meshes.get(&mesh3d.0).and_then(|m| m.compute_aabb());
+
+    let modified: std::collections::HashSet<AssetId<Mesh>> = mesh_events
+        .read()
+        .filter_map(|event| match event {
+            AssetEvent::Modified { id } => Some(*id),
+            _ => None,
+        })
+        .collect();
+    if !modified.is_empty() {
+        for (entity, mesh3d) in &unculled {
+            if modified.contains(&mesh3d.0.id()) {
+                if let Some(aabb) = compute(mesh3d) {
+                    commands.entity(entity).insert(aabb);
+                }
+            }
+        }
+    }
+
+    for (entity, mesh3d) in &missing {
         // Mesh may still be loading — retried automatically next frame.
-        let Some(mesh) = meshes.get(&mesh3d.0) else { continue };
-        if let Some(aabb) = mesh.compute_aabb() {
+        if let Some(aabb) = compute(mesh3d) {
             commands.entity(entity).insert(aabb);
         }
     }

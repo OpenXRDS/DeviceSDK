@@ -1,3 +1,6 @@
+// `server::server` — matches the existing module layout referenced
+// throughout the crate; not worth a rename at this point.
+#[allow(clippy::module_inception)]
 mod server;
 mod webrtc_server;
 mod ws_server;
