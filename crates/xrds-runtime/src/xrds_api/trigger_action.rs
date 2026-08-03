@@ -1,8 +1,9 @@
 //! Trigger-action sequencing runtime.
 //!
-//! See `docs/xrds-scenegraph-trigger-action-sequencing.md` for the design
-//! and `docs/xrds-trigger-action-implementation-plan.md` for the phased
-//! build-out (this file is Phases 3-4).
+//! See `docs/xrds-scenegraph-trigger-action-sequencing.md` for the design,
+//! `docs/done/xrds-trigger-action-v1.md` for the implementation record (this
+//! file is Phases 3-4, 7 and 10), and
+//! `docs/xrds-trigger-action-implementation-plan.md` for what is still ahead.
 //!
 //! Two collaborating-but-separate systems live here:
 //!
@@ -176,6 +177,14 @@ pub trait XrdsTriggerEvent: Message {
     }
 
     fn kind(&self) -> XrdsTriggerKind;
+
+    /// Which controller caused this, if the source reports one. Defaults to
+    /// `None` — most trigger sources (zone enter/exit, animation
+    /// completion, app-defined `Custom` events) have no controller to
+    /// report at all.
+    fn hand(&self) -> Option<xrds_components::XrGrabHand> {
+        None
+    }
 }
 
 impl XrdsTriggerEvent for xrds_components::XrZoneEnterEvent {
@@ -213,6 +222,9 @@ impl XrdsTriggerEvent for xrds_components::XrGrabEvent {
     fn kind(&self) -> XrdsTriggerKind {
         XrdsTriggerKind::Grabbed
     }
+    fn hand(&self) -> Option<xrds_components::XrGrabHand> {
+        Some(self.hand)
+    }
 }
 
 impl XrdsTriggerEvent for xrds_components::XrDropEvent {
@@ -221,6 +233,9 @@ impl XrdsTriggerEvent for xrds_components::XrDropEvent {
     }
     fn kind(&self) -> XrdsTriggerKind {
         XrdsTriggerKind::Dropped
+    }
+    fn hand(&self) -> Option<xrds_components::XrGrabHand> {
+        Some(self.hand)
     }
 }
 
@@ -233,6 +248,9 @@ impl XrdsTriggerEvent for xrds_components::XrWorldHoverEnterEvent {
     fn kind(&self) -> XrdsTriggerKind {
         XrdsTriggerKind::HoverEnter
     }
+    fn hand(&self) -> Option<xrds_components::XrGrabHand> {
+        Some(self.hand)
+    }
 }
 
 impl XrdsTriggerEvent for xrds_components::XrWorldHoverExitEvent {
@@ -241,6 +259,9 @@ impl XrdsTriggerEvent for xrds_components::XrWorldHoverExitEvent {
     }
     fn kind(&self) -> XrdsTriggerKind {
         XrdsTriggerKind::HoverExit
+    }
+    fn hand(&self) -> Option<xrds_components::XrGrabHand> {
+        Some(self.hand)
     }
 }
 
@@ -251,6 +272,9 @@ impl XrdsTriggerEvent for xrds_components::XrWorldButtonPressEvent {
     fn kind(&self) -> XrdsTriggerKind {
         XrdsTriggerKind::ButtonPress
     }
+    fn hand(&self) -> Option<xrds_components::XrGrabHand> {
+        Some(self.hand)
+    }
 }
 
 impl XrdsTriggerEvent for xrds_components::XrWorldButtonReleaseEvent {
@@ -259,6 +283,9 @@ impl XrdsTriggerEvent for xrds_components::XrWorldButtonReleaseEvent {
     }
     fn kind(&self) -> XrdsTriggerKind {
         XrdsTriggerKind::ButtonRelease
+    }
+    fn hand(&self) -> Option<xrds_components::XrGrabHand> {
+        Some(self.hand)
     }
 }
 
@@ -269,6 +296,9 @@ impl XrdsTriggerEvent for xrds_components::XrWorldSliderChangeEvent {
     fn kind(&self) -> XrdsTriggerKind {
         XrdsTriggerKind::SliderChange
     }
+    fn hand(&self) -> Option<xrds_components::XrGrabHand> {
+        Some(self.hand)
+    }
 }
 
 impl XrdsTriggerEvent for xrds_components::XrWorldToggleEvent {
@@ -277,6 +307,9 @@ impl XrdsTriggerEvent for xrds_components::XrWorldToggleEvent {
     }
     fn kind(&self) -> XrdsTriggerKind {
         XrdsTriggerKind::ToggleChange
+    }
+    fn hand(&self) -> Option<xrds_components::XrGrabHand> {
+        Some(self.hand)
     }
 }
 
@@ -299,8 +332,17 @@ pub fn consume_triggers<E: XrdsTriggerEvent>(
         };
         let source = event.source().resolve(&id_index);
         let kind = event.kind();
+        let hand = event.hand();
 
-        for binding in node_bindings.0.iter().filter(|b| b.trigger == kind) {
+        for binding in node_bindings.0.iter().filter(|b| {
+            // `binding.hand: None` matches any hand (including a source
+            // that reports none), preserving the old behavior for every
+            // binding that doesn't opt into this filter. `Some(h)` only
+            // matches an event that reports that exact hand — an event
+            // with no hand (hand() == None) can never satisfy a filter,
+            // which is correct: it has nothing to compare against.
+            !b.disabled && b.trigger == kind && (b.hand.is_none() || b.hand == hand)
+        }) {
             spawn_sequence_agent(&mut commands, target, source, &binding.sequence);
         }
     }
@@ -332,6 +374,96 @@ pub fn spawn_sequence_agent(
         .collect();
 
     commands.actions(agent).add(runners);
+}
+
+/// Fires a trigger on a node directly, without waiting for the real event
+/// that would normally produce it.
+///
+/// Runs every binding on that node matching `kind`, exactly as
+/// [`consume_triggers`] would. Returns how many sequences it started, so a
+/// caller can tell "nothing was bound" from "it ran".
+///
+/// Intended for an editor's "preview this sequence" affordance and for
+/// application-level tests, where waiting for a real zone collision or
+/// button press is impractical.
+pub fn fire_trigger_in_world(
+    world: &mut World,
+    node: XrdsId,
+    kind: &XrdsTriggerKind,
+    hand: Option<xrds_components::XrGrabHand>,
+) -> usize {
+    let Some(target) = world.resource::<XrdsIdIndex>().entity_of(node) else {
+        return 0;
+    };
+    let Some(bindings) = world.get::<XrdsTriggerBindings>(target) else {
+        return 0;
+    };
+
+    // Skips disabled bindings and applies the same hand filter as
+    // consume_triggers — an editor preview that ignored either would
+    // misrepresent runtime.
+    let sequences: Vec<XrdsSequence> = bindings
+        .0
+        .iter()
+        .filter(|b| !b.disabled && &b.trigger == kind && (b.hand.is_none() || b.hand == hand))
+        .map(|b| b.sequence.clone())
+        .collect();
+
+    let count = sequences.len();
+    for sequence in sequences {
+        // Same shape as consume_triggers: target is its own source, since
+        // nothing external caused this.
+        let mut commands = world.commands();
+        spawn_sequence_agent(&mut commands, target, Some(target), &sequence);
+    }
+    world.flush();
+    count
+}
+
+/// Cancels every in-flight sequence targeting `node`. Returns how many were
+/// stopped.
+///
+/// The manual half of the runaway-loop escape hatch (see the plan doc), and
+/// independently useful for aborting a cutscene or tearing down before a
+/// scene transition.
+pub fn stop_sequences_on_in_world(world: &mut World, node: XrdsId) -> usize {
+    let Some(target) = world.resource::<XrdsIdIndex>().entity_of(node) else {
+        return 0;
+    };
+
+    let doomed: Vec<Entity> = world
+        .query::<(Entity, &XrdsSequenceAgent)>()
+        .iter(world)
+        .filter(|(_, agent)| agent.target == target)
+        .map(|(entity, _)| entity)
+        .collect();
+
+    let count = doomed.len();
+    for agent in doomed {
+        // Despawning the agent drops its queue; bevy-sequential-actions
+        // reports StopReason to each action's on_stop as it goes.
+        if let Ok(entity) = world.get_entity_mut(agent) {
+            entity.despawn();
+        }
+    }
+    count
+}
+
+/// Cancels every in-flight sequence in the world. Returns how many were
+/// stopped.
+pub fn stop_all_sequences_in_world(world: &mut World) -> usize {
+    let doomed: Vec<Entity> = world
+        .query_filtered::<Entity, With<XrdsSequenceAgent>>()
+        .iter(world)
+        .collect();
+
+    let count = doomed.len();
+    for agent in doomed {
+        if let Ok(entity) = world.get_entity_mut(agent) {
+            entity.despawn();
+        }
+    }
+    count
 }
 
 /// Despawns ephemeral agents whose queue has fully drained. Without this
@@ -534,6 +666,19 @@ impl Action for XrdsActionRunner {
                     target: self.target,
                     source: self.source,
                 });
+                true
+            }
+
+            // An action this build doesn't recognize — almost certainly a
+            // document written by a newer editor. Skip it and keep the rest
+            // of the sequence running; the alternative (failing the whole
+            // document at load) is far worse. See XrdsAction::Unknown.
+            XrdsAction::Unknown => {
+                log::warn!(
+                    "Skipping an unrecognized XrdsAction on {:?} — this scene was likely \
+                     authored by a newer build of the editor than this runtime.",
+                    self.target
+                );
                 true
             }
         }

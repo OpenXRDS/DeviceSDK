@@ -1,7 +1,7 @@
 // Trigger-action sequencing, watched in a real 3D scene.
 //
 // See docs/xrds-scenegraph-trigger-action-sequencing.md for the design and
-// docs/xrds-trigger-action-implementation-plan.md Phase 5 for where this
+// docs/done/xrds-trigger-action-v1.md Phase 5 for where this
 // sits. This is the counterpart to the headless behavior tests in
 // crates/xrds-runtime/src/tests/trigger_action.rs — those assert the
 // mechanism is correct, this one lets you *see* it.
@@ -180,6 +180,8 @@ fn demo_document() -> XrdsSceneDocument {
                                 XrdsAction::Teleport { destination: AWAY },
                             ],
                         },
+                        disabled: false,
+                        hand: None,
                     },
                     // A separate binding — fires its own agent, and does
                     // NOT cancel or interfere with the one above.
@@ -188,6 +190,8 @@ fn demo_document() -> XrdsSceneDocument {
                         sequence: XrdsSequence {
                             steps: vec![XrdsAction::Teleport { destination: HOME }],
                         },
+                        disabled: false,
+                        hand: None,
                     },
                 ],
             },

@@ -1,8 +1,9 @@
 # `XrdsAction` backlog — candidate variants beyond the v1 draft
 
 Companion to [`xrds-scenegraph-trigger-action-sequencing.md`](xrds-scenegraph-trigger-action-sequencing.md)
-(the design doc) and [`xrds-trigger-action-implementation-plan.md`](xrds-trigger-action-implementation-plan.md)
-(the phased build-out). **Not scheduled** — this is a holding area for
+(the design doc), [`done/xrds-trigger-action-v1.md`](done/xrds-trigger-action-v1.md)
+(what shipped) and [`xrds-trigger-action-implementation-plan.md`](xrds-trigger-action-implementation-plan.md)
+(what is still ahead). **Not scheduled** — this is a holding area for
 candidate `XrdsAction` variants beyond the seven in the v1 draft
 (`PlayGltfAnimation`, `StopGltfAnimation`, `SetVisible`, `Teleport`,
 `ModifyHealth`, `Wait`, `FireCustomEvent`). None of these block Phase 1-5

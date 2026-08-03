@@ -1479,6 +1479,41 @@ impl XrdsAPI<'_> {
         play_gltf_animation_in_world(self.app.world_mut(), handle, selector, options)
     }
 
+    /// Fires a trigger on a node directly, running every binding on it that
+    /// matches `kind`, without waiting for the real event.
+    ///
+    /// Returns how many sequences started — `0` means nothing was bound for
+    /// that kind. Intended for an editor "preview this sequence" button and
+    /// for application tests, where staging a real zone collision or button
+    /// press is impractical.
+    pub fn fire_trigger(
+        &mut self,
+        node: XrdsId,
+        kind: &xrds_scene_graph::XrdsTriggerKind,
+        hand: Option<xrds_components::XrGrabHand>,
+    ) -> usize {
+        crate::xrds_api::trigger_action::fire_trigger_in_world(
+            self.app.world_mut(),
+            node,
+            kind,
+            hand,
+        )
+    }
+
+    /// Cancels every in-flight sequence on a node, clearing its queues and
+    /// despawning the agents.
+    ///
+    /// Useful beyond error recovery — aborting a cutscene on player input,
+    /// or tearing down before a scene transition.
+    pub fn stop_sequences_on(&mut self, node: XrdsId) -> usize {
+        crate::xrds_api::trigger_action::stop_sequences_on_in_world(self.app.world_mut(), node)
+    }
+
+    /// Cancels every in-flight sequence in the world.
+    pub fn stop_all_sequences(&mut self) -> usize {
+        crate::xrds_api::trigger_action::stop_all_sequences_in_world(self.app.world_mut())
+    }
+
     pub fn stop_gltf_animation(
         &mut self,
         handle: &Handle<XrdsGltfAsset>,

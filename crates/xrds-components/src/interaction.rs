@@ -34,7 +34,12 @@ pub struct XrGrabbed {
 }
 
 /// Which controller initiated or holds a grab.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// `Serialize`/`Deserialize` so it can be stored as authored document data —
+/// needed for the optional `hand` filter on `XrdsTriggerBinding`
+/// (`xrds-scene-graph`), which lets an author require a specific hand for a
+/// binding to fire.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum XrGrabHand {
     Left,
     Right,

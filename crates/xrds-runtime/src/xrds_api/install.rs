@@ -14,7 +14,7 @@ pub(super) fn install_xrds(app: &mut App) {
     app.add_plugins(MaterialPlugin::<XrdsRuntimeMaterial>::default());
     app.add_plugins(avian3d::prelude::PhysicsPlugins::default());
     // Execution substrate for the trigger-action sequencer — see
-    // docs/xrds-trigger-action-implementation-plan.md Phase 0.
+    // docs/done/xrds-trigger-action-v1.md Phase 0.
     app.add_plugins(bevy_sequential_actions::SequentialActionsPlugin);
     // Not added in test builds: cosmic-text panics in headless environments with no
     // system fonts. Round-trip tests only verify document serialization, not rendering.
@@ -202,7 +202,7 @@ pub(super) fn install_xrds(app: &mut App) {
     app.add_systems(Update, ensure_aabbs_for_unculled_meshes_system);
     app.add_systems(Update, crate::xrds_api::grab::grab_system);
     app.add_systems(Update, crate::xrds_api::zone::zone_collision_system);
-    // Trigger-action sequencing (docs/xrds-trigger-action-implementation-plan.md
+    // Trigger-action sequencing (docs/done/xrds-trigger-action-v1.md
     // Phase 3). Explicitly ordered after zone_collision_system rather than
     // relying on Bevy's event double-buffering to hide a missing constraint:
     // this way a zone entered on frame N fires its sequence on frame N, not N+1.

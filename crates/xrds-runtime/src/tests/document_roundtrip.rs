@@ -816,6 +816,8 @@ fn trigger_bindings_survive_import_export_round_trip() {
         sequence: XrdsSequence {
             steps: vec![XrdsAction::Teleport { destination: [1.0, 0.0, 2.0] }],
         },
+        disabled: false,
+        hand: None,
     }];
 
     let document = XrdsSceneDocument {

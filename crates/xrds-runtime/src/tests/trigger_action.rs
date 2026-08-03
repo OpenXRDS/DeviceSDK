@@ -61,6 +61,8 @@ fn zone_enter_trigger_runs_authored_teleport_action() {
             sequence: XrdsSequence {
                 steps: vec![XrdsAction::Teleport { destination: [5.0, 6.0, 7.0] }],
             },
+            disabled: false,
+            hand: None,
         }],
     );
 
@@ -98,6 +100,8 @@ fn zone_exit_binding_does_not_fire_on_enter() {
             sequence: XrdsSequence {
                 steps: vec![XrdsAction::Teleport { destination: [9.0, 9.0, 9.0] }],
             },
+            disabled: false,
+            hand: None,
         }],
     );
 
@@ -131,6 +135,8 @@ fn modify_health_reads_value_from_trigger_source() {
                     delta: XrdsActionValue::FromTriggerSource,
                 }],
             },
+            disabled: false,
+            hand: None,
         }],
     );
 
@@ -184,6 +190,8 @@ fn two_distinct_sources_each_fire_their_own_sequence() {
                     },
                 ],
             },
+            disabled: false,
+            hand: None,
         }],
     );
     app.world_mut().entity_mut(target).insert(XrdsHealth(100.0));
@@ -244,6 +252,8 @@ fn finished_sequence_agents_are_despawned() {
             sequence: XrdsSequence {
                 steps: vec![XrdsAction::SetVisible(false)],
             },
+            disabled: false,
+            hand: None,
         }],
     );
 
@@ -282,6 +292,8 @@ fn trigger_targeting_an_already_despawned_entity_is_ignored() {
             sequence: XrdsSequence {
                 steps: vec![XrdsAction::Teleport { destination: [3.0, 3.0, 3.0] }],
             },
+            disabled: false,
+            hand: None,
         }],
     );
 
@@ -334,6 +346,8 @@ fn target_despawned_mid_sequence_does_not_panic() {
                     XrdsAction::StopGltfAnimation,
                 ],
             },
+            disabled: false,
+            hand: None,
         }],
     );
 
@@ -390,6 +404,8 @@ fn grab_event_fires_its_authored_sequence() {
             sequence: XrdsSequence {
                 steps: vec![XrdsAction::Teleport { destination: [2.0, 0.0, 0.0] }],
             },
+            disabled: false,
+            hand: None,
         }],
     );
 
@@ -421,6 +437,8 @@ fn button_press_fires_via_the_entity_ref_path() {
             sequence: XrdsSequence {
                 steps: vec![XrdsAction::Teleport { destination: [0.0, 7.0, 0.0] }],
             },
+            disabled: false,
+            hand: None,
         }],
     );
 
@@ -476,6 +494,8 @@ fn app_defined_custom_trigger_fires_without_any_sdk_change() {
             sequence: XrdsSequence {
                 steps: vec![XrdsAction::Teleport { destination: [8.0, 0.0, 0.0] }],
             },
+            disabled: false,
+            hand: None,
         }],
     );
 
@@ -510,6 +530,8 @@ fn custom_trigger_with_a_different_name_does_not_fire() {
             sequence: XrdsSequence {
                 steps: vec![XrdsAction::Teleport { destination: [8.0, 0.0, 0.0] }],
             },
+            disabled: false,
+            hand: None,
         }],
     );
 
@@ -672,6 +694,8 @@ fn animation_complete_fires_as_an_authored_trigger() {
             sequence: XrdsSequence {
                 steps: vec![XrdsAction::Teleport { destination: [4.0, 0.0, 4.0] }],
             },
+            disabled: false,
+            hand: None,
         }],
         XrdsAnimationRepeatMode::Once,
     );
@@ -703,6 +727,8 @@ fn fire_custom_event_emits_message_with_target_and_source() {
             sequence: XrdsSequence {
                 steps: vec![XrdsAction::FireCustomEvent { name: "door_opened".to_string() }],
             },
+            disabled: false,
+            hand: None,
         }],
     );
 
@@ -727,4 +753,380 @@ fn fire_custom_event_emits_message_with_target_and_source() {
     assert_eq!(emitted[0].name, "door_opened");
     assert_eq!(emitted[0].target, target);
     assert_eq!(emitted[0].source, Some(source));
+}
+
+#[test]
+fn fire_trigger_runs_bindings_without_a_real_event() {
+    // The editor "preview this sequence" path, and how app tests should
+    // stage a sequence rather than faking a zone collision.
+    let mut app = xrds_test_app();
+
+    let entity = import_node_with_triggers(
+        &mut app,
+        960,
+        vec![XrdsTriggerBinding {
+            trigger: XrdsTriggerKind::ButtonPress,
+            sequence: XrdsSequence {
+                steps: vec![XrdsAction::Teleport { destination: [3.0, 0.0, 0.0] }],
+            },
+            disabled: false,
+            hand: None,
+        }],
+    );
+
+    let started = crate::xrds_api::trigger_action::fire_trigger_in_world(
+        app.world_mut(),
+        XrdsId(960),
+        &XrdsTriggerKind::ButtonPress,
+        None,
+    );
+    assert_eq!(started, 1, "one binding matched, so one sequence should start");
+
+    pump(&mut app, 3);
+    assert_eq!(
+        app.world().get::<Transform>(entity).map(|t| t.translation),
+        Some(Vec3::new(3.0, 0.0, 0.0)),
+    );
+}
+
+#[test]
+fn fire_trigger_reports_zero_when_nothing_is_bound() {
+    let mut app = xrds_test_app();
+    import_node_with_triggers(
+        &mut app,
+        961,
+        vec![XrdsTriggerBinding {
+            trigger: XrdsTriggerKind::ZoneEnter,
+            sequence: XrdsSequence { steps: vec![XrdsAction::SetVisible(false)] },
+            disabled: false,
+            hand: None,
+        }],
+    );
+
+    // A kind with no binding on this node.
+    let started = crate::xrds_api::trigger_action::fire_trigger_in_world(
+        app.world_mut(),
+        XrdsId(961),
+        &XrdsTriggerKind::Grabbed,
+        None,
+    );
+    assert_eq!(started, 0, "caller must be able to tell 'nothing bound' from 'ran'");
+}
+
+#[test]
+fn stop_sequences_on_cancels_in_flight_work() {
+    let mut app = xrds_test_app();
+
+    let entity = import_node_with_triggers(
+        &mut app,
+        962,
+        vec![XrdsTriggerBinding {
+            trigger: XrdsTriggerKind::ZoneEnter,
+            sequence: XrdsSequence {
+                steps: vec![
+                    XrdsAction::Wait { seconds: 5.0 },
+                    // Must never run — we cancel during the Wait.
+                    XrdsAction::Teleport { destination: [9.0, 9.0, 9.0] },
+                ],
+            },
+            disabled: false,
+            hand: None,
+        }],
+    );
+
+    app.world_mut()
+        .write_message(xrds_components::XrZoneEnterEvent {
+            zone_id: XrdsId(962),
+            entity_id: XrdsId(962),
+        });
+    app.update();
+
+    let stopped =
+        crate::xrds_api::trigger_action::stop_sequences_on_in_world(app.world_mut(), XrdsId(962));
+    assert_eq!(stopped, 1, "the in-flight sequence should have been cancelled");
+
+    pump(&mut app, 5);
+    assert_eq!(
+        app.world().get::<Transform>(entity).map(|t| t.translation),
+        Some(Vec3::ZERO),
+        "the step after the Wait must not run once cancelled"
+    );
+    assert_eq!(
+        app.world_mut()
+            .query::<&XrdsSequenceAgent>()
+            .iter(app.world())
+            .count(),
+        0,
+        "cancelling must not leave the agent behind"
+    );
+}
+
+#[test]
+fn wait_respects_paused_virtual_time() {
+    // Res<Time> is Time<Virtual> in Bevy, so pausing the app SHOULD pause a
+    // Wait mid-sequence. That was assumed but never verified — and it is
+    // exactly the kind of thing that is silently wrong until someone pauses
+    // during a cutscene.
+    let mut app = xrds_test_app();
+
+    let entity = import_node_with_triggers(
+        &mut app,
+        963,
+        vec![XrdsTriggerBinding {
+            trigger: XrdsTriggerKind::ZoneEnter,
+            sequence: XrdsSequence {
+                steps: vec![
+                    XrdsAction::Wait { seconds: 0.08 },
+                    XrdsAction::Teleport { destination: [4.0, 0.0, 0.0] },
+                ],
+            },
+            disabled: false,
+            hand: None,
+        }],
+    );
+
+    app.world_mut()
+        .write_message(xrds_components::XrZoneEnterEvent {
+            zone_id: XrdsId(963),
+            entity_id: XrdsId(963),
+        });
+    app.update();
+
+    app.world_mut().resource_mut::<Time<Virtual>>().pause();
+
+    // Well past the 0.08s wait in wall-clock terms.
+    for _ in 0..20 {
+        app.update();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(
+        app.world().get::<Transform>(entity).map(|t| t.translation),
+        Some(Vec3::ZERO),
+        "a Wait must not elapse while virtual time is paused"
+    );
+
+    app.world_mut().resource_mut::<Time<Virtual>>().unpause();
+    for _ in 0..20 {
+        app.update();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(
+        app.world().get::<Transform>(entity).map(|t| t.translation),
+        Some(Vec3::new(4.0, 0.0, 0.0)),
+        "the sequence must resume once unpaused"
+    );
+}
+
+#[test]
+fn disabled_binding_does_not_fire() {
+    let mut app = xrds_test_app();
+
+    let entity = import_node_with_triggers(
+        &mut app,
+        970,
+        vec![XrdsTriggerBinding {
+            trigger: XrdsTriggerKind::ZoneEnter,
+            sequence: XrdsSequence {
+                steps: vec![XrdsAction::Teleport { destination: [6.0, 0.0, 0.0] }],
+            },
+            disabled: true,
+            hand: None,
+        }],
+    );
+
+    app.world_mut()
+        .write_message(xrds_components::XrZoneEnterEvent {
+            zone_id: XrdsId(970),
+            entity_id: XrdsId(970),
+        });
+    pump(&mut app, 3);
+
+    assert_eq!(
+        app.world().get::<Transform>(entity).map(|t| t.translation),
+        Some(Vec3::ZERO),
+        "a parked binding must stay inert"
+    );
+}
+
+#[test]
+fn disabling_one_binding_leaves_its_siblings_running() {
+    // The actual point of the flag: silence one rule without touching the
+    // others on the same node and trigger kind.
+    let mut app = xrds_test_app();
+
+    let target = import_node_with_triggers(
+        &mut app,
+        971,
+        vec![
+            XrdsTriggerBinding {
+                trigger: XrdsTriggerKind::ZoneEnter,
+                sequence: XrdsSequence {
+                    steps: vec![XrdsAction::ModifyHealth {
+                        target: XrdsActionTarget::SelfNode,
+                        delta: XrdsActionValue::Fixed(-1.0),
+                    }],
+                },
+                disabled: true,
+                hand: None,
+            },
+            XrdsTriggerBinding {
+                trigger: XrdsTriggerKind::ZoneEnter,
+                sequence: XrdsSequence {
+                    steps: vec![XrdsAction::ModifyHealth {
+                        target: XrdsActionTarget::SelfNode,
+                        delta: XrdsActionValue::Fixed(-10.0),
+                    }],
+                },
+                disabled: false,
+                hand: None,
+            },
+        ],
+    );
+    app.world_mut().entity_mut(target).insert(XrdsHealth(100.0));
+
+    app.world_mut()
+        .write_message(xrds_components::XrZoneEnterEvent {
+            zone_id: XrdsId(971),
+            entity_id: XrdsId(971),
+        });
+    pump(&mut app, 3);
+
+    assert_eq!(
+        app.world().get::<XrdsHealth>(target).map(|h| h.0),
+        Some(90.0),
+        "only the enabled binding should have applied (-10, not -11)"
+    );
+}
+
+#[test]
+fn fire_trigger_skips_disabled_bindings() {
+    // An editor preview that ran parked rules would misrepresent runtime.
+    let mut app = xrds_test_app();
+
+    import_node_with_triggers(
+        &mut app,
+        972,
+        vec![XrdsTriggerBinding {
+            trigger: XrdsTriggerKind::ButtonPress,
+            sequence: XrdsSequence {
+                steps: vec![XrdsAction::SetVisible(false)],
+            },
+            disabled: true,
+            hand: None,
+        }],
+    );
+
+    let started = crate::xrds_api::trigger_action::fire_trigger_in_world(
+        app.world_mut(),
+        XrdsId(972),
+        &XrdsTriggerKind::ButtonPress,
+        None,
+    );
+    assert_eq!(started, 0, "preview must skip disabled bindings too");
+}
+
+#[test]
+fn hand_filter_matches_the_specified_hand_only() {
+    let mut app = xrds_test_app();
+
+    let entity = import_node_with_triggers(
+        &mut app,
+        980,
+        vec![XrdsTriggerBinding {
+            trigger: XrdsTriggerKind::Grabbed,
+            sequence: XrdsSequence {
+                steps: vec![XrdsAction::Teleport { destination: [5.0, 0.0, 0.0] }],
+            },
+            disabled: false,
+            hand: Some(xrds_components::XrGrabHand::Left),
+        }],
+    );
+
+    // Wrong hand: must not fire.
+    app.world_mut().write_message(xrds_components::XrGrabEvent {
+        id: XrdsId(980),
+        hand: xrds_components::XrGrabHand::Right,
+    });
+    pump(&mut app, 3);
+    assert_eq!(
+        app.world().get::<Transform>(entity).map(|t| t.translation),
+        Some(Vec3::ZERO),
+        "a Left-only binding must not fire for a Right-hand grab"
+    );
+
+    // Correct hand: must fire.
+    app.world_mut().write_message(xrds_components::XrGrabEvent {
+        id: XrdsId(980),
+        hand: xrds_components::XrGrabHand::Left,
+    });
+    pump(&mut app, 3);
+    assert_eq!(
+        app.world().get::<Transform>(entity).map(|t| t.translation),
+        Some(Vec3::new(5.0, 0.0, 0.0)),
+        "a Left-only binding must fire for a Left-hand grab"
+    );
+}
+
+#[test]
+fn no_hand_filter_matches_either_hand() {
+    // The backward-compatible default: existing bindings with hand: None
+    // keep working exactly as before this feature existed.
+    let mut app = xrds_test_app();
+
+    let entity = import_node_with_triggers(
+        &mut app,
+        981,
+        vec![XrdsTriggerBinding {
+            trigger: XrdsTriggerKind::Grabbed,
+            sequence: XrdsSequence {
+                steps: vec![XrdsAction::Teleport { destination: [6.0, 0.0, 0.0] }],
+            },
+            disabled: false,
+            hand: None,
+        }],
+    );
+
+    app.world_mut().write_message(xrds_components::XrGrabEvent {
+        id: XrdsId(981),
+        hand: xrds_components::XrGrabHand::Right,
+    });
+    pump(&mut app, 3);
+
+    assert_eq!(
+        app.world().get::<Transform>(entity).map(|t| t.translation),
+        Some(Vec3::new(6.0, 0.0, 0.0)),
+        "no hand filter should match any hand"
+    );
+}
+
+#[test]
+fn fire_trigger_honors_the_hand_argument() {
+    let mut app = xrds_test_app();
+
+    import_node_with_triggers(
+        &mut app,
+        982,
+        vec![XrdsTriggerBinding {
+            trigger: XrdsTriggerKind::ButtonPress,
+            sequence: XrdsSequence { steps: vec![XrdsAction::SetVisible(false)] },
+            disabled: false,
+            hand: Some(xrds_components::XrGrabHand::Right),
+        }],
+    );
+
+    let wrong = crate::xrds_api::trigger_action::fire_trigger_in_world(
+        app.world_mut(),
+        XrdsId(982),
+        &XrdsTriggerKind::ButtonPress,
+        Some(xrds_components::XrGrabHand::Left),
+    );
+    assert_eq!(wrong, 0, "preview must respect the hand filter too");
+
+    let right = crate::xrds_api::trigger_action::fire_trigger_in_world(
+        app.world_mut(),
+        XrdsId(982),
+        &XrdsTriggerKind::ButtonPress,
+        Some(xrds_components::XrGrabHand::Right),
+    );
+    assert_eq!(right, 1, "the matching hand should start the sequence");
 }
