@@ -4,8 +4,9 @@
 //! asserted.
 use super::*;
 use crate::xrds_api::trigger_action::{
-    XrdsCustomTriggerEvent, XrdsHealth, XrdsSequenceAgent, XrdsTriggerValue,
+    XrdsCustomTriggerEvent, XrdsHealth, XrdsSequenceAgent, XrdsTimelineAgent, XrdsTriggerValue,
 };
+use xrds_scene_graph::{XrdsNamedRunnable, XrdsRunnable, XrdsTimeline, XrdsTimelineKey};
 
 /// Imports a single node carrying `bindings`, returns its live entity.
 fn import_node_with_triggers(
@@ -25,7 +26,85 @@ fn import_node_with_triggers(
             grabbable: false,
             editor: XrdsEditorMetadata::default(),
             triggers: bindings,
+            watchers: Vec::new(),
         }],
+        ..Default::default()
+    };
+
+    {
+        let mut xrds = XrdsAPI::attach(app);
+        xrds.import_scene_document(&document)
+            .expect("import should succeed");
+    }
+
+    app.world()
+        .resource::<XrdsIdIndex>()
+        .entity_of(XrdsId(node_id))
+        .expect("imported node should be indexed")
+}
+
+/// Imports a single node carrying `watchers` (and optionally `triggers`,
+/// for the bindings a watcher's `Custom` firing should drive), returns its
+/// live entity.
+fn import_node_with_watchers(
+    app: &mut App,
+    node_id: u64,
+    watchers: Vec<XrdsThresholdWatcher>,
+    triggers: Vec<XrdsTriggerBinding>,
+) -> Entity {
+    let document = XrdsSceneDocument {
+        nodes: vec![XrdsSceneNode {
+            id: XrdsSceneNodeId(node_id),
+            parent_id: None,
+            name: format!("WatcherNode{node_id}"),
+            enabled: true,
+            visible: true,
+            transform: XrdsSceneTransform::default(),
+            payload: XrdsSceneNodePayload::Empty,
+            grabbable: false,
+            editor: XrdsEditorMetadata::default(),
+            triggers,
+            watchers,
+        }],
+        ..Default::default()
+    };
+
+    {
+        let mut xrds = XrdsAPI::attach(app);
+        xrds.import_scene_document(&document)
+            .expect("import should succeed");
+    }
+
+    app.world()
+        .resource::<XrdsIdIndex>()
+        .entity_of(XrdsId(node_id))
+        .expect("imported node should be indexed")
+}
+
+/// Imports a single node carrying `bindings`, plus a document-level
+/// `runnables` registry (Phase 9a) — for `XrdsAction::Run` and
+/// `XrdsTriggerBinding::runnable` tests.
+fn import_node_with_triggers_and_runnables(
+    app: &mut App,
+    node_id: u64,
+    bindings: Vec<XrdsTriggerBinding>,
+    runnables: Vec<XrdsNamedRunnable>,
+) -> Entity {
+    let document = XrdsSceneDocument {
+        nodes: vec![XrdsSceneNode {
+            id: XrdsSceneNodeId(node_id),
+            parent_id: None,
+            name: format!("RunnableNode{node_id}"),
+            enabled: true,
+            visible: true,
+            transform: XrdsSceneTransform::default(),
+            payload: XrdsSceneNodePayload::Empty,
+            grabbable: false,
+            editor: XrdsEditorMetadata::default(),
+            triggers: bindings,
+            watchers: Vec::new(),
+        }],
+        runnables,
         ..Default::default()
     };
 
@@ -63,6 +142,7 @@ fn zone_enter_trigger_runs_authored_teleport_action() {
             },
             disabled: false,
             hand: None,
+            runnable: None,
         }],
     );
 
@@ -102,6 +182,7 @@ fn zone_exit_binding_does_not_fire_on_enter() {
             },
             disabled: false,
             hand: None,
+            runnable: None,
         }],
     );
 
@@ -137,6 +218,7 @@ fn modify_health_reads_value_from_trigger_source() {
             },
             disabled: false,
             hand: None,
+            runnable: None,
         }],
     );
 
@@ -192,6 +274,7 @@ fn two_distinct_sources_each_fire_their_own_sequence() {
             },
             disabled: false,
             hand: None,
+            runnable: None,
         }],
     );
     app.world_mut().entity_mut(target).insert(XrdsHealth(100.0));
@@ -254,6 +337,7 @@ fn finished_sequence_agents_are_despawned() {
             },
             disabled: false,
             hand: None,
+            runnable: None,
         }],
     );
 
@@ -294,6 +378,7 @@ fn trigger_targeting_an_already_despawned_entity_is_ignored() {
             },
             disabled: false,
             hand: None,
+            runnable: None,
         }],
     );
 
@@ -348,6 +433,7 @@ fn target_despawned_mid_sequence_does_not_panic() {
             },
             disabled: false,
             hand: None,
+            runnable: None,
         }],
     );
 
@@ -406,6 +492,7 @@ fn grab_event_fires_its_authored_sequence() {
             },
             disabled: false,
             hand: None,
+            runnable: None,
         }],
     );
 
@@ -439,6 +526,7 @@ fn button_press_fires_via_the_entity_ref_path() {
             },
             disabled: false,
             hand: None,
+            runnable: None,
         }],
     );
 
@@ -496,6 +584,7 @@ fn app_defined_custom_trigger_fires_without_any_sdk_change() {
             },
             disabled: false,
             hand: None,
+            runnable: None,
         }],
     );
 
@@ -532,6 +621,7 @@ fn custom_trigger_with_a_different_name_does_not_fire() {
             },
             disabled: false,
             hand: None,
+            runnable: None,
         }],
     );
 
@@ -696,6 +786,7 @@ fn animation_complete_fires_as_an_authored_trigger() {
             },
             disabled: false,
             hand: None,
+            runnable: None,
         }],
         XrdsAnimationRepeatMode::Once,
     );
@@ -729,6 +820,7 @@ fn fire_custom_event_emits_message_with_target_and_source() {
             },
             disabled: false,
             hand: None,
+            runnable: None,
         }],
     );
 
@@ -771,6 +863,7 @@ fn fire_trigger_runs_bindings_without_a_real_event() {
             },
             disabled: false,
             hand: None,
+            runnable: None,
         }],
     );
 
@@ -800,6 +893,7 @@ fn fire_trigger_reports_zero_when_nothing_is_bound() {
             sequence: XrdsSequence { steps: vec![XrdsAction::SetVisible(false)] },
             disabled: false,
             hand: None,
+            runnable: None,
         }],
     );
 
@@ -831,6 +925,7 @@ fn stop_sequences_on_cancels_in_flight_work() {
             },
             disabled: false,
             hand: None,
+            runnable: None,
         }],
     );
 
@@ -882,6 +977,7 @@ fn wait_respects_paused_virtual_time() {
             },
             disabled: false,
             hand: None,
+            runnable: None,
         }],
     );
 
@@ -931,6 +1027,7 @@ fn disabled_binding_does_not_fire() {
             },
             disabled: true,
             hand: None,
+            runnable: None,
         }],
     );
 
@@ -968,6 +1065,7 @@ fn disabling_one_binding_leaves_its_siblings_running() {
                 },
                 disabled: true,
                 hand: None,
+                runnable: None,
             },
             XrdsTriggerBinding {
                 trigger: XrdsTriggerKind::ZoneEnter,
@@ -979,6 +1077,7 @@ fn disabling_one_binding_leaves_its_siblings_running() {
                 },
                 disabled: false,
                 hand: None,
+                runnable: None,
             },
         ],
     );
@@ -1013,6 +1112,7 @@ fn fire_trigger_skips_disabled_bindings() {
             },
             disabled: true,
             hand: None,
+            runnable: None,
         }],
     );
 
@@ -1039,6 +1139,7 @@ fn hand_filter_matches_the_specified_hand_only() {
             },
             disabled: false,
             hand: Some(xrds_components::XrGrabHand::Left),
+            runnable: None,
         }],
     );
 
@@ -1083,6 +1184,7 @@ fn no_hand_filter_matches_either_hand() {
             },
             disabled: false,
             hand: None,
+            runnable: None,
         }],
     );
 
@@ -1111,6 +1213,7 @@ fn fire_trigger_honors_the_hand_argument() {
             sequence: XrdsSequence { steps: vec![XrdsAction::SetVisible(false)] },
             disabled: false,
             hand: Some(xrds_components::XrGrabHand::Right),
+            runnable: None,
         }],
     );
 
@@ -1129,4 +1232,600 @@ fn fire_trigger_honors_the_hand_argument() {
         Some(xrds_components::XrGrabHand::Right),
     );
     assert_eq!(right, 1, "the matching hand should start the sequence");
+}
+
+#[test]
+fn height_watcher_fires_custom_trigger_on_crossing_above() {
+    let mut app = xrds_test_app();
+
+    let entity = import_node_with_watchers(
+        &mut app,
+        990,
+        vec![XrdsThresholdWatcher {
+            observable: XrdsObservable::Height,
+            crossing: XrdsCrossing::Above,
+            value: 5.0,
+            hysteresis: 0.0,
+            fires: "risen".to_string(),
+            disabled: false,
+        }],
+        vec![XrdsTriggerBinding {
+            trigger: XrdsTriggerKind::Custom("risen".to_string()),
+            sequence: XrdsSequence {
+                steps: vec![XrdsAction::Teleport { destination: [7.0, 7.0, 7.0] }],
+            },
+            disabled: false,
+            hand: None,
+            runnable: None,
+        }],
+    );
+
+    // The first evaluation only primes the watcher's initial state; it
+    // must not fire even though the node has not moved.
+    app.update();
+    assert_eq!(
+        app.world().get::<Transform>(entity).map(|t| t.translation),
+        Some(Vec3::ZERO),
+        "priming must not fire"
+    );
+
+    // Cross upward through the threshold.
+    app.world_mut().entity_mut(entity).insert(Transform::from_xyz(0.0, 6.0, 0.0));
+    pump(&mut app, 3);
+
+    assert_eq!(
+        app.world().get::<Transform>(entity).map(|t| t.translation),
+        Some(Vec3::new(7.0, 7.0, 7.0)),
+        "crossing above 5.0 should have fired the Custom(risen) binding"
+    );
+}
+
+#[test]
+fn crossing_above_only_does_not_fire_on_the_way_back_down() {
+    let mut app = xrds_test_app();
+
+    let entity = import_node_with_watchers(
+        &mut app,
+        991,
+        vec![XrdsThresholdWatcher {
+            observable: XrdsObservable::Height,
+            crossing: XrdsCrossing::Above,
+            value: 5.0,
+            hysteresis: 0.0,
+            fires: "risen".to_string(),
+            disabled: false,
+        }],
+        vec![XrdsTriggerBinding {
+            trigger: XrdsTriggerKind::Custom("risen".to_string()),
+            sequence: XrdsSequence {
+                steps: vec![XrdsAction::ModifyHealth {
+                    target: XrdsActionTarget::SelfNode,
+                    delta: XrdsActionValue::Fixed(-1.0),
+                }],
+            },
+            disabled: false,
+            hand: None,
+            runnable: None,
+        }],
+    );
+    app.world_mut().entity_mut(entity).insert(XrdsHealth(100.0));
+    app.update(); // prime
+
+    app.world_mut().entity_mut(entity).insert(Transform::from_xyz(0.0, 6.0, 0.0));
+    pump(&mut app, 3); // crosses above -> fires once, health 99
+
+    app.world_mut().entity_mut(entity).insert(Transform::from_xyz(0.0, 0.0, 0.0));
+    pump(&mut app, 3); // crosses back below -> Above-only watcher stays silent
+
+    assert_eq!(
+        app.world().get::<XrdsHealth>(entity).map(|h| h.0),
+        Some(99.0),
+        "an Above-only watcher must not fire again on the downward crossing"
+    );
+}
+
+#[test]
+fn hysteresis_suppresses_chatter_at_the_boundary() {
+    let mut app = xrds_test_app();
+
+    let entity = import_node_with_watchers(
+        &mut app,
+        992,
+        vec![XrdsThresholdWatcher {
+            observable: XrdsObservable::Height,
+            crossing: XrdsCrossing::Either,
+            value: 5.0,
+            hysteresis: 1.0,
+            fires: "wobble".to_string(),
+            disabled: false,
+        }],
+        vec![XrdsTriggerBinding {
+            trigger: XrdsTriggerKind::Custom("wobble".to_string()),
+            sequence: XrdsSequence {
+                steps: vec![XrdsAction::ModifyHealth {
+                    target: XrdsActionTarget::SelfNode,
+                    delta: XrdsActionValue::Fixed(-1.0),
+                }],
+            },
+            disabled: false,
+            hand: None,
+            runnable: None,
+        }],
+    );
+    app.world_mut().entity_mut(entity).insert(XrdsHealth(100.0));
+    app.update(); // primes below (0.0 < 5.0)
+
+    // Wobble around the raw threshold, but stay inside the [4.0, 6.0]
+    // hysteresis band the whole time -- without hysteresis this would fire
+    // on every single one of these.
+    for y in [5.2, 4.9, 5.3, 4.8, 5.1] {
+        app.world_mut().entity_mut(entity).insert(Transform::from_xyz(0.0, y, 0.0));
+        app.update();
+    }
+
+    assert_eq!(
+        app.world().get::<XrdsHealth>(entity).map(|h| h.0),
+        Some(100.0),
+        "wobbling inside the hysteresis band must not fire at all"
+    );
+
+    // Now actually clear the band on the high side.
+    app.world_mut().entity_mut(entity).insert(Transform::from_xyz(0.0, 6.5, 0.0));
+    pump(&mut app, 3);
+
+    assert_eq!(
+        app.world().get::<XrdsHealth>(entity).map(|h| h.0),
+        Some(99.0),
+        "clearing the hysteresis band should fire exactly once"
+    );
+}
+
+#[test]
+fn either_crossing_re_arms_and_fires_both_directions() {
+    let mut app = xrds_test_app();
+
+    let entity = import_node_with_watchers(
+        &mut app,
+        993,
+        vec![XrdsThresholdWatcher {
+            observable: XrdsObservable::Height,
+            crossing: XrdsCrossing::Either,
+            value: 5.0,
+            hysteresis: 0.0,
+            fires: "crossed".to_string(),
+            disabled: false,
+        }],
+        vec![XrdsTriggerBinding {
+            trigger: XrdsTriggerKind::Custom("crossed".to_string()),
+            sequence: XrdsSequence {
+                steps: vec![XrdsAction::ModifyHealth {
+                    target: XrdsActionTarget::SelfNode,
+                    delta: XrdsActionValue::Fixed(-1.0),
+                }],
+            },
+            disabled: false,
+            hand: None,
+            runnable: None,
+        }],
+    );
+    app.world_mut().entity_mut(entity).insert(XrdsHealth(100.0));
+    app.update(); // primes below
+
+    app.world_mut().entity_mut(entity).insert(Transform::from_xyz(0.0, 6.0, 0.0));
+    pump(&mut app, 3); // up-crossing: fires, 99
+
+    app.world_mut().entity_mut(entity).insert(Transform::from_xyz(0.0, 0.0, 0.0));
+    pump(&mut app, 3); // down-crossing: Either re-arms and fires again, 98
+
+    assert_eq!(
+        app.world().get::<XrdsHealth>(entity).map(|h| h.0),
+        Some(98.0),
+        "Either should fire on both the up- and the down-crossing"
+    );
+}
+
+#[test]
+fn distance_to_watcher_uses_world_space_positions() {
+    let mut app = xrds_test_app();
+
+    let watched = import_node_with_watchers(
+        &mut app,
+        994,
+        vec![XrdsThresholdWatcher {
+            observable: XrdsObservable::DistanceTo { node: XrdsSceneNodeId(995) },
+            crossing: XrdsCrossing::Below,
+            value: 2.0,
+            hysteresis: 0.0,
+            fires: "close".to_string(),
+            disabled: false,
+        }],
+        vec![XrdsTriggerBinding {
+            trigger: XrdsTriggerKind::Custom("close".to_string()),
+            sequence: XrdsSequence {
+                steps: vec![XrdsAction::SetVisible(false)],
+            },
+            disabled: false,
+            hand: None,
+            runnable: None,
+        }],
+    );
+    let other = import_node_with_watchers(&mut app, 995, Vec::new(), Vec::new());
+    app.world_mut().entity_mut(other).insert(Transform::from_xyz(10.0, 0.0, 0.0));
+    app.update(); // primes far (distance 10 > 2, so "not below" == Above)
+
+    app.world_mut().entity_mut(watched).insert(Transform::from_xyz(9.0, 0.0, 0.0));
+    pump(&mut app, 3); // distance now 1.0 < 2.0 -> crosses Below
+
+    assert_eq!(
+        app.world().get::<Visibility>(watched),
+        Some(&Visibility::Hidden),
+        "DistanceTo should have crossed Below once the nodes were close enough"
+    );
+}
+
+#[test]
+fn disabled_watcher_never_evaluates() {
+    let mut app = xrds_test_app();
+
+    let entity = import_node_with_watchers(
+        &mut app,
+        996,
+        vec![XrdsThresholdWatcher {
+            observable: XrdsObservable::Height,
+            crossing: XrdsCrossing::Above,
+            value: 5.0,
+            hysteresis: 0.0,
+            fires: "risen".to_string(),
+            disabled: true,
+        }],
+        vec![XrdsTriggerBinding {
+            trigger: XrdsTriggerKind::Custom("risen".to_string()),
+            sequence: XrdsSequence {
+                steps: vec![XrdsAction::Teleport { destination: [1.0, 1.0, 1.0] }],
+            },
+            disabled: false,
+            hand: None,
+            runnable: None,
+        }],
+    );
+    app.update();
+    app.world_mut().entity_mut(entity).insert(Transform::from_xyz(0.0, 50.0, 0.0));
+    pump(&mut app, 3);
+
+    assert_eq!(
+        app.world().get::<Transform>(entity).map(|t| t.translation.y),
+        Some(50.0),
+        "a disabled watcher must never fire regardless of how far the value moves"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Phase 9 / 9a — timelines, the runnable registry, and Run (below)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn run_action_resolves_named_sequence_and_waits_for_it_to_finish() {
+    let mut app = xrds_test_app();
+
+    let entity = import_node_with_triggers_and_runnables(
+        &mut app,
+        960,
+        vec![XrdsTriggerBinding {
+            trigger: XrdsTriggerKind::ZoneEnter,
+            sequence: XrdsSequence {
+                steps: vec![
+                    XrdsAction::Run { runnable: "teleport-away".to_string(), wait: true },
+                    XrdsAction::SetVisible(false),
+                ],
+            },
+            disabled: false,
+            hand: None,
+            runnable: None,
+        }],
+        vec![XrdsNamedRunnable {
+            name: "teleport-away".to_string(),
+            runnable: XrdsRunnable::Sequence(XrdsSequence {
+                steps: vec![XrdsAction::Teleport { destination: [3.0, 4.0, 5.0] }],
+            }),
+        }],
+    );
+
+    app.world_mut().write_message(xrds_components::XrZoneEnterEvent {
+        zone_id: XrdsId(960),
+        entity_id: XrdsId(960),
+    });
+    pump(&mut app, 4);
+
+    assert_eq!(
+        app.world().get::<Transform>(entity).map(|t| t.translation),
+        Some(Vec3::new(3.0, 4.0, 5.0)),
+        "Run should have started the named runnable and applied its Teleport"
+    );
+    assert_eq!(
+        app.world().get::<Visibility>(entity),
+        Some(&Visibility::Hidden),
+        "wait: true should block the outer sequence until the child finishes, then run SetVisible"
+    );
+}
+
+#[test]
+fn run_action_wait_false_does_not_block_the_outer_sequence() {
+    let mut app = xrds_test_app();
+
+    let entity = import_node_with_triggers_and_runnables(
+        &mut app,
+        961,
+        vec![XrdsTriggerBinding {
+            trigger: XrdsTriggerKind::ZoneEnter,
+            sequence: XrdsSequence {
+                steps: vec![
+                    XrdsAction::Run { runnable: "slow".to_string(), wait: false },
+                    XrdsAction::SetVisible(false),
+                ],
+            },
+            disabled: false,
+            hand: None,
+            runnable: None,
+        }],
+        vec![XrdsNamedRunnable {
+            name: "slow".to_string(),
+            runnable: XrdsRunnable::Sequence(XrdsSequence {
+                steps: vec![
+                    XrdsAction::Wait { seconds: 5.0 },
+                    XrdsAction::Teleport { destination: [9.0, 9.0, 9.0] },
+                ],
+            }),
+        }],
+    );
+
+    app.world_mut().write_message(xrds_components::XrZoneEnterEvent {
+        zone_id: XrdsId(961),
+        entity_id: XrdsId(961),
+    });
+    pump(&mut app, 3);
+
+    assert_eq!(
+        app.world().get::<Visibility>(entity),
+        Some(&Visibility::Hidden),
+        "wait: false must not block the outer sequence on the slow child"
+    );
+    assert_eq!(
+        app.world().get::<Transform>(entity).map(|t| t.translation),
+        Some(Vec3::ZERO),
+        "the child's own Teleport should not have run yet — it's still inside its own Wait"
+    );
+}
+
+#[test]
+fn run_action_with_unknown_runnable_name_skips_and_continues_sequence() {
+    let mut app = xrds_test_app();
+
+    let entity = import_node_with_triggers(
+        &mut app,
+        962,
+        vec![XrdsTriggerBinding {
+            trigger: XrdsTriggerKind::ZoneEnter,
+            sequence: XrdsSequence {
+                steps: vec![
+                    XrdsAction::Run { runnable: "does-not-exist".to_string(), wait: true },
+                    XrdsAction::SetVisible(false),
+                ],
+            },
+            disabled: false,
+            hand: None,
+            runnable: None,
+        }],
+    );
+
+    app.world_mut().write_message(xrds_components::XrZoneEnterEvent {
+        zone_id: XrdsId(962),
+        entity_id: XrdsId(962),
+    });
+    pump(&mut app, 3);
+
+    assert_eq!(
+        app.world().get::<Visibility>(entity),
+        Some(&Visibility::Hidden),
+        "an unresolvable Run must be skipped, not stall the rest of the sequence"
+    );
+}
+
+#[test]
+fn trigger_binding_runnable_field_resolves_through_the_registry() {
+    let mut app = xrds_test_app();
+
+    let entity = import_node_with_triggers_and_runnables(
+        &mut app,
+        963,
+        vec![XrdsTriggerBinding {
+            trigger: XrdsTriggerKind::ZoneEnter,
+            // Inline sequence is present but must be ignored: `runnable`
+            // takes priority per XrdsTriggerBinding's documented fallback.
+            sequence: XrdsSequence {
+                steps: vec![XrdsAction::Teleport { destination: [1.0, 1.0, 1.0] }],
+            },
+            disabled: false,
+            hand: None,
+            runnable: Some("named-teleport".to_string()),
+        }],
+        vec![XrdsNamedRunnable {
+            name: "named-teleport".to_string(),
+            runnable: XrdsRunnable::Sequence(XrdsSequence {
+                steps: vec![XrdsAction::Teleport { destination: [8.0, 8.0, 8.0] }],
+            }),
+        }],
+    );
+
+    app.world_mut().write_message(xrds_components::XrZoneEnterEvent {
+        zone_id: XrdsId(963),
+        entity_id: XrdsId(963),
+    });
+    pump(&mut app, 3);
+
+    assert_eq!(
+        app.world().get::<Transform>(entity).map(|t| t.translation),
+        Some(Vec3::new(8.0, 8.0, 8.0)),
+        "a binding naming a runnable should run the registry entry, not its own inline sequence"
+    );
+}
+
+#[test]
+fn run_action_starting_a_timeline_fires_keys_at_their_times() {
+    let mut app = xrds_test_app();
+
+    let entity = import_node_with_triggers_and_runnables(
+        &mut app,
+        964,
+        vec![XrdsTriggerBinding {
+            trigger: XrdsTriggerKind::ZoneEnter,
+            sequence: XrdsSequence {
+                steps: vec![XrdsAction::Run { runnable: "blink-timeline".to_string(), wait: false }],
+            },
+            disabled: false,
+            hand: None,
+            runnable: None,
+        }],
+        vec![XrdsNamedRunnable {
+            name: "blink-timeline".to_string(),
+            runnable: XrdsRunnable::Timeline(XrdsTimeline {
+                keys: vec![
+                    XrdsTimelineKey { at_secs: 0.0, action: XrdsAction::SetVisible(false) },
+                    XrdsTimelineKey { at_secs: 0.05, action: XrdsAction::SetVisible(true) },
+                ],
+                duration_secs: None,
+                looping: false,
+            }),
+        }],
+    );
+
+    app.world_mut().write_message(xrds_components::XrZoneEnterEvent {
+        zone_id: XrdsId(964),
+        entity_id: XrdsId(964),
+    });
+    pump(&mut app, 3);
+
+    assert_eq!(
+        app.world().get::<Visibility>(entity),
+        Some(&Visibility::Hidden),
+        "the at_secs: 0.0 key should have fired on the timeline's first advance"
+    );
+
+    for _ in 0..15 {
+        std::thread::sleep(Duration::from_millis(10));
+        app.update();
+    }
+
+    assert_eq!(
+        app.world().get::<Visibility>(entity),
+        Some(&Visibility::Inherited),
+        "the at_secs: 0.05 key should have fired once enough time elapsed"
+    );
+    assert_eq!(
+        app.world_mut().query::<&XrdsTimelineAgent>().iter(app.world()).count(),
+        0,
+        "a non-looping timeline should despawn once its duration has elapsed"
+    );
+}
+
+#[test]
+fn run_action_runaway_chain_is_capped_and_fires_runaway_detected() {
+    // A registry entry that Runs itself, fire-and-forget, forever. The
+    // escape hatch (chain-depth cap) must stop this — cycles are allowed to
+    // be *authored*, just not allowed to hang the runtime.
+    let mut app = xrds_test_app();
+
+    let entity = import_node_with_triggers_and_runnables(
+        &mut app,
+        965,
+        vec![
+            XrdsTriggerBinding {
+                trigger: XrdsTriggerKind::ZoneEnter,
+                sequence: XrdsSequence {
+                    steps: vec![XrdsAction::Run { runnable: "loop".to_string(), wait: false }],
+                },
+                disabled: false,
+                hand: None,
+                runnable: None,
+            },
+            XrdsTriggerBinding {
+                trigger: XrdsTriggerKind::RunawayDetected,
+                sequence: XrdsSequence {
+                    steps: vec![XrdsAction::Teleport { destination: [42.0, 42.0, 42.0] }],
+                },
+                disabled: false,
+                hand: None,
+                runnable: None,
+            },
+        ],
+        vec![XrdsNamedRunnable {
+            name: "loop".to_string(),
+            runnable: XrdsRunnable::Sequence(XrdsSequence {
+                steps: vec![XrdsAction::Run { runnable: "loop".to_string(), wait: false }],
+            }),
+        }],
+    );
+
+    app.world_mut().write_message(xrds_components::XrZoneEnterEvent {
+        zone_id: XrdsId(965),
+        entity_id: XrdsId(965),
+    });
+
+    pump(&mut app, 200);
+
+    assert_eq!(
+        app.world().get::<Transform>(entity).map(|t| t.translation),
+        Some(Vec3::new(42.0, 42.0, 42.0)),
+        "hitting the chain-depth cap should fire RunawayDetected instead of recursing forever"
+    );
+}
+
+#[test]
+fn stop_all_sequences_also_cancels_in_flight_timelines() {
+    let mut app = xrds_test_app();
+
+    import_node_with_triggers_and_runnables(
+        &mut app,
+        966,
+        vec![XrdsTriggerBinding {
+            trigger: XrdsTriggerKind::ZoneEnter,
+            sequence: XrdsSequence {
+                steps: vec![XrdsAction::Run { runnable: "loop-timeline".to_string(), wait: false }],
+            },
+            disabled: false,
+            hand: None,
+            runnable: None,
+        }],
+        vec![XrdsNamedRunnable {
+            name: "loop-timeline".to_string(),
+            runnable: XrdsRunnable::Timeline(XrdsTimeline {
+                keys: vec![XrdsTimelineKey { at_secs: 1.0, action: XrdsAction::SetVisible(false) }],
+                duration_secs: None,
+                looping: true,
+            }),
+        }],
+    );
+
+    app.world_mut().write_message(xrds_components::XrZoneEnterEvent {
+        zone_id: XrdsId(966),
+        entity_id: XrdsId(966),
+    });
+    pump(&mut app, 3);
+
+    assert_eq!(
+        app.world_mut().query::<&XrdsTimelineAgent>().iter(app.world()).count(),
+        1,
+        "the looping timeline should still be in flight before its first key fires"
+    );
+
+    let stopped = {
+        let mut xrds = XrdsAPI::attach(&mut app);
+        xrds.stop_all_sequences()
+    };
+    assert_eq!(stopped, 1, "stop_all_sequences should also cancel in-flight timelines");
+
+    assert_eq!(
+        app.world_mut().query::<&XrdsTimelineAgent>().iter(app.world()).count(),
+        0,
+        "the timeline agent should have been despawned"
+    );
 }

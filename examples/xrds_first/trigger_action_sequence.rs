@@ -127,6 +127,7 @@ fn demo_document() -> XrdsSceneDocument {
                 grabbable: false,
                 editor: XrdsEditorMetadata::default(),
                 triggers: Vec::new(),
+                watchers: Vec::new(),
             },
             XrdsSceneNode {
                 id: XrdsSceneNodeId(LIGHT_ID),
@@ -145,6 +146,7 @@ fn demo_document() -> XrdsSceneDocument {
                 grabbable: false,
                 editor: XrdsEditorMetadata::default(),
                 triggers: Vec::new(),
+                watchers: Vec::new(),
             },
             // The star of the show: one node, two authored bindings.
             XrdsSceneNode {
@@ -182,6 +184,7 @@ fn demo_document() -> XrdsSceneDocument {
                         },
                         disabled: false,
                         hand: None,
+                        runnable: None,
                     },
                     // A separate binding — fires its own agent, and does
                     // NOT cancel or interfere with the one above.
@@ -192,8 +195,10 @@ fn demo_document() -> XrdsSceneDocument {
                         },
                         disabled: false,
                         hand: None,
+                        runnable: None,
                     },
                 ],
+                watchers: Vec::new(),
             },
         ],
         ..Default::default()

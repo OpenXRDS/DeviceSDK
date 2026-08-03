@@ -35,6 +35,7 @@ fn sphere_doc() -> XrdsSceneDocument {
             grabbable: false,
             editor: XrdsEditorMetadata::default(),
             triggers: Vec::new(),
+            watchers: Vec::new(),
         }],
         ..Default::default()
     }

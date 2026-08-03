@@ -80,6 +80,7 @@ pub fn apply_palette_command(
                         payload,
                         editor: XrdsEditorMetadata::default(),
                         triggers: Vec::new(),
+                        watchers: Vec::new(),
                     });
                 }
             }) {
@@ -184,6 +185,7 @@ fn build_primitive_node(
         payload,
         editor: XrdsEditorMetadata::default(),
         triggers: Vec::new(),
+        watchers: Vec::new(),
     })
 }
 

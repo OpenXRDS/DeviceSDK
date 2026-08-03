@@ -15,6 +15,7 @@ fn document_metadata_workflow_normalizes_editor_fields() {
             grabbable: false,
             editor: XrdsEditorMetadata::default(),
             triggers: Vec::new(),
+            watchers: Vec::new(),
         }],
         ..Default::default()
     };
@@ -116,6 +117,7 @@ fn document_material_workflow_updates_mesh_nodes_and_rejects_materialless_nodes(
                 grabbable: false,
                 editor: XrdsEditorMetadata::default(),
                 triggers: Vec::new(),
+                watchers: Vec::new(),
             },
             XrdsSceneNode {
                 id: XrdsSceneNodeId(9),
@@ -128,6 +130,7 @@ fn document_material_workflow_updates_mesh_nodes_and_rejects_materialless_nodes(
                 grabbable: false,
                 editor: XrdsEditorMetadata::default(),
                 triggers: Vec::new(),
+                watchers: Vec::new(),
             },
         ],
         ..Default::default()
@@ -233,6 +236,7 @@ fn document_material_texture_workflow_updates_slots_and_normalizes_ids() {
             grabbable: false,
             editor: XrdsEditorMetadata::default(),
             triggers: Vec::new(),
+            watchers: Vec::new(),
         }],
         ..Default::default()
     };
@@ -309,6 +313,7 @@ fn document_validation_rejects_material_texture_reference_to_missing_or_wrong_ki
             grabbable: false,
             editor: XrdsEditorMetadata::default(),
             triggers: Vec::new(),
+            watchers: Vec::new(),
         }],
         ..Default::default()
     };

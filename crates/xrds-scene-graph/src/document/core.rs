@@ -77,6 +77,12 @@ pub struct XrdsSceneDocument {
     pub gltf_node_authoring: BTreeMap<u64, XrdsSceneGltfNodeAuthoring>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub hud_library: Vec<XrdsHudTemplate>,
+    /// Named `XrdsSequence`/`XrdsTimeline` templates, referenced by
+    /// `XrdsTriggerBinding::runnable` and `XrdsAction::Run` by name. See
+    /// `docs/xrds-trigger-action-implementation-plan.md` Phase 9a — this
+    /// is the *template* half of the template/instance split.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub runnables: Vec<XrdsNamedRunnable>,
 }
 
 impl Default for XrdsSceneDocument {
@@ -88,6 +94,7 @@ impl Default for XrdsSceneDocument {
             nodes: Vec::new(),
             gltf_node_authoring: BTreeMap::new(),
             hud_library: Vec::new(),
+            runnables: Vec::new(),
         }
     }
 }
@@ -261,6 +268,10 @@ impl XrdsSceneDocument {
             nodes,
             gltf_node_authoring,
             hud_library: self.hud_library.clone(),
+            // Cloned through unfiltered, same as hud_library above — an
+            // unreferenced registry entry in the subset is harmless, just
+            // unused, same as any other unreferenced asset.
+            runnables: self.runnables.clone(),
         })
     }
 }

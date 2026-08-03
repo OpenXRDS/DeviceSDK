@@ -191,6 +191,7 @@ fn import_scene_document_json_loads_saved_document_into_runtime() {
             grabbable: false,
             editor: XrdsEditorMetadata::default(),
             triggers: Vec::new(),
+            watchers: Vec::new(),
         }],
         ..Default::default()
     };
@@ -410,6 +411,7 @@ fn audio_clip_node_survives_import_export_round_trip() {
             grabbable: false,
             editor: XrdsEditorMetadata::default(),
             triggers: Vec::new(),
+            watchers: Vec::new(),
         }],
         ..Default::default()
     };
@@ -636,6 +638,7 @@ fn light_nodes_survive_import_export_round_trip() {
                 grabbable: false,
                 editor: XrdsEditorMetadata::default(),
                 triggers: Vec::new(),
+                watchers: Vec::new(),
             },
             XrdsSceneNode {
                 id: XrdsSceneNodeId(901),
@@ -657,6 +660,7 @@ fn light_nodes_survive_import_export_round_trip() {
                 grabbable: false,
                 editor: XrdsEditorMetadata::default(),
                 triggers: Vec::new(),
+                watchers: Vec::new(),
             },
             XrdsSceneNode {
                 id: XrdsSceneNodeId(902),
@@ -676,6 +680,7 @@ fn light_nodes_survive_import_export_round_trip() {
                 grabbable: false,
                 editor: XrdsEditorMetadata::default(),
                 triggers: Vec::new(),
+                watchers: Vec::new(),
             },
             XrdsSceneNode {
                 id: XrdsSceneNodeId(903),
@@ -692,6 +697,7 @@ fn light_nodes_survive_import_export_round_trip() {
                 grabbable: false,
                 editor: XrdsEditorMetadata::default(),
                 triggers: Vec::new(),
+                watchers: Vec::new(),
             },
         ],
         ..Default::default()
@@ -775,6 +781,7 @@ fn camera_node_survives_import_export_round_trip() {
             grabbable: false,
             editor: XrdsEditorMetadata::default(),
             triggers: Vec::new(),
+            watchers: Vec::new(),
         }],
         ..Default::default()
     };
@@ -818,6 +825,7 @@ fn trigger_bindings_survive_import_export_round_trip() {
         },
         disabled: false,
         hand: None,
+        runnable: None,
     }];
 
     let document = XrdsSceneDocument {
@@ -840,6 +848,7 @@ fn trigger_bindings_survive_import_export_round_trip() {
             grabbable: false,
             editor: XrdsEditorMetadata::default(),
             triggers: bindings.clone(),
+            watchers: Vec::new(),
         }],
         ..Default::default()
     };
@@ -900,6 +909,7 @@ fn text3d_node_survives_import_export_round_trip() {
             grabbable: false,
             editor: XrdsEditorMetadata::default(),
             triggers: Vec::new(),
+            watchers: Vec::new(),
         }],
         ..Default::default()
     };

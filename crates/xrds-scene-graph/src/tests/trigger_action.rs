@@ -27,6 +27,7 @@ fn trigger_binding_round_trips_every_v1_action_variant() {
         },
         disabled: false,
         hand: None,
+        runnable: None,
     };
 
     let json = serde_json::to_string_pretty(&binding).expect("serialise");
@@ -80,7 +81,9 @@ fn unknown_action_variant_does_not_destroy_the_whole_document() {
                 },
                 disabled: false,
                 hand: None,
+                runnable: None,
             }],
+            watchers: Vec::new(),
         }],
         ..Default::default()
     };
@@ -174,6 +177,7 @@ fn trigger_diagnostics_catch_the_silent_failure_modes() {
                     },
                     disabled: false,
                     hand: None,
+                    runnable: None,
                 },
                 // Listens for a name nothing fires.
                 XrdsTriggerBinding {
@@ -181,8 +185,10 @@ fn trigger_diagnostics_catch_the_silent_failure_modes() {
                     sequence: XrdsSequence { steps: vec![] },
                     disabled: false,
                     hand: None,
+                    runnable: None,
                 },
             ],
+            watchers: Vec::new(),
         }],
         ..Default::default()
     };
@@ -238,6 +244,7 @@ fn trigger_diagnostics_are_quiet_on_a_healthy_document() {
                     },
                     disabled: false,
                     hand: None,
+                    runnable: None,
                 },
                 XrdsTriggerBinding {
                     trigger: XrdsTriggerKind::Custom("arrived".to_string()),
@@ -246,8 +253,10 @@ fn trigger_diagnostics_are_quiet_on_a_healthy_document() {
                     },
                     disabled: false,
                     hand: None,
+                    runnable: None,
                 },
             ],
+            watchers: Vec::new(),
         }],
         ..Default::default()
     };
@@ -285,6 +294,7 @@ fn diagnostics_stay_quiet_about_disabled_bindings() {
         sequence: XrdsSequence { steps: vec![] }, // empty AND unlistened-for
         disabled: true,
         hand: None,
+        runnable: None,
     };
 
     let doc = XrdsSceneDocument {
@@ -300,6 +310,7 @@ fn diagnostics_stay_quiet_about_disabled_bindings() {
             payload: XrdsSceneNodePayload::Empty,
             editor: XrdsEditorMetadata::default(),
             triggers: vec![broken_but_parked.clone()],
+            watchers: Vec::new(),
         }],
         ..Default::default()
     };
@@ -325,6 +336,7 @@ fn hand_filter_round_trips_and_defaults_to_none() {
         sequence: XrdsSequence { steps: vec![] },
         disabled: false,
         hand: Some(xrds_components::XrGrabHand::Left),
+        runnable: None,
     };
     let json = serde_json::to_string(&with_hand).expect("serialise");
     let restored: XrdsTriggerBinding = serde_json::from_str(&json).expect("deserialise");
@@ -362,7 +374,9 @@ fn diagnostics_flag_a_hand_filter_on_a_handless_trigger_kind() {
                 },
                 disabled: false,
                 hand: Some(xrds_components::XrGrabHand::Left),
+                runnable: None,
             }],
+            watchers: Vec::new(),
         }],
         ..Default::default()
     };
@@ -398,7 +412,9 @@ fn diagnostics_allow_a_hand_filter_on_a_grab_binding() {
                 },
                 disabled: false,
                 hand: Some(xrds_components::XrGrabHand::Right),
+                runnable: None,
             }],
+            watchers: Vec::new(),
         }],
         ..Default::default()
     };
@@ -408,4 +424,188 @@ fn diagnostics_allow_a_hand_filter_on_a_grab_binding() {
         vec![],
         "a hand filter on a Grabbed binding is legitimate and should not be flagged"
     );
+}
+
+#[test]
+fn threshold_watcher_round_trips_and_defaults() {
+    let watcher = XrdsThresholdWatcher {
+        observable: XrdsObservable::RotationDegrees { axis: XrdsAxis::Y },
+        crossing: XrdsCrossing::Above,
+        value: 90.0,
+        hysteresis: 2.0,
+        fires: "valve_opened".to_string(),
+        disabled: false,
+    };
+    let json = serde_json::to_string(&watcher).expect("serialise");
+    let restored: XrdsThresholdWatcher = serde_json::from_str(&json).expect("deserialise");
+    assert_eq!(watcher, restored);
+
+    assert_eq!(XrdsAxis::default(), XrdsAxis::Y);
+    assert_eq!(XrdsCrossing::default(), XrdsCrossing::Either);
+}
+
+#[test]
+fn node_watchers_field_defaults_to_empty_and_stays_out_of_output() {
+    // Serialize a real node, then strip the "watchers" key by hand — this
+    // simulates an older saved document (predating this field) far more
+    // robustly than hand-writing node JSON, which breaks every time an
+    // unrelated field is added to XrdsSceneNode/XrdsEditorMetadata.
+    let node = XrdsSceneNode {
+        id: XrdsSceneNodeId(1),
+        parent_id: None,
+        name: "n".to_string(),
+        enabled: true,
+        visible: true,
+        grabbable: false,
+        transform: XrdsSceneTransform::default(),
+        payload: XrdsSceneNodePayload::Empty,
+        editor: XrdsEditorMetadata::default(),
+        triggers: Vec::new(),
+        watchers: Vec::new(),
+    };
+    let json = serde_json::to_string(&node).expect("serialise");
+    assert!(!json.contains("watchers"), "empty watchers must not appear in output, got {json}");
+
+    let restored: XrdsSceneNode =
+        serde_json::from_str(&json).expect("older document with no watchers field must still load");
+    assert!(restored.watchers.is_empty());
+}
+
+fn node_with_watcher(id: u64, watcher: XrdsThresholdWatcher) -> XrdsSceneNode {
+    XrdsSceneNode {
+        id: XrdsSceneNodeId(id),
+        parent_id: None,
+        name: format!("Node{id}"),
+        enabled: true,
+        visible: true,
+        grabbable: false,
+        transform: XrdsSceneTransform::default(),
+        payload: XrdsSceneNodePayload::Empty,
+        editor: XrdsEditorMetadata::default(),
+        triggers: Vec::new(),
+        watchers: vec![watcher],
+    }
+}
+
+#[test]
+fn diagnostics_flag_distance_watcher_targeting_a_missing_node() {
+    let doc = XrdsSceneDocument {
+        metadata: XrdsSceneMetadata { name: "d".to_string(), ..Default::default() },
+        nodes: vec![node_with_watcher(
+            1,
+            XrdsThresholdWatcher {
+                observable: XrdsObservable::DistanceTo { node: XrdsSceneNodeId(999) },
+                crossing: XrdsCrossing::Below,
+                value: 1.0,
+                hysteresis: 0.0,
+                fires: "close".to_string(),
+                disabled: false,
+            },
+        )],
+        ..Default::default()
+    };
+    let diags = doc.trigger_diagnostics();
+    assert!(
+        diags.iter().any(|d| {
+            d.severity == XrdsSceneTriggerDiagnosticSeverity::Error
+                && d.title.contains("does not exist")
+        }),
+        "DistanceTo a missing node must be an Error, got {diags:?}"
+    );
+}
+
+#[test]
+fn diagnostics_flag_negative_hysteresis() {
+    let doc = XrdsSceneDocument {
+        metadata: XrdsSceneMetadata { name: "d".to_string(), ..Default::default() },
+        nodes: vec![node_with_watcher(
+            1,
+            XrdsThresholdWatcher {
+                observable: XrdsObservable::Height,
+                crossing: XrdsCrossing::Above,
+                value: 1.0,
+                hysteresis: -0.5,
+                fires: "up".to_string(),
+                disabled: false,
+            },
+        )],
+        ..Default::default()
+    };
+    assert!(
+        doc.trigger_diagnostics()
+            .iter()
+            .any(|d| d.title.contains("Negative hysteresis"))
+    );
+}
+
+#[test]
+fn watcher_counts_as_a_custom_emitter_for_diagnostics() {
+    // A binding listening for what a watcher fires must not be flagged as
+    // "nothing fires this" — the watcher is a legitimate emitter.
+    let mut listener_node = node_with_watcher(
+        2,
+        XrdsThresholdWatcher {
+            observable: XrdsObservable::ScaleMagnitude,
+            crossing: XrdsCrossing::Above,
+            value: 2.0,
+            hysteresis: 0.0,
+            fires: "grown".to_string(),
+            disabled: false,
+        },
+    );
+    listener_node.watchers.clear();
+    listener_node.triggers = vec![XrdsTriggerBinding {
+        trigger: XrdsTriggerKind::Custom("grown".to_string()),
+        sequence: XrdsSequence { steps: vec![] },
+        disabled: false,
+        hand: None,
+        runnable: None,
+    }];
+
+    let emitter_node = node_with_watcher(
+        3,
+        XrdsThresholdWatcher {
+            observable: XrdsObservable::ScaleMagnitude,
+            crossing: XrdsCrossing::Above,
+            value: 2.0,
+            hysteresis: 0.0,
+            fires: "grown".to_string(),
+            disabled: false,
+        },
+    );
+
+    let doc = XrdsSceneDocument {
+        metadata: XrdsSceneMetadata { name: "d".to_string(), ..Default::default() },
+        nodes: vec![listener_node, emitter_node],
+        ..Default::default()
+    };
+
+    assert!(
+        !doc.trigger_diagnostics()
+            .iter()
+            .any(|d| d.title.contains("no emitter") || d.title.contains("no listener")),
+        "the watcher's fires name should satisfy the binding's listener, got {:?}",
+        doc.trigger_diagnostics()
+    );
+}
+
+#[test]
+fn disabled_watcher_produces_no_diagnostics_and_is_not_an_emitter() {
+    let doc = XrdsSceneDocument {
+        metadata: XrdsSceneMetadata { name: "d".to_string(), ..Default::default() },
+        nodes: vec![node_with_watcher(
+            1,
+            XrdsThresholdWatcher {
+                // Both problems at once — neither should surface while parked.
+                observable: XrdsObservable::DistanceTo { node: XrdsSceneNodeId(999) },
+                crossing: XrdsCrossing::Above,
+                value: 1.0,
+                hysteresis: -1.0,
+                fires: "x".to_string(),
+                disabled: true,
+            },
+        )],
+        ..Default::default()
+    };
+    assert_eq!(doc.trigger_diagnostics(), vec![]);
 }

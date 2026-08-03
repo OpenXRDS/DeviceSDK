@@ -11,6 +11,14 @@ authors = ["OpenXRDS developers"]
 [workspace]
 members = ["crates/*", "apps/xrds-editor/src-tauri", "apps/xrds-app"]
 
+# Debug info at the default level (2) generates enormous PDBs across this
+# many crates/examples with Bevy in the dependency graph — that's most of
+# what makes link.exe's memory spike on every build. Level 1 (line tables
+# only) still gives usable backtraces at a fraction of the size. Applies
+# workspace-wide since [profile.*] can only be set at the workspace root.
+[profile.dev]
+debug = 1
+
 [workspace.dependencies.xrds-gltf]
 package = "xrds-gltf"
 path = "./crates/xrds-gltf"

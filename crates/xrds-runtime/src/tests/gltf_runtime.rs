@@ -362,6 +362,7 @@ fn export_scene_document_captures_runtime_gltf_morph_weights_in_authoring() {
             grabbable: false,
             editor: XrdsEditorMetadata::default(),
             triggers: Vec::new(),
+            watchers: Vec::new(),
         }],
         gltf_node_authoring: [(
             630,
@@ -498,6 +499,7 @@ fn export_scene_document_captures_runtime_gltf_playback_in_authoring() {
             grabbable: false,
             editor: XrdsEditorMetadata::default(),
             triggers: Vec::new(),
+            watchers: Vec::new(),
         }],
         ..Default::default()
     };

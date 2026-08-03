@@ -68,6 +68,7 @@ fn authored_scene_document() -> XrdsSceneDocument {
                 editor: XrdsEditorMetadata::default(),
                 grabbable: false,
                 triggers: Vec::new(),
+                watchers: Vec::new(),
             },
             XrdsSceneNode {
                 id: DOCUMENT_CAMERA_ID,
@@ -91,6 +92,7 @@ fn authored_scene_document() -> XrdsSceneDocument {
                 editor: XrdsEditorMetadata::default(),
                 grabbable: false,
                 triggers: Vec::new(),
+                watchers: Vec::new(),
             },
             XrdsSceneNode {
                 id: DOCUMENT_BASELINE_PLANE_ID,
@@ -111,6 +113,7 @@ fn authored_scene_document() -> XrdsSceneDocument {
                 editor: XrdsEditorMetadata::default(),
                 grabbable: false,
                 triggers: Vec::new(),
+                watchers: Vec::new(),
             },
             XrdsSceneNode {
                 id: DOCUMENT_ROTATED_PLANE_ID,
@@ -131,6 +134,7 @@ fn authored_scene_document() -> XrdsSceneDocument {
                 editor: XrdsEditorMetadata::default(),
                 grabbable: false,
                 triggers: Vec::new(),
+                watchers: Vec::new(),
             },
         ],
         ..Default::default()

@@ -356,6 +356,7 @@ impl XrdsSceneDocument {
             }),
             editor,
             triggers: Vec::new(),
+            watchers: Vec::new(),
         });
 
         self.validate()

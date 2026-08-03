@@ -65,6 +65,7 @@ fn import_scene_document_resolves_catalog_backed_gltf_references() {
             grabbable: false,
             editor: XrdsEditorMetadata::default(),
             triggers: Vec::new(),
+            watchers: Vec::new(),
         }],
         ..Default::default()
     };
@@ -114,6 +115,7 @@ fn import_export_scene_document_preserves_gltf_node_authoring() {
             grabbable: false,
             editor: XrdsEditorMetadata::default(),
             triggers: Vec::new(),
+            watchers: Vec::new(),
         }],
         gltf_node_authoring: [(
             600,
@@ -193,6 +195,7 @@ fn import_scene_document_queues_default_gltf_playback_from_authoring() {
             grabbable: false,
             editor: XrdsEditorMetadata::default(),
             triggers: Vec::new(),
+            watchers: Vec::new(),
         }],
         gltf_node_authoring: [(
             610,
@@ -269,6 +272,7 @@ fn import_scene_document_applies_authored_gltf_morph_target_overrides_when_ready
             grabbable: false,
             editor: XrdsEditorMetadata::default(),
             triggers: Vec::new(),
+            watchers: Vec::new(),
         }],
         gltf_node_authoring: [(
             620,

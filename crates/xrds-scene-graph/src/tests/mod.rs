@@ -68,6 +68,7 @@ pub(super) fn persistence_test_document() -> XrdsSceneDocument {
                     }),
                 },
                 triggers: Vec::new(),
+                watchers: Vec::new(),
             },
             XrdsSceneNode {
                 id: XrdsSceneNodeId(11),
@@ -105,6 +106,7 @@ pub(super) fn persistence_test_document() -> XrdsSceneDocument {
                     }),
                 },
                 triggers: Vec::new(),
+                watchers: Vec::new(),
             },
         ],
         ..Default::default()

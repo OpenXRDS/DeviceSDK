@@ -78,6 +78,13 @@ pub struct XrdsSceneNode {
     /// See `docs/xrds-scenegraph-trigger-action-sequencing.md`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub triggers: Vec<XrdsTriggerBinding>,
+    /// Threshold watchers — turn a continuous value (rotation, distance,
+    /// height, scale) into a discrete `Custom` trigger when it crosses a
+    /// value. See `docs/xrds-trigger-action-implementation-plan.md`
+    /// Phase 8 for why continuous values are deliberately not modeled as
+    /// trigger kinds directly.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub watchers: Vec<XrdsThresholdWatcher>,
 }
 
 #[derive(Debug, Clone)]
@@ -554,6 +561,7 @@ impl XrdsSceneNode {
             payload,
             editor: XrdsEditorMetadata::default(),
             triggers: Vec::new(),
+            watchers: Vec::new(),
         }
     }
 

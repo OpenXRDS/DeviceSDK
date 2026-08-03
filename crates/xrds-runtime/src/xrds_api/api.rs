@@ -624,6 +624,8 @@ impl XrdsAPI<'_> {
         crate::xrds_api::reimport::tag_grabbable_entities(self.app.world_mut(), document);
         crate::xrds_api::reimport::tag_spawn_zone_entities(self.app.world_mut(), document);
         crate::xrds_api::reimport::tag_trigger_binding_entities(self.app.world_mut(), document);
+        crate::xrds_api::reimport::tag_threshold_watcher_entities(self.app.world_mut(), document);
+        crate::xrds_api::reimport::sync_runnable_registry(self.app.world_mut(), document);
         apply_imported_scene_environment_policy_in_world(self.app.world_mut());
         Ok(imported_ids)
     }

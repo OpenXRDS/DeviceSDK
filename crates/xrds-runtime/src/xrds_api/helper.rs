@@ -387,6 +387,11 @@ pub(super) fn export_scene_document_in_world(
         {
             node.triggers = bindings.0.clone();
         }
+        if let Some(watchers) =
+            world.get::<crate::xrds_api::trigger_action::XrdsThresholdWatchers>(entity)
+        {
+            node.watchers = watchers.0.clone();
+        }
         if matches!(node.payload, XrdsSceneNodePayload::GltfAsset(_)) {
             let mut authoring = world
                 .get::<XrdsStoredSceneGltfNodeAuthoring>(entity)

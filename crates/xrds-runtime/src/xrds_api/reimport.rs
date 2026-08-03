@@ -108,6 +108,12 @@ pub(super) fn reimport_scene_in_world(
     // ── 4e. Tag trigger-binding entities ──────────────────────────────────────
     tag_trigger_binding_entities(world, document);
 
+    // ── 4f. Tag threshold-watcher entities ────────────────────────────────────
+    tag_threshold_watcher_entities(world, document);
+
+    // ── 4g. Sync the runnable registry ────────────────────────────────────────
+    sync_runnable_registry(world, document);
+
     // ── 5. Apply materials ────────────────────────────────────────────────────
     for (entity, mat) in material_updates {
         set_material_params_for_entity_in_world(world, entity, mat);
@@ -541,6 +547,42 @@ pub(super) fn tag_trigger_binding_entities(world: &mut World, document: &XrdsSce
             ));
         }
     }
+}
+
+/// Insert [`crate::xrds_api::trigger_action::XrdsThresholdWatchers`] on every
+/// entity whose scene document node has non-empty `watchers` data. Mirrors
+/// [`tag_trigger_binding_entities`] exactly, including the toggle-safe
+/// remove-when-empty behavior. Spawns the authored definition only —
+/// per-watcher crossing state lives in a separate, runtime-only component
+/// that this does not touch (re-tagging on a live reimport must not reset
+/// a watcher's in-progress state).
+pub(super) fn tag_threshold_watcher_entities(world: &mut World, document: &XrdsSceneDocument) {
+    for node in &document.nodes {
+        let Some(entity) = world.resource::<XrdsIdIndex>().entity_of(node.id.into()) else {
+            continue;
+        };
+        let Ok(mut e) = world.get_entity_mut(entity) else { continue; };
+        if node.watchers.is_empty() {
+            e.remove::<crate::xrds_api::trigger_action::XrdsThresholdWatchers>();
+        } else {
+            e.insert(crate::xrds_api::trigger_action::XrdsThresholdWatchers(
+                node.watchers.clone(),
+            ));
+        }
+    }
+}
+
+/// Replaces [`crate::xrds_api::trigger_action::XrdsRunnableRegistry`]
+/// wholesale from `document.runnables` — matching every other tag_* helper
+/// here in treating the document as complete, authoritative state rather
+/// than something to merge into.
+pub(super) fn sync_runnable_registry(world: &mut World, document: &XrdsSceneDocument) {
+    let map = document
+        .runnables
+        .iter()
+        .map(|entry| (entry.name.clone(), entry.runnable.clone()))
+        .collect();
+    world.insert_resource(crate::xrds_api::trigger_action::XrdsRunnableRegistry(map));
 }
 
 /// Insert [`XrdsPlayerSpawnZone`] on every entity whose scene document node is a

@@ -128,6 +128,7 @@ fn session_metadata_operations_participate_in_undo_redo() {
             grabbable: false,
             editor: XrdsEditorMetadata::default(),
             triggers: Vec::new(),
+            watchers: Vec::new(),
         }],
         ..Default::default()
     })
@@ -223,6 +224,7 @@ fn session_material_operations_participate_in_undo_redo() {
             grabbable: false,
             editor: XrdsEditorMetadata::default(),
             triggers: Vec::new(),
+            watchers: Vec::new(),
         }],
         ..Default::default()
     })
@@ -315,6 +317,7 @@ fn session_remove_asset_and_rebind_asset_participate_in_undo_redo() {
             grabbable: false,
             editor: XrdsEditorMetadata::default(),
             triggers: Vec::new(),
+            watchers: Vec::new(),
         }],
         ..Default::default()
     })
@@ -408,6 +411,7 @@ fn session_rename_asset_id_participates_in_undo_redo() {
             grabbable: false,
             editor: XrdsEditorMetadata::default(),
             triggers: Vec::new(),
+            watchers: Vec::new(),
         }],
         ..Default::default()
     })
@@ -473,6 +477,7 @@ fn session_place_and_retarget_gltf_asset_support_undo_and_redo() {
             grabbable: false,
             editor: XrdsEditorMetadata::default(),
             triggers: Vec::new(),
+            watchers: Vec::new(),
         }],
         ..Default::default()
     })

@@ -78,6 +78,7 @@ fn authored_scene_document() -> XrdsSceneDocument {
                 editor: XrdsEditorMetadata::default(),
                 grabbable: false,
                 triggers: Vec::new(),
+                watchers: Vec::new(),
             },
             XrdsSceneNode {
                 id: DOCUMENT_CAMERA_ID,
@@ -101,6 +102,7 @@ fn authored_scene_document() -> XrdsSceneDocument {
                 editor: XrdsEditorMetadata::default(),
                 grabbable: false,
                 triggers: Vec::new(),
+                watchers: Vec::new(),
             },
             XrdsSceneNode {
                 id: DOCUMENT_SPHERE_ID,
@@ -117,6 +119,7 @@ fn authored_scene_document() -> XrdsSceneDocument {
                 editor: XrdsEditorMetadata::default(),
                 grabbable: false,
                 triggers: Vec::new(),
+                watchers: Vec::new(),
             },
             XrdsSceneNode {
                 id: DOCUMENT_LIGHT_ID,
@@ -138,6 +141,7 @@ fn authored_scene_document() -> XrdsSceneDocument {
                 editor: XrdsEditorMetadata::default(),
                 grabbable: false,
                 triggers: Vec::new(),
+                watchers: Vec::new(),
             },
         ],
         ..Default::default()

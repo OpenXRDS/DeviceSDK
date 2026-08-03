@@ -50,6 +50,35 @@ pub enum XrdsAction {
         name: String,
     },
 
+    /// Starts a named entry from `XrdsSceneDocument::runnables` — how a
+    /// sequence starts a timeline, a timeline starts a sequence, or either
+    /// starts another instance of itself (see the cycle-detection note
+    /// below).
+    ///
+    /// **Takes a bare name, not an inline runnable.** This is the
+    /// recursion firewall: a name cannot contain another `XrdsAction`, so
+    /// `Run` cannot make this data structure nest arbitrarily the way an
+    /// inline reference could.
+    ///
+    /// `wait` is honored when this runs inside an `XrdsSequence` (blocks
+    /// the queue until the started runnable finishes — natural, since a
+    /// sequence is already completion-chained) and ignored, with a
+    /// warning, when it fires from an `XrdsTimeline` key (a timeline that
+    /// paused would break the absolute timing that is its entire purpose).
+    ///
+    /// **Cycles are not prevented, only escaped.** `A runs B runs A` is
+    /// statically detectable in the registry and is flagged as an `Error`
+    /// by `XrdsSceneDocument::trigger_diagnostics`, but authoring a loop is
+    /// not blocked outright — other engines permit intentional event
+    /// loops too. What is guaranteed is an escape: a causal chain depth is
+    /// tracked at runtime and capped, and exceeding it fires
+    /// `XrdsTriggerKind::RunawayDetected` rather than hanging silently.
+    Run {
+        runnable: String,
+        #[serde(default = "default_run_wait")]
+        wait: bool,
+    },
+
     /// Any action variant this build does not recognize.
     ///
     /// **Why this exists:** without it, a document written by a newer
@@ -69,6 +98,10 @@ pub enum XrdsAction {
     /// `Deserialize`, tracked as a follow-up.
     #[serde(other)]
     Unknown,
+}
+
+fn default_run_wait() -> bool {
+    true
 }
 
 /// Which entity an `XrdsAction` applies to.
@@ -182,6 +215,19 @@ pub enum XrdsTriggerKind {
     /// path or expression, so it cannot grow into a scripting surface.
     Custom(String),
 
+    /// Fired instead of letting a causal chain of triggers/actions run
+    /// away — an `XrdsAction::Run` chain, or `FireCustomEvent` re-triggering
+    /// its own listener, deep enough to exceed the runtime's depth cap.
+    ///
+    /// **This is the required escape hatch, not a general loop
+    /// preventer.** Authoring an intentional loop is not blocked — other
+    /// engines permit that too. When one *does* run away, this trigger
+    /// lets a recovery sequence be *authored* (log it, reset state,
+    /// whatever fits) rather than only discoverable as a silent hang.
+    /// `XrdsAPI::stop_sequences_on`/`stop_all_sequences` are the manual
+    /// half of the same escape hatch.
+    RunawayDetected,
+
     /// A trigger kind this build does not recognize — same rationale and
     /// same lossiness caveat as [`XrdsAction::Unknown`].
     ///
@@ -198,8 +244,24 @@ pub enum XrdsTriggerKind {
 pub struct XrdsTriggerBinding {
     #[serde(default)]
     pub trigger: XrdsTriggerKind,
+    /// Inline sequence, used when `runnable` is `None`. Ignored (with a
+    /// diagnostic) when `runnable` is `Some` — see the field below.
     #[serde(default)]
     pub sequence: XrdsSequence,
+    /// Names an entry in `XrdsSceneDocument::runnables` to run instead of
+    /// `sequence` — the template case (Phase 9a): the same named
+    /// `XrdsRunnable` (a `Sequence` **or** a `Timeline`) can be referenced
+    /// by many bindings, and editing the registry entry affects all of
+    /// them at once.
+    ///
+    /// Deliberately additive rather than replacing `sequence` with a
+    /// `Named`/`Inline` enum: this keeps every existing inline-sequence
+    /// binding (and every existing test literal) working unchanged.
+    /// `Some` and a non-empty `sequence` set together is diagnosable
+    /// author confusion (`sequence` is simply ignored), not a runtime
+    /// error — see `trigger_diagnostics`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runnable: Option<String>,
     /// When true this rule is parked: it stays authored but never fires.
     ///
     /// For switching one rule off without deleting it — isolating which of
@@ -301,6 +363,15 @@ impl XrdsSceneDocument {
                     if let XrdsAction::FireCustomEvent { name } = step {
                         emitted_custom.insert(name.as_str());
                     }
+                }
+            }
+            // A threshold watcher is also a Custom emitter — a binding
+            // listening for what a watcher fires must not be flagged as
+            // "nothing fires this" just because no FireCustomEvent action
+            // happens to emit the same name.
+            for watcher in &node.watchers {
+                if !watcher.disabled {
+                    emitted_custom.insert(watcher.fires.as_str());
                 }
             }
         }
@@ -446,8 +517,132 @@ impl XrdsSceneDocument {
                     }
                 }
             }
+
+            for (index, watcher) in node.watchers.iter().enumerate() {
+                if watcher.disabled {
+                    continue;
+                }
+                let where_ = format!("watcher #{index} on node {:?}", node.id);
+
+                if let XrdsObservable::DistanceTo { node: target } = &watcher.observable {
+                    if !known_ids.contains(target) {
+                        out.push(XrdsSceneTriggerDiagnostic {
+                            node_id: node.id,
+                            severity: Severity::Error,
+                            title: "Watcher measures distance to a node that does not exist"
+                                .to_string(),
+                            detail: format!(
+                                "{where_} measures DistanceTo({target:?}), which is not in \
+                                 this document."
+                            ),
+                        });
+                    }
+                }
+
+                if watcher.hysteresis < 0.0 {
+                    out.push(XrdsSceneTriggerDiagnostic {
+                        node_id: node.id,
+                        severity: Severity::Warning,
+                        title: "Negative hysteresis".to_string(),
+                        detail: format!(
+                            "{where_} has a negative hysteresis ({}); treated as 0.0 at \
+                             runtime, so this has no effect.",
+                            watcher.hysteresis
+                        ),
+                    });
+                }
+
+                if !bound_custom.contains(watcher.fires.as_str()) {
+                    out.push(XrdsSceneTriggerDiagnostic {
+                        node_id: node.id,
+                        severity: Severity::Info,
+                        title: "Watcher fires a Custom trigger with no listener".to_string(),
+                        detail: format!(
+                            "{where_} fires Custom({}), which no binding in this document \
+                             listens for. Fine if application code handles it.",
+                            watcher.fires
+                        ),
+                    });
+                }
+            }
         }
 
         out
     }
+}
+
+// ---------------------------------------------------------------------------
+// Threshold watchers — continuous values to discrete triggers (Phase 8)
+// ---------------------------------------------------------------------------
+
+/// Which local axis a rotation is measured around, for
+/// [`XrdsObservable::RotationDegrees`].
+///
+/// Extracted via Euler XYZ decomposition of the node's world rotation —
+/// simple and well-defined for the common "this hinge/valve/dial has
+/// turned past N degrees" case, with the usual Euler-angle caveat: near a
+/// gimbal-lock configuration, a single axis's reading can behave
+/// unintuitively. Not a concern for the typical single-axis hinge/dial
+/// case this is aimed at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum XrdsAxis {
+    X,
+    #[default]
+    Y,
+    Z,
+}
+
+/// A closed set of continuous quantities that can be watched. Deliberately
+/// not an arbitrary property path — see the module-level rationale for why
+/// continuous state stays out of the trigger-kind vocabulary itself.
+///
+/// All measured in world space (via the node's `GlobalTransform`), since a
+/// watcher answering "has this rotated past 90°" almost always means in the
+/// world, not relative to a possibly-rotating parent.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum XrdsObservable {
+    RotationDegrees { axis: XrdsAxis },
+    DistanceTo { node: XrdsSceneNodeId },
+    /// World-space `translation.y`.
+    Height,
+    /// `scale.length()` — one number for non-uniform scale, so "grown
+    /// past 2x" has an unambiguous meaning without picking an axis.
+    ScaleMagnitude,
+}
+
+/// Which direction(s) across the threshold should fire.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum XrdsCrossing {
+    Above,
+    Below,
+    #[default]
+    Either,
+}
+
+/// Watches one continuous value on this node and fires a `Custom` trigger
+/// each time it crosses `value`, in the direction(s) `crossing` allows.
+///
+/// Re-arms automatically: every crossing fires, including a value that
+/// crosses back and forth repeatedly. A one-shot `once` flag is deliberately
+/// not included in this v1 — add it if a real use case needs it, per the
+/// project's general "don't build for hypothetical needs" stance.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct XrdsThresholdWatcher {
+    pub observable: XrdsObservable,
+    #[serde(default)]
+    pub crossing: XrdsCrossing,
+    pub value: f32,
+    /// Deadband around `value`: the watcher must move at least this far
+    /// past the threshold, and then back at least this far, before it will
+    /// re-fire in the other direction. Without this, a value hovering
+    /// exactly at the threshold fires every frame it wobbles across it.
+    #[serde(default)]
+    pub hysteresis: f32,
+    /// Fired as `XrdsTriggerKind::Custom(fires)` on each qualifying
+    /// crossing — bind to it the same way as any other `Custom` trigger.
+    pub fires: String,
+    /// Parks this watcher without deleting it, same semantics and same
+    /// reasoning as `XrdsTriggerBinding::disabled`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub disabled: bool,
 }

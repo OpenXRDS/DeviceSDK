@@ -1,8 +1,8 @@
 # Trigger-action sequencing — v1 implementation record
 
 **Status: done.** The completed record of what shipped, phase by phase, and
-why each decision was made. Live at `xrds-runtime` 96/96,
-`xrds-scene-graph` 79/79, `cargo check --workspace --all-targets` clean, and
+why each decision was made. Live at `xrds-runtime` 112/112,
+`xrds-scene-graph` 88/88, `cargo check --workspace --all-targets` clean, and
 the Phase 5 example visually confirmed by a human.
 
 Companion docs:
@@ -10,14 +10,15 @@ Companion docs:
 - [`../xrds-scenegraph-trigger-action-sequencing.md`](../xrds-scenegraph-trigger-action-sequencing.md)
   — the design rationale (why the system is shaped this way).
 - [`../xrds-trigger-action-implementation-plan.md`](../xrds-trigger-action-implementation-plan.md)
-  — what is still *ahead* (Phases 6, 8, 9, 9a) plus open questions.
+  — what is still *ahead* (Phase 6 editor integration) plus open questions.
 - [`../xrds-trigger-action-backlog.md`](../xrds-trigger-action-backlog.md)
   — candidate `XrdsAction` variants, unscheduled.
 
 Phase numbers are kept stable because code comments reference them. They are
 ordered here by phase number, which is also the order they were built —
 except Phase 10, a robustness pass done after Phase 7 and deliberately
-before Phase 8.
+before Phase 8, and Phase 9/9a (timelines and interop), built last, after
+Phase 10.
 
 ## Scope for v1
 
@@ -380,6 +381,144 @@ Blueprint slide, and it is the one thing this whole design exists to avoid.
 
 ---
 
+## Phase 8 — threshold watchers (continuous to discrete)
+
+**Status: done.** `xrds-runtime` 105/105, `xrds-scene-graph` 88/88,
+`cargo check --workspace --all-targets` clean.
+
+Phase 7 (see [`done/xrds-trigger-action-v1.md`](done/xrds-trigger-action-v1.md))
+deliberately excluded continuous values (rotation angle, position,
+scale) from the trigger vocabulary, on the grounds that they have no natural
+"moment" and no SDK-knowable threshold. That reasoning still holds for
+*general* property watching — but it over-corrected. A **closed set of
+observables** with a threshold is a much narrower thing than the
+reflection-path-plus-expression-predicate mechanism that was being ruled
+out.
+
+Precedent: animation state machines already do exactly this. Unity's
+Animator transitions compare **declared parameters** against thresholds
+(`Speed > 0.5`); Unreal's AnimBP is similar. Those parameters are a
+declared, typed list — not arbitrary property paths. That is the shape that
+works.
+
+**Why this is worth centralizing — it is not about reading the value.** The
+value read is trivial. The fiddly parts are:
+
+1. **Edge detection.** A threshold must fire on *crossing*, not
+   while-above, or it fires every frame. That needs stored previous state
+   per watcher.
+2. **Hysteresis.** A value hovering at the threshold will chatter without a
+   deadband.
+
+Both are easy to get subtly wrong, and every project would otherwise
+reimplement them. Writing this as **one** system rather than one per
+quantity means that logic exists in exactly one place.
+
+Proposed shape — closed enum plus one `match`, the same design language as
+`XrdsAction`:
+
+```rust
+pub enum XrdsAxis { X, Y, Z }
+
+pub enum XrdsObservable {
+    RotationDegrees { axis: XrdsAxis },
+    DistanceTo { node: XrdsSceneNodeId },
+    Height,            // translation.y
+    ScaleMagnitude,
+}
+
+pub enum XrdsCrossing { Above, Below, Either }
+
+pub struct XrdsThresholdWatcher {
+    pub observable: XrdsObservable,
+    pub crossing: XrdsCrossing,
+    pub value: f32,
+    /// Deadband, to stop chatter at the boundary.
+    pub hysteresis: f32,
+    /// Fired as `XrdsTriggerKind::Custom(fires)` on each crossing.
+    pub fires: String,
+}
+```
+
+The full loop stays data-driven with no code: watcher crosses, fires
+`Custom("valve_opened")`, and an existing `XrdsTriggerBinding` on
+`Custom("valve_opened")` runs. Keeping that two-step indirection (rather
+than letting a watcher point at a sequence directly) avoids duplicating the
+binding mechanism, and lets one watcher drive several bindings.
+
+- [x] Added the types (`XrdsAxis`, `XrdsObservable`, `XrdsCrossing`,
+      `XrdsThresholdWatcher`) to `xrds-scene-graph`, serde-default, as a
+      `watchers: Vec<XrdsThresholdWatcher>` field on `XrdsSceneNode`
+      alongside `triggers`. Adjacently-tagged like `XrdsAction`/
+      `XrdsTriggerKind` were made in Phase 10, for the same forward-compat
+      reason — not needed by anything in `XrdsObservable` today, but
+      consistent rather than reintroducing the externally-tagged trap.
+      **Deviation from the sketch:** all observables read world space (via
+      `GlobalTransform`), not local — "has this rotated past 90°" almost
+      always means in the world, not relative to a possibly-rotating
+      parent. `RotationDegrees` uses Euler XYZ decomposition (documented
+      gimbal-lock caveat); `ScaleMagnitude` is `scale.length()` rather than
+      per-axis, so "grown past 2x" has one unambiguous number.
+- [x] One runtime system, `evaluate_threshold_watchers` — reads the
+      observable, compares against threshold with a sticky hysteresis band
+      (not just a wider single check: once `Above`, must fall below
+      `value - hysteresis` to become `Below`, and vice versa — this is what
+      actually stops chatter at the boundary rather than just moving it),
+      fires `XrdsThresholdCrossedEvent` on a qualifying crossing.
+      Previous-state lives in `XrdsThresholdWatcherState`, a runtime-only
+      component never touched by import/export/reimport.
+      `XrdsThresholdCrossedEvent` implements `XrdsTriggerEvent` as
+      `Custom(fires)`, so a crossing reuses the exact same `consume_triggers`
+      path as any other trigger source — no special-casing.
+      Runs in `Last`, after `TransformSystems::Propagate`, alongside the
+      existing glTF-animation-trigger sync — same one-frame-latency
+      trade-off, for the same reason.
+- [x] **A real, load-bearing test-harness gap found and fixed while writing
+      tests, not guessed at:** a probe test proved `GlobalTransform` was not
+      propagating in `xrds_test_app()` at all (stayed at identity after
+      moving an entity via `Transform`) — the harness was missing
+      `TransformPlugin`, the same class of gap as the `OutlinePlugin`/
+      `ScenePlugin` fixes in Phase 10 (a real app always has this via
+      `DefaultPlugins`; this minimal harness did not). Fixed by adding it,
+      guarded by `is_plugin_added`. The alternative — reading local
+      `Transform` instead of `GlobalTransform` to dodge the gap — was
+      rejected because it would have silently broken correctness under any
+      parenting, exactly what reading world space was chosen to avoid.
+- [x] Tests (`crates/xrds-runtime/src/tests/trigger_action.rs`, 6 new):
+      a crossing fires the bound `Custom` sequence; an `Above`-only watcher
+      stays silent on the downward crossing; wobbling inside the hysteresis
+      band fires nothing, clearing it fires exactly once; `Either` re-arms
+      and fires on both directions; `DistanceTo` correctly uses world-space
+      positions between two different nodes; a `disabled` watcher never
+      evaluates regardless of how far the value moves.
+- [x] Diagnostics (`crates/xrds-scene-graph/src/scene/trigger_action.rs`):
+      a `DistanceTo` targeting a node that does not exist is an `Error`
+      (mirrors the existing `ModifyHealth` dangling-target check); negative
+      hysteresis is a `Warning` (silently clamped to `0.0` at runtime, so
+      authoring it is never dangerous, just pointless); a watcher's `fires`
+      name with no listener is `Info`. A watcher's `fires` name also now
+      counts as a legitimate `Custom` emitter in the existing "nothing
+      fires this" check — a binding listening for what only a watcher (not
+      a `FireCustomEvent` action) emits must not be flagged as dangling.
+      All of the above correctly stay silent while a watcher is `disabled`.
+- [x] **Explicitly out of scope, unchanged from the plan:** arbitrary
+      expressions (`a > b && c < d`), property paths, math over observables.
+      Anything needing those drops to gameplay code and fires its own
+      `Custom` trigger — already works, remains the escape hatch.
+
+### Phase 8 decisions (settled during implementation)
+
+- Crossings re-arm automatically — edge-triggered on every crossing, as
+  planned. A `once` flag remains deferred until something asks for it.
+- `Health` stays out of the observable list, as planned — still just a data
+  slot, still not pulling gameplay semantics into the SDK.
+- Hysteresis is `.max(0.0)` at read time rather than rejected at author
+  time, so a negative value degrades to "no hysteresis" instead of being a
+  hard error — consistent with this project's general stance that
+  malformed/nonsensical authored data should degrade, not crash or block
+  loading. The diagnostic (`Warning`, not `Error`) is what actually
+  surfaces it to an author.
+
 ## Phase 10 — robustness pass (done, before Phase 8)
 
 A review of the shipped system surfaced seven gaps. Fixed here, ranked by
@@ -435,16 +574,20 @@ likelihood of biting.
       now proves it: the wait does not elapse while paused, and the sequence
       resumes on unpause. Exactly the kind of thing that stays silently
       broken until someone pauses during a cutscene.
-- [ ] **Hand information is discarded — still open, needs a decision.**
-      `XrGrabEvent`, `XrWorldButtonPressEvent` and friends all carry
-      `hand: XrGrabHand`, but the `XrdsTriggerEvent` impls drop it — only
-      target/source/kind survive. So "grabbed with the left hand" is
-      inexpressible even though the data is right there, which is a notable
-      gap for an XR SDK. Proposal: an optional `hand()` on the trait
-      (defaulting to `None`) plus an optional `hand` filter on
-      `XrdsTriggerBinding`, so a binding can require a specific hand. Not
-      implemented — it changes the authored schema, so it wants an explicit
-      call.
+- [x] **Hand information — resolved.** Added `hand()` to `XrdsTriggerEvent`
+      (default `None`), implemented on all 8 events that actually carry a
+      controller (`Grabbed`/`Dropped`/`HoverEnter`/`HoverExit`/
+      `ButtonPress`/`ButtonRelease`/`SliderChange`/`ToggleChange`), plus an
+      optional `hand: Option<XrGrabHand>` filter on `XrdsTriggerBinding`.
+      `None` (default) matches any hand — existing bindings are unaffected.
+      `XrGrabHand` gained `Serialize`/`Deserialize` (it had neither before).
+      Applied everywhere a binding is matched — `consume_triggers` **and**
+      `fire_trigger_in_world`/`XrdsAPI::fire_trigger` — so an editor preview
+      can't misrepresent what actually fires. **Diagnostics catch the
+      resulting footgun:** a hand filter on a trigger kind that never
+      reports one (`ZoneEnter`, `AnimationComplete`, `Custom`, …) makes that
+      binding permanently, silently unfireable — flagged as an `Error` in
+      `trigger_diagnostics()`.
 - [ ] **Multiplayer authority — recorded, deferred.** In a networked scene,
       if a zone trigger fires on one client, does the sequence run
       everywhere? Every client simulating the same trigger locally means
@@ -512,6 +655,148 @@ instance, while editing an instance (its trigger kind, its `enabled` flag,
 which template it points at) affects only that one. No extra schema is
 needed for this — it is a Phase 6 editor view over Phase 9a data.
 
+## Terminology: "sequence" vs "timeline"
+
+Worth pinning down, because it caused a genuine misunderstanding mid-build.
+What shipped in Phases 0-7 is an **ordered queue**, which these docs call a
+"sequence". That is *not* the same thing as a timeline (Phase 9), and the
+difference is not cosmetic:
+
+| | `XrdsSequence` | `XrdsTimeline` |
+| --- | --- | --- |
+| When does step N+1 run? | when step N reports finished | at its own authored timestamp |
+| Timing model | relative, implicit | absolute, explicit |
+| Concurrency | none — one action at a time per agent | yes — two keys can share a timestamp |
+| Duration comes from | each action blocking | where the next key is placed |
+| Substrate | `bevy-sequential-actions` queue | a clock + scheduler |
+
+The practical consequence: in a queue, `[A, Wait 0.5, B]` places B at 0.5s
+**only if A takes no time**. If A's duration changes, everything after it
+drifts. On a timeline, `t=0.5` is `t=0.5` regardless of what else happens.
+
+Both are legitimate and complementary — Unity ships Timeline *and*
+coroutine-style sequencing for the same reason.
+
+## Phase 9 — timeline-based composition
+
+- [x] `XrdsTimelineKey { at_secs: f32, action: XrdsAction }`,
+      `XrdsTimeline { keys, duration_secs: Option<f32>, looping: bool }` in
+      `crates/xrds-scene-graph/src/scene/timeline.rs`, serde-default
+      throughout. **A flat key list, not explicit tracks** — tracks are an
+      editor-organization concept; two keys sharing a timestamp already
+      expresses concurrency at runtime, so runtime tracks would be
+      redundant structure.
+- [x] Runtime scheduler: `XrdsTimelineAgent` component +
+      `advance_timelines` system (`crates/xrds-runtime/src/xrds_api/trigger_action.rs`).
+      Fires every key crossed within a frame step via a `while` loop, not an
+      `if` — a long frame, or a `duration_secs` shorter than one frame,
+      cannot silently drop a key. `duration_secs <= 0.0` fires every key
+      immediately instead of hot-spinning at one key per frame forever.
+      Looping wraps `elapsed_secs` and re-fires any key at/before the
+      wrapped time immediately, so a key at `t=0` doesn't wait a full lap.
+- [x] **Reuses `spawn_sequence_agent_with_depth` for the actual effects**,
+      rather than a second action-execution path: each fired key becomes its
+      own one-step `XrdsSequence` agent. One implementation of what each
+      `XrdsAction` does, shared between queue and timeline, as planned.
+      `XrdsAction::Wait` inside a key is meaningless (a key already carries
+      its own `at_secs`) — skipped with a warning rather than silently
+      stalling.
+- [x] Tests (`crates/xrds-runtime/src/tests/trigger_action.rs`): a timeline
+      started via `Run` fires its keys at their times and despawns once
+      non-looping duration elapses; `stop_all_sequences`/`stop_sequences_on`
+      also cancel in-flight timelines (extended to query `XrdsTimelineAgent`
+      alongside `XrdsSequenceAgent`).
+- [ ] **Not done, tracked as follow-up:** seeking/scrubbing (deliberately
+      deferred — not needed for runtime playback, likely wanted for editor
+      preview; the scheduler still fires purely as a function of `elapsed`,
+      so this isn't foreclosed) and an exhaustive multi-frame-drop stress
+      test beyond the coverage above.
+
+## Phase 9a — interoperability, the runnable registry, and Run
+
+**Mechanism, as designed: a document-level registry of named runnables,
+referenced by name, not inline nesting** (avoids a recursive data structure —
+an `XrdsAction` containing an `XrdsRunnable` containing `XrdsAction`s would
+need boxing and serialize into deeply nested JSON).
+
+- [x] `XrdsRunnable { Sequence(XrdsSequence) | Timeline(XrdsTimeline) }` and
+      `XrdsNamedRunnable { name: String, runnable: XrdsRunnable }` in
+      `timeline.rs`; `XrdsSceneDocument::runnables: Vec<XrdsNamedRunnable>`
+      (document-level, not per-node).
+- [x] `XrdsTriggerBinding` gained `runnable: Option<String>`, **additive**
+      alongside the existing inline `sequence` field rather than retyping it
+      into a `Named | Inline` enum — deliberately, to avoid an expensive
+      rewrite of ~60 existing test literals for marginal type-safety gain.
+      `Some(name)` resolves through the registry and takes priority;
+      `None` falls back to the binding's own `sequence`.
+- [x] `XrdsAction::Run { runnable: String, wait: bool }` (`wait` defaults
+      `true`). Takes a **bare name only** — the recursion firewall, since a
+      name cannot nest the way an inline runnable could.
+      `wait: true` blocks the enclosing sequence until the started runnable
+      finishes (natural for a sequence, since it's already
+      completion-chained); `wait: true` on a *timeline* target is ignored
+      with a warning instead (a timeline that paused would break the
+      absolute timing that is its entire purpose) and it always runs
+      fire-and-forget.
+- [x] Runtime resolution: `XrdsRunnableRegistry` resource
+      (`HashMap<String, XrdsRunnable>`), replaced wholesale on every full
+      document import (`reimport::sync_runnable_registry`, called from both
+      `XrdsAPI::import_scene_document` and the editor's
+      `reimport_scene_in_world`) — matching how the rest of import treats
+      the document as complete, authoritative state rather than something to
+      merge into. `consume_triggers` and `fire_trigger_in_world` both
+      resolve a binding's `runnable`/`sequence` through the same
+      `spawn_binding_runnable` helper, so the two paths can't drift.
+      An unresolvable name (unknown runnable, or a binding naming one that
+      isn't registered) logs a warning and fires nothing, rather than
+      panicking or stalling the rest of a sequence — same forward-compat
+      posture as `XrdsAction::Unknown`.
+- [x] **Runaway loops: causal chain depth, not a rate limit, with a
+      guaranteed escape** — the user's explicit requirement going in: cycles
+      may be *authored* (other engines permit intentional event loops too),
+      but an escape must always exist so a runaway loop is never a
+      mysterious hang.
+      - `XrdsSequenceAgent`/`XrdsTimelineAgent`/`XrdsActionRunner` all carry
+        `chain_depth: u32`. `Run` spawns its child at `chain_depth + 1`.
+        A rate limit was explicitly rejected: it can't distinguish a real
+        loop from legitimately high-frequency input (`SliderChange` fires
+        every frame while dragging — correct behavior, not a runaway).
+      - At the cap (`MAX_RUN_CHAIN_DEPTH = 64`), the `Run` action stops
+        spawning and fires `XrdsTriggerKind::RunawayDetected` on the node —
+        an *authorable* escape trigger (via `fire_runaway_detected_in_world`),
+        not just a log line, so a recovery sequence can run.
+      - **Recovery-path protection, verified, not just documented:** agents
+        spawned from a `RunawayDetected` firing carry `is_recovery: true`,
+        propagated through every descendant `Run`. If a recovery chain
+        itself hits the depth cap, it is dropped with a hard `log::error!`
+        and does **not** re-fire `RunawayDetected` — the breaker can never
+        recurse through its own recovery path. Without this flag, a
+        `RunawayDetected` binding that itself contained a looping `Run`
+        would cycle forever in bursts of 64, exactly the "mysterious hang"
+        the design commits to ruling out; caught and fixed before shipping,
+        not left as a known gap.
+      - `XrdsAPI::stop_sequences_on`/`stop_all_sequences` (already shipped
+        in Phase 10) are the manual kill switch, extended in this phase to
+        also cancel in-flight `XrdsTimelineAgent`s, not just
+        `XrdsSequenceAgent`s.
+      - **Known, stated coverage gap** (matches the design doc, not
+        silently dropped): an app-defined trigger event cannot carry the
+        depth stamp, so a loop routed entirely through application code is
+        undetectable by this mechanism. Same position as other engines.
+      - Tests: a self-referencing `Run` chain hits the cap and fires
+        `RunawayDetected` (observed via a bound recovery action) instead of
+        hanging the test process.
+- [x] Migration: clean break, no legacy field — verified before deciding
+      that no saved scene document on disk depended on the pre-registry
+      binding shape.
+- [ ] **Not done, tracked as follow-up:** static diagnostics for `Run`
+      (a name with no matching registry entry, or a cycle in the registry's
+      `Run`-graph, flagged as an `Error` in `trigger_diagnostics()`) — the
+      design doc calls for this, but only the *runtime* unknown-name warning
+      and depth-cap escape are implemented so far. Left for a follow-up pass
+      rather than blocking Phase 9/9a on it, since the runtime already
+      degrades safely (warn-and-skip, capped-and-escaped) without it.
+
 ## Decision log
 
 Carried over from the design doc's decisions, for a single place to see
@@ -530,4 +815,3 @@ what's settled vs. still open:
   (glTF-style external references are reserved for heavy binary assets,
   not small structured data like this).
 - Priority: build this before other new SDK components.
-

@@ -885,6 +885,7 @@ mod tests {
                 }),
                 editor: Default::default(),
                 triggers: Vec::new(),
+                watchers: Vec::new(),
             }],
             ..Default::default()
         };

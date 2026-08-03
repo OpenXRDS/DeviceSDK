@@ -14,6 +14,7 @@ fn document_validation_rejects_missing_parent() {
             grabbable: false,
             editor: XrdsEditorMetadata::default(),
             triggers: Vec::new(),
+            watchers: Vec::new(),
         }],
         ..Default::default()
     };
@@ -40,6 +41,7 @@ fn primitives_are_marked_for_mesh_bake_on_gltf_export() {
         grabbable: false,
         editor: XrdsEditorMetadata::default(),
         triggers: Vec::new(),
+        watchers: Vec::new(),
     };
 
     assert_eq!(
@@ -113,6 +115,7 @@ fn runtime_projection_preserves_ids_parents_and_gltf_references() {
                 grabbable: false,
                 editor: XrdsEditorMetadata::default(),
                 triggers: Vec::new(),
+                watchers: Vec::new(),
             },
             XrdsSceneNode {
                 id: XrdsSceneNodeId(11),
@@ -130,6 +133,7 @@ fn runtime_projection_preserves_ids_parents_and_gltf_references() {
                 grabbable: false,
                 editor: XrdsEditorMetadata::default(),
                 triggers: Vec::new(),
+                watchers: Vec::new(),
             },
         ],
         ..Default::default()
@@ -185,6 +189,7 @@ fn runtime_projection_preserves_material_for_mesh_nodes() {
         grabbable: false,
         editor: XrdsEditorMetadata::default(),
         triggers: Vec::new(),
+        watchers: Vec::new(),
     };
 
     let runtime = node.to_runtime_node();

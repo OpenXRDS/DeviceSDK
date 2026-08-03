@@ -20,8 +20,8 @@ use xrds_components::{
     XrdsMaterialTextureUvTransformMode,
 };
 use xrds_scene_graph::{
-    XrdsAction, XrdsActionTarget, XrdsActionValue, XrdsEditorMetadata, XrdsGltfAssetExportPolicy,
-    XrdsSceneAmbientLight,
+    XrdsAction, XrdsActionTarget, XrdsActionValue, XrdsAxis, XrdsCrossing, XrdsEditorMetadata,
+    XrdsGltfAssetExportPolicy, XrdsObservable, XrdsThresholdWatcher, XrdsSceneAmbientLight,
     XrdsSceneAnimationRepeatMode, XrdsSceneAsset, XrdsSceneAssetKind, XrdsSceneAudioClip,
     XrdsSceneCamera, XrdsSceneCameraProjection, XrdsSceneCube, XrdsSceneDirectionalLight,
     XrdsSceneDocument, XrdsSceneEnvironment, XrdsSceneExposureEnvironment, XrdsSceneFogEnvironment,
@@ -87,6 +87,17 @@ fn xrds_test_app() -> App {
         // this for the same reason.
         ScenePlugin,
     ));
+    // Without this, GlobalTransform never updates from Transform at all —
+    // confirmed empirically (a test moving an entity via Transform found
+    // GlobalTransform still at identity afterward), not assumed. A real app
+    // always has this via DefaultPlugins; this minimal harness does not.
+    // Needed by threshold watchers (Phase 8), which read world-space
+    // GlobalTransform rather than local Transform on purpose (correctness
+    // under parenting), so it can't be worked around by reading Transform
+    // instead.
+    if !app.is_plugin_added::<bevy::transform::TransformPlugin>() {
+        app.add_plugins(bevy::transform::TransformPlugin);
+    }
     app.init_asset::<Scene>();
     app.init_asset::<Mesh>();
     app.init_asset::<StandardMaterial>();
@@ -242,6 +253,7 @@ fn imported_test_document() -> XrdsSceneDocument {
                     }),
                 },
                 triggers: Vec::new(),
+                watchers: Vec::new(),
             },
             XrdsSceneNode {
                 id: XrdsSceneNodeId(101),
@@ -310,6 +322,7 @@ fn imported_test_document() -> XrdsSceneDocument {
                     }),
                 },
                 triggers: Vec::new(),
+                watchers: Vec::new(),
             },
         ],
         ..Default::default()
@@ -342,6 +355,7 @@ fn imported_gltf_catalog_document() -> XrdsSceneDocument {
                     ..Default::default()
                 },
                 triggers: Vec::new(),
+                watchers: Vec::new(),
             },
             XrdsSceneNode {
                 id: XrdsSceneNodeId(201),
@@ -359,6 +373,7 @@ fn imported_gltf_catalog_document() -> XrdsSceneDocument {
                 grabbable: false,
                 editor: XrdsEditorMetadata::default(),
                 triggers: Vec::new(),
+                watchers: Vec::new(),
             },
             XrdsSceneNode {
                 id: XrdsSceneNodeId(202),
@@ -376,6 +391,7 @@ fn imported_gltf_catalog_document() -> XrdsSceneDocument {
                 grabbable: false,
                 editor: XrdsEditorMetadata::default(),
                 triggers: Vec::new(),
+                watchers: Vec::new(),
             },
         ],
         ..Default::default()

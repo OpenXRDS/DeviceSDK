@@ -70,6 +70,7 @@ pub(super) fn install_xrds(app: &mut App) {
     // play mode) drive it synthetically from mouse input.
     app.init_resource::<xrds_openxr::XrInput>();
     app.init_resource::<crate::xrds_api::environment::XrdsAnchorExposureOverride>();
+    app.init_resource::<crate::xrds_api::trigger_action::XrdsRunnableRegistry>();
     app.add_message::<xrds_components::XrGrabEvent>();
     app.add_message::<xrds_components::XrDropEvent>();
     app.add_message::<xrds_components::XrZoneEnterEvent>();
@@ -82,6 +83,7 @@ pub(super) fn install_xrds(app: &mut App) {
     app.add_message::<xrds_components::XrWorldToggleEvent>();
     app.add_message::<crate::xrds_api::trigger_action::XrdsCustomTriggerEvent>();
     app.add_message::<crate::xrds_api::trigger_action::XrdsGltfAnimationCompleteEvent>();
+    app.add_message::<crate::xrds_api::trigger_action::XrdsThresholdCrossedEvent>();
 
     {
         let mut registry = app.world_mut().resource_mut::<SurfaceInterpreterRegistry>();
@@ -202,6 +204,10 @@ pub(super) fn install_xrds(app: &mut App) {
     app.add_systems(Update, ensure_aabbs_for_unculled_meshes_system);
     app.add_systems(Update, crate::xrds_api::grab::grab_system);
     app.add_systems(Update, crate::xrds_api::zone::zone_collision_system);
+    // Timeline scheduler (docs/xrds-trigger-action-implementation-plan.md
+    // Phase 9) — absolute-time, concurrent choreography, run independently
+    // of the trigger/sequence machinery below.
+    app.add_systems(Update, crate::xrds_api::trigger_action::advance_timelines);
     // Trigger-action sequencing (docs/done/xrds-trigger-action-v1.md
     // Phase 3). Explicitly ordered after zone_collision_system rather than
     // relying on Bevy's event double-buffering to hide a missing constraint:
@@ -240,17 +246,28 @@ pub(super) fn install_xrds(app: &mut App) {
             crate::xrds_api::trigger_action::consume_triggers::<
                 xrds_components::XrWorldToggleEvent,
             >,
+            // Threshold watchers (docs/xrds-trigger-action-implementation-plan.md
+            // Phase 8) — a crossing is just another way to fire Custom, so it
+            // reuses this same generic consumer, no special-casing.
+            crate::xrds_api::trigger_action::consume_triggers::<
+                crate::xrds_api::trigger_action::XrdsThresholdCrossedEvent,
+            >,
         )
             .after(crate::xrds_api::zone::zone_collision_system),
     );
-    // Both run in Last: by then Bevy's animation systems have advanced playback
-    // this frame, and SequentialActionsPlugin has advanced the action queues.
+    // All three run in Last: by then Bevy's animation and transform-propagation
+    // systems have both advanced this frame, and SequentialActionsPlugin has
+    // advanced the action queues.
     app.add_systems(
         Last,
         (
             // Corrects the cached XrdsGltfAnimationState.playing flag and emits
             // AnimationComplete triggers.
             crate::xrds_api::trigger_action::sync_completed_gltf_animation_triggers,
+            // Reads GlobalTransform (fresh as of this frame's PostUpdate
+            // propagation) and emits XrdsThresholdCrossedEvent on qualifying
+            // crossings.
+            crate::xrds_api::trigger_action::evaluate_threshold_watchers,
             // Reaps ephemeral per-firing agents once their queue drains.
             crate::xrds_api::trigger_action::despawn_finished_sequence_agents,
         ),
