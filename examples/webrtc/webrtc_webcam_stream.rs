@@ -1,7 +1,7 @@
 // External usage: live webcam + microphone streamed over WebRTC.
 //
 // Demonstrates the full media pipeline split from
-// docs/xrds-net-capture-decoupling.md:
+// docs/done/xrds-net-capture-decoupling.md:
 //   - `xrds-media` (PC-only) owns device access (nokhwa webcam, cpal
 //     microphone) AND encoding for transport (its `transcoding` feature,
 //     JPEG->H264 / PCM->Opus) — both are media concerns, not networking ones.

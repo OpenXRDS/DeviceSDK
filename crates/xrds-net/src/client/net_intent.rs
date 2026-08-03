@@ -16,7 +16,7 @@ limitations under the License.
 
 //! `XrdsNet`: the four intent verbs (`request`/`dispatch`/`listen`/
 //! `transfer`) that satisfy "protocol agnostic" as defined in
-//! `docs/xrds-net-protocol-handler.md` — an XR app developer expresses what
+//! `docs/done/xrds-net-protocol-handler.md` — an XR app developer expresses what
 //! they want, never which protocol or transport shape it needs. Built
 //! entirely on the `ProtocolHandler` capability-query mechanism `Client`
 //! itself uses; no protocol match anywhere in this file.
@@ -398,7 +398,7 @@ mod tests {
     // public `XrdsNet` verbs (not `Client` directly) — these are the rows the
     // developer-facing intent API actually needs to satisfy. Real network
     // I/O, same accepted flakiness as the rest of this suite (see
-    // `docs/xrds-net-protocol-handler.md`'s Verification strategy).
+    // `docs/done/xrds-net-protocol-handler.md`'s Verification strategy).
     //
     // Not covered here (documented gap, not an oversight):
     // - HTTP3 `request`: HTTP3 has no scheme of its own (see `scheme.rs`) —

@@ -20,7 +20,7 @@ const RANDOM_STRING_CHARSET: &str =
 /// connect path that uses rustls directly or transitively (wss via
 /// `tokio-tungstenite`, ftps via `suppaftp`'s `rustls` feature) rather than
 /// leaving it as an unstated requirement for callers to discover by crashing.
-/// See docs/xrds-net-crypto-consolidation.md.
+/// See docs/done/xrds-net-crypto-consolidation.md.
 pub fn ensure_rustls_crypto_provider() {
     static INSTALLED: std::sync::Once = std::sync::Once::new();
     INSTALLED.call_once(|| {

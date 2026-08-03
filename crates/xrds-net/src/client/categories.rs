@@ -15,7 +15,7 @@ limitations under the License.
 */
 
 //! Category traits: the two capability shapes a [`ProtocolHandler`] can offer
-//! beyond plain `request`. See `docs/xrds-net-protocol-handler.md`'s
+//! beyond plain `request`. See `docs/done/xrds-net-protocol-handler.md`'s
 //! "`ProtocolHandler` mechanism".
 //!
 //! A handler exposes these via [`ProtocolHandler::as_stream`]/

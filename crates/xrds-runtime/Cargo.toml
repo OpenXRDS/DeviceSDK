@@ -14,7 +14,7 @@ default = ["ftp-server"]
 # be varied per platform via `[target.'cfg(...)'.dependencies]` alone — the
 # Android build explicitly passes `--no-default-features` at the xrds-app
 # level (see android/quest/build.sh) instead. See
-# docs/xrds-net-android-shipping.md Phase 3.
+# docs/done/xrds-net-android-shipping.md Phase 3.
 ftp-server = ["xrds-net/ftp-server"]
 
 [dependencies]
@@ -49,7 +49,7 @@ gltf = "1.4.1"
 
 # xrds-net's client networking (http/https, ws/wss, quic, mqtt, ftp/sftp
 # client, coap) cross-compiles for Android — see
-# docs/xrds-net-android-shipping.md. `default-features = false` here (the
+# docs/done/xrds-net-android-shipping.md. `default-features = false` here (the
 # `ftp-server` feature above forwards it back on for the default/desktop
 # case); WebRTC stays out of this path entirely regardless of platform.
 xrds-net = { workspace = true, default-features = false }

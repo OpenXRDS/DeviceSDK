@@ -16,7 +16,7 @@ limitations under the License.
 
 //! `Client`/`ClientBuilder`: the expert/session API, now built on the
 //! `ProtocolHandler` mechanism (Phase 2 of
-//! `docs/xrds-net-protocol-handler.md`). Public shape is unchanged except
+//! `docs/done/xrds-net-protocol-handler.md`). Public shape is unchanged except
 //! `Client` is no longer `Clone` (see "Drop `Client: Clone`" in the plan
 //! doc) — every method that used to match over `self.protocol` and call a
 //! private per-protocol method now delegates through a capability query on

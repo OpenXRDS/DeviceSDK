@@ -8,11 +8,11 @@ description = "Desktop-only media I/O for XRDS: camera/microphone capture, encod
 [features]
 default = []
 # Synthetic, hardware-free sources for downstream tests (and this crate's own
-# Tier 2 tests). See docs/xrds-net-capture-decoupling.md.
+# Tier 2 tests). See docs/done/xrds-net-capture-decoupling.md.
 test-util = []
 # JPEG->H264 and PCM->Opus encoding, for feeding xrds-net's already-encoded
 # media sources (VideoSource::EncodedH264, AudioSource). xrds-net itself never
-# depends on a codec library — see docs/xrds-net-capture-decoupling.md.
+# depends on a codec library — see docs/done/xrds-net-capture-decoupling.md.
 transcoding = ["dep:ffmpeg-next", "dep:opus"]
 
 [dependencies]

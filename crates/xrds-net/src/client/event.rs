@@ -18,7 +18,7 @@ limitations under the License.
 //!
 //! `topic` carries the URL-path-derived topic/track name for topic-addressed
 //! transports (MQTT, future MoQ) and is `None` for topic-less ones (WS, raw
-//! QUIC) — one shape covers both, see `docs/xrds-net-protocol-handler.md`'s
+//! QUIC) — one shape covers both, see `docs/done/xrds-net-protocol-handler.md`'s
 //! "Topic addressing".
 //!
 //! `EventStream`: `listen()`'s return type. A background thread repeatedly

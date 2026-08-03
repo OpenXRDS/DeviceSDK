@@ -6,7 +6,7 @@
 // exercises the same signaling -> ICE -> media-transport path end to end
 // using the crate's own test sample file instead, so it's fast,
 // deterministic, and hardware-free — a template for smoke-testing the
-// WebRTC path, e.g. from `docs/xrds-net-release-readiness.md`'s CI work.
+// WebRTC path, e.g. from `docs/done/xrds-net-release-readiness.md`'s CI work.
 //
 // Run with: cargo run --example webrtc_file_stream
 //

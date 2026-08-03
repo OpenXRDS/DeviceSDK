@@ -1,5 +1,5 @@
 // Standalone WebRTC subscriber for the real-network verification procedure
-// in docs/xrds-net-release-readiness.md Phase 3 — see
+// in docs/done/xrds-net-release-readiness.md Phase 3 — see
 // docs/done/xrds-net-webrtc-realnet-binaries.md.
 //
 // Like webrtc_realnet_publisher.rs, this uses the default production

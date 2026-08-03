@@ -1,5 +1,5 @@
 // Standalone WebRTC signaling server for the real-network verification
-// procedure in docs/xrds-net-release-readiness.md Phase 3 — see
+// procedure in docs/done/xrds-net-release-readiness.md Phase 3 — see
 // docs/done/xrds-net-webrtc-realnet-binaries.md for why this exists as its own
 // binary rather than reusing webrtc_file_stream.rs (which runs both peers
 // from one process on loopback; this needs to run standalone so a real

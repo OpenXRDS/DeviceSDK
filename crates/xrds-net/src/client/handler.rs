@@ -16,7 +16,7 @@ limitations under the License.
 
 //! `ProtocolHandler`: one implementation per protocol, the mechanism shared by
 //! both the `Client` expert/session API and the `XrdsNet` intent-verb layer.
-//! See `docs/xrds-net-protocol-handler.md`'s "`ProtocolHandler` mechanism".
+//! See `docs/done/xrds-net-protocol-handler.md`'s "`ProtocolHandler` mechanism".
 //!
 //! `create_handler` is the one place that matches over all `PROTOCOLS` — it
 //! is not called by `Client`/`ClientBuilder` yet (that cutover is Phase 2),
@@ -38,7 +38,7 @@ use super::protocols::quic::QuicHandler;
 use super::protocols::ws::WsHandler;
 
 pub trait ProtocolHandler: Send + Sync {
-    /// Precondition check — see `docs/xrds-net-protocol-handler.md`'s
+    /// Precondition check — see `docs/done/xrds-net-protocol-handler.md`'s
     /// "Guided-error validation". Runs before the handler's actual verb;
     /// default `Ok(())` for handlers with nothing to precheck.
     fn validate(&self, _ctx: &ClientContext) -> Result<(), NetError> {
@@ -70,7 +70,7 @@ pub trait ProtocolHandler: Send + Sync {
 
     /// Escape hatch for concrete-type-only extras (FTP's raw `FtpCommands`
     /// surface, MQTT's raw connection handle) — see
-    /// `docs/xrds-net-protocol-handler.md`'s "Expert-only extras".
+    /// `docs/done/xrds-net-protocol-handler.md`'s "Expert-only extras".
     fn as_any(&self) -> &dyn std::any::Any;
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
 }

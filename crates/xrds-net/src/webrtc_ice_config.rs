@@ -17,7 +17,7 @@ limitations under the License.
 use webrtc::ice_transport::ice_server::RTCIceServer;
 
 /// Env vars TURN credentials are read from — see `build_ice_servers()`.
-/// See docs/xrds-net-release-readiness.md Phase 1.
+/// See docs/done/xrds-net-release-readiness.md Phase 1.
 pub const TURN_USERNAME_ENV: &str = "XRDS_TURN_USERNAME";
 pub const TURN_PASSWORD_ENV: &str = "XRDS_TURN_PASSWORD";
 
@@ -29,7 +29,7 @@ pub(crate) struct TurnCredentials {
 /// Reads TURN credentials from `XRDS_TURN_USERNAME`/`XRDS_TURN_PASSWORD`.
 /// `None` if either is unset — the caller then omits the TURN entry
 /// entirely rather than falling back to a hardcoded default (see
-/// docs/xrds-net-release-readiness.md Phase 1: these used to be committed
+/// docs/done/xrds-net-release-readiness.md Phase 1: these used to be committed
 /// literals in this file).
 fn turn_credentials_from_env() -> Option<TurnCredentials> {
     let username = std::env::var(TURN_USERNAME_ENV).ok()?;
@@ -113,7 +113,7 @@ mod tests {
     }
 
     /// This is the exact class of bug fixed in
-    /// docs/xrds-net-crypto-consolidation.md (TURN-over-TLS on port 13479
+    /// docs/done/xrds-net-crypto-consolidation.md (TURN-over-TLS on port 13479
     /// using `turn:` instead of `turns:`, rejected by the ICE agent), which
     /// then reappeared in a second, un-synced copy of this list (see
     /// docs/done/xrds-net-webrtc-ice-config-fix.md). Both `WebRTCClient` and

@@ -23,7 +23,7 @@ In practice, this means the repo follows a two-layer model:
 
 For strict layering, the `xrds` crate does not re-export Bevy. If you intentionally drop to the expert layer, import `bevy` explicitly instead of reaching it through XRDS.
 
-Editor-focused planning notes are tracked in [docs/editor-readiness-checklist.md](docs/editor-readiness-checklist.md).
+Editor-focused planning notes are tracked in [docs/done/editor-readiness-checklist.md](docs/done/editor-readiness-checklist.md).
 
 ## Which Type Do I Use?
 

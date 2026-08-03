@@ -6,7 +6,7 @@
 //! concern, not a networking one: encoder selection, hardware acceleration,
 //! and platform codec-library interop (e.g. ffmpeg's Media Foundation
 //! backend on Windows) are entirely orthogonal to sockets/ICE/RTP. See
-//! `docs/xrds-net-capture-decoupling.md`.
+//! `docs/done/xrds-net-capture-decoupling.md`.
 //!
 //! [`encode_jpeg_stream_to_h264`] and [`encode_pcm_stream_to_opus`] are the
 //! ergonomic entry points: they take this crate's own capture outputs

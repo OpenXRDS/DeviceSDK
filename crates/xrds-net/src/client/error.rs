@@ -20,7 +20,7 @@ limitations under the License.
 //! `XrdsNet` intent verbs, so "this protocol doesn't support that verb" and
 //! "you forgot to fill in a required field" are programmatically distinguishable
 //! from a generic network failure — not just human-readable strings. See
-//! `docs/xrds-net-protocol-handler.md`'s "`NetError`: structured, not
+//! `docs/done/xrds-net-protocol-handler.md`'s "`NetError`: structured, not
 //! stringly-typed".
 
 use crate::common::enums::PROTOCOLS;

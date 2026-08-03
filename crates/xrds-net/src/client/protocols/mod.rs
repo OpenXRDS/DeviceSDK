@@ -15,7 +15,7 @@ limitations under the License.
 */
 
 //! One `ProtocolHandler` implementation per protocol. See
-//! `docs/xrds-net-protocol-handler.md`'s "Method -> handler mapping" for the
+//! `docs/done/xrds-net-protocol-handler.md`'s "Method -> handler mapping" for the
 //! full extraction plan; modules land here one at a time (Phase 1).
 
 pub mod coap;

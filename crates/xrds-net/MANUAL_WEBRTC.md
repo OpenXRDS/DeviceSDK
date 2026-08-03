@@ -86,7 +86,7 @@ WebRTC needs setup the rest of the crate doesn't:
    one). Calling `rustls::crypto::ring::default_provider().install_default()`
    directly instead is not recommended: it panics if called twice in the
    same process, which is easy to hit once more than one part of an app
-   touches rustls (see docs/xrds-net-crypto-consolidation.md).
+   touches rustls (see docs/done/xrds-net-crypto-consolidation.md).
 
    Omitting this makes the DTLS handshake fail at runtime.
 3. **A reachable signaling server.** Either run the built-in one
@@ -111,7 +111,7 @@ WebRTC needs setup the rest of the crate doesn't:
    that can reach each other directly (including same-machine/loopback
    testing) still work, but there's no relay fallback for restrictive
    NATs. There used to be a single hardcoded TURN username/password
-   committed in source; see docs/xrds-net-release-readiness.md Phase 1 for
+   committed in source; see docs/done/xrds-net-release-readiness.md Phase 1 for
    why that changed.
 
    For a loopback/local-testing scenario where you don't want *any* remote

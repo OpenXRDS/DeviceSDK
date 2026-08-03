@@ -21,11 +21,11 @@ limitations under the License.
 //! `PROTOCOLS::FILE` is handled separately, by direct `std::fs::read` — not
 //! through this HTTP client at all. `reqwest` can't fetch `file://` URLs (it's
 //! HTTP-only); the previous `curl`-based implementation could, because curl's
-//! URL API is scheme-agnostic. See docs/xrds-net-crypto-consolidation.md.
+//! URL API is scheme-agnostic. See docs/done/xrds-net-crypto-consolidation.md.
 //!
 //! Rustls-backed (`rustls-tls-webpki-roots`), replacing `curl`/OpenSSL as
 //! part of the crypto-library consolidation — see
-//! docs/xrds-net-crypto-consolidation.md. Feature parity with the old `curl`
+//! docs/done/xrds-net-crypto-consolidation.md. Feature parity with the old `curl`
 //! implementation: GET/POST, custom request headers, a redirect on/off
 //! toggle. `ctx.insecure` and `ctx.timeout` were never read by the old
 //! implementation either (confirmed: `insecure` is QUIC-only) — not adding

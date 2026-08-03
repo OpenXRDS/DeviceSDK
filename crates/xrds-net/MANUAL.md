@@ -514,7 +514,7 @@ provider): HTTP/HTTPS (`reqwest`), `wss://` (`tokio-tungstenite`), FTPS
 vendored inside `quiche` — it has no rustls option, so it's the one exception.
 That's the whole story: two crypto backends, no OpenSSL, no libcurl, no
 `native-tls`, nothing to provision on any platform. See
-`docs/xrds-net-crypto-consolidation.md` for why.
+`docs/done/xrds-net-crypto-consolidation.md` for why.
 
 Certificate validation uses the **webpki-roots** bundled Mozilla CA set (not
 the OS trust store — more portable, and works identically on Android).

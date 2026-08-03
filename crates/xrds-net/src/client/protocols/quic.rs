@@ -19,7 +19,7 @@ limitations under the License.
 //!
 //! Extracted verbatim from `client.rs`'s `connect_quic`/`send_quic`/
 //! `rcv_quic` + `event_loop`/`handle_read`/`handle_write`/
-//! `send_initial_packet` (Phase 1 of `docs/xrds-net-protocol-handler.md`) —
+//! `send_initial_packet` (Phase 1 of `docs/done/xrds-net-protocol-handler.md`) —
 //! `Client`'s old methods are untouched and still the ones actually called
 //! until Phase 2 rewires `Client` onto this handler. Shares
 //! `create_quic_config` with `Http3Handler` via `quic_shared`.

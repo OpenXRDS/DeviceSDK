@@ -103,7 +103,7 @@ impl Args {
 /// overrides (`XRDS_TURN_USERNAME`/`XRDS_TURN_PASSWORD`) before any
 /// `WebRTCClient` is created — that's the only place `build_ice_servers()`
 /// actually reads credentials from (see
-/// docs/xrds-net-release-readiness.md Phase 1), so this is purely a
+/// docs/done/xrds-net-release-readiness.md Phase 1), so this is purely a
 /// convenience over exporting the env vars yourself; both do the same
 /// thing. Call once, early in `main()`, before creating any `WebRTCClient`
 /// — env vars are read at `publish()`/`join_session()` time, not at
@@ -124,7 +124,7 @@ pub fn apply_turn_credentials_from_args(args: &Args) {
 /// the winning candidate pair type via `active_candidate_pair_summary()`,
 /// which is the actual evidence of whether a TURN relay was used versus a
 /// direct/STUN-assisted path. This is the main thing Phase 3 of
-/// docs/xrds-net-release-readiness.md needs a human to read off the
+/// docs/done/xrds-net-release-readiness.md needs a human to read off the
 /// terminal.
 ///
 /// Returns whether ICE actually connected — **check this** before doing

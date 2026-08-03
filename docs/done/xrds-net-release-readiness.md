@@ -78,7 +78,7 @@ in actual findings rather than guesswork. Summarized in Findings below.
    crash risk above (stale references outliving their session).
 
 4. **Hardcoded TURN credentials** (already identified pre-plan):
-   `username: "gganjang"`, `password: "keti007"` in
+   a literal username/password pair in
    `crates/xrds-net/src/webrtc_ice_config.rs` — the single shared ICE
    config function (post de-duplication). **Decision: move to config/env
    before release** (per explicit instruction).

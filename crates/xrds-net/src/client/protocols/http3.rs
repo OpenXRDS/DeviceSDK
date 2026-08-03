@@ -18,7 +18,7 @@ limitations under the License.
 //!
 //! Extracted verbatim from `client.rs`'s `request_http3` + its
 //! `send_packet`/`receive_packets`/`send_http3_request`/`handle_http3_events`
-//! helpers (Phase 1 of `docs/xrds-net-protocol-handler.md`) — `Client`'s old
+//! helpers (Phase 1 of `docs/done/xrds-net-protocol-handler.md`) — `Client`'s old
 //! methods are untouched and still the ones actually called until Phase 2
 //! rewires `Client` onto this handler. Shares `create_quic_config` with
 //! `QuicHandler` via `quic_shared`.

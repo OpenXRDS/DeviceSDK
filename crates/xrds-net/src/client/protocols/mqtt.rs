@@ -18,7 +18,7 @@ limitations under the License.
 //! expert-only extra (raw `rumqttc` handle access via `as_any`).
 //!
 //! Extracted verbatim from `client.rs`'s `connect_mqtt`/`send_mqtt`/
-//! `rcv_mqtt` (Phase 1 of `docs/xrds-net-protocol-handler.md`) — `Client`'s
+//! `rcv_mqtt` (Phase 1 of `docs/done/xrds-net-protocol-handler.md`) — `Client`'s
 //! old methods are untouched and still the ones actually called until Phase
 //! 2 rewires `Client` onto this handler.
 //!

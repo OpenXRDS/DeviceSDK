@@ -16,7 +16,7 @@ limitations under the License.
 
 //! URL scheme -> `PROTOCOLS` inference, the mechanism behind
 //! `ClientBuilder::from_url` and every `XrdsNet` intent verb. See
-//! `docs/xrds-net-protocol-handler.md`'s "Scheme -> protocol mapping".
+//! `docs/done/xrds-net-protocol-handler.md`'s "Scheme -> protocol mapping".
 //!
 //! `HTTP3` has no scheme of its own on purpose — reached only via the
 //! `ClientBuilder::set_protocol` expert override until real ALPN-based

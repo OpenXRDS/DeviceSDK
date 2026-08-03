@@ -19,7 +19,7 @@ limitations under the License.
 //! This is transport only — no PCM, no resampling, no Opus encoding. That used
 //! to live here (as the old `AudioCapturer`, and later a PCM-consuming
 //! `AudioEncoder`), but codec encoding is a media concern, not a networking
-//! one (see `docs/xrds-net-capture-decoupling.md`); it now lives in
+//! one (see `docs/done/xrds-net-capture-decoupling.md`); it now lives in
 //! `xrds_media::transcoding`. This module only bridges the caller's
 //! [`AudioSource`] (a plain `std::sync::mpsc::Receiver`, so the caller isn't
 //! forced to depend on tokio) onto the async `write_sample` call.

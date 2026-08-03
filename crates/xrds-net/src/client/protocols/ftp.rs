@@ -20,7 +20,7 @@ limitations under the License.
 //! (`CDUP`/`QUIT`/`RMD`/`MKD`/`PWD`/`NOOP`/`APPE`).
 //!
 //! Extracted verbatim from `client.rs`'s `connect_ftp`/`connect_sftp` + all
-//! `run_ftp_*` (Phase 1 of `docs/xrds-net-protocol-handler.md`) — `Client`'s
+//! `run_ftp_*` (Phase 1 of `docs/done/xrds-net-protocol-handler.md`) — `Client`'s
 //! old methods are untouched and still the ones actually called until Phase
 //! 2 rewires `Client` onto this handler.
 //!

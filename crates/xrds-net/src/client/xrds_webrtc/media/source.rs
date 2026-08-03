@@ -18,7 +18,7 @@ limitations under the License.
 //!
 //! xrds-net does not acquire media from hardware, and it does not encode media
 //! for a specific wire codec either — both are media concerns, not networking
-//! ones (see `docs/xrds-net-capture-decoupling.md`). It accepts media **already
+//! ones (see `docs/done/xrds-net-capture-decoupling.md`). It accepts media **already
 //! encoded** in the codec WebRTC negotiated (H264 video, Opus audio) and only
 //! handles transport: RTP packetization and track writes.
 //!

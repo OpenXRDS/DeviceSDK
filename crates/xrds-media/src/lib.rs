@@ -37,7 +37,7 @@ limitations under the License.
 //!   and [`transcoding::encode_pcm_stream_to_opus`] turn the two outputs above
 //!   into exactly what `xrds-net`'s `VideoSource::EncodedH264` / `AudioSource`
 //!   expect — because encoding for a specific wire codec is a media concern,
-//!   not a networking one (see `docs/xrds-net-capture-decoupling.md`).
+//!   not a networking one (see `docs/done/xrds-net-capture-decoupling.md`).
 //!
 //! By design this crate does **not** depend on `xrds-net`; the consumer wires the
 //! plain outputs into whatever transport it uses.

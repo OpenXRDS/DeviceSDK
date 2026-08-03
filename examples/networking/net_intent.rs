@@ -1,7 +1,7 @@
 // The protocol-agnostic path: XrdsNet's four intent verbs (request,
 // dispatch, listen, transfer). No protocol enum, no builder chain, no
 // connect()/send() choice to make — the URL scheme picks the mechanism.
-// See docs/xrds-net-protocol-handler.md for the full design.
+// See docs/done/xrds-net-protocol-handler.md for the full design.
 //
 // Compare with net.rs, which shows the same operations through the expert
 // ClientBuilder/Client session API this is built on top of.

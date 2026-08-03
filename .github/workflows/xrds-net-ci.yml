@@ -47,7 +47,7 @@ jobs:
     # Stopgap, not a fix: a large fraction of this suite hits live public
     # servers (mosquitto/rebex/coap.me/echo.websocket.org) and isn't tagged
     # #[ignore] the way the WebRTC slow test is, so it can't be cleanly
-    # split into blocking/non-blocking today. See docs/xrds-net-release-readiness.md
+    # split into blocking/non-blocking today. See docs/done/xrds-net-release-readiness.md
     # Phase 5 — tagging those tests is the real fix, tracked as a follow-up.
     continue-on-error: true
     steps:

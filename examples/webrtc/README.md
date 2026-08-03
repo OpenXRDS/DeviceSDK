@@ -46,7 +46,7 @@ config (no loopback shortcut), so they're the right tool when you actually
 need to confirm WebRTC works over a real network, not just within one
 process.
 
-Background: `docs/xrds-net-release-readiness.md` Phase 3 and
+Background: `docs/done/xrds-net-release-readiness.md` Phase 3 and
 `docs/done/xrds-net-webrtc-realnet-binaries.md`.
 
 ### Build them once

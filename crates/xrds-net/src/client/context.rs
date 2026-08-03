@@ -20,7 +20,7 @@ limitations under the License.
 //! connection state (the `ws_client`/`ftp_stream`/`mqtt_client`/
 //! `quic_connection`/... fields) — those move into each handler's own struct
 //! in Phase 1. Handlers stay stateless w.r.t. config; they only own their
-//! *connection* state. See `docs/xrds-net-protocol-handler.md`'s
+//! *connection* state. See `docs/done/xrds-net-protocol-handler.md`'s
 //! "`ProtocolHandler` mechanism".
 
 use crate::common::data_structure::XrUrl;

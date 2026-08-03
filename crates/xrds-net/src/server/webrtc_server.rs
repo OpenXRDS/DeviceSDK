@@ -159,7 +159,7 @@ impl WebRTCServer {
     /// error, or the stream just ending) — previously this only ran on an
     /// explicit WS close frame, so a dropped connection (network blip, a
     /// crashed client) leaked its session/participant entries forever. See
-    /// docs/xrds-net-release-readiness.md Phase 2.
+    /// docs/done/xrds-net-release-readiness.md Phase 2.
     async fn handle_client_disconnect(&self, client_id: &str) {
         self.clients.lock().await.remove(client_id);
 
@@ -383,7 +383,7 @@ impl WebRTCServer {
 
     /// Builds an error response of the given message type — used instead of
     /// panicking when a client references an unknown/stale session or client
-    /// id, or omits a required field. See docs/xrds-net-release-readiness.md
+    /// id, or omits a required field. See docs/done/xrds-net-release-readiness.md
     /// Phase 2: these lookups used to `.unwrap()` on client-supplied ids,
     /// which let one malformed or out-of-order message from a single client
     /// crash the whole signaling task.
@@ -970,7 +970,7 @@ mod tests {
     }
 
     // These four exercise the crash-risk fix from
-    // docs/xrds-net-release-readiness.md Phase 2: every handler taking a
+    // docs/done/xrds-net-release-readiness.md Phase 2: every handler taking a
     // client-supplied session_id used to `.unwrap()` the lookup, so an
     // unknown/stale id panicked the whole signaling task instead of
     // returning an error to that one client.

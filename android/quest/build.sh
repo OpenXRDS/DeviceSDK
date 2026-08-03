@@ -118,7 +118,7 @@ export CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS="-L $SCRIPT_DIR/libs/arm64-v
 
 # Force CMake onto Ninja for quiche's vendored BoringSSL build (quiche is the
 # only remaining native/CMake dependency — everything else is rustls; see
-# docs/xrds-net-crypto-consolidation.md). On Windows hosts, CMake's default
+# docs/done/xrds-net-crypto-consolidation.md). On Windows hosts, CMake's default
 # generator can be hijacked by a stale Visual Studio "Android Application"
 # toolset (old NDK bundled with a VS Android workload) instead of our
 # NDK/cargo-ndk toolchain.
@@ -133,7 +133,7 @@ export CMAKE_MAKE_PROGRAM="${CMAKE_MAKE_PROGRAM:-}"
 # --no-default-features drops xrds-app's `ftp-server` feature (forwarded
 # through xrds-runtime to xrds-net) — an XR client never hosts FTP, and that
 # feature's dependency chain (libunftp -> aws-lc-sys) isn't cross-compile
-# proven for Android. See docs/xrds-net-android-shipping.md Phase 3 for why
+# proven for Android. See docs/done/xrds-net-android-shipping.md Phase 3 for why
 # this can't be expressed as a per-target Cargo.toml default instead.
 (cd "$WORKSPACE_ROOT" && cargo ndk -t arm64-v8a -P 32 -o "$SCRIPT_DIR/jni" build --release -p xrds-app --no-default-features)
 

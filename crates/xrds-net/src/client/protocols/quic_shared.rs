@@ -17,7 +17,7 @@ limitations under the License.
 //! Shared QUIC transport config used by both `Http3Handler` and
 //! `QuicHandler` — extracted verbatim from `client.rs`'s
 //! `create_quic_config`/`MAX_DATAGRAM_SIZE` (Phase 1 of
-//! `docs/xrds-net-protocol-handler.md`).
+//! `docs/done/xrds-net-protocol-handler.md`).
 
 pub(crate) const MAX_DATAGRAM_SIZE: usize = 1350;
 

@@ -4,7 +4,7 @@
 mod client;
 
 // Phase 0 scaffolding for the protocol-agnostic API (see
-// docs/xrds-net-protocol-handler.md) — new types only, not wired into
+// docs/done/xrds-net-protocol-handler.md) — new types only, not wired into
 // `Client`/`ClientBuilder` yet.
 mod categories;
 mod context;

@@ -27,7 +27,7 @@ limitations under the License.
 //! crate) while only `open` used `tokio-tungstenite` — two independent WS
 //! implementations, each pulling their own TLS dependency. Consolidated onto
 //! this one backend as part of the crypto-library consolidation (see
-//! `docs/xrds-net-crypto-consolidation.md`): one implementation, one TLS
+//! `docs/done/xrds-net-crypto-consolidation.md`): one implementation, one TLS
 //! stack (rustls), for all three verbs. `StreamHandler::recv` blocks by
 //! polling `WsSession` (matching the old sync backend's blocking-until-message
 //! contract) rather than the non-blocking `poll_recv` `SessionHandler` uses.
