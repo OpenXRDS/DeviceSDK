@@ -307,8 +307,12 @@ pub struct XrdsTriggerBinding {
 /// diagnostics in one uniform list.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct XrdsSceneTriggerDiagnostic {
-    /// The node whose bindings the problem was found on.
-    pub node_id: XrdsSceneNodeId,
+    /// The node whose bindings the problem was found on. `None` for a
+    /// problem in the document-level runnable registry itself (Phase 9a) —
+    /// a `Run` cycle or dangling reference there isn't any one node's
+    /// fault, since a registry entry may be referenced by many nodes or
+    /// none yet.
+    pub node_id: Option<XrdsSceneNodeId>,
     pub severity: XrdsSceneTriggerDiagnosticSeverity,
     pub title: String,
     pub detail: String,
@@ -335,13 +339,18 @@ impl XrdsSceneDocument {
     /// story — a runtime `warn!` only helps if someone happens to be
     /// watching the log at that moment.
     ///
-    /// Note: `XrdsAction::Run` / named-runnable reference checks belong here
-    /// too once Phase 9a lands; this is their intended home.
+    /// Also covers Phase 9a's registry: a `runnable`/`Run` reference naming
+    /// an entry `XrdsSceneDocument::runnables` doesn't have, and a static
+    /// cycle in the registry's own `Run`-graph (`A runs B runs A`) — the
+    /// latter is `node_id: None` since a registry entry isn't any one
+    /// node's fault.
     pub fn trigger_diagnostics(&self) -> Vec<XrdsSceneTriggerDiagnostic> {
         use XrdsSceneTriggerDiagnosticSeverity as Severity;
 
         let mut out = Vec::new();
         let known_ids: HashSet<XrdsSceneNodeId> = self.nodes.iter().map(|n| n.id).collect();
+        let known_runnables: HashSet<&str> =
+            self.runnables.iter().map(|r| r.name.as_str()).collect();
 
         // Custom names bound somewhere in this document, and custom names it
         // emits. Either side can legitimately live in application code, so a
@@ -392,7 +401,7 @@ impl XrdsSceneDocument {
 
                 match &binding.trigger {
                     XrdsTriggerKind::Unknown => out.push(XrdsSceneTriggerDiagnostic {
-                        node_id: node.id,
+                        node_id: Some(node.id),
                         severity: Severity::Warning,
                         title: "Unrecognized trigger kind".to_string(),
                         detail: format!(
@@ -402,7 +411,7 @@ impl XrdsSceneDocument {
                     }),
                     XrdsTriggerKind::Custom(name) if !emitted_custom.contains(name.as_str()) => {
                         out.push(XrdsSceneTriggerDiagnostic {
-                            node_id: node.id,
+                            node_id: Some(node.id),
                             severity: Severity::Info,
                             title: "Custom trigger has no emitter in this document".to_string(),
                             detail: format!(
@@ -434,7 +443,7 @@ impl XrdsSceneDocument {
                     )
                 {
                     out.push(XrdsSceneTriggerDiagnostic {
-                        node_id: node.id,
+                        node_id: Some(node.id),
                         severity: Severity::Error,
                         title: "Hand filter on a trigger kind with no hand".to_string(),
                         detail: format!(
@@ -445,73 +454,127 @@ impl XrdsSceneDocument {
                     });
                 }
 
-                if binding.sequence.steps.is_empty() {
-                    out.push(XrdsSceneTriggerDiagnostic {
-                        node_id: node.id,
-                        severity: Severity::Info,
-                        title: "Empty sequence".to_string(),
-                        detail: format!("{where_} has no steps, so firing it does nothing."),
-                    });
-                }
-
-                for (step_index, step) in binding.sequence.steps.iter().enumerate() {
-                    let at = format!("{where_}, step #{step_index}");
-
-                    match step {
-                        XrdsAction::Unknown => out.push(XrdsSceneTriggerDiagnostic {
-                            node_id: node.id,
-                            severity: Severity::Warning,
-                            title: "Unrecognized action".to_string(),
+                // `runnable: Some(name)` takes priority over the inline
+                // `sequence` at runtime (see `XrdsTriggerBinding::runnable`),
+                // so the two are mutually exclusive in what actually
+                // executes. Check the named case here; only walk the inline
+                // sequence's own steps below when there is no named runnable
+                // to defer to — otherwise "Empty sequence" and per-step
+                // diagnostics would fire on dead data that never runs.
+                if let Some(name) = &binding.runnable {
+                    if !known_runnables.contains(name.as_str()) {
+                        out.push(XrdsSceneTriggerDiagnostic {
+                            node_id: Some(node.id),
+                            severity: Severity::Error,
+                            title: "Binding references unknown runnable".to_string(),
                             detail: format!(
-                                "{at} is an action this build does not know and will be skipped \
-                                 at runtime. The scene was likely authored by a newer editor."
+                                "{where_} names runnable {name:?}, which has no matching entry \
+                                 in XrdsSceneDocument::runnables — this binding will fire \
+                                 nothing at runtime."
                             ),
-                        }),
-
-                        XrdsAction::PlayGltfAnimation { .. } | XrdsAction::StopGltfAnimation
-                            if !node_is_gltf =>
-                        {
-                            out.push(XrdsSceneTriggerDiagnostic {
-                                node_id: node.id,
-                                severity: Severity::Warning,
-                                title: "glTF animation action on a non-glTF node".to_string(),
-                                detail: format!(
-                                    "{at} drives glTF animation, but this node payload is not a \
-                                     glTF asset, so it will do nothing."
-                                ),
-                            });
-                        }
-
-                        XrdsAction::FireCustomEvent { name }
-                            if !bound_custom.contains(name.as_str()) =>
-                        {
-                            out.push(XrdsSceneTriggerDiagnostic {
-                                node_id: node.id,
-                                severity: Severity::Info,
-                                title: "Custom event has no listener in this document".to_string(),
-                                detail: format!(
-                                    "{at} fires Custom({name}), which no binding in this document \
-                                     listens for. Fine if application code handles it."
-                                ),
-                            });
-                        }
-
-                        _ => {}
+                        });
+                    }
+                    if !binding.sequence.steps.is_empty() {
+                        out.push(XrdsSceneTriggerDiagnostic {
+                            node_id: Some(node.id),
+                            severity: Severity::Info,
+                            title: "Binding has both a named runnable and an inline sequence"
+                                .to_string(),
+                            detail: format!(
+                                "{where_} sets runnable: Some({name:?}) but also has inline \
+                                 sequence steps — the named runnable takes priority and the \
+                                 inline sequence is ignored at runtime."
+                            ),
+                        });
+                    }
+                } else {
+                    if binding.sequence.steps.is_empty() {
+                        out.push(XrdsSceneTriggerDiagnostic {
+                            node_id: Some(node.id),
+                            severity: Severity::Info,
+                            title: "Empty sequence".to_string(),
+                            detail: format!("{where_} has no steps, so firing it does nothing."),
+                        });
                     }
 
-                    // Dangling explicit node target — the one genuinely
-                    // unworkable case, hence Error.
-                    if let XrdsAction::ModifyHealth { target, .. } = step {
-                        if let XrdsActionTarget::Node(id) = target {
-                            if !known_ids.contains(id) {
+                    for (step_index, step) in binding.sequence.steps.iter().enumerate() {
+                        let at = format!("{where_}, step #{step_index}");
+
+                        match step {
+                            XrdsAction::Unknown => out.push(XrdsSceneTriggerDiagnostic {
+                                node_id: Some(node.id),
+                                severity: Severity::Warning,
+                                title: "Unrecognized action".to_string(),
+                                detail: format!(
+                                    "{at} is an action this build does not know and will be \
+                                     skipped at runtime. The scene was likely authored by a \
+                                     newer editor."
+                                ),
+                            }),
+
+                            XrdsAction::PlayGltfAnimation { .. } | XrdsAction::StopGltfAnimation
+                                if !node_is_gltf =>
+                            {
                                 out.push(XrdsSceneTriggerDiagnostic {
-                                    node_id: node.id,
-                                    severity: Severity::Error,
-                                    title: "Action targets a node that does not exist".to_string(),
+                                    node_id: Some(node.id),
+                                    severity: Severity::Warning,
+                                    title: "glTF animation action on a non-glTF node".to_string(),
                                     detail: format!(
-                                        "{at} targets node {id:?}, which is not in this document."
+                                        "{at} drives glTF animation, but this node payload is \
+                                         not a glTF asset, so it will do nothing."
                                     ),
                                 });
+                            }
+
+                            XrdsAction::FireCustomEvent { name }
+                                if !bound_custom.contains(name.as_str()) =>
+                            {
+                                out.push(XrdsSceneTriggerDiagnostic {
+                                    node_id: Some(node.id),
+                                    severity: Severity::Info,
+                                    title: "Custom event has no listener in this document"
+                                        .to_string(),
+                                    detail: format!(
+                                        "{at} fires Custom({name}), which no binding in this \
+                                         document listens for. Fine if application code handles \
+                                         it."
+                                    ),
+                                });
+                            }
+
+                            XrdsAction::Run { runnable, .. }
+                                if !known_runnables.contains(runnable.as_str()) =>
+                            {
+                                out.push(XrdsSceneTriggerDiagnostic {
+                                    node_id: Some(node.id),
+                                    severity: Severity::Error,
+                                    title: "Run references unknown runnable".to_string(),
+                                    detail: format!(
+                                        "{at} runs {runnable:?}, which has no matching entry in \
+                                         XrdsSceneDocument::runnables."
+                                    ),
+                                });
+                            }
+
+                            _ => {}
+                        }
+
+                        // Dangling explicit node target — the one genuinely
+                        // unworkable case, hence Error.
+                        if let XrdsAction::ModifyHealth { target, .. } = step {
+                            if let XrdsActionTarget::Node(id) = target {
+                                if !known_ids.contains(id) {
+                                    out.push(XrdsSceneTriggerDiagnostic {
+                                        node_id: Some(node.id),
+                                        severity: Severity::Error,
+                                        title: "Action targets a node that does not exist"
+                                            .to_string(),
+                                        detail: format!(
+                                            "{at} targets node {id:?}, which is not in this \
+                                             document."
+                                        ),
+                                    });
+                                }
                             }
                         }
                     }
@@ -527,7 +590,7 @@ impl XrdsSceneDocument {
                 if let XrdsObservable::DistanceTo { node: target } = &watcher.observable {
                     if !known_ids.contains(target) {
                         out.push(XrdsSceneTriggerDiagnostic {
-                            node_id: node.id,
+                            node_id: Some(node.id),
                             severity: Severity::Error,
                             title: "Watcher measures distance to a node that does not exist"
                                 .to_string(),
@@ -541,7 +604,7 @@ impl XrdsSceneDocument {
 
                 if watcher.hysteresis < 0.0 {
                     out.push(XrdsSceneTriggerDiagnostic {
-                        node_id: node.id,
+                        node_id: Some(node.id),
                         severity: Severity::Warning,
                         title: "Negative hysteresis".to_string(),
                         detail: format!(
@@ -554,7 +617,7 @@ impl XrdsSceneDocument {
 
                 if !bound_custom.contains(watcher.fires.as_str()) {
                     out.push(XrdsSceneTriggerDiagnostic {
-                        node_id: node.id,
+                        node_id: Some(node.id),
                         severity: Severity::Info,
                         title: "Watcher fires a Custom trigger with no listener".to_string(),
                         detail: format!(
@@ -567,8 +630,127 @@ impl XrdsSceneDocument {
             }
         }
 
+        // --- Registry-level: unknown Run targets and Run-graph cycles ---
+        // These are node-less (a registry entry may be referenced by many
+        // nodes, or none yet), unlike everything above.
+        let registry_map: std::collections::HashMap<String, &XrdsNamedRunnable> =
+            self.runnables.iter().map(|r| (r.name.clone(), r)).collect();
+
+        for entry in &self.runnables {
+            for target in run_targets(&entry.runnable) {
+                if !registry_map.contains_key(target) {
+                    out.push(XrdsSceneTriggerDiagnostic {
+                        node_id: None,
+                        severity: Severity::Error,
+                        title: "Named runnable references unknown runnable".to_string(),
+                        detail: format!(
+                            "Runnable {:?} contains Run({target:?}), which has no matching \
+                             entry in XrdsSceneDocument::runnables.",
+                            entry.name
+                        ),
+                    });
+                }
+            }
+        }
+
+        // `A runs B runs A` is not prevented — other engines permit
+        // intentional event loops too — but it is flagged, since the
+        // runtime only escapes it via the chain-depth cap
+        // (`XrdsTriggerKind::RunawayDetected`), not by refusing to run.
+        let mut done: HashSet<&str> = HashSet::new();
+        let mut reported: HashSet<&str> = HashSet::new();
+        for entry in &self.runnables {
+            if !done.contains(entry.name.as_str()) {
+                let mut stack: Vec<&str> = Vec::new();
+                visit_runnable_for_cycles(
+                    &entry.name,
+                    &registry_map,
+                    &mut stack,
+                    &mut done,
+                    &mut reported,
+                    &mut out,
+                );
+            }
+        }
+
         out
     }
+}
+
+/// Every name a `Run` action inside `runnable` targets — used only by the
+/// registry-level cycle/unknown-reference checks in `trigger_diagnostics`.
+fn run_targets(runnable: &XrdsRunnable) -> Vec<&str> {
+    match runnable {
+        XrdsRunnable::Sequence(seq) => seq
+            .steps
+            .iter()
+            .filter_map(|action| match action {
+                XrdsAction::Run { runnable, .. } => Some(runnable.as_str()),
+                _ => None,
+            })
+            .collect(),
+        XrdsRunnable::Timeline(timeline) => timeline
+            .keys
+            .iter()
+            .filter_map(|key| match &key.action {
+                XrdsAction::Run { runnable, .. } => Some(runnable.as_str()),
+                _ => None,
+            })
+            .collect(),
+    }
+}
+
+/// DFS cycle detection over the registry's `Run`-graph. `stack` is the
+/// current path; finding `name` already on it means everything from its
+/// first occurrence onward forms a cycle. `done` short-circuits re-walking
+/// an already-fully-explored (acyclic-from-here) name; `reported` stops the
+/// same cycle being pushed once per member node.
+fn visit_runnable_for_cycles<'a>(
+    name: &'a str,
+    registry_map: &std::collections::HashMap<String, &'a XrdsNamedRunnable>,
+    stack: &mut Vec<&'a str>,
+    done: &mut HashSet<&'a str>,
+    reported: &mut HashSet<&'a str>,
+    out: &mut Vec<XrdsSceneTriggerDiagnostic>,
+) {
+    if done.contains(name) {
+        return;
+    }
+    if let Some(pos) = stack.iter().position(|n| *n == name) {
+        let cycle_path = &stack[pos..];
+        for member in cycle_path {
+            if reported.insert(member) {
+                out.push(XrdsSceneTriggerDiagnostic {
+                    node_id: None,
+                    severity: XrdsSceneTriggerDiagnosticSeverity::Error,
+                    title: "Cycle in the Run registry".to_string(),
+                    detail: format!(
+                        "Named runnable {member:?} is part of a Run cycle ({}). Not rejected \
+                         — intentional event loops are allowed — but the runtime only escapes \
+                         it via the chain-depth cap (see XrdsTriggerKind::RunawayDetected), so \
+                         double check this is deliberate.",
+                        cycle_path
+                            .iter()
+                            .map(|n| format!("{n:?}"))
+                            .collect::<Vec<_>>()
+                            .join(" -> ")
+                    ),
+                });
+            }
+        }
+        return;
+    }
+
+    stack.push(name);
+    if let Some(entry) = registry_map.get(name) {
+        for target in run_targets(&entry.runnable) {
+            if registry_map.contains_key(target) {
+                visit_runnable_for_cycles(target, registry_map, stack, done, reported, out);
+            }
+        }
+    }
+    stack.pop();
+    done.insert(name);
 }
 
 // ---------------------------------------------------------------------------

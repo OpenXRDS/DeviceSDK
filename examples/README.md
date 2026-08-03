@@ -87,6 +87,8 @@ Important rule about ids:
 | [scene_document_session_save_load.rs](xrds_first/scene_document_session_save_load.rs) | Document-only session workflow: save JSON, edit, save in place, and reload through `XrdsSceneDocumentSession`. |
 | [descriptor_gen.rs](xrds_first/descriptor_gen.rs) | Minimal descriptor-authoring demo: spawns a camera, ambient light, and cube purely through `XrdsAPI`/`XrdsApp::setup`. |
 | [glb_runtime_add.rs](xrds_first/glb_runtime_add.rs) | Runtime GLB placement: adds/removes a `.glb` at runtime via a keypress, entirely through `XrdsSceneDocumentSession`/scene-graph node ids. |
+| [trigger_action_sequence.rs](xrds_first/trigger_action_sequence.rs) | Trigger-action sequencing (Phase 5): one node, two `XrdsTriggerBinding`s, watched live as an ordered `XrdsSequence` blinks and teleports a cube on `ZoneEnter`/`ZoneExit`. |
+| [trigger_action_timeline.rs](xrds_first/trigger_action_timeline.rs) | Timeline-based composition and the runnable registry (Phases 9/9a): a looping `XrdsTimeline`, `XrdsAction::Run` interop in both directions (sequence starts a timeline, timeline starts a sequence), and registry reuse across two independently-triggered cubes. |
 
 ## Extension-First Examples
 

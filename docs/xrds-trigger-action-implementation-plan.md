@@ -9,27 +9,16 @@ and unscheduled action variants in
 
 Phase numbers are stable (code comments reference them), so they are
 non-contiguous here — 0-5, 7, 8, 9, 9a and 10 are done and live in the
-record doc. Only Phase 6 (editor integration) and two open questions remain.
+record doc. Only Phase 6 (editor integration) remains.
 
-## Open items — decisions needed
-
-- **Multiplayer authority is unaddressed.** In a networked scene, if a zone
-  trigger fires on one client, does the sequence run everywhere? Every client
-  simulating the same trigger locally means divergent state. Broader than the
-  backlog's `SendNetworkMessage` note, and it interacts with the existing
-  `xrds-net` work. Not a v1 blocker, but it should be written down rather
-  than discovered later.
-- **`XrdsSceneNode::enabled` is decorative today** and honoring it is a
-  change affecting every node type, so it was left out of trigger-action
-  scope. See Phase 10 in
-  [`done/xrds-trigger-action-v1.md`](done/xrds-trigger-action-v1.md) for the
-  full reasoning and the template/instance discussion that came with it.
-- **Static `Run` diagnostics — deferred, not blocking.** Unknown-runnable
-  names and `Run`-graph cycles resolve safely at runtime already (warn and
-  skip; capped chain depth with a guaranteed `RunawayDetected` escape — see
-  Phase 9a in the record doc). What is *not* yet built is catching these
-  cases at author time in `trigger_diagnostics()`, so a scene author would
-  currently only discover a typo'd runnable name by running the scene.
+Two things raised during Phase 10's review — multiplayer authority and
+`XrdsSceneNode::enabled` semantics — were deliberately scoped **out** of
+trigger-action rather than left as open questions for it: multiplayer
+authority isn't a trigger-action concern (it's a broader `xrds-net`
+question, if and when that's taken up), and `enabled` needs a pass across
+every node type, not just this one. See Phase 10 in
+[`done/xrds-trigger-action-v1.md`](done/xrds-trigger-action-v1.md) for the
+full reasoning behind both. Neither blocks Phase 6.
 
 ## Priority
 
@@ -67,4 +56,3 @@ work.
       fires; and an **instance list** — a view enumerating bindings across
       all nodes, which is what makes the template/instance split usable
       (see Phase 10 in the record doc).
-

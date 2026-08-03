@@ -2,7 +2,7 @@
 
 **Status: done.** The completed record of what shipped, phase by phase, and
 why each decision was made. Live at `xrds-runtime` 112/112,
-`xrds-scene-graph` 88/88, `cargo check --workspace --all-targets` clean, and
+`xrds-scene-graph` 95/95, `cargo check --workspace --all-targets` clean, and
 the Phase 5 example visually confirmed by a human.
 
 Companion docs:
@@ -789,13 +789,39 @@ need boxing and serialize into deeply nested JSON).
 - [x] Migration: clean break, no legacy field — verified before deciding
       that no saved scene document on disk depended on the pre-registry
       binding shape.
-- [ ] **Not done, tracked as follow-up:** static diagnostics for `Run`
-      (a name with no matching registry entry, or a cycle in the registry's
-      `Run`-graph, flagged as an `Error` in `trigger_diagnostics()`) — the
-      design doc calls for this, but only the *runtime* unknown-name warning
-      and depth-cap escape are implemented so far. Left for a follow-up pass
-      rather than blocking Phase 9/9a on it, since the runtime already
-      degrades safely (warn-and-skip, capped-and-escaped) without it.
+- [x] **Static `Run` diagnostics — resolved.** Extended
+      `XrdsSceneDocument::trigger_diagnostics()` (Phase 10) to catch these
+      at author time rather than only degrading safely at runtime:
+      - A binding's `runnable: Some(name)` naming an entry
+        `XrdsSceneDocument::runnables` doesn't have — `Error`, attributed to
+        that binding's node.
+      - A binding with **both** `runnable: Some(_)` and a non-empty inline
+        `sequence` — `Info`, since the named runnable silently wins at
+        runtime and the inline steps are dead data (the "nonsensical
+        both-set state" flagged as a risk when the additive field was
+        designed).
+      - An inline `Run` step (when `runnable` is `None`, so it actually
+        executes) naming an unregistered runnable — `Error`.
+      - **Registry-level, node-less** (`node_id: None` — a registry entry
+        may be referenced by many nodes or none, so a problem in it isn't
+        any one node's fault): a `Run` inside a registry entry itself
+        targeting an unregistered name, and a static cycle in the
+        registry's own `Run`-graph (`A runs B runs A`), found via DFS over
+        every entry's `Run` targets. A cycle is **flagged, not rejected** —
+        matches the runtime's "escape, don't prevent" stance — every member
+        of the cycle gets its own diagnostic (not just one), and the detail
+        message spells out the path (`"a" -> "b" -> "a"`).
+      Tests: unknown-runnable-name binding (Error, attributed to its node),
+      both-set binding (Info, and confirmed *not* also flagged as unknown
+      since the name IS valid), a healthy named-runnable binding is quiet,
+      an inline `Run` step naming an unknown runnable (Error), a two-entry
+      registry cycle (both members reported, node-less), an unknown `Run`
+      target inside a registry entry (node-less), and a healthy
+      non-cyclic `Run` chain is quiet.
+      **Schema note:** `XrdsSceneTriggerDiagnostic::node_id` changed from
+      `XrdsSceneNodeId` to `Option<XrdsSceneNodeId>` to allow this — no
+      external consumers existed yet (Phase 6 isn't built), so this was a
+      free change; all existing construction sites updated to `Some(node.id)`.
 
 ## Decision log
 

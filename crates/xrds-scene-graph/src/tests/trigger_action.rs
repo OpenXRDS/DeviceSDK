@@ -609,3 +609,227 @@ fn disabled_watcher_produces_no_diagnostics_and_is_not_an_emitter() {
     };
     assert_eq!(doc.trigger_diagnostics(), vec![]);
 }
+
+// ---------------------------------------------------------------------------
+// Phase 9a — Run / runnable-registry diagnostics
+// ---------------------------------------------------------------------------
+
+fn node_with_binding(id: u64, binding: XrdsTriggerBinding) -> XrdsSceneNode {
+    XrdsSceneNode {
+        id: XrdsSceneNodeId(id),
+        parent_id: None,
+        name: format!("Node{id}"),
+        enabled: true,
+        visible: true,
+        grabbable: false,
+        transform: XrdsSceneTransform::default(),
+        payload: XrdsSceneNodePayload::Empty,
+        editor: XrdsEditorMetadata::default(),
+        triggers: vec![binding],
+        watchers: Vec::new(),
+    }
+}
+
+#[test]
+fn diagnostics_flag_a_binding_naming_an_unregistered_runnable() {
+    let doc = XrdsSceneDocument {
+        metadata: XrdsSceneMetadata { name: "d".to_string(), ..Default::default() },
+        nodes: vec![node_with_binding(
+            1,
+            XrdsTriggerBinding {
+                trigger: XrdsTriggerKind::ZoneEnter,
+                sequence: XrdsSequence::default(),
+                disabled: false,
+                hand: None,
+                runnable: Some("does-not-exist".to_string()),
+            },
+        )],
+        ..Default::default()
+    };
+    let diags = doc.trigger_diagnostics();
+    assert!(
+        diags.iter().any(|d| d.severity == XrdsSceneTriggerDiagnosticSeverity::Error
+            && d.title.contains("unknown runnable")
+            && d.node_id == Some(XrdsSceneNodeId(1))),
+        "a binding naming a nonexistent runnable must be an Error attributed to its node, got \
+         {diags:?}"
+    );
+}
+
+#[test]
+fn diagnostics_flag_a_binding_with_both_a_runnable_and_an_inline_sequence() {
+    let doc = XrdsSceneDocument {
+        metadata: XrdsSceneMetadata { name: "d".to_string(), ..Default::default() },
+        runnables: vec![XrdsNamedRunnable {
+            name: "teleport".to_string(),
+            runnable: XrdsRunnable::Sequence(XrdsSequence {
+                steps: vec![XrdsAction::Teleport { destination: [1.0, 1.0, 1.0] }],
+            }),
+        }],
+        nodes: vec![node_with_binding(
+            1,
+            XrdsTriggerBinding {
+                trigger: XrdsTriggerKind::ZoneEnter,
+                // Both set — the inline sequence is dead data at runtime.
+                sequence: XrdsSequence {
+                    steps: vec![XrdsAction::SetVisible(false)],
+                },
+                disabled: false,
+                hand: None,
+                runnable: Some("teleport".to_string()),
+            },
+        )],
+        ..Default::default()
+    };
+    let diags = doc.trigger_diagnostics();
+    assert!(
+        diags.iter().any(|d| d.title.contains("both a named runnable and an inline sequence")),
+        "should flag the nonsensical both-set state, got {diags:?}"
+    );
+    // The named runnable resolves fine, so there must be no "unknown runnable" Error.
+    assert!(
+        !diags.iter().any(|d| d.title.contains("unknown runnable")),
+        "the runnable name IS registered, so it must not be flagged as unknown, got {diags:?}"
+    );
+}
+
+#[test]
+fn diagnostics_are_quiet_on_a_binding_naming_a_valid_runnable() {
+    let doc = XrdsSceneDocument {
+        metadata: XrdsSceneMetadata { name: "d".to_string(), ..Default::default() },
+        runnables: vec![XrdsNamedRunnable {
+            name: "teleport".to_string(),
+            runnable: XrdsRunnable::Sequence(XrdsSequence {
+                steps: vec![XrdsAction::Teleport { destination: [1.0, 1.0, 1.0] }],
+            }),
+        }],
+        nodes: vec![node_with_binding(
+            1,
+            XrdsTriggerBinding {
+                trigger: XrdsTriggerKind::ZoneEnter,
+                sequence: XrdsSequence::default(),
+                disabled: false,
+                hand: None,
+                runnable: Some("teleport".to_string()),
+            },
+        )],
+        ..Default::default()
+    };
+    assert_eq!(
+        doc.trigger_diagnostics(),
+        vec![],
+        "a binding naming a registered runnable, with no inline sequence, should be quiet"
+    );
+}
+
+#[test]
+fn diagnostics_flag_a_run_action_referencing_an_unknown_runnable() {
+    let doc = XrdsSceneDocument {
+        metadata: XrdsSceneMetadata { name: "d".to_string(), ..Default::default() },
+        nodes: vec![node_with_binding(
+            1,
+            XrdsTriggerBinding {
+                trigger: XrdsTriggerKind::ZoneEnter,
+                sequence: XrdsSequence {
+                    steps: vec![XrdsAction::Run {
+                        runnable: "does-not-exist".to_string(),
+                        wait: true,
+                    }],
+                },
+                disabled: false,
+                hand: None,
+                runnable: None,
+            },
+        )],
+        ..Default::default()
+    };
+    let diags = doc.trigger_diagnostics();
+    assert!(
+        diags.iter().any(|d| d.severity == XrdsSceneTriggerDiagnosticSeverity::Error
+            && d.title.contains("Run references unknown runnable")),
+        "a Run step naming a nonexistent runnable must be an Error, got {diags:?}"
+    );
+}
+
+#[test]
+fn diagnostics_flag_a_cycle_in_the_run_registry() {
+    // A runs B, B runs A — a static cycle in the registry itself, not tied
+    // to any one node.
+    let doc = XrdsSceneDocument {
+        metadata: XrdsSceneMetadata { name: "d".to_string(), ..Default::default() },
+        runnables: vec![
+            XrdsNamedRunnable {
+                name: "a".to_string(),
+                runnable: XrdsRunnable::Sequence(XrdsSequence {
+                    steps: vec![XrdsAction::Run { runnable: "b".to_string(), wait: false }],
+                }),
+            },
+            XrdsNamedRunnable {
+                name: "b".to_string(),
+                runnable: XrdsRunnable::Sequence(XrdsSequence {
+                    steps: vec![XrdsAction::Run { runnable: "a".to_string(), wait: false }],
+                }),
+            },
+        ],
+        ..Default::default()
+    };
+    let diags = doc.trigger_diagnostics();
+    assert!(
+        diags.iter().any(|d| d.severity == XrdsSceneTriggerDiagnosticSeverity::Error
+            && d.title.contains("Cycle in the Run registry")
+            && d.node_id.is_none()),
+        "a registry cycle must be flagged, node-less since it isn't any one node's fault, got \
+         {diags:?}"
+    );
+    // Both members of the cycle should be reported, not just one.
+    let cycle_diag_count = diags.iter().filter(|d| d.title.contains("Cycle")).count();
+    assert_eq!(cycle_diag_count, 2, "each member of the cycle should get its own diagnostic");
+}
+
+#[test]
+fn diagnostics_flag_an_unknown_run_target_inside_the_registry_itself() {
+    let doc = XrdsSceneDocument {
+        metadata: XrdsSceneMetadata { name: "d".to_string(), ..Default::default() },
+        runnables: vec![XrdsNamedRunnable {
+            name: "a".to_string(),
+            runnable: XrdsRunnable::Sequence(XrdsSequence {
+                steps: vec![XrdsAction::Run { runnable: "ghost".to_string(), wait: false }],
+            }),
+        }],
+        ..Default::default()
+    };
+    let diags = doc.trigger_diagnostics();
+    assert!(
+        diags.iter().any(|d| d.severity == XrdsSceneTriggerDiagnosticSeverity::Error
+            && d.title.contains("Named runnable references unknown runnable")
+            && d.node_id.is_none()),
+        "an unresolvable Run target inside a registry entry must be flagged, got {diags:?}"
+    );
+}
+
+#[test]
+fn diagnostics_are_quiet_on_a_healthy_run_registry() {
+    let doc = XrdsSceneDocument {
+        metadata: XrdsSceneMetadata { name: "d".to_string(), ..Default::default() },
+        runnables: vec![
+            XrdsNamedRunnable {
+                name: "step-one".to_string(),
+                runnable: XrdsRunnable::Sequence(XrdsSequence {
+                    steps: vec![XrdsAction::Run { runnable: "step-two".to_string(), wait: true }],
+                }),
+            },
+            XrdsNamedRunnable {
+                name: "step-two".to_string(),
+                runnable: XrdsRunnable::Sequence(XrdsSequence {
+                    steps: vec![XrdsAction::Teleport { destination: [0.0, 0.0, 0.0] }],
+                }),
+            },
+        ],
+        ..Default::default()
+    };
+    assert_eq!(
+        doc.trigger_diagnostics(),
+        vec![],
+        "a non-cyclic chain of valid Run references should produce no diagnostics"
+    );
+}
