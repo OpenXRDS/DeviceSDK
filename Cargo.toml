@@ -38,7 +38,7 @@ path = "./crates/xrds-net"
 # equal to) the workspace baseline, never less. Named-feature activation
 # (`workspace-dep/feature-name`) still works regardless of this flag; each
 # consumer re-enables what it needs via its own [features] forwarding. See
-# docs/xrds-net-android-shipping.md Phase 3.
+# docs/done/xrds-net-android-shipping.md Phase 3.
 default-features = false
 
 [workspace.dependencies.xrds-media]
@@ -109,7 +109,7 @@ bevy_winit = { path = "patches/bevy_winit" }
 # combo (cargo-ndk's CC/CXX env vars lack the .exe suffix CMake's compiler
 # validation requires; no fix as of cloudflare/quiche#2020). Staying on
 # 0.24.6 + this patch, which is fully verified working end-to-end.
-# See docs/xrds-net-android-shipping.md §2c.
+# See docs/done/xrds-net-android-shipping.md §2c.
 quiche = { path = "patches/quiche" }
 
 [features]
@@ -120,7 +120,7 @@ default = ["xrds-runtime/ftp-server"]
 # sample binaries/examples) keeps ftp-server, but an un-gated default-featured
 # edge here would leak into Android's shared feature resolution for
 # xrds-runtime/xrds-net even though this package never targets Android — see
-# docs/xrds-net-android-shipping.md Phase 3.
+# docs/done/xrds-net-android-shipping.md Phase 3.
 xrds-runtime = { workspace = true, default-features = false }
 xrds-openxr = { workspace = true }
 xrds-scene-graph = { workspace = true }
@@ -143,7 +143,7 @@ tokio = { workspace = true, features = ["time", "signal"] }
 # xrds-net here was pulling `ftp-server` (and its libunftp -> aws-lc-sys
 # chain, which doesn't cross-compile) into `xrds-runtime`'s Android build
 # despite xrds-runtime's own Android-specific `default-features = false`.
-# See docs/xrds-net-android-shipping.md Phase 3.
+# See docs/done/xrds-net-android-shipping.md Phase 3.
 [target.'cfg(not(target_os = "android"))'.dev-dependencies]
 xrds-net = { workspace = true }
 
@@ -288,7 +288,7 @@ name = "webrtc_file_stream"
 path = "examples/webrtc/webrtc_file_stream.rs"
 
 # Standalone real-network verification binaries — see
-# docs/xrds-net-webrtc-realnet-binaries.md. examples/webrtc/realnet_common.rs
+# docs/done/xrds-net-webrtc-realnet-binaries.md. examples/webrtc/realnet_common.rs
 # is shared support code (no `main`), included via `#[path]` in each of
 # these rather than registered as its own example.
 [[example]]
