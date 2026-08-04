@@ -1,24 +1,29 @@
 # Trigger-action sequencing — v1 implementation record
 
-**Status: done.** The completed record of what shipped, phase by phase, and
-why each decision was made. Live at `xrds-runtime` 112/112,
-`xrds-scene-graph` 95/95, `cargo check --workspace --all-targets` clean, and
-the Phase 5 example visually confirmed by a human.
+**Status: done. Nothing left planned.** The completed record of what
+shipped, phase by phase, and why each decision was made. Live at
+`xrds-runtime` 112/112, `xrds-scene-graph` 95/95,
+`cargo check --workspace --all-targets` clean, the Phase 5 example visually
+confirmed by a human, and the Phase 6 editor UI confirmed against a real
+scene file (fired a binding, watched its timeline actually move a node).
 
 Companion docs:
 
-- [`../xrds-scenegraph-trigger-action-sequencing.md`](../xrds-scenegraph-trigger-action-sequencing.md)
+- [`xrds-scenegraph-trigger-action-sequencing.md`](xrds-scenegraph-trigger-action-sequencing.md)
   — the design rationale (why the system is shaped this way).
-- [`../xrds-trigger-action-implementation-plan.md`](../xrds-trigger-action-implementation-plan.md)
-  — what is still *ahead* (Phase 6 editor integration) plus open questions.
+- [`xrds-trigger-action-editor-plan.md`](xrds-trigger-action-editor-plan.md)
+  — the Phase 6 editor-integration implementation record in full detail
+  (architecture decisions, per-stage build notes, and every follow-up bug
+  found while testing it).
 - [`../xrds-trigger-action-backlog.md`](../xrds-trigger-action-backlog.md)
   — candidate `XrdsAction` variants, unscheduled.
 
 Phase numbers are kept stable because code comments reference them. They are
 ordered here by phase number, which is also the order they were built —
 except Phase 10, a robustness pass done after Phase 7 and deliberately
-before Phase 8, and Phase 9/9a (timelines and interop), built last, after
-Phase 10.
+before Phase 8; Phase 9/9a (timelines and interop), built after Phase 10;
+and Phase 6 (editor integration), built last of all, once Phase 9a had
+settled the data shape it needed to edit.
 
 ## Scope for v1
 
@@ -820,8 +825,79 @@ need boxing and serialize into deeply nested JSON).
       non-cyclic `Run` chain is quiet.
       **Schema note:** `XrdsSceneTriggerDiagnostic::node_id` changed from
       `XrdsSceneNodeId` to `Option<XrdsSceneNodeId>` to allow this — no
-      external consumers existed yet (Phase 6 isn't built), so this was a
-      free change; all existing construction sites updated to `Some(node.id)`.
+      external consumers existed at the time (Phase 6 hadn't landed yet),
+      so this was a free change; all existing construction sites updated
+      to `Some(node.id)`.
+
+## Phase 6 — editor integration
+
+Full implementation record (architecture decisions, per-stage build notes,
+every follow-up bug found while testing it) lives in
+[`xrds-trigger-action-editor-plan.md`](xrds-trigger-action-editor-plan.md) —
+this is the condensed version.
+
+- [x] **A property-panel + full-viewport-overlay UI in `xrds-editor`** for
+      authoring the whole system: the document-level runnable registry
+      (`TriggerActionLibraryPanel` sidebar list + `TriggerActionEditorOverlay`
+      step/timeline-key editor, reusing the exact HUD-library and
+      world-panel-widget patterns already in this codebase), and per-node
+      `TriggersSection`/`WatchersSection` in the Inspector. List-based, not
+      a node-graph, per the original "no Blueprint-shaped authoring
+      surface" decision.
+      **Architecture finding worth keeping:** this editor has no precedent
+      for a second WebView or OS window, and a prior version of the editor
+      that *did* run two windows was deliberately abandoned for the
+      complexity and latency it cost. The "dedicated editing surface" need
+      was met instead by the same full-viewport same-WebView-overlay
+      pattern (`set_viewport_hole`) three other editor features already
+      use — zero new architectural risk.
+      **`TriggerActionEditorOverlay` serves both a registry runnable and a
+      binding's inline sequence** through one `StepTarget` prop
+      (`Runnable{name}` | `Binding{node_id, binding_index}`), resolving the
+      question the original plan had deliberately left open.
+- [x] **The two pickers Phase 10's review said this UI would need** — both
+      built as planned: a `<select>` (not free text) for a binding's
+      `runnable` reference, with the same dangling-reference warning
+      `PlayerAnchorSection`'s HUD-template picker already establishes; and
+      the per-node `TriggersSection` list *is* the instance list the
+      template/instance split was designed around.
+- [x] **Trigger preview — `XrdsUpdateContext::fire_trigger()`.** Found
+      while testing: authoring a binding in the editor had no way to
+      actually fire it — desktop editing generates no real
+      `ZoneEnter`/`Grabbed`/etc event, and `XrdsAPI::fire_trigger()` (built
+      in Phase 10 for exactly this) had never been wired into any UI.
+      Added the `update()`-time counterpart plus a "▶ Fire" button on every
+      binding row.
+- [x] **Default trigger kind on a new binding is an explicit "none",
+      not a silent `ZoneEnter`.** `XrdsTriggerKind` has no real None
+      variant, so the editor (not the domain type's own `Default`) seeds a
+      freshly added binding with `Unknown` instead — already means "never
+      fires" at runtime, doubling as an inert placeholder. The `Unknown`
+      diagnostic message was reworded to cover both real causes (not yet
+      picked in the editor, or a kind from a newer editor build).
+- [x] **Two pre-existing bugs found and fixed while testing this feature,
+      neither introduced by it:**
+      - Selecting a step immediately after adding it showed the empty-state
+        hint instead of its field editor — `AddActionStep`/`AddTimelineKey`
+        round-trip through Rust before the array actually grows, and the
+        sync effect's dependency array didn't account for that.
+      - Viewport click-selection picked the ground plane instead of the
+        clicked object, but only during Play mode — the editor camera used
+        for raycasting is deactivated (not removed) when Play mode starts,
+        so its stale `Transform` no longer matched what the player-pawn
+        camera was actually rendering. Fixed with the same
+        `if state.is_playing { return; }` guard `orbit_camera_system`
+        already uses for the identical reason.
+      Also added: rename support directly in the overlay's title bar (the
+      sidebar list had it; the overlay — where authoring actually happens —
+      didn't).
+- [ ] **Not done, tracked as a real gap, not silently dropped:** an
+      editor-side "preview this sequence without a real trigger" mode
+      exists (`fire_trigger`), but there is still no way to *watch* a
+      runnable's timeline advance frame-by-frame in the overlay itself —
+      firing it drives the live 3D viewport, which is the actual point,
+      but the overlay's own step list does not highlight "the key that
+      just fired." Minor; not blocking.
 
 ## Decision log
 
@@ -837,7 +913,20 @@ what's settled vs. still open:
 - Dynamic parameters: Option C (a generic `XrdsTriggerValue(f32)` slot,
   populated by ordinary gameplay code) over hardcoded field-enums or
   reflection-based field paths.
-- Storage: inline on `XrdsInteractionZone`, not a separate linked file
-  (glTF-style external references are reserved for heavy binary assets,
-  not small structured data like this).
+- Storage: inline data, not a separate linked file (glTF-style external
+  references are reserved for heavy binary assets, not small structured
+  data like this) — **corrected once, during Phase 2:** the first version
+  of this decision put `triggers` inside `XrdsInteractionZone`'s payload
+  specifically; that was wrong, since it made trigger-action data depend
+  on a node having a zone, contradicting the open/pluggable-trigger-source
+  decision (a bullet-hits-player binding needs to live on the player, a
+  plain physics body with no zone at all). Final answer: `triggers: Vec<XrdsTriggerBinding>`
+  is a top-level field on `XrdsSceneNode` itself, alongside `grabbable: bool`.
 - Priority: build this before other new SDK components.
+- Non-goals, held for the whole system, not just v1: no scripting language,
+  no visual node-graph editor, no codegen; no general branching/conditional
+  logic inside `Action` (the expert-layer escape hatch, `FireCustomEvent`,
+  is the answer to "I need an if"); no parallel execution via
+  `bevy-sequential-actions` tuple-add (confirmed sequential-only by the
+  spike — genuine concurrency is what the Phase 9 timeline scheduler is,
+  built outside that crate for exactly this reason).

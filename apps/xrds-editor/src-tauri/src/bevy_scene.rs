@@ -320,6 +320,18 @@ impl XrdsApp for XrdsEditorTauriApp {
             }
         }
 
+        // ── Trigger-action preview (PreviewFireTrigger from the Inspector) ────
+        // No real ZoneEnter/Grabbed/etc event exists to wait for in a desktop
+        // editor, so this is the only way an authored binding ever fires here.
+        let pending_fire_trigger = ctx.resource::<EditorState>()
+            .and_then(|s| s.pending_fire_trigger.clone());
+        if let Some((node_id, kind, hand)) = pending_fire_trigger {
+            let _ = ctx.fire_trigger(xrds_runtime::sdk::XrdsId::from(node_id), &kind, hand);
+            if let Some(mut state) = ctx.resource_mut::<EditorState>() {
+                state.pending_fire_trigger = None;
+            }
+        }
+
         // ── Play mode: start GLB animations on the first play frame ─────────
         let play_started = ctx.resource::<EditorState>()
             .map(|s| s.play_started)
@@ -509,7 +521,7 @@ pub fn run_bevy_viewport(bridge: Arc<EditorBridge>) {
         app_name: "XRDS Editor".to_owned(),
         asset_path: Some(asset_path),
         allow_unapproved_paths: true,
-        window_resolution: Some((1600.0, 1000.0)),
+        window_resolution: Some((1920.0, 1080.0)),
         ..Default::default()
     })
     .run_xrds(XrdsEditorTauriApp::new(bridge))

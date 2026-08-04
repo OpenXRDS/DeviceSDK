@@ -34,6 +34,12 @@ pub fn viewport_ray_selection(
 ) {
     if !mouse_buttons.just_pressed(MouseButton::Left) { return; }
     if state.gizmo_hover.is_some() || state.gizmo_drag.is_some() { return; }
+    // `apply_camera_selection_system` deactivates the editor camera during
+    // play mode (the player pawn camera renders instead), but its Transform
+    // is left where it was — raycasting through it here would silently pick
+    // against a camera pose that no longer matches what's on screen. Same
+    // guard `orbit_camera_system` already applies for the same reason.
+    if state.is_playing { return; }
 
     let Ok((camera, cam_gt)) = camera_q.single() else { return; };
     let Ok(window) = windows.single() else { return; };

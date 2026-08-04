@@ -88,7 +88,109 @@ export interface NodeInspector {
   scale: [number, number, number];
   payload: NodePayload;
   parent_kind: string | null;
+  /** Applies regardless of `payload` kind — any node can carry triggers. */
+  triggers: TriggerBindingDto[];
+  watchers: ThresholdWatcherDto[];
+  /** This node's subset of trigger_diagnostics (`node_id === this node`). */
+  trigger_diagnostics: TriggerDiagnosticDto[];
 }
+
+// ---------------------------------------------------------------------------
+// Trigger-action (Phases 6 / 9 / 9a)
+// ---------------------------------------------------------------------------
+
+export type XrdsAction =
+  | { kind: "PlayGltfAnimation"; data: { clip_index: number; speed: number; repeat: string; start_paused: boolean } }
+  | { kind: "StopGltfAnimation" }
+  | { kind: "SetVisible"; data: boolean }
+  | { kind: "Teleport"; data: { destination: [number, number, number] } }
+  | { kind: "ModifyHealth"; data: { target: ActionTarget; delta: ActionValue } }
+  | { kind: "Wait"; data: { seconds: number } }
+  | { kind: "FireCustomEvent"; data: { name: string } }
+  | { kind: "Run"; data: { runnable: string; wait: boolean } }
+  | { kind: "Unknown" };
+
+export type ActionTarget =
+  | { type: "SelfNode" }
+  | { type: "Node"; id: number }
+  | { type: "TriggerSource" };
+
+export type ActionValue =
+  | { type: "Fixed"; value: number }
+  | { type: "FromTriggerSource" };
+
+export interface XrdsSequenceDto {
+  steps: XrdsAction[];
+}
+
+export interface XrdsTimelineKeyDto {
+  at_secs: number;
+  action: XrdsAction;
+}
+
+export type RunnableBody =
+  | { type: "Sequence"; steps: XrdsAction[] }
+  | { type: "Timeline"; keys: XrdsTimelineKeyDto[]; duration_secs: number | null; looping: boolean };
+
+export interface NamedRunnableDto {
+  name: string;
+  body: RunnableBody;
+}
+
+export type XrdsTriggerKind =
+  | { kind: "ZoneEnter" }
+  | { kind: "ZoneExit" }
+  | { kind: "Grabbed" }
+  | { kind: "Dropped" }
+  | { kind: "HoverEnter" }
+  | { kind: "HoverExit" }
+  | { kind: "ButtonPress" }
+  | { kind: "ButtonRelease" }
+  | { kind: "SliderChange" }
+  | { kind: "ToggleChange" }
+  | { kind: "AnimationComplete" }
+  | { kind: "RunawayDetected" }
+  | { kind: "Custom"; data: string }
+  | { kind: "Unknown" };
+
+export interface TriggerBindingDto {
+  trigger: XrdsTriggerKind;
+  sequence: XrdsSequenceDto;
+  disabled: boolean;
+  /** "Left" | "Right" | null. */
+  hand: string | null;
+  runnable: string | null;
+}
+
+export type ObservableDto =
+  | { type: "RotationDegrees"; axis: string }
+  | { type: "DistanceTo"; node: number }
+  | { type: "Height" }
+  | { type: "ScaleMagnitude" };
+
+export interface ThresholdWatcherDto {
+  observable: ObservableDto;
+  /** "Above" | "Below" | "Either". */
+  crossing: string;
+  value: number;
+  hysteresis: number;
+  fires: string;
+  disabled: boolean;
+}
+
+export interface TriggerDiagnosticDto {
+  /** null for a registry-level problem (e.g. a Run cycle) — not any one node's fault. */
+  node_id: number | null;
+  /** "info" | "warning" | "error". */
+  severity: string;
+  title: string;
+  detail: string;
+}
+
+/** Addresses where an XrdsAction step list lives. */
+export type StepTarget =
+  | { type: "Runnable"; name: string }
+  | { type: "Binding"; node_id: number; binding_index: number };
 
 export interface CameraNodeDto {
   id: number;
@@ -137,6 +239,10 @@ export interface EditorSnapshot {
   is_exporting_apk: boolean;
   /** Tail of the APK build log (last ≤200 lines). Empty when idle. */
   apk_build_log: string[];
+  /** Document-level named-runnable registry (Phase 9a). */
+  runnables: NamedRunnableDto[];
+  /** Registry-level trigger diagnostics only (node_id === null). */
+  runnable_diagnostics: TriggerDiagnosticDto[];
 }
 
 export interface EnvironmentDto {
@@ -174,6 +280,8 @@ export const defaultSnapshot: EditorSnapshot = {
   apk_prerequisites: null,
   is_exporting_apk: false,
   apk_build_log: [],
+  runnables: [],
+  runnable_diagnostics: [],
 };
 
 // ---------------------------------------------------------------------------
@@ -275,7 +383,34 @@ export type EditorCommand =
   | { type: "CopySelection" }
   | { type: "CutSelection" }
   | { type: "PasteClipboard" }
-  | { type: "SelectAll" };
+  | { type: "SelectAll" }
+  // --- Trigger-action: runnable registry (document-level) ---
+  | { type: "CreateRunnable"; payload: { name: string; kind: string } }
+  | { type: "DeleteRunnable"; payload: { name: string } }
+  | { type: "RenameRunnable"; payload: { old_name: string; new_name: string } }
+  | { type: "SetTimelineLooping";  payload: { name: string; looping: boolean } }
+  | { type: "SetTimelineDuration"; payload: { name: string; duration_secs: number | null } }
+  // --- Trigger-action: steps (registry sequence body OR a binding's inline sequence) ---
+  | { type: "AddActionStep";    payload: { target: StepTarget; kind: string } }
+  | { type: "RemoveActionStep"; payload: { target: StepTarget; index: number } }
+  | { type: "MoveActionStep";   payload: { target: StepTarget; index: number; delta: number } }
+  | { type: "SetActionStep";    payload: { target: StepTarget; index: number; action: XrdsAction } }
+  // --- Trigger-action: timeline keys (registry timeline body only) ---
+  | { type: "AddTimelineKey";    payload: { name: string; at_secs: number; kind: string } }
+  | { type: "RemoveTimelineKey"; payload: { name: string; index: number } }
+  | { type: "SetTimelineKey";    payload: { name: string; index: number; key: XrdsTimelineKeyDto } }
+  // --- Trigger-action: per-node bindings ---
+  | { type: "AddTriggerBinding";    payload: { node_id: number } }
+  | { type: "RemoveTriggerBinding"; payload: { node_id: number; index: number } }
+  | { type: "SetTriggerBindingTrigger";  payload: { node_id: number; index: number; trigger: XrdsTriggerKind } }
+  | { type: "SetTriggerBindingHand";     payload: { node_id: number; index: number; hand: string | null } }
+  | { type: "SetTriggerBindingDisabled"; payload: { node_id: number; index: number; disabled: boolean } }
+  | { type: "SetTriggerBindingRunnable"; payload: { node_id: number; index: number; runnable: string | null } }
+  // --- Trigger-action: per-node threshold watchers ---
+  | { type: "AddWatcher";    payload: { node_id: number } }
+  | { type: "RemoveWatcher"; payload: { node_id: number; index: number } }
+  | { type: "SetWatcher";    payload: { node_id: number; index: number; watcher: ThresholdWatcherDto } }
+  | { type: "PreviewFireTrigger"; payload: { node_id: number; index: number } };
 
 // ---------------------------------------------------------------------------
 // Helpers

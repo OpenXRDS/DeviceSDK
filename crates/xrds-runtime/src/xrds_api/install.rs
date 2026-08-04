@@ -204,9 +204,9 @@ pub(super) fn install_xrds(app: &mut App) {
     app.add_systems(Update, ensure_aabbs_for_unculled_meshes_system);
     app.add_systems(Update, crate::xrds_api::grab::grab_system);
     app.add_systems(Update, crate::xrds_api::zone::zone_collision_system);
-    // Timeline scheduler (docs/xrds-trigger-action-implementation-plan.md
-    // Phase 9) — absolute-time, concurrent choreography, run independently
-    // of the trigger/sequence machinery below.
+    // Timeline scheduler (docs/done/xrds-trigger-action-v1.md Phase 9) —
+    // absolute-time, concurrent choreography, run independently of the
+    // trigger/sequence machinery below.
     app.add_systems(Update, crate::xrds_api::trigger_action::advance_timelines);
     // Trigger-action sequencing (docs/done/xrds-trigger-action-v1.md
     // Phase 3). Explicitly ordered after zone_collision_system rather than
@@ -246,7 +246,7 @@ pub(super) fn install_xrds(app: &mut App) {
             crate::xrds_api::trigger_action::consume_triggers::<
                 xrds_components::XrWorldToggleEvent,
             >,
-            // Threshold watchers (docs/xrds-trigger-action-implementation-plan.md
+            // Threshold watchers (docs/done/xrds-trigger-action-v1.md
             // Phase 8) — a crossing is just another way to fire Custom, so it
             // reuses this same generic consumer, no special-casing.
             crate::xrds_api::trigger_action::consume_triggers::<

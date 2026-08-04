@@ -1,6 +1,6 @@
 // Trigger-action sequencing, watched in a real 3D scene.
 //
-// See docs/xrds-scenegraph-trigger-action-sequencing.md for the design and
+// See docs/done/xrds-scenegraph-trigger-action-sequencing.md for the design and
 // docs/done/xrds-trigger-action-v1.md Phase 5 for where this
 // sits. This is the counterpart to the headless behavior tests in
 // crates/xrds-runtime/src/tests/trigger_action.rs — those assert the

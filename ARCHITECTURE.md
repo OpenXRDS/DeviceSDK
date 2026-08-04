@@ -263,7 +263,7 @@ Scene environment policy currently supports IBL, skybox, manual exposure, and li
 Lets an authored scene say "when trigger T fires on this node, run this
 ordered list of actions" — without a scripting language, a visual
 node-graph, or any codegen. Design rationale:
-`docs/xrds-scenegraph-trigger-action-sequencing.md`.
+`docs/done/xrds-scenegraph-trigger-action-sequencing.md`.
 
 **Two collaborating but separate systems:**
 

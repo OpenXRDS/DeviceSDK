@@ -13,6 +13,9 @@ use crate::bridge::{
     WorldLayoutDto, WorldWidgetDto,
 };
 use crate::editor_state::{EditorSession, EditorState};
+use crate::trigger_action::{
+    build_node_trigger_diagnostics_dto, build_node_triggers_dto, build_node_watchers_dto,
+};
 
 // ---------------------------------------------------------------------------
 // Snapshot serializer
@@ -45,6 +48,9 @@ pub fn build_node_inspector(
         scale: s,
         payload: build_payload_dto(doc, &node.payload, id, gltf_clips),
         parent_kind,
+        triggers: build_node_triggers_dto(&node.triggers),
+        watchers: build_node_watchers_dto(&node.watchers),
+        trigger_diagnostics: build_node_trigger_diagnostics_dto(doc, id),
     })
 }
 

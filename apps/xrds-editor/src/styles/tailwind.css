@@ -1,0 +1,8 @@
+/* Tailwind utilities, coexisting with editor.css during the incremental
+ * migration (see docs/done/xrds-trigger-action-editor-plan.md's frontend
+ * follow-up notes). Preflight is disabled in tailwind.config.js, so this
+ * only ever adds utility classes — it never resets/overrides anything
+ * editor.css already owns. */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;

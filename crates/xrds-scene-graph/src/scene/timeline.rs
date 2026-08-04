@@ -1,9 +1,9 @@
 //! Timeline-based composition and the runnable registry (Phase 9 / 9a).
-//! See `docs/xrds-trigger-action-implementation-plan.md` for the design —
-//! in particular the terminology section distinguishing a *timeline* from
-//! `XrdsSequence` (an ordered queue). They are genuinely different
-//! execution models, not two names for the same thing; conflating them
-//! already caused one real misunderstanding mid-build.
+//! See `docs/done/xrds-trigger-action-v1.md` for the terminology section
+//! distinguishing a *timeline* from `XrdsSequence` (an ordered queue). They
+//! are genuinely different execution models, not two names for the same
+//! thing; conflating them already caused one real misunderstanding
+//! mid-build.
 
 use super::*;
 

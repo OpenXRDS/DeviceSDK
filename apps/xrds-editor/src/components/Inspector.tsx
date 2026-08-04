@@ -1,11 +1,17 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import type { EditorSnapshot, EditorCommand, NodeInspector, MaterialParams, EnvironmentDto } from "../types/bridge";
+import type {
+  EditorSnapshot, EditorCommand, NodeInspector, MaterialParams, EnvironmentDto,
+  ObservableDto, ThresholdWatcherDto, XrdsTriggerKind,
+} from "../types/bridge";
 import { rgbaToHex, hexToRgba } from "../types/bridge";
+import { Select } from "./ui/Select";
+import { Checkbox } from "./ui/Checkbox";
 
 interface Props {
   snapshot: EditorSnapshot;
   send:     (cmd: EditorCommand) => void;
   onEditWorldPanel: (id: number) => void;
+  onEditBindingSequence: (nodeId: number, bindingIndex: number) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -178,7 +184,7 @@ function ColorRow({ label, color, onLive, onCommit }: {
 // ---------------------------------------------------------------------------
 // Main Inspector
 // ---------------------------------------------------------------------------
-export function Inspector({ snapshot, send, onEditWorldPanel }: Props) {
+export function Inspector({ snapshot, send, onEditWorldPanel, onEditBindingSequence }: Props) {
   const node = snapshot.selected_node;
   const prevId = useRef<number | null>(null);
 
@@ -267,6 +273,263 @@ export function Inspector({ snapshot, send, onEditWorldPanel }: Props) {
 
       {/* Payload-specific sections — key forces remount on node change so useState re-initialises */}
       <PayloadSection key={node.id} node={node} send={send} isPlaying={snapshot.is_playing} snapshot={snapshot} onEditWorldPanel={onEditWorldPanel} />
+
+      {/* Applies regardless of payload kind — any node can carry triggers/watchers. */}
+      <TriggersSection node={node} snapshot={snapshot} send={send} onEditBindingSequence={onEditBindingSequence} />
+      <WatchersSection node={node} send={send} />
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Triggers / Watchers — applies to every node regardless of payload kind
+// (Phase 6, see docs/xrds-trigger-action-editor-plan.md Stages 3/4)
+// ---------------------------------------------------------------------------
+
+const TRIGGER_KINDS = [
+  // "Unknown" doubles as the "nothing picked yet" placeholder for a freshly
+  // added binding — it already means "never fires" at runtime, matching a
+  // None state exactly (the domain type has no real None variant).
+  "Unknown",
+  "ZoneEnter", "ZoneExit", "Grabbed", "Dropped", "HoverEnter", "HoverExit",
+  "ButtonPress", "ButtonRelease", "SliderChange", "ToggleChange",
+  "AnimationComplete", "RunawayDetected", "Custom",
+] as const;
+
+const TRIGGER_KIND_LABELS: Record<string, string> = {
+  Unknown: "— none selected —",
+};
+
+/** Kinds that never report a hand — matches the Rust-side diagnostic
+ * (`trigger_diagnostics`'s "Hand filter on a trigger kind with no hand"
+ * Error) so the UI doesn't let an author set up a binding that can never
+ * fire without at least showing why. */
+const HANDLESS_KINDS = new Set([
+  "ZoneEnter", "ZoneExit", "AnimationComplete", "RunawayDetected", "Custom", "Unknown",
+]);
+
+// Radix Select.Item forbids an empty-string value, but `null`/"" is this
+// section's existing "no restriction/no runnable" convention — map to/from
+// these sentinels at the Select boundary instead of touching that convention.
+const HAND_ANY_SENTINEL = "__any__";
+const RUNNABLE_INLINE_SENTINEL = "__inline__";
+
+function triggerKindFromSelectValue(k: string): XrdsTriggerKind {
+  if (k === "Custom") return { kind: "Custom", data: "" };
+  return { kind: k } as XrdsTriggerKind;
+}
+
+function TriggersSection({ node, snapshot, send, onEditBindingSequence }: {
+  node: NodeInspector;
+  snapshot: EditorSnapshot;
+  send: (cmd: EditorCommand) => void;
+  onEditBindingSequence: (nodeId: number, bindingIndex: number) => void;
+}) {
+  const id = node.id;
+  return (
+    <div className="insp-section">
+      <h4>Triggers</h4>
+      {node.triggers.length === 0 && (
+        <div className="hud-library-empty">
+          No trigger bindings yet. "+ Add binding" fires an authored sequence when this node's
+          trigger kind occurs.
+        </div>
+      )}
+      {node.triggers.map((b, i) => {
+        const kind = b.trigger.kind;
+        const handDisallowed = b.hand !== null && HANDLESS_KINDS.has(kind);
+        const runnableMissing = b.runnable !== null && !snapshot.runnables.some(r => r.name === b.runnable);
+        return (
+          <div key={i} className="hud-library-row flex-col items-stretch gap-1">
+            <div className="flex gap-1 items-center flex-wrap">
+              <Select
+                value={kind}
+                onValueChange={v => send({ type: "SetTriggerBindingTrigger", payload: { node_id: id, index: i, trigger: triggerKindFromSelectValue(v) } })}
+                options={TRIGGER_KINDS.map(k => ({ value: k, label: TRIGGER_KIND_LABELS[k] ?? k }))}
+              />
+              {kind === "Custom" && (
+                <input type="text" defaultValue={b.trigger.kind === "Custom" ? b.trigger.data : ""}
+                  placeholder="event name"
+                  className="w-[100px] text-text bg-surface0 rounded px-2 py-1 border border-transparent focus:outline focus:outline-1 focus:outline-blue"
+                  key={`${id}-${i}-custom-${b.trigger.kind === "Custom" ? b.trigger.data : ""}`}
+                  onKeyDown={e => { e.stopPropagation(); if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+                  onBlur={e => send({ type: "SetTriggerBindingTrigger", payload: { node_id: id, index: i, trigger: { kind: "Custom", data: e.target.value } } })} />
+              )}
+              <Select
+                value={b.hand ?? HAND_ANY_SENTINEL}
+                onValueChange={v => send({ type: "SetTriggerBindingHand", payload: { node_id: id, index: i, hand: v === HAND_ANY_SENTINEL ? null : v } })}
+                options={[
+                  { value: HAND_ANY_SENTINEL, label: "any hand" },
+                  { value: "Left", label: "Left" },
+                  { value: "Right", label: "Right" },
+                ]}
+              />
+              <Checkbox
+                label="disabled"
+                checked={b.disabled}
+                onCheckedChange={v => send({ type: "SetTriggerBindingDisabled", payload: { node_id: id, index: i, disabled: v } })}
+              />
+              <button className="tb-btn text-[10px] ml-auto"
+                title="Fire this binding right now — there's no real ZoneEnter/Grabbed/etc event in the desktop editor to wait for"
+                disabled={b.disabled || handDisallowed}
+                onClick={() => send({ type: "PreviewFireTrigger", payload: { node_id: id, index: i } })}>
+                ▶ Fire
+              </button>
+              <button className="tb-btn text-red text-[10px]"
+                title="Remove this binding"
+                onClick={() => send({ type: "RemoveTriggerBinding", payload: { node_id: id, index: i } })}>✕</button>
+            </div>
+
+            {handDisallowed && (
+              <span className="text-[10px] text-red">
+                ⚠ {kind} never reports a hand — this binding can never fire
+              </span>
+            )}
+
+            <div className="flex gap-1.5 items-center flex-wrap">
+              <label className="text-[10px] text-overlay0">Runs</label>
+              <Select
+                value={b.runnable ?? RUNNABLE_INLINE_SENTINEL}
+                onValueChange={v => send({ type: "SetTriggerBindingRunnable", payload: { node_id: id, index: i, runnable: v === RUNNABLE_INLINE_SENTINEL ? null : v } })}
+                options={[
+                  { value: RUNNABLE_INLINE_SENTINEL, label: "— inline sequence —" },
+                  ...snapshot.runnables.map(r => ({ value: r.name, label: r.name })),
+                ]}
+              />
+              {b.runnable !== null ? (
+                runnableMissing && <span className="text-[10px] text-red">⚠ "{b.runnable}" has no matching runnable</span>
+              ) : (
+                <button className="tb-btn text-[10px] py-px px-[7px]"
+                  onClick={() => onEditBindingSequence(id, i)}>
+                  Edit inline sequence… ({b.sequence.steps.length} step{b.sequence.steps.length !== 1 ? "s" : ""})
+                </button>
+              )}
+            </div>
+          </div>
+        );
+      })}
+      <button className="tb-btn text-[10px] px-2 py-0.5"
+        onClick={() => send({ type: "AddTriggerBinding", payload: { node_id: id } })}>
+        + Add binding
+      </button>
+      {node.trigger_diagnostics.length > 0 && (
+        <div className="flex flex-col gap-0.5 mt-1">
+          {node.trigger_diagnostics.map((d, i) => (
+            <span key={i} className={`text-[10px] ${d.severity === "error" ? "text-red" : "text-overlay0"}`} title={d.detail}>
+              ⚠ {d.title}
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const OBSERVABLE_KINDS = ["Height", "ScaleMagnitude", "RotationDegrees", "DistanceTo"] as const;
+
+function defaultObservableForKind(kind: string): ObservableDto {
+  switch (kind) {
+    case "RotationDegrees": return { type: "RotationDegrees", axis: "Y" };
+    case "DistanceTo": return { type: "DistanceTo", node: 0 };
+    case "ScaleMagnitude": return { type: "ScaleMagnitude" };
+    default: return { type: "Height" };
+  }
+}
+
+function WatchersSection({ node, send }: {
+  node: NodeInspector;
+  send: (cmd: EditorCommand) => void;
+}) {
+  const id = node.id;
+  const setWatcher = (i: number, watcher: ThresholdWatcherDto) =>
+    send({ type: "SetWatcher", payload: { node_id: id, index: i, watcher } });
+  const numCls = "text-text bg-surface0 rounded px-2 py-1 border border-transparent focus:outline focus:outline-1 focus:outline-blue font-mono";
+  const textCls = "text-text bg-surface0 rounded px-2 py-1 border border-transparent focus:outline focus:outline-1 focus:outline-blue";
+
+  return (
+    <div className="insp-section">
+      <h4>Threshold Watchers</h4>
+      {node.watchers.length === 0 && (
+        <div className="hud-library-empty">
+          No watchers yet. A watcher turns a continuous value (height, distance…) into a Custom
+          trigger crossing a threshold.
+        </div>
+      )}
+      {node.watchers.map((w, i) => (
+        <div key={i} className="hud-library-row flex-col items-stretch gap-1">
+          <div className="flex gap-1 items-center flex-wrap">
+            <Select
+              value={w.observable.type}
+              onValueChange={v => setWatcher(i, { ...w, observable: defaultObservableForKind(v) })}
+              options={OBSERVABLE_KINDS.map(k => ({ value: k, label: k }))}
+            />
+            {w.observable.type === "RotationDegrees" && (
+              <Select
+                value={w.observable.axis}
+                onValueChange={v => setWatcher(i, { ...w, observable: { type: "RotationDegrees", axis: v } })}
+                options={[
+                  { value: "X", label: "X" },
+                  { value: "Y", label: "Y" },
+                  { value: "Z", label: "Z" },
+                ]}
+              />
+            )}
+            {w.observable.type === "DistanceTo" && (
+              <input type="number" step={1} className={`w-[60px] ${numCls}`}
+                key={`${id}-${i}-distnode-${w.observable.node}`}
+                defaultValue={w.observable.node}
+                onKeyDown={e => { e.stopPropagation(); if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+                onBlur={e => setWatcher(i, { ...w, observable: { type: "DistanceTo", node: +e.target.value } })} />
+            )}
+            <Select
+              value={w.crossing}
+              onValueChange={v => setWatcher(i, { ...w, crossing: v })}
+              options={[
+                { value: "Above", label: "Above" },
+                { value: "Below", label: "Below" },
+                { value: "Either", label: "Either" },
+              ]}
+            />
+            <button className="tb-btn text-red text-[10px] ml-auto"
+              title="Remove this watcher"
+              onClick={() => send({ type: "RemoveWatcher", payload: { node_id: id, index: i } })}>✕</button>
+          </div>
+
+          <div className="flex gap-1.5 items-center flex-wrap">
+            <label className="text-[10px] text-overlay0">value</label>
+            <input type="number" step={0.1} className={`w-16 ${numCls}`}
+              key={`${id}-${i}-value-${w.value}`} defaultValue={w.value}
+              onKeyDown={e => { e.stopPropagation(); if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+              onBlur={e => setWatcher(i, { ...w, value: +e.target.value })} />
+
+            <label className="text-[10px] text-overlay0"
+              title="Deadband the value must clear before it can fire again in the other direction">
+              hysteresis
+            </label>
+            <input type="number" step={0.05} min={0} className={`w-16 ${numCls}`}
+              key={`${id}-${i}-hyst-${w.hysteresis}`} defaultValue={w.hysteresis}
+              onKeyDown={e => { e.stopPropagation(); if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+              onBlur={e => setWatcher(i, { ...w, hysteresis: +e.target.value })} />
+
+            <label className="text-[10px] text-overlay0">fires</label>
+            <input type="text" className={`w-[90px] ${textCls}`}
+              key={`${id}-${i}-fires-${w.fires}`} defaultValue={w.fires}
+              placeholder="Custom event name"
+              onKeyDown={e => { e.stopPropagation(); if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+              onBlur={e => setWatcher(i, { ...w, fires: e.target.value })} />
+
+            <Checkbox
+              label="disabled"
+              checked={w.disabled}
+              onCheckedChange={v => setWatcher(i, { ...w, disabled: v })}
+            />
+          </div>
+        </div>
+      ))}
+      <button className="tb-btn text-[10px] px-2 py-0.5"
+        onClick={() => send({ type: "AddWatcher", payload: { node_id: id } })}>
+        + Add watcher
+      </button>
     </div>
   );
 }

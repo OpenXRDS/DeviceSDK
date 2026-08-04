@@ -999,4 +999,24 @@ impl XrdsUpdateContext<'_> {
             e.insert(layout);
         }
     }
+
+    /// Fires a trigger on a node directly, without waiting for the real
+    /// event that would normally produce it (a zone collision, a grab, a
+    /// button press, …). Runs every matching, non-disabled binding on that
+    /// node, exactly as [`super::trigger_action::consume_triggers`] would.
+    /// Returns how many sequences/timelines it started, so a caller can
+    /// tell "nothing was bound" from "it ran".
+    ///
+    /// The [`XrdsAPI`](super::api::XrdsAPI) counterpart of this exists for
+    /// setup-time use; this is the `update()`-time equivalent — e.g. an
+    /// editor's "preview this trigger" button, which has no other way to
+    /// generate a real `ZoneEnter`/`Grabbed`/etc event from a desktop UI.
+    pub fn fire_trigger(
+        &mut self,
+        node: XrdsId,
+        kind: &xrds_scene_graph::XrdsTriggerKind,
+        hand: Option<xrds_components::XrGrabHand>,
+    ) -> usize {
+        super::trigger_action::fire_trigger_in_world(self.world, node, kind, hand)
+    }
 }

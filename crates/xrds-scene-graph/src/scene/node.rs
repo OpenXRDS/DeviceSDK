@@ -75,14 +75,14 @@ pub struct XrdsSceneNode {
     /// fires, run sequence S." Applies regardless of payload kind (any
     /// node can carry these, not just `InteractionZone` — e.g. a plain
     /// physics-body player node can bind a collision-sourced trigger).
-    /// See `docs/xrds-scenegraph-trigger-action-sequencing.md`.
+    /// See `docs/done/xrds-scenegraph-trigger-action-sequencing.md`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub triggers: Vec<XrdsTriggerBinding>,
     /// Threshold watchers — turn a continuous value (rotation, distance,
     /// height, scale) into a discrete `Custom` trigger when it crosses a
-    /// value. See `docs/xrds-trigger-action-implementation-plan.md`
-    /// Phase 8 for why continuous values are deliberately not modeled as
-    /// trigger kinds directly.
+    /// value. See `docs/done/xrds-trigger-action-v1.md` Phase 8 for why
+    /// continuous values are deliberately not modeled as trigger kinds
+    /// directly.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub watchers: Vec<XrdsThresholdWatcher>,
 }

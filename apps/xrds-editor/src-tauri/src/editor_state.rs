@@ -118,6 +118,16 @@ pub struct EditorState {
     /// Clip names per GltfAsset node — refreshed each frame in update().
     pub gltf_clips: std::collections::HashMap<XrdsSceneNodeId, Vec<(usize, String)>>,
 
+    // ── Trigger-action preview ───────────────────────────────────────────
+    /// Set by `PreviewFireTrigger`, drained in `update()` where an
+    /// `XrdsUpdateContext` (and therefore `fire_trigger`) is actually
+    /// available — same pending/drain pattern as `pending_gltf_play`.
+    pub pending_fire_trigger: Option<(
+        XrdsSceneNodeId,
+        xrds_scene_graph::XrdsTriggerKind,
+        Option<xrds_components::XrGrabHand>,
+    )>,
+
     // ── Clipboard ─────────────────────────────────────────────────────────
     /// Flat list of cloned scene nodes (roots + descendants).
     /// Set by CopySelection / CutSelection; consumed (non-destructively) by PasteClipboard.
@@ -207,6 +217,7 @@ impl Default for EditorState {
             pending_gltf_play: None,
             pending_gltf_stop: None,
             gltf_clips: std::collections::HashMap::new(),
+            pending_fire_trigger: None,
             export_job: None,
             apk_prerequisites: None,
             apk_export_job: None,

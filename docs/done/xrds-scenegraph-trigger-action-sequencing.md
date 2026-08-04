@@ -158,10 +158,11 @@ authoring surface — the schema stays plain, closed-vocabulary data.
       `XrZoneExitEvent` and enqueues actions per the authored `Sequence`
       data — see "Proposed schema" below.
 
-This design doc's job is done for v1: **see
-[`xrds-trigger-action-implementation-plan.md`](xrds-trigger-action-implementation-plan.md)
-for the phased build-out**, and
-[`xrds-trigger-action-backlog.md`](xrds-trigger-action-backlog.md) for
+This design doc's job is done: the whole system it sketched — schema,
+runtime, timelines/interop, diagnostics, and the `xrds-editor` UI — has
+shipped. **See [`xrds-trigger-action-v1.md`](xrds-trigger-action-v1.md)
+for the full phase-by-phase build record**, and
+[`../xrds-trigger-action-backlog.md`](../xrds-trigger-action-backlog.md) for
 candidate `Action` variants beyond v1 (audio, materials, physics,
 networking, ...), explicitly not scheduled.
 
@@ -412,14 +413,14 @@ accessor mechanism against a single hypothetical case).
   at all). Final answer: `triggers: Vec<XrdsTriggerBinding>` is a
   top-level field on `XrdsSceneNode` itself, alongside the existing
   top-level `grabbable: bool` — not nested in any payload variant. See
-  the implementation plan's Phase 2.
+  Phase 2 in [`xrds-trigger-action-v1.md`](xrds-trigger-action-v1.md).
 - **`FromTriggerSource` accessor mechanism:** decided — Option C, a
   generic `XrdsTriggerValue(f32)` component populated by ordinary
   gameplay code, not a hardcoded field-enum or reflection-based field
   path. This also surfaced that `XrdsTriggerEvent` needs a `source()`
   method in addition to `target()`/`kind()` (the entity that *caused* the
-  trigger, vs. whose bindings to check — they can differ). See the
-  implementation plan's Phase 3.
+  trigger, vs. whose bindings to check — they can differ). See Phase 3 in
+  [`xrds-trigger-action-v1.md`](xrds-trigger-action-v1.md).
 
 ### Re-fire semantics and the agent model (decided)
 
@@ -468,14 +469,15 @@ since `bevy-sequential-actions` puts the queue on the agent entity:
   `XrdsIdIndex`. (The earlier schema sketch above said `Entity`; that
   predated checking the real event shape.)
 
-### Still open
+### Resolved (previously "still open")
 
-- Error handling: target node missing/despawned when a trigger fires,
-  unknown `XrdsTriggerKind` on load (older saved scenes vs. newer engine
-  code) — the implementation plan's Phase 1 adds a concrete test for the
-  additive-schema-evolution case; the missing/despawned-target case at
-  fire-time is not yet designed.
-- Editor UI shape for authoring bindings/sequences (list-based, not
-  node-graph, per the earlier "no Blueprint-shaped surface" decision) —
-  tracked as the implementation plan's Phase 6, deliberately not
-  designed until Phases 0-5 land.
+- **Error handling.** A target node missing/despawned when a trigger
+  fires: `consume_triggers`/`fire_trigger_in_world` resolve through
+  `XrdsIdIndex` and skip (no-op) on a miss — never a panic. An unknown
+  `XrdsTriggerKind`/`XrdsAction` on load (older saved scenes vs. newer
+  engine code, or vice versa): the `Unknown` fallback variant on both
+  enums, plus `trigger_diagnostics()` flagging it at author time instead
+  of only failing silently at runtime. See Phase 1/10 in the record doc.
+- **Editor UI shape.** Built as list-based, not a node-graph, per the
+  "no Blueprint-shaped surface" decision below — see Phase 6 in the
+  record doc for the full build-out.

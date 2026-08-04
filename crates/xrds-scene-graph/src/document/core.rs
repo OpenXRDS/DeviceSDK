@@ -79,8 +79,8 @@ pub struct XrdsSceneDocument {
     pub hud_library: Vec<XrdsHudTemplate>,
     /// Named `XrdsSequence`/`XrdsTimeline` templates, referenced by
     /// `XrdsTriggerBinding::runnable` and `XrdsAction::Run` by name. See
-    /// `docs/xrds-trigger-action-implementation-plan.md` Phase 9a — this
-    /// is the *template* half of the template/instance split.
+    /// `docs/done/xrds-trigger-action-v1.md` Phase 9a — this is the
+    /// *template* half of the template/instance split.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub runnables: Vec<XrdsNamedRunnable>,
 }
@@ -212,6 +212,16 @@ impl XrdsSceneDocument {
         HudTemplateId(
             self.hud_library.iter().map(|t| t.id.0).max().unwrap_or(0).saturating_add(1),
         )
+    }
+
+    /// Looks up a document-level runnable by name — the registry entries
+    /// `XrdsTriggerBinding::runnable` and `XrdsAction::Run` resolve against.
+    pub fn runnable(&self, name: &str) -> Option<&XrdsNamedRunnable> {
+        self.runnables.iter().find(|r| r.name == name)
+    }
+
+    pub fn runnable_mut(&mut self, name: &str) -> Option<&mut XrdsNamedRunnable> {
+        self.runnables.iter_mut().find(|r| r.name == name)
     }
 
     pub(crate) fn gltf_node_authoring_entry(

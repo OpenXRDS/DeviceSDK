@@ -11,6 +11,7 @@ mod keyboard_shortcuts;
 mod palette;
 mod play_pointer;
 mod toolbar;
+mod trigger_action;
 mod viewport_camera;
 mod viewport_gizmo;
 mod viewport_gizmo_interaction;

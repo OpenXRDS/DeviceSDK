@@ -1,9 +1,9 @@
 //! Trigger-action sequencing runtime.
 //!
-//! See `docs/xrds-scenegraph-trigger-action-sequencing.md` for the design,
-//! `docs/done/xrds-trigger-action-v1.md` for the implementation record (this
-//! file is Phases 3-4, 7 and 10), and
-//! `docs/xrds-trigger-action-implementation-plan.md` for what is still ahead.
+//! See `docs/done/xrds-scenegraph-trigger-action-sequencing.md` for the design
+//! and `docs/done/xrds-trigger-action-v1.md` for the implementation record
+//! (this file is Phases 3-4, 7, 8, 9, 9a and 10) — the whole system is done,
+//! nothing is left planned.
 //!
 //! Two collaborating-but-separate systems live here:
 //!

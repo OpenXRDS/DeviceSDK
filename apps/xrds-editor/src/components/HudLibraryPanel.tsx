@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { EditorCommand, EditorSnapshot } from "../types/bridge";
+import { useResizable } from "../hooks/useResizable";
 
 interface Props {
   snapshot: EditorSnapshot;
@@ -11,6 +12,9 @@ export function HudLibraryPanel({ snapshot, send, onEditTemplate }: Props) {
   const templates = snapshot.hud_library;
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editName, setEditName]   = useState("");
+  // Handle sits on this panel's own top edge — drag up to grow it.
+  const { size: height, dragging, onPointerDown } =
+    useResizable({ axis: "y", initial: 150, min: 60, max: 400, invert: true });
 
   function startRename(id: number, currentName: string) {
     setEditingId(id);
@@ -29,7 +33,9 @@ export function HudLibraryPanel({ snapshot, send, onEditTemplate }: Props) {
   }
 
   return (
-    <div className="hud-library-panel">
+    <div className="hud-library-panel" style={{ height }}>
+      <div className={`panel-resize-handle--h${dragging ? " dragging" : ""}`}
+        onPointerDown={onPointerDown} title="Drag to resize" />
       <div className="hud-library-header">
         <span className="hud-library-title">HUD Library</span>
         <button className="tb-btn" style={{ fontSize: 10, padding: "2px 8px" }} onClick={createTemplate}>

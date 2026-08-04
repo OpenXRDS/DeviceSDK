@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useEditorState } from "./hooks/useEditorState";
 import { useSendCommand } from "./hooks/useSendCommand";
+import { useResizable } from "./hooks/useResizable";
 import { Menubar } from "./components/Menubar";
 import { Toolbar } from "./components/Toolbar";
 import { Hierarchy } from "./components/Hierarchy";
@@ -13,7 +14,9 @@ import { HudCanvasOverlay } from "./components/HudCanvasOverlay";
 import { WorldPanelCanvasOverlay } from "./components/WorldPanelCanvasOverlay";
 import { HudLibraryPanel } from "./components/HudLibraryPanel";
 import { ApkExportDialog } from "./components/ApkExportDialog";
-import type { EditorCommand } from "./types/bridge";
+import { TriggerActionLibraryPanel } from "./components/TriggerActionLibraryPanel";
+import { TriggerActionEditorOverlay } from "./components/TriggerActionEditorOverlay";
+import type { EditorCommand, StepTarget } from "./types/bridge";
 
 // ---------------------------------------------------------------------------
 // IPC helpers
@@ -44,6 +47,12 @@ export default function App() {
   const [hudTemplateId,  setHudTemplateId]  = useState<number | null>(null);
   const [worldPanelId,   setWorldPanelId]   = useState<number | null>(null);
   const [showApkExport,  setShowApkExport]  = useState(false);
+  const [editingStepTarget, setEditingStepTarget] = useState<StepTarget | null>(null);
+
+  // Handle sits on the sidebar's right edge — drag right to grow it.
+  const sidebar = useResizable({ axis: "x", initial: 240, min: 180, max: 520 });
+  // Handle sits on the inspector's left edge — drag left to grow it.
+  const inspector = useResizable({ axis: "x", initial: 280, min: 220, max: 560, invert: true });
 
   // Report exact viewport bounds to Rust whenever the layout changes.
   useEffect(() => {
@@ -160,15 +169,33 @@ export default function App() {
         )}
 
         <div className="editor-panels">
-          <div className="left-sidebar">
+          <div className="left-sidebar" style={{ width: sidebar.size }}>
             <Hierarchy snapshot={snapshot} send={send} />
             <PlayerPanel snapshot={snapshot} send={send} />
             <HudLibraryPanel snapshot={snapshot} send={send} onEditTemplate={id => setHudTemplateId(id)} />
+            <TriggerActionLibraryPanel snapshot={snapshot} send={send} onEditRunnable={name => setEditingStepTarget({ type: "Runnable", name })} />
+            <button className={`panel-lock-btn${sidebar.locked ? " locked" : ""}`}
+              style={{ top: 6, right: 6 }} onClick={sidebar.toggleLock}
+              title={sidebar.locked ? "Unlock sidebar width" : "Lock sidebar width"}>
+              {sidebar.locked ? "🔒" : "🔓"}
+            </button>
+            <div className={`panel-resize-handle--v${sidebar.dragging ? " dragging" : ""}${sidebar.locked ? " locked" : ""}`}
+              style={{ right: -4 }} onPointerDown={sidebar.onPointerDown} title={sidebar.locked ? "Sidebar width is locked" : "Drag to resize"} />
           </div>
           <div className="editor-center" ref={centerRef}>
             <ViewportCanvas send={send} />
           </div>
-          <Inspector snapshot={snapshot} send={send} onEditWorldPanel={id => setWorldPanelId(id)} />
+          <div className="inspector-wrap" style={{ width: inspector.size }}>
+            <button className={`panel-lock-btn${inspector.locked ? " locked" : ""}`}
+              style={{ top: 6, left: 6 }} onClick={inspector.toggleLock}
+              title={inspector.locked ? "Unlock inspector width" : "Lock inspector width"}>
+              {inspector.locked ? "🔒" : "🔓"}
+            </button>
+            <div className={`panel-resize-handle--v${inspector.dragging ? " dragging" : ""}${inspector.locked ? " locked" : ""}`}
+              style={{ left: -4 }} onPointerDown={inspector.onPointerDown} title={inspector.locked ? "Inspector width is locked" : "Drag to resize"} />
+            <Inspector snapshot={snapshot} send={send} onEditWorldPanel={id => setWorldPanelId(id)}
+              onEditBindingSequence={(nodeId, bindingIndex) => setEditingStepTarget({ type: "Binding", node_id: nodeId, binding_index: bindingIndex })} />
+          </div>
         </div>
 
         <Palette snapshot={snapshot} send={send} />
@@ -198,6 +225,14 @@ export default function App() {
           send={send}
           onPickAsset={() => ipcDialog("pick_texture")}
           onClose={() => setWorldPanelId(null)}
+        />
+      )}
+      {editingStepTarget !== null && (
+        <TriggerActionEditorOverlay
+          target={editingStepTarget}
+          snapshot={snapshot}
+          send={send}
+          onClose={() => setEditingStepTarget(null)}
         />
       )}
     </>

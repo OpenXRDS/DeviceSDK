@@ -11377,6 +11377,7 @@ dependencies = [
  "windows-sys 0.52.0",
  "wry",
  "x11rb",
+ "xrds-components",
  "xrds-gltf",
  "xrds-runtime",
  "xrds-scene-graph",

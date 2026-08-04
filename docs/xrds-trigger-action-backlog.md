@@ -1,16 +1,15 @@
 # `XrdsAction` backlog — candidate variants beyond the v1 draft
 
-Companion to [`xrds-scenegraph-trigger-action-sequencing.md`](xrds-scenegraph-trigger-action-sequencing.md)
-(the design doc), [`done/xrds-trigger-action-v1.md`](done/xrds-trigger-action-v1.md)
-(what shipped) and [`xrds-trigger-action-implementation-plan.md`](xrds-trigger-action-implementation-plan.md)
-(what is still ahead). **Not scheduled** — this is a holding area for
-candidate `XrdsAction` variants beyond the seven in the v1 draft
-(`PlayGltfAnimation`, `StopGltfAnimation`, `SetVisible`, `Teleport`,
-`ModifyHealth`, `Wait`, `FireCustomEvent`). None of these block Phase 1-5
-of the implementation plan; pull an entry out of here only when a real
-use case needs it, per the "don't design for hypothetical future
-requirements" principle — this list exists so the *idea* isn't lost, not
-as a commitment to build all of it.
+Companion to [`done/xrds-scenegraph-trigger-action-sequencing.md`](done/xrds-scenegraph-trigger-action-sequencing.md)
+(the design doc) and [`done/xrds-trigger-action-v1.md`](done/xrds-trigger-action-v1.md)
+(what shipped — the whole system, schema through the `xrds-editor` UI, is
+done; nothing is "still ahead" anymore). **Not scheduled** — this is a
+holding area for candidate `XrdsAction` variants beyond the ones already
+shipped (`PlayGltfAnimation`, `StopGltfAnimation`, `SetVisible`, `Teleport`,
+`ModifyHealth`, `Wait`, `FireCustomEvent`, `Run`). Pull an entry out of here
+only when a real use case needs it, per the "don't design for hypothetical
+future requirements" principle — this list exists so the *idea* isn't
+lost, not as a commitment to build all of it.
 
 Every entry below wraps an imperative capability that **already exists**
 in `xrds-runtime`/`xrds-net` today — same relationship `PlayGltfAnimation`

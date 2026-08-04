@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { EditorSnapshot, EditorCommand } from "../types/bridge";
 import { KIND_ICON } from "../types/bridge";
+import { useResizable } from "../hooks/useResizable";
 
 interface Props {
   snapshot: EditorSnapshot;
@@ -49,8 +50,17 @@ const PRIMITIVE_GROUPS = [
   { label: "XR",       items: ["WorldPanel"] },
 ];
 
+const DEFAULT_HEIGHT = 148;
+const MIN_HEIGHT = 84;
+const MAX_HEIGHT = 440;
+
 export function Palette({ snapshot, send }: Props) {
   const [tab, setTab] = useState<"primitives"|"assets">("primitives");
+  const [category, setCategory] = useState<string>(PRIMITIVE_GROUPS[0].label);
+  // Handle sits on the palette's own top edge — drag up (away from the
+  // bottom of the window) to grow it, same as every other bottom-docked panel.
+  const { size: height, dragging, onPointerDown: onResizeStart, locked, toggleLock } =
+    useResizable({ axis: "y", initial: DEFAULT_HEIGHT, min: MIN_HEIGHT, max: MAX_HEIGHT, invert: true });
   const parentId = snapshot.selection.length === 1 ? snapshot.selection[0] : null;
 
   function spawnPrimitive(kind: string) {
@@ -60,29 +70,47 @@ export function Palette({ snapshot, send }: Props) {
     send({ type: "SpawnAsset", payload: { asset_id: assetId, parent_id: parentId } });
   }
 
+  const activeGroup = PRIMITIVE_GROUPS.find(g => g.label === category) ?? PRIMITIVE_GROUPS[0];
+
   return (
-    <div className="palette">
+    <div className="palette" style={{ height }}>
+      <button className={`panel-lock-btn${locked ? " locked" : ""}`}
+        style={{ top: 6, right: 6 }} onClick={toggleLock}
+        title={locked ? "Unlock palette height" : "Lock palette height"}>
+        {locked ? "🔒" : "🔓"}
+      </button>
+      <div className={`panel-resize-handle--h${dragging ? " dragging" : ""}${locked ? " locked" : ""}`}
+        onPointerDown={onResizeStart} title={locked ? "Palette height is locked" : "Drag to resize"} />
       <div className="pal-tabs">
         <div className={`pal-tab${tab === "primitives" ? " active" : ""}`} onClick={() => setTab("primitives")}>Primitives</div>
         <div className={`pal-tab${tab === "assets" ? " active" : ""}`} onClick={() => setTab("assets")}>Project Assets</div>
       </div>
+      {tab === "primitives" && (
+        <div className="pal-cat-tabs">
+          {PRIMITIVE_GROUPS.map(group => (
+            <div key={group.label}
+              className={`pal-cat-tab${category === group.label ? " active" : ""}`}
+              onClick={() => setCategory(group.label)}
+            >
+              {group.label}
+            </div>
+          ))}
+        </div>
+      )}
       <div className="pal-content">
-        {tab === "primitives" && PRIMITIVE_GROUPS.flatMap(group => [
-          <div key={`__hdr_${group.label}`} className="pal-group-header">{group.label}</div>,
-          ...group.items.map(kind => {
-            const meta = PALETTE_META[kind];
-            return (
-              <button
-                key={kind}
-                className="pal-btn"
-                title={meta?.tip}
-                onClick={() => spawnPrimitive(kind)}
-              >
-                {KIND_ICON[kind] ?? "○"} {meta?.label ?? kind}
-              </button>
-            );
-          }),
-        ])}
+        {tab === "primitives" && activeGroup.items.map(kind => {
+          const meta = PALETTE_META[kind];
+          return (
+            <button
+              key={kind}
+              className="pal-btn"
+              title={meta?.tip}
+              onClick={() => spawnPrimitive(kind)}
+            >
+              {KIND_ICON[kind] ?? "○"} {meta?.label ?? kind}
+            </button>
+          );
+        })}
         {tab === "assets" && (
           snapshot.asset_catalog.length === 0
             ? <span className="pal-empty">No assets imported yet.  Use File → Import Asset…</span>

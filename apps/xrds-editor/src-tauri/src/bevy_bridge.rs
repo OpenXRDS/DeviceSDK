@@ -11,6 +11,9 @@ use crate::io::apply_io_command;
 use crate::hud_library::{apply_hud_library_command, build_hud_library_dto};
 use crate::palette::{apply_palette_command, build_asset_catalog};
 use crate::toolbar::apply_toolbar_command;
+use crate::trigger_action::{
+    apply_trigger_action_command, build_runnable_diagnostics_dto, build_runnables_dto,
+};
 
 /// Bevy resource that holds the shared bridge channels.
 #[derive(Resource)]
@@ -36,6 +39,7 @@ pub fn drain_editor_commands_system(
             apply_palette_command(cmd, &mut session, &mut state) ||
             apply_inspector_command(cmd, &mut session, &mut state) ||
             apply_hud_library_command(cmd, &mut session, &mut state) ||
+            apply_trigger_action_command(cmd, &mut session, &mut state) ||
             apply_io_command(cmd, &mut session, &mut state);
         let env_changed = apply_environment_command(cmd, &mut session, &mut state);
         if env_changed { state.needs_env_sync = true; }
@@ -125,6 +129,8 @@ pub fn broadcast_editor_snapshot_system(
         apk_prerequisites: state.apk_prerequisites.take(),
         is_exporting_apk: state.apk_export_job.is_some(),
         apk_build_log,
+        runnables: build_runnables_dto(doc),
+        runnable_diagnostics: build_runnable_diagnostics_dto(doc),
     };
 
     bridge.0.outbound.lock().unwrap().push_back(snapshot);
@@ -159,7 +165,16 @@ fn is_structural_command(cmd: &EditorCommand) -> bool {
         CreateHudTemplate{..} | DeleteHudTemplate{..} | RenameHudTemplate{..} |
         SetHudTemplateDepth{..} | AddHudItem{..} | RemoveHudItem{..} |
         RenameHudItem{..} | SetHudItemPosition{..} | SetHudItemText{..} |
-        SetHudItemFontSize{..} | SetHudItemColor{..} | LinkHudTemplate{..}
+        SetHudItemFontSize{..} | SetHudItemColor{..} | LinkHudTemplate{..} |
+        // Trigger-action registry / bindings / watchers
+        CreateRunnable{..} | DeleteRunnable{..} | RenameRunnable{..} |
+        SetTimelineLooping{..} | SetTimelineDuration{..} |
+        AddActionStep{..} | RemoveActionStep{..} | MoveActionStep{..} | SetActionStep{..} |
+        AddTimelineKey{..} | RemoveTimelineKey{..} | SetTimelineKey{..} |
+        AddTriggerBinding{..} | RemoveTriggerBinding{..} |
+        SetTriggerBindingTrigger{..} | SetTriggerBindingHand{..} |
+        SetTriggerBindingDisabled{..} | SetTriggerBindingRunnable{..} |
+        AddWatcher{..} | RemoveWatcher{..} | SetWatcher{..}
     )
 }
 

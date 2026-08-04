@@ -1,5 +1,6 @@
 import type { EditorSnapshot, EditorCommand } from "../types/bridge";
 import { KIND_ICON } from "../types/bridge";
+import { useResizable } from "../hooks/useResizable";
 
 interface Props {
   snapshot: EditorSnapshot;
@@ -8,6 +9,12 @@ interface Props {
 
 export function PlayerPanel({ snapshot, send }: Props) {
   const { player_anchors, active_player_anchor_id, show_fov_overlay } = snapshot;
+  // Handle sits on this panel's own top edge — drag up to grow it,
+  // encroaching into Hierarchy's space above. Called before the early
+  // return below so hook order stays stable across renders either way.
+  const { size: height, dragging, onPointerDown } =
+    useResizable({ axis: "y", initial: 130, min: 60, max: 360, invert: true });
+
   if (player_anchors.length === 0) return null;
 
   function toggle(id: number) {
@@ -18,7 +25,9 @@ export function PlayerPanel({ snapshot, send }: Props) {
   }
 
   return (
-    <div className="player-panel">
+    <div className="player-panel" style={{ height }}>
+      <div className={`panel-resize-handle--h${dragging ? " dragging" : ""}`}
+        onPointerDown={onPointerDown} title="Drag to resize" />
       <div className="player-panel-header">
         <span>{KIND_ICON.Player} Players</span>
         <div style={{ display: "flex", gap: 4, marginLeft: "auto" }}>

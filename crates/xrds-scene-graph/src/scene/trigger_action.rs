@@ -1,5 +1,5 @@
 //! Authored trigger-action sequencing data. See
-//! `docs/xrds-scenegraph-trigger-action-sequencing.md` for the design
+//! `docs/done/xrds-scenegraph-trigger-action-sequencing.md` for the design
 //! rationale and `docs/done/xrds-trigger-action-v1.md` for the
 //! implementation record (this file is Phases 1-2, 7 and 10).
 //!
@@ -403,10 +403,12 @@ impl XrdsSceneDocument {
                     XrdsTriggerKind::Unknown => out.push(XrdsSceneTriggerDiagnostic {
                         node_id: Some(node.id),
                         severity: Severity::Warning,
-                        title: "Unrecognized trigger kind".to_string(),
+                        title: "No trigger kind selected".to_string(),
                         detail: format!(
-                            "{where_} uses a trigger kind this build does not know, so it can \
-                             never fire. The scene was likely authored by a newer editor."
+                            "{where_} has no recognized trigger kind, so it can never fire. \
+                             Either the author hasn't picked one yet (this is the editor's \
+                             placeholder for a freshly added binding), or the scene was \
+                             authored by a newer editor build using a kind this one doesn't know."
                         ),
                     }),
                     XrdsTriggerKind::Custom(name) if !emitted_custom.contains(name.as_str()) => {

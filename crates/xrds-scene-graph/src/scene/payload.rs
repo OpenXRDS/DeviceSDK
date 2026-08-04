@@ -937,7 +937,7 @@ pub use xrds_components::{XrdsGrabType, XrdsInteractionZoneShape};
 /// Has no visible mesh — its bounds are shown in the editor as a wireframe overlay.
 ///
 /// `shape` alone is a valid trigger-detection volume for zone-enter/exit
-/// sequencing (see `docs/xrds-scenegraph-trigger-action-sequencing.md`) —
+/// sequencing (see `docs/done/xrds-scenegraph-trigger-action-sequencing.md`) —
 /// `grab_type: None`, `hoverable: false` is normal for a zone meant only
 /// to be walked through (a teleport pad, a damage zone), not a sign
 /// something's misconfigured.

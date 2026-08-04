@@ -1,7 +1,7 @@
 // Spike: evaluate `bevy-sequential-actions` 0.14 (matches this workspace's
 // `bevy = "0.17.2"`) as the execution substrate for xrds-scene-graph's
 // planned trigger-action sequencing — see
-// docs/xrds-scenegraph-trigger-action-sequencing.md for the design context
+// docs/done/xrds-scenegraph-trigger-action-sequencing.md for the design context
 // and the two open questions this spike answers with running code instead
 // of docs alone:
 //

@@ -162,6 +162,47 @@ pub enum EditorCommand {
     CheckApkPrerequisites,
     ExportApk { output_dir: String },
 
+    // --- Trigger-action: runnable registry (document-level) ---
+    /// kind: "sequence" | "timeline". Rejected (logged, no-op) if `name` is
+    /// already taken.
+    CreateRunnable { name: String, kind: String },
+    DeleteRunnable { name: String },
+    RenameRunnable { old_name: String, new_name: String },
+    SetTimelineLooping  { name: String, looping: bool },
+    SetTimelineDuration { name: String, duration_secs: Option<f32> },
+
+    // --- Trigger-action: steps (registry sequence body OR a binding's inline sequence) ---
+    /// kind: one of the `XrdsAction` variant names ("SetVisible", "Teleport", ...).
+    AddActionStep    { target: StepTargetDto, kind: String },
+    RemoveActionStep { target: StepTargetDto, index: usize },
+    /// Reorder a step within its list by ±1.
+    MoveActionStep   { target: StepTargetDto, index: usize, delta: i32 },
+    SetActionStep    { target: StepTargetDto, index: usize, action: XrdsActionDto },
+
+    // --- Trigger-action: timeline keys (registry timeline body only) ---
+    AddTimelineKey    { name: String, at_secs: f32, kind: String },
+    RemoveTimelineKey { name: String, index: usize },
+    SetTimelineKey    { name: String, index: usize, key: XrdsTimelineKeyDto },
+
+    // --- Trigger-action: per-node bindings ---
+    AddTriggerBinding    { node_id: u64 },
+    RemoveTriggerBinding { node_id: u64, index: usize },
+    SetTriggerBindingTrigger  { node_id: u64, index: usize, trigger: XrdsTriggerKindDto },
+    /// hand: "Left" | "Right" | null.
+    SetTriggerBindingHand     { node_id: u64, index: usize, hand: Option<String> },
+    SetTriggerBindingDisabled { node_id: u64, index: usize, disabled: bool },
+    SetTriggerBindingRunnable { node_id: u64, index: usize, runnable: Option<String> },
+
+    // --- Trigger-action: per-node threshold watchers ---
+    AddWatcher    { node_id: u64 },
+    RemoveWatcher { node_id: u64, index: usize },
+    SetWatcher    { node_id: u64, index: usize, watcher: ThresholdWatcherDto },
+
+    /// Fires binding `index` on `node_id` right now, without waiting for a
+    /// real ZoneEnter/Grabbed/etc event — there is no other way to trigger
+    /// one from a desktop editor UI. See `XrdsUpdateContext::fire_trigger`.
+    PreviewFireTrigger { node_id: u64, index: usize },
+
     // --- Edit ---
     Undo,
     Redo,
@@ -234,6 +275,15 @@ pub struct EditorSnapshot {
     /// Tail of the APK build log (last ≤200 lines).  Empty when no APK export is running.
     #[serde(default)]
     pub apk_build_log: Vec<String>,
+    /// Document-level named-runnable registry (Phase 9a).
+    #[serde(default)]
+    pub runnables: Vec<NamedRunnableDto>,
+    /// Registry-level trigger diagnostics only (`node_id: None`) — a `Run`
+    /// naming an unregistered runnable, or a cycle in the registry's own
+    /// `Run`-graph. Per-node diagnostics ride on `selected_node.trigger_diagnostics`
+    /// instead.
+    #[serde(default)]
+    pub runnable_diagnostics: Vec<TriggerDiagnosticDto>,
 }
 
 /// Snapshot of the scene-wide environment settings (fog, exposure, IBL, skybox).
@@ -291,6 +341,14 @@ pub struct NodeInspectorDto {
     pub payload: NodePayloadDto,
     /// Kind string of the immediate parent node, or None for root nodes.
     pub parent_kind: Option<String>,
+    /// Applies regardless of `payload` kind — any node can carry triggers.
+    #[serde(default)]
+    pub triggers: Vec<TriggerBindingDto>,
+    #[serde(default)]
+    pub watchers: Vec<ThresholdWatcherDto>,
+    /// This node's subset of `trigger_diagnostics()` (`node_id == Some(id)`).
+    #[serde(default)]
+    pub trigger_diagnostics: Vec<TriggerDiagnosticDto>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
@@ -419,4 +477,141 @@ pub struct ApkPrerequisite {
     pub name: String,
     pub ok: bool,
     pub hint: String,
+}
+
+// ---------------------------------------------------------------------------
+// Trigger-action (Phases 6 / 9 / 9a)
+// ---------------------------------------------------------------------------
+
+/// Mirrors `xrds_scene_graph::XrdsAction`. Same adjacent-tag JSON shape
+/// (`{"kind": "...", "data": ...}`) as the real type, kept as a separate
+/// wire type per this editor's DTO convention.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+#[serde(tag = "kind", content = "data")]
+pub enum XrdsActionDto {
+    /// `clip_index` always addresses the real `XrdsSceneGltfAnimationSelector::Index`
+    /// variant — the `Name(String)` selector isn't editable through this UI,
+    /// matching the existing imperative `EditorCommand::PlayGltfAnimation`
+    /// command's convention (also index-only).
+    PlayGltfAnimation { clip_index: usize, speed: f32, repeat: String, start_paused: bool },
+    StopGltfAnimation,
+    SetVisible(bool),
+    Teleport { destination: [f32; 3] },
+    ModifyHealth { target: ActionTargetDto, delta: ActionValueDto },
+    Wait { seconds: f32 },
+    FireCustomEvent { name: String },
+    Run { runnable: String, wait: bool },
+    Unknown,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+#[serde(tag = "type")]
+pub enum ActionTargetDto {
+    SelfNode,
+    Node { id: u64 },
+    TriggerSource,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+#[serde(tag = "type")]
+pub enum ActionValueDto {
+    Fixed { value: f32 },
+    FromTriggerSource,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct XrdsSequenceDto {
+    pub steps: Vec<XrdsActionDto>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct XrdsTimelineKeyDto {
+    pub at_secs: f32,
+    pub action: XrdsActionDto,
+}
+
+/// Mirrors `xrds_scene_graph::XrdsRunnable` — a named registry entry is
+/// either a `Sequence` or a `Timeline`, never both.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+#[serde(tag = "type")]
+pub enum RunnableBodyDto {
+    Sequence { steps: Vec<XrdsActionDto> },
+    Timeline { keys: Vec<XrdsTimelineKeyDto>, duration_secs: Option<f32>, looping: bool },
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct NamedRunnableDto {
+    pub name: String,
+    pub body: RunnableBodyDto,
+}
+
+/// Mirrors `xrds_scene_graph::XrdsTriggerKind`. Same adjacent-tag shape.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+#[serde(tag = "kind", content = "data")]
+pub enum XrdsTriggerKindDto {
+    ZoneEnter,
+    ZoneExit,
+    Grabbed,
+    Dropped,
+    HoverEnter,
+    HoverExit,
+    ButtonPress,
+    ButtonRelease,
+    SliderChange,
+    ToggleChange,
+    AnimationComplete,
+    RunawayDetected,
+    Custom(String),
+    Unknown,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct TriggerBindingDto {
+    pub trigger: XrdsTriggerKindDto,
+    pub sequence: XrdsSequenceDto,
+    pub disabled: bool,
+    /// "Left" | "Right" | null.
+    pub hand: Option<String>,
+    pub runnable: Option<String>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+#[serde(tag = "type")]
+pub enum ObservableDto {
+    RotationDegrees { axis: String },
+    DistanceTo { node: u64 },
+    Height,
+    ScaleMagnitude,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct ThresholdWatcherDto {
+    pub observable: ObservableDto,
+    /// "Above" | "Below" | "Either".
+    pub crossing: String,
+    pub value: f32,
+    pub hysteresis: f32,
+    pub fires: String,
+    pub disabled: bool,
+}
+
+/// Mirrors `xrds_scene_graph::XrdsSceneTriggerDiagnostic`.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct TriggerDiagnosticDto {
+    /// `None` for a registry-level problem (e.g. a `Run` cycle) — not any
+    /// one node's fault.
+    pub node_id: Option<u64>,
+    /// "info" | "warning" | "error".
+    pub severity: String,
+    pub title: String,
+    pub detail: String,
+}
+
+/// Addresses where an `XrdsAction` step list lives — a registry runnable's
+/// body, or a specific trigger binding's inline sequence.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+#[serde(tag = "type")]
+pub enum StepTargetDto {
+    Runnable { name: String },
+    Binding { node_id: u64, binding_index: usize },
 }

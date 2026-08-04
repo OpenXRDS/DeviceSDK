@@ -109,7 +109,7 @@ pub enum XrdsGrabType {
 /// meant only to be walked through (e.g. a teleport pad or damage zone),
 /// not a sign something's misconfigured — this type covers both "can be
 /// grabbed/hovered" and "fires enter/exit for trigger-action sequencing"
-/// (see `docs/xrds-scenegraph-trigger-action-sequencing.md`), and most
+/// (see `docs/done/xrds-scenegraph-trigger-action-sequencing.md`), and most
 /// zones only need one of the two.
 #[derive(bevy::prelude::Component, Debug, Clone, Copy)]
 pub struct XrdsInteractionZone {
