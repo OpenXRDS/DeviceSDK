@@ -146,7 +146,7 @@ pub struct XrdsTrackRegistry(pub std::collections::HashMap<String, XrdsTrack>);
 ///
 /// This is the runtime half of the one-asset-at-a-time rule: a Track will not
 /// start if any asset it drives is already held by another running Track.
-/// See `docs/xrds-track-model-plan.md` §4 for why the policy is
+/// See `docs/done/xrds-track-model-plan.md` §4 for why the policy is
 /// *reject the newcomer* rather than preempt or queue — briefly, a scenario
 /// that completes is worth more than one that starts, and a partially-applied
 /// Track plays *wrong* rather than not at all, which is far harder to debug.

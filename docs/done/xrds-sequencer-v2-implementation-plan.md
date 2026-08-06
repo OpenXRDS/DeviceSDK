@@ -1,7 +1,7 @@
 > **Superseded in part.** The *model* described here — two execution models
 > (`XrdsSequence` / `XrdsTimeline`), "Action Chain" as a display name,
 > action-category lanes — has been replaced by the Track model. See
-> **`docs/xrds-track-model-plan.md`** for the current design, the evidence
+> **`docs/done/xrds-track-model-plan.md`** for the current design, the evidence
 > for collapsing the two execution models into one, the cross-Track asset
 > conflict policy, and the live build state. Everything below stays
 > accurate as a record of how the work got here.

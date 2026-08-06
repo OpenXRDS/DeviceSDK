@@ -1,5 +1,5 @@
 // Pure, framework-free derivations for the Sequencer — see
-// docs/xrds-track-model-plan.md.
+// docs/done/xrds-track-model-plan.md.
 //
 // Note what is *absent*: there is no lane derivation any more. A Track's rows
 // come straight from `NamedTrackDto.assets`, because a row is now a real

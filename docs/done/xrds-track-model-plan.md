@@ -1,7 +1,7 @@
 # Track model — sequencer rework plan
 
 Supersedes the Sequencer-v2 work recorded in
-`docs/xrds-sequencer-v2-implementation-plan.md`. That document's Phase A–D
+`docs/done/xrds-sequencer-v2-implementation-plan.md`. That document's Phase A–D
 history is still accurate as history; this one replaces its *model*.
 
 This file exists to survive a context reset. It records the decisions, the

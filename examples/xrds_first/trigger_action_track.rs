@@ -1,5 +1,5 @@
 // Tracks — one piece of choreography driving several assets, watched in a
-// real 3D scene. See `docs/xrds-track-model-plan.md`.
+// real 3D scene. See `docs/done/xrds-track-model-plan.md`.
 //
 // Replaces the former `trigger_action_sequence` and `trigger_action_timeline`
 // examples. Those two existed to contrast an ordered *sequence* against an

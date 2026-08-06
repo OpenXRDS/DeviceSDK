@@ -195,7 +195,7 @@ export function Hierarchy({ snapshot, send, onOpenTrack }: Props) {
 
         {/* Triggers pseudo-row — Bindings/Watchers authored on this node
          * (Phase D's Hierarchy grouping; see
-         * docs/xrds-sequencer-v2-implementation-plan.md). Kept as two
+         * docs/done/xrds-sequencer-v2-implementation-plan.md). Kept as two
          * separate sub-rows rather than one merged list per the design
          * assessment doc's decision — a Watcher only *fires* a Custom
          * name some other binding may listen for, it never names a

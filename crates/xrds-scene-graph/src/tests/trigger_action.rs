@@ -1,7 +1,7 @@
 //! Tests for authored Track data and `track_diagnostics`.
 //!
 //! Rewritten wholesale for the Track model — see
-//! `docs/xrds-track-model-plan.md`. The previous version of this file was
+//! `docs/done/xrds-track-model-plan.md`. The previous version of this file was
 //! built around `XrdsSequence`, `Wait`, `Run` and `FireCustomEvent`, none of
 //! which exist any more, so most of it was testing features rather than
 //! needing porting.
@@ -252,7 +252,7 @@ fn a_payload_less_unrecognized_action_does_not_destroy_the_whole_document() {
 /// `kind` tag against a known-tags list *before* touching `data`, so an
 /// unrecognized action with a payload degrades to `Unknown` instead of
 /// failing the whole document. See `XrdsAction::Unknown`'s doc comment and
-/// `docs/xrds-track-model-plan.md` §9.
+/// `docs/done/xrds-track-model-plan.md` §9.
 #[test]
 fn a_payload_carrying_unrecognized_action_should_not_destroy_the_whole_document() {
     let json = r#"{

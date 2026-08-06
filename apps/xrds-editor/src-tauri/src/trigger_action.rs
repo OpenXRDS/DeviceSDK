@@ -3,7 +3,7 @@
 //! same `XrdsSceneDocument` data the runtime consumes
 //! (`XrdsSceneDocument::tracks`, `XrdsSceneNode::triggers`/`.watchers`).
 //!
-//! See `docs/xrds-track-model-plan.md` for the model. The command surface is
+//! See `docs/done/xrds-track-model-plan.md` for the model. The command surface is
 //! row-addressed — `(track, asset_index, key_index)` — because an event
 //! belongs to an asset row, not to a flat list.
 

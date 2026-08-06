@@ -382,7 +382,7 @@ button, input, select, textarea { font-family: inherit; }
              overflow-y: auto; }
 
 /* ── Sequencer (bottom-docked, single unified panel — see
-   docs/xrds-sequencer-v2-implementation-plan.md Phase D, redesigned to
+   docs/done/xrds-sequencer-v2-implementation-plan.md Phase D, redesigned to
    match docs/Sequencer Editor.dc.html's one-panel layout: a transport/
    header strip, then three columns — track list | ruler+lanes |
    inspector-for-the-selected-item — instead of a separate docked

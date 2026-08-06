@@ -345,7 +345,7 @@ pub struct EditorSnapshot {
     pub track_preview: Option<TrackPreviewDto>,
     /// The most recent asset-conflict refusal. Kept in the snapshot because a
     /// refused Track is otherwise a silent no-op — see the reject-the-newcomer
-    /// policy in `docs/xrds-track-model-plan.md` §4.
+    /// policy in `docs/done/xrds-track-model-plan.md` §4.
     #[serde(default)]
     pub track_conflict: Option<TrackConflictDto>,
     /// Every trigger binding in the document, tagged with its owning node

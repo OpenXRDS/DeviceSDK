@@ -46,7 +46,7 @@ function Ruler({ duration }: { duration: number }) {
 }
 
 /** Bottom-docked Sequencer: a transport header, then three columns — asset
- * rows | ruler + lanes | event inspector. See docs/xrds-track-model-plan.md.
+ * rows | ruler + lanes | event inspector. See docs/done/xrds-track-model-plan.md.
  *
  * Rows come straight from the Track's `assets`; there is no lane *derivation*
  * any more. Mute/Solo/Lock are gone — a deliberate simplification.
