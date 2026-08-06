@@ -65,6 +65,17 @@ fn serve_dist(dist: &std::path::Path, req: wry::http::Request<Vec<u8>>)
     let body: Cow<'static, [u8]> = Cow::Owned(std::fs::read(&path).unwrap_or_default());
     wry::http::Response::builder()
         .header("Content-Type", mime)
+        // WebView2 (the Chromium engine wry uses on Windows) applies
+        // heuristic HTTP caching to responses with no cache-control header
+        // at all — and its disk cache lives in a persistent user-data
+        // folder that survives across process restarts, not just within
+        // one running window. Without this, rebuilding `dist/` and even
+        // fully relaunching the app can both still serve a stale bundle:
+        // the browser never asks `serve_dist` again, it just replays a
+        // cached response for the same `xrds://localhost/...` URL. Every
+        // response here always re-reads from disk already, so there is
+        // nothing this handler wants cached, ever.
+        .header("Cache-Control", "no-store")
         .body(body)
         .unwrap()
 }

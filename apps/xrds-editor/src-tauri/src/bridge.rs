@@ -53,6 +53,19 @@ pub enum EditorCommand {
     SetMaterial { id: u64, params: MaterialParamsDto },
     /// Commit carries params — independent of pending state timing.
     CommitMaterial { id: u64, params: MaterialParamsDto },
+    /// Assigns (or with `texture_asset_id: None`, clears) **one** texture slot
+    /// on a node's authored material.
+    ///
+    /// One slot per command rather than a whole-set write, for the same reason
+    /// `XrdsAction::SetMaterial` takes one slot: replacing the set would let
+    /// assigning a base-colour map silently drop an authored normal map.
+    /// `slot` is "BaseColor" | "MetallicRoughness" | "Normal" | "Occlusion" |
+    /// "Emissive".
+    SetNodeMaterialTexture {
+        id: u64,
+        slot: String,
+        texture_asset_id: Option<String>,
+    },
 
     // --- Lights ---
     SetPointLight { id: u64, color: [f32; 4], intensity: f32, range: f32 },
@@ -165,24 +178,47 @@ pub enum EditorCommand {
     // --- Trigger-action: runnable registry (document-level) ---
     /// kind: "sequence" | "timeline". Rejected (logged, no-op) if `name` is
     /// already taken.
-    CreateRunnable { name: String, kind: String },
-    DeleteRunnable { name: String },
-    RenameRunnable { old_name: String, new_name: String },
-    SetTimelineLooping  { name: String, looping: bool },
-    SetTimelineDuration { name: String, duration_secs: Option<f32> },
+    // --- Tracks: the registry ---
+    CreateTrack { name: String },
+    DeleteTrack { name: String },
+    RenameTrack { old_name: String, new_name: String },
+    SetTrackLooping  { name: String, looping: bool },
+    SetTrackDuration { name: String, duration_secs: Option<f32> },
 
-    // --- Trigger-action: steps (registry sequence body OR a binding's inline sequence) ---
-    /// kind: one of the `XrdsAction` variant names ("SetVisible", "Teleport", ...).
-    AddActionStep    { target: StepTargetDto, kind: String },
-    RemoveActionStep { target: StepTargetDto, index: usize },
-    /// Reorder a step within its list by ±1.
-    MoveActionStep   { target: StepTargetDto, index: usize, delta: i32 },
-    SetActionStep    { target: StepTargetDto, index: usize, action: XrdsActionDto },
+    // --- Tracks: asset rows ---
+    /// Adds a row for `node_id`. Refused (with a status message) when that
+    /// asset already has a row in this Track — one row per asset is the
+    /// invariant `track_diagnostics` enforces, so the command layer should
+    /// not be able to create the violation in the first place.
+    AddTrackAsset    { track: String, node_id: u64 },
+    RemoveTrackAsset { track: String, asset_index: usize },
+    /// Repoints an existing row at a different node, keeping its events.
+    SetTrackAssetTarget { track: String, asset_index: usize, node_id: u64 },
 
-    // --- Trigger-action: timeline keys (registry timeline body only) ---
-    AddTimelineKey    { name: String, at_secs: f32, kind: String },
-    RemoveTimelineKey { name: String, index: usize },
-    SetTimelineKey    { name: String, index: usize, key: XrdsTimelineKeyDto },
+    // --- Tracks: events on a row ---
+    /// kind: one of the `XrdsAction` variant names ("SetVisible", "SetTransform", ...).
+    AddTrackKey    { track: String, asset_index: usize, at_secs: f32, kind: String },
+    RemoveTrackKey { track: String, asset_index: usize, key_index: usize },
+    SetTrackKey    { track: String, asset_index: usize, key_index: usize, key: XrdsTrackKeyDto },
+
+    // --- Tracks: editor preview transport ---
+    /// Starts `name` in the editor world without entering play mode. Separate
+    /// from `SetPlayMode` by design: previewing one Track is not the same as
+    /// running the simulation.
+    PreviewPlayTrack  { name: String },
+    PreviewPauseTrack { paused: bool },
+    /// Stops the preview and restores every asset it moved from the document.
+    PreviewStopTrack,
+
+    // --- Internal, never sent by the frontend ---
+    /// An inbound message the Rust side could not decode.
+    ///
+    /// Synthesised by `wry_overlay::ipc_handler` and routed through the ordinary
+    /// command queue purely to reach `pending_status`, so a rejected command
+    /// surfaces in the editor's own status bar instead of only a `warn!` in a
+    /// terminal nobody is watching. Reusing the existing queue avoids a second
+    /// channel for one message.
+    ReportBridgeError { message: String },
 
     // --- Trigger-action: per-node bindings ---
     AddTriggerBinding    { node_id: u64 },
@@ -191,7 +227,7 @@ pub enum EditorCommand {
     /// hand: "Left" | "Right" | null.
     SetTriggerBindingHand     { node_id: u64, index: usize, hand: Option<String> },
     SetTriggerBindingDisabled { node_id: u64, index: usize, disabled: bool },
-    SetTriggerBindingRunnable { node_id: u64, index: usize, runnable: Option<String> },
+    SetTriggerBindingTrack    { node_id: u64, index: usize, track: Option<String> },
 
     // --- Trigger-action: per-node threshold watchers ---
     AddWatcher    { node_id: u64 },
@@ -218,10 +254,30 @@ pub enum EditorCommand {
 // Snapshot — Bevy → webview
 // ---------------------------------------------------------------------------
 
+/// Bumped on **every** change to `EditorCommand`, `EditorSnapshot`, or any DTO
+/// they contain.
+///
+/// `src/types/bridge.ts` is a hand-written mirror of this file with nothing
+/// linking the two, so drift produces no compile error on either side: the Rust
+/// build passes, `tsc` passes, and the failure only appears at runtime — a
+/// dropped command that does nothing, or an `undefined` snapshot field that
+/// throws on first `.map()`. No test crosses the boundary either.
+///
+/// This constant is the cheap guard. The frontend compares it against its own
+/// copy and shows a hard "rebuild the UI" banner on mismatch, which turns both
+/// of those silent failures into one clear message.
+///
+/// **If you change a DTO and do not bump this, you have removed the only thing
+/// that would have told anyone.**
+pub const BRIDGE_VERSION: u32 = 5;
+
 /// State snapshot emitted to the webview after each frame's update.
 /// Grow this incrementally — add fields as each phase is implemented.
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Default)]
 pub struct EditorSnapshot {
+    /// See [`BRIDGE_VERSION`]. Compared by the frontend against its own copy.
+    #[serde(default)]
+    pub bridge_version: u32,
     // Phase 1
     pub hierarchy: Vec<HierarchyNode>,
     pub selection: Vec<u64>,
@@ -275,15 +331,34 @@ pub struct EditorSnapshot {
     /// Tail of the APK build log (last ≤200 lines).  Empty when no APK export is running.
     #[serde(default)]
     pub apk_build_log: Vec<String>,
-    /// Document-level named-runnable registry (Phase 9a).
+    /// Document-level Track registry.
     #[serde(default)]
-    pub runnables: Vec<NamedRunnableDto>,
-    /// Registry-level trigger diagnostics only (`node_id: None`) — a `Run`
-    /// naming an unregistered runnable, or a cycle in the registry's own
-    /// `Run`-graph. Per-node diagnostics ride on `selected_node.trigger_diagnostics`
-    /// instead.
+    pub tracks: Vec<NamedTrackDto>,
+    /// Registry-level Track diagnostics only (`node_id: None`) — a duplicate
+    /// asset row, a row targeting a deleted node, two Tracks sharing an asset,
+    /// a looping Track blocking another. Per-node diagnostics ride on
+    /// `selected_node.trigger_diagnostics` instead.
     #[serde(default)]
-    pub runnable_diagnostics: Vec<TriggerDiagnosticDto>,
+    pub track_diagnostics: Vec<TriggerDiagnosticDto>,
+    /// Live editor preview, or `None` when nothing is previewing.
+    #[serde(default)]
+    pub track_preview: Option<TrackPreviewDto>,
+    /// The most recent asset-conflict refusal. Kept in the snapshot because a
+    /// refused Track is otherwise a silent no-op — see the reject-the-newcomer
+    /// policy in `docs/xrds-track-model-plan.md` §4.
+    #[serde(default)]
+    pub track_conflict: Option<TrackConflictDto>,
+    /// Every trigger binding in the document, tagged with its owning node
+    /// — see `build_all_node_bindings_dto`. Powers the sequencer redesign's
+    /// hierarchy-wide "Triggers" grouping without needing to select each
+    /// node one at a time.
+    #[serde(default)]
+    pub all_node_bindings: Vec<NodeBindingSummaryDto>,
+    /// Every threshold watcher in the document, tagged with its owning
+    /// node — see `build_all_node_watchers_dto`. Same rationale as
+    /// `all_node_bindings`, for the Watchers half of the same grouping.
+    #[serde(default)]
+    pub all_node_watchers: Vec<NodeWatcherSummaryDto>,
 }
 
 /// Snapshot of the scene-wide environment settings (fog, exposure, IBL, skybox).
@@ -421,6 +496,26 @@ pub struct MaterialParamsDto {
     pub metallic: f32,
     pub roughness: f32,
     pub emissive: [f32; 3],
+    /// Currently-assigned texture slots, **read-only in this DTO**.
+    ///
+    /// Writes go through `EditorCommand::SetNodeMaterialTexture` instead, one
+    /// slot at a time. Deliberately asymmetric: this struct is also the live
+    /// *drag* payload (sent on every pointer move), and letting it write
+    /// textures would mean every drag frame round-tripping the whole slot set,
+    /// with a stale frontend copy able to clobber slots it never touched.
+    #[serde(default)]
+    pub textures: MaterialTexturesDto,
+}
+
+/// The five texture slots, each holding an asset id or nothing. Mirrors
+/// `XrdsSceneMaterialTextureSlots`.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Default)]
+pub struct MaterialTexturesDto {
+    pub base_color: Option<String>,
+    pub metallic_roughness: Option<String>,
+    pub normal: Option<String>,
+    pub occlusion: Option<String>,
+    pub emissive: Option<String>,
 }
 
 impl Default for MaterialParamsDto {
@@ -430,6 +525,7 @@ impl Default for MaterialParamsDto {
             metallic: 0.0,
             roughness: 0.5,
             emissive: [0.0, 0.0, 0.0],
+            textures: MaterialTexturesDto::default(),
         }
     }
 }
@@ -496,11 +592,27 @@ pub enum XrdsActionDto {
     PlayGltfAnimation { clip_index: usize, speed: f32, repeat: String, start_paused: bool },
     StopGltfAnimation,
     SetVisible(bool),
-    Teleport { destination: [f32; 3] },
-    ModifyHealth { target: ActionTargetDto, delta: ActionValueDto },
-    Wait { seconds: f32 },
-    FireCustomEvent { name: String },
-    Run { runnable: String, wait: bool },
+    /// `ease` is "Linear" | "Quad" | "Cubic" — same plain-String-for-a-
+    /// closed-set convention as `repeat`/`hand`/`crossing` elsewhere in
+    /// this file, rather than a dedicated DTO enum.
+    SetTransform {
+        position: Option<[f32; 3]>,
+        rotation: Option<[f32; 3]>,
+        scale: Option<[f32; 3]>,
+        duration_secs: f32,
+        ease: String,
+    },
+    /// No `target` field: applies to whichever asset row it sits on, same as
+    /// every other action. See `XrdsAction::SetMaterial`'s doc comment on the
+    /// Rust domain side for why the old per-action target was removed.
+    SetMaterial {
+        base_color: Option<[f32; 4]>,
+        metallic: Option<f32>,
+        roughness: Option<f32>,
+        /// One texture slot assignment; `None` leaves all slots alone.
+        texture: Option<ActionTextureDto>,
+    },
+    ModifyHealth { delta: ActionValueDto },
     Unknown,
 }
 
@@ -519,30 +631,66 @@ pub enum ActionValueDto {
     FromTriggerSource,
 }
 
+/// One texture-slot assignment for `SetMaterial`.
+///
+/// `slot` is a plain String over a closed set ("BaseColor" |
+/// "MetallicRoughness" | "Normal" | "Occlusion" | "Emissive"), the same
+/// convention `repeat`/`hand`/`ease` already use here rather than a dedicated
+/// DTO enum. `texture_asset_id` of `None` clears the slot.
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
-pub struct XrdsSequenceDto {
-    pub steps: Vec<XrdsActionDto>,
+pub struct ActionTextureDto {
+    pub slot: String,
+    pub texture_asset_id: Option<String>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
-pub struct XrdsTimelineKeyDto {
+pub struct XrdsTrackKeyDto {
     pub at_secs: f32,
     pub action: XrdsActionDto,
 }
 
-/// Mirrors `xrds_scene_graph::XrdsRunnable` — a named registry entry is
-/// either a `Sequence` or a `Timeline`, never both.
+/// One asset row. `node_id` is `None` for a `SelfNode`/`TriggerSource` row,
+/// which has no concrete node until the Track is fired — the frontend renders
+/// those rows with a placeholder label rather than a node name.
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
-#[serde(tag = "type")]
-pub enum RunnableBodyDto {
-    Sequence { steps: Vec<XrdsActionDto> },
-    Timeline { keys: Vec<XrdsTimelineKeyDto>, duration_secs: Option<f32>, looping: bool },
+pub struct XrdsTrackAssetDto {
+    pub target: ActionTargetDto,
+    /// Resolved display name for a `Node` target, so the frontend does not
+    /// have to walk the hierarchy to label a row.
+    pub node_name: Option<String>,
+    pub keys: Vec<XrdsTrackKeyDto>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
-pub struct NamedRunnableDto {
+pub struct NamedTrackDto {
     pub name: String,
-    pub body: RunnableBodyDto,
+    pub assets: Vec<XrdsTrackAssetDto>,
+    pub duration_secs: Option<f32>,
+    /// What the ruler should span: `duration_secs` when set, otherwise the
+    /// span the events actually occupy including a trailing interpolation.
+    /// Computed here so the editor and the runtime cannot disagree.
+    pub effective_duration_secs: f32,
+    pub looping: bool,
+}
+
+/// Live editor-preview state, or `None` when nothing is previewing. Drives the
+/// transport readout and the playhead.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct TrackPreviewDto {
+    pub name: String,
+    pub elapsed_secs: f32,
+    pub duration_secs: f32,
+    pub playing: bool,
+}
+
+/// The most recent refusal by the asset-conflict guard, so a Track that
+/// silently did not start is diagnosable from the UI.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct TrackConflictDto {
+    pub blocked_track: String,
+    /// Node names where resolvable, so the message can say "crane_arm" rather
+    /// than an opaque entity id.
+    pub contended: Vec<String>,
 }
 
 /// Mirrors `xrds_scene_graph::XrdsTriggerKind`. Same adjacent-tag shape.
@@ -565,14 +713,25 @@ pub enum XrdsTriggerKindDto {
     Unknown,
 }
 
+/// One binding, tagged with its owning node — see
+/// `EditorSnapshot::all_node_bindings`.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct NodeBindingSummaryDto {
+    pub node_id: u64,
+    pub node_name: String,
+    pub binding_index: usize,
+    pub binding: TriggerBindingDto,
+}
+
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub struct TriggerBindingDto {
     pub trigger: XrdsTriggerKindDto,
-    pub sequence: XrdsSequenceDto,
     pub disabled: bool,
     /// "Left" | "Right" | null.
     pub hand: Option<String>,
-    pub runnable: Option<String>,
+    /// The Track this binding fires, or `None` for authored-but-unwired.
+    /// There is no inline alternative — see `XrdsTriggerBinding::track`.
+    pub track: Option<String>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
@@ -595,6 +754,16 @@ pub struct ThresholdWatcherDto {
     pub disabled: bool,
 }
 
+/// One watcher, tagged with its owning node — see
+/// `EditorSnapshot::all_node_watchers`.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct NodeWatcherSummaryDto {
+    pub node_id: u64,
+    pub node_name: String,
+    pub watcher_index: usize,
+    pub watcher: ThresholdWatcherDto,
+}
+
 /// Mirrors `xrds_scene_graph::XrdsSceneTriggerDiagnostic`.
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub struct TriggerDiagnosticDto {
@@ -607,11 +776,4 @@ pub struct TriggerDiagnosticDto {
     pub detail: String,
 }
 
-/// Addresses where an `XrdsAction` step list lives — a registry runnable's
-/// body, or a specific trigger binding's inline sequence.
-#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
-#[serde(tag = "type")]
-pub enum StepTargetDto {
-    Runnable { name: String },
-    Binding { node_id: u64, binding_index: usize },
-}
+

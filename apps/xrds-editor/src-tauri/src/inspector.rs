@@ -260,8 +260,11 @@ pub fn apply_inspector_command(
         // ── Material ─────────────────────────────────────────────────────────
         EditorCommand::CommitMaterial { id, params } => {
             let id = XrdsSceneNodeId(*id);
-            let mat = scene_material_from_dto(params);
+            let dto = params.clone();
             match session.0.edit(|doc| {
+                // Merge, do not replace — see `merge_material_dto`.
+                let existing = doc.node_material(id).ok().cloned();
+                let mat = merge_material_dto(existing.as_ref(), &dto);
                 if let Some(node) = doc.node_mut(id) {
                     set_node_material(node, mat);
                 }
@@ -269,6 +272,31 @@ pub fn apply_inspector_command(
                 Ok(_) => {}
                 Err(e) => error!("[inspector] CommitMaterial failed: {:?}", e),
             }
+            false
+        }
+
+        EditorCommand::SetNodeMaterialTexture { id, slot, texture_asset_id } => {
+            let id = XrdsSceneNodeId(*id);
+            let slot = crate::trigger_action::texture_slot_from_dto(slot);
+            // `None` clears the slot — a real authoring action, not a no-op.
+            let texture = texture_asset_id.as_ref().map(|asset_id| {
+                xrds_scene_graph::XrdsSceneTextureRef {
+                    texture_asset_id: asset_id.clone(),
+                    uv: Default::default(),
+                    sampler: Default::default(),
+                }
+            });
+            match session.0.edit(|doc| {
+                if let Err(e) = doc.set_node_material_texture(id, slot, texture.clone()) {
+                    error!("[inspector] SetNodeMaterialTexture rejected: {:?}", e);
+                }
+            }) {
+                Ok(_) => {}
+                Err(e) => error!("[inspector] SetNodeMaterialTexture failed: {:?}", e),
+            }
+            // Structural enough to need the scene rebuilt so the new image
+            // actually loads onto the mesh.
+            state.needs_full_reimport = true;
             false
         }
 
@@ -794,12 +822,51 @@ fn physics_body_from_str(s: &str) -> xrds_scene_graph::XrdsPhysicsBody {
 // ---------------------------------------------------------------------------
 
 pub fn mat_dto(mat: &XrdsSceneMaterial) -> MaterialParamsDto {
+    let id_of = |t: &Option<xrds_scene_graph::XrdsSceneTextureRef>| {
+        t.as_ref().map(|r| r.texture_asset_id.clone())
+    };
     MaterialParamsDto {
         base_color: mat.base_color,
         metallic: mat.pbr.metallic,
         roughness: mat.pbr.roughness,
         emissive: [mat.emissive[0], mat.emissive[1], mat.emissive[2]],
+        textures: crate::bridge::MaterialTexturesDto {
+            base_color: id_of(&mat.textures.base_color),
+            metallic_roughness: id_of(&mat.textures.metallic_roughness),
+            normal: id_of(&mat.textures.normal),
+            occlusion: id_of(&mat.textures.occlusion),
+            emissive: id_of(&mat.textures.emissive),
+        },
     }
+}
+
+/// Merges the four fields the Material panel edits over an existing material,
+/// leaving everything else untouched.
+///
+/// `MaterialParamsDto` is a *partial* view — base colour, emissive, metallic,
+/// roughness — so rebuilding an `XrdsSceneMaterial` from it destroys texture
+/// slots, `opacity`, `unlit` and the extra PBR fields (reflectance /
+/// double_sided / alpha_mode / alpha_cutoff). That was happening on every
+/// colour drag; it stayed invisible only while nothing in the editor could
+/// author those fields, and became real data loss the moment texture slots
+/// were exposed.
+///
+/// Extracted from the command handler so the preservation is directly
+/// assertable — the handler needs a whole session to exercise.
+pub(crate) fn merge_material_dto(
+    existing: Option<&XrdsSceneMaterial>,
+    dto: &MaterialParamsDto,
+) -> XrdsSceneMaterial {
+    let mut mat = match existing {
+        Some(m) => m.clone(),
+        // No material to merge into (a payload kind that has none) — build one.
+        None => return scene_material_from_dto(dto),
+    };
+    mat.base_color = dto.base_color;
+    mat.emissive = [dto.emissive[0], dto.emissive[1], dto.emissive[2], 1.0];
+    mat.pbr.metallic = dto.metallic;
+    mat.pbr.roughness = dto.roughness;
+    mat
 }
 
 fn scene_material_from_dto(dto: &MaterialParamsDto) -> XrdsSceneMaterial {
@@ -980,4 +1047,100 @@ fn default_widget_for_kind(kind: &str) -> Option<XrdsSceneWorldWidget> {
         "Toggle" => XrdsSceneWorldWidget::Toggle(XrdsSceneWorldToggle::default()),
         _ => return None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use xrds_scene_graph::{
+        XrdsSceneMaterialTextureSlotKind, XrdsSceneMaterialTextureSlots, XrdsSceneTextureRef,
+    };
+
+    fn textured_material() -> XrdsSceneMaterial {
+        let mut textures = XrdsSceneMaterialTextureSlots::default();
+        textures.set(
+            XrdsSceneMaterialTextureSlotKind::Normal,
+            Some(XrdsSceneTextureRef {
+                texture_asset_id: "asset:normal-map".to_string(),
+                uv: Default::default(),
+                sampler: Default::default(),
+            }),
+        );
+        XrdsSceneMaterial {
+            base_color: [0.1, 0.2, 0.3, 1.0],
+            emissive: [0.0, 0.0, 0.0, 1.0],
+            opacity: 0.25,
+            unlit: true,
+            pbr: xrds_scene_graph::XrdsSceneMaterialPbrParams {
+                metallic: 0.1,
+                roughness: 0.9,
+                double_sided: true,
+                ..Default::default()
+            },
+            textures,
+        }
+    }
+
+    /// Regression: editing colour/metallic/roughness must not destroy the rest
+    /// of the material. This was live for as long as the Material panel has
+    /// existed — invisible only because nothing could author the fields it
+    /// wiped, and it became real data loss when texture slots were exposed.
+    #[test]
+    fn committing_a_material_edit_preserves_textures_opacity_unlit_and_pbr_extras() {
+        let existing = textured_material();
+        let dto = MaterialParamsDto {
+            base_color: [1.0, 0.0, 0.0, 1.0],
+            metallic: 0.75,
+            roughness: 0.25,
+            emissive: [0.0, 0.0, 0.0],
+            textures: Default::default(), // read-only field; must be ignored on write
+        };
+
+        let merged = merge_material_dto(Some(&existing), &dto);
+
+        // The four edited fields land.
+        assert_eq!(merged.base_color, [1.0, 0.0, 0.0, 1.0]);
+        assert_eq!(merged.pbr.metallic, 0.75);
+        assert_eq!(merged.pbr.roughness, 0.25);
+
+        // Everything else survives.
+        assert_eq!(
+            merged
+                .textures
+                .get(XrdsSceneMaterialTextureSlotKind::Normal)
+                .map(|t| t.texture_asset_id.as_str()),
+            Some("asset:normal-map"),
+            "a colour edit must not drop an authored texture slot"
+        );
+        assert_eq!(merged.opacity, 0.25, "opacity must survive");
+        assert!(merged.unlit, "unlit must survive");
+        assert!(merged.pbr.double_sided, "extra PBR fields must survive");
+    }
+
+    /// The DTO's `textures` is read-only — writes go through
+    /// `SetNodeMaterialTexture`. An empty one arriving from a drag must not be
+    /// mistaken for "clear every slot".
+    #[test]
+    fn the_dtos_read_only_textures_field_never_writes() {
+        let existing = textured_material();
+        let dto = MaterialParamsDto { textures: Default::default(), ..Default::default() };
+        let merged = merge_material_dto(Some(&existing), &dto);
+        assert!(
+            !merged.textures.is_empty(),
+            "an empty DTO texture set must be ignored, not applied"
+        );
+    }
+
+    /// A payload kind with no material at all still has to produce one.
+    #[test]
+    fn merging_onto_nothing_builds_a_material_from_the_dto() {
+        let dto = MaterialParamsDto {
+            base_color: [0.0, 1.0, 0.0, 1.0],
+            metallic: 0.5,
+            ..Default::default()
+        };
+        let built = merge_material_dto(None, &dto);
+        assert_eq!(built.base_color, [0.0, 1.0, 0.0, 1.0]);
+        assert_eq!(built.pbr.metallic, 0.5);
+    }
 }

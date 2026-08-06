@@ -63,6 +63,17 @@ pub struct GizmoDrag {
 // EditorState
 // ---------------------------------------------------------------------------
 
+/// What the frontend asked the Track preview to do. Drained once per frame.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TrackPreviewRequest {
+    /// Start this Track in the editor world, replacing any current preview.
+    Play(String),
+    Pause(bool),
+    /// Stop and restore every asset the preview moved back to its authored
+    /// document values.
+    Stop,
+}
+
 #[derive(Resource)]
 pub struct EditorState {
     pub selection: Selection,
@@ -127,6 +138,26 @@ pub struct EditorState {
         xrds_scene_graph::XrdsTriggerKind,
         Option<xrds_components::XrGrabHand>,
     )>,
+
+    // ── Track preview transport ──────────────────────────────────────────
+    /// Set by the `PreviewPlayTrack`/`PreviewPauseTrack`/`PreviewStopTrack`
+    /// commands, drained in `update()` where world access is available —
+    /// same pending/drain pattern as `pending_fire_trigger`.
+    ///
+    /// Deliberately independent of `is_playing`: previewing one Track is not
+    /// running the simulation.
+    pub pending_track_preview: Option<TrackPreviewRequest>,
+    /// The Track currently being previewed, if any. Its agent lives in the
+    /// Bevy world; this is just the name, for the snapshot readout.
+    pub track_preview_name: Option<String>,
+    /// The live preview, mirrored out of the world once per frame so the
+    /// snapshot builder — which has no world access — can report it. Drives the
+    /// transport timecode and the playhead.
+    pub track_preview: Option<crate::bridge::TrackPreviewDto>,
+    /// The most recent asset-conflict refusal, mirrored out of the world with
+    /// its entities resolved to node names. Without this a refused Track is a
+    /// silent no-op — the whole weakness of the reject-the-newcomer policy.
+    pub track_conflict: Option<crate::bridge::TrackConflictDto>,
 
     // ── Clipboard ─────────────────────────────────────────────────────────
     /// Flat list of cloned scene nodes (roots + descendants).
@@ -218,6 +249,10 @@ impl Default for EditorState {
             pending_gltf_stop: None,
             gltf_clips: std::collections::HashMap::new(),
             pending_fire_trigger: None,
+            pending_track_preview: None,
+            track_preview_name: None,
+            track_preview: None,
+            track_conflict: None,
             export_job: None,
             apk_prerequisites: None,
             apk_export_job: None,

@@ -12,7 +12,8 @@ use crate::hud_library::{apply_hud_library_command, build_hud_library_dto};
 use crate::palette::{apply_palette_command, build_asset_catalog};
 use crate::toolbar::apply_toolbar_command;
 use crate::trigger_action::{
-    apply_trigger_action_command, build_runnable_diagnostics_dto, build_runnables_dto,
+    apply_trigger_action_command, build_all_node_bindings_dto, build_all_node_watchers_dto,
+    build_track_diagnostics_dto, build_tracks_dto,
 };
 
 /// Bevy resource that holds the shared bridge channels.
@@ -34,6 +35,13 @@ pub fn drain_editor_commands_system(
     };
 
     for cmd in &commands {
+        // Surfaced in the status bar rather than handled by a feature module —
+        // it is not a user action, it is the bridge reporting drift.
+        if let EditorCommand::ReportBridgeError { message } = cmd {
+            bevy::log::error!("[bridge] {message}");
+            state.pending_status = Some(message.clone());
+            continue;
+        }
         let needs_reimport =
             apply_hierarchy_command(cmd, &mut session, &mut state) ||
             apply_palette_command(cmd, &mut session, &mut state) ||
@@ -129,8 +137,16 @@ pub fn broadcast_editor_snapshot_system(
         apk_prerequisites: state.apk_prerequisites.take(),
         is_exporting_apk: state.apk_export_job.is_some(),
         apk_build_log,
-        runnables: build_runnables_dto(doc),
-        runnable_diagnostics: build_runnable_diagnostics_dto(doc),
+        bridge_version: crate::bridge::BRIDGE_VERSION,
+        tracks: build_tracks_dto(doc),
+        track_diagnostics: build_track_diagnostics_dto(doc),
+        // Mirrored out of the world by bevy_scene.rs once per frame — this
+        // builder has no world access, so it cannot see the running agent
+        // itself. This is what animates the transport timecode and playhead.
+        track_preview: state.track_preview.clone(),
+        track_conflict: state.track_conflict.clone(),
+        all_node_bindings: build_all_node_bindings_dto(doc),
+        all_node_watchers: build_all_node_watchers_dto(doc),
     };
 
     bridge.0.outbound.lock().unwrap().push_back(snapshot);
@@ -166,14 +182,15 @@ fn is_structural_command(cmd: &EditorCommand) -> bool {
         SetHudTemplateDepth{..} | AddHudItem{..} | RemoveHudItem{..} |
         RenameHudItem{..} | SetHudItemPosition{..} | SetHudItemText{..} |
         SetHudItemFontSize{..} | SetHudItemColor{..} | LinkHudTemplate{..} |
-        // Trigger-action registry / bindings / watchers
-        CreateRunnable{..} | DeleteRunnable{..} | RenameRunnable{..} |
-        SetTimelineLooping{..} | SetTimelineDuration{..} |
-        AddActionStep{..} | RemoveActionStep{..} | MoveActionStep{..} | SetActionStep{..} |
-        AddTimelineKey{..} | RemoveTimelineKey{..} | SetTimelineKey{..} |
+        // Tracks / bindings / watchers
+        CreateTrack{..} | DeleteTrack{..} | RenameTrack{..} |
+        SetTrackLooping{..} | SetTrackDuration{..} |
+        AddTrackAsset{..} | RemoveTrackAsset{..} | SetTrackAssetTarget{..} |
+        AddTrackKey{..} | RemoveTrackKey{..} | SetTrackKey{..} |
+        PreviewPlayTrack{..} | PreviewPauseTrack{..} | PreviewStopTrack |
         AddTriggerBinding{..} | RemoveTriggerBinding{..} |
         SetTriggerBindingTrigger{..} | SetTriggerBindingHand{..} |
-        SetTriggerBindingDisabled{..} | SetTriggerBindingRunnable{..} |
+        SetTriggerBindingDisabled{..} | SetTriggerBindingTrack{..} |
         AddWatcher{..} | RemoveWatcher{..} | SetWatcher{..}
     )
 }

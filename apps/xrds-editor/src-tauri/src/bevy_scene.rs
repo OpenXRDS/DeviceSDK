@@ -332,6 +332,98 @@ impl XrdsApp for XrdsEditorTauriApp {
             }
         }
 
+
+        // ── Track preview transport ───────────────────────────────────────────
+        // Independent of play mode: previewing one Track is not running the
+        // simulation. `advance_tracks` is not gated on `is_playing`, so a
+        // spawned agent advances on its own — no play mode needed.
+        let pending_preview = ctx.resource::<EditorState>()
+            .and_then(|s| s.pending_track_preview.clone());
+        if let Some(request) = pending_preview {
+            use crate::editor_state::TrackPreviewRequest as Req;
+            match request {
+                Req::Play(name) => {
+                    // Restore this Track's own nodes from the document *before*
+                    // starting it fresh. Covers both restart cases: (a) it is
+                    // still running and gets stopped-then-restarted inside
+                    // `preview_play_track`, and (b) it already finished
+                    // naturally, so no live agent exists to report what it
+                    // touched — the document's own asset rows are what we fall
+                    // back to in that case, since they name the same nodes.
+                    restore_track_nodes_from_document(ctx, &name);
+                    if ctx.preview_play_track(&name) {
+                        if let Some(mut state) = ctx.resource_mut::<EditorState>() {
+                            state.track_preview_name = Some(name);
+                        }
+                    } else if let Some(mut state) = ctx.resource_mut::<EditorState>() {
+                        // Refused or empty. The runtime already logged why; the
+                        // status message is what the author actually sees.
+                        state.track_preview_name = None;
+                        state.pending_status = Some(format!(
+                            "Could not preview \"{name}\" — it has no events on a live node, or \
+                             another Track already holds its assets."
+                        ));
+                    }
+                }
+
+                Req::Pause(paused) => {
+                    ctx.preview_pause_track(paused);
+                }
+
+                Req::Stop => {
+                    let name = ctx.resource::<EditorState>().and_then(|s| s.track_preview_name.clone());
+                    ctx.preview_stop_track();
+                    // The document is the authority on where a previewed
+                    // Track's nodes belong; restore from it by name rather than
+                    // from what the runtime reports it touched, so material
+                    // (which the runtime's lock table has no notion of) is
+                    // restored too, not just transform/visibility.
+                    if let Some(name) = &name {
+                        restore_track_nodes_from_document(ctx, name);
+                    }
+                    if let Some(mut state) = ctx.resource_mut::<EditorState>() {
+                        state.track_preview_name = None;
+                    }
+                }
+            }
+
+            if let Some(mut state) = ctx.resource_mut::<EditorState>() {
+                state.pending_track_preview = None;
+            }
+        }
+
+        // Mirror the live preview into EditorState each frame, so the snapshot
+        // builder (which has no world access) can report it. This is what makes
+        // the transport timecode and the playhead move.
+        let preview_state = ctx.track_preview_state();
+        // Same for the conflict readout, resolving entities to node names so the
+        // message can say "crane_arm" rather than an opaque entity id.
+        let conflict = ctx
+            .resource::<xrds_runtime::xrds_api::trigger_action::XrdsTrackAssetLocks>()
+            .and_then(|locks| locks.last_conflict.clone())
+            .map(|c| {
+                let names: Vec<String> = c
+                    .contended
+                    .iter()
+                    .map(|e| format!("{e:?}"))
+                    .collect();
+                crate::bridge::TrackConflictDto {
+                    blocked_track: c.blocked_track,
+                    contended: names,
+                }
+            });
+        if let Some(mut state) = ctx.resource_mut::<EditorState>() {
+            state.track_preview = preview_state.map(|(name, elapsed, duration, playing)| {
+                crate::bridge::TrackPreviewDto {
+                    name,
+                    elapsed_secs: elapsed,
+                    duration_secs: duration,
+                    playing,
+                }
+            });
+            state.track_conflict = conflict;
+        }
+
         // ── Play mode: start GLB animations on the first play frame ─────────
         let play_started = ctx.resource::<EditorState>()
             .map(|s| s.play_started)
@@ -379,18 +471,29 @@ impl XrdsApp for XrdsEditorTauriApp {
 
         // ── Material live preview ────────────────────────────────────────────
         if let Some((id, ref dto)) = pending_material {
-            let params = XrdsMaterialParams {
-                base_color: XrdsColor { rgba: dto.base_color },
-                emissive: XrdsLinearRgba { rgba: [dto.emissive[0], dto.emissive[1], dto.emissive[2], 1.0] },
-                opacity: 1.0,
-                unlit: false,
-                pbr: XrdsMaterialPbrParams {
-                    metallic: dto.metallic,
-                    roughness: dto.roughness,
-                    ..Default::default()
-                },
-                textures: Default::default(),
-            };
+            // Merge the dragged fields over the *authored* material rather than
+            // building a fresh one: the DTO carries only these four, so a fresh
+            // struct drops textures/opacity/unlit and the extra PBR fields for
+            // the whole drag — they would visibly vanish and then pop back on
+            // commit. Same reasoning as `CommitMaterial` in inspector.rs.
+            let authored = ctx
+                .resource::<EditorSession>()
+                .and_then(|s| s.0.document().node_material(id).ok().cloned());
+            let mut params: XrdsMaterialParams = authored
+                .map(Into::into)
+                .unwrap_or_else(|| XrdsMaterialParams {
+                    base_color: XrdsColor { rgba: [1.0, 1.0, 1.0, 1.0] },
+                    emissive: XrdsLinearRgba { rgba: [0.0, 0.0, 0.0, 1.0] },
+                    opacity: 1.0,
+                    unlit: false,
+                    pbr: XrdsMaterialPbrParams::default(),
+                    textures: Default::default(),
+                });
+            params.base_color = XrdsColor { rgba: dto.base_color };
+            params.emissive =
+                XrdsLinearRgba { rgba: [dto.emissive[0], dto.emissive[1], dto.emissive[2], 1.0] };
+            params.pbr.metallic = dto.metallic;
+            params.pbr.roughness = dto.roughness;
             ctx.set_material_params_for_node(id.into(), params);
         }
 
@@ -478,6 +581,59 @@ impl XrdsApp for XrdsEditorTauriApp {
 ///
 /// Search order per URI: `<scene_dir>/<uri>`, then `<scene_dir>/assets/<uri>`
 /// (the layout produced by Export Application / dev-mode pushes).
+/// Puts every `Node`-target asset row of Track `track_name` back to whatever
+/// the document authors, covering transform, visibility, *and* material.
+///
+/// Deliberately keyed by the Track's own authored rows rather than by asking
+/// the runtime what a live preview agent touched: that also works once the
+/// agent is already gone (a Track that finished on its own, or was already
+/// stopped), which is exactly the state the Sequencer's restart button needs
+/// to recover from. `SelfNode`/`TriggerSource` rows are skipped — a preview
+/// resolves those to a stand-in that is always also a `Node` row in the same
+/// Track (see `preview_play_track_in_world`), so restoring the `Node` rows
+/// covers them too.
+fn restore_track_nodes_from_document(ctx: &mut XrdsUpdateContext<'_>, track_name: &str) {
+    let restorations: Vec<(u64, [f32; 3], [f32; 4], [f32; 3], bool, Option<XrdsSceneMaterial>)> = ctx
+        .resource::<EditorSession>()
+        .and_then(|session| {
+            let doc = session.0.document();
+            let named = doc.track(track_name)?;
+            Some(
+                named
+                    .track
+                    .assets
+                    .iter()
+                    .filter_map(|asset| match asset.target {
+                        xrds_scene_graph::XrdsActionTarget::Node(id) => {
+                            let node = doc.node(id)?;
+                            Some((
+                                node.id.0,
+                                node.transform.translation,
+                                node.transform.rotation_quat_xyzw,
+                                node.transform.scale,
+                                node.visible,
+                                doc.node_material(id).ok().cloned(),
+                            ))
+                        }
+                        _ => None,
+                    })
+                    .collect(),
+            )
+        })
+        .unwrap_or_default();
+
+    for (id, translation, rotation, scale, visible, material) in restorations {
+        let id = xrds_runtime::sdk::XrdsId(id);
+        ctx.set_translation_for_node(id, translation);
+        ctx.set_rotation_for_node(id, rotation);
+        ctx.set_scale_for_node(id, scale);
+        ctx.set_visible_for_node(id, visible);
+        if let Some(material) = material {
+            ctx.set_material_params_for_node(id, material.into());
+        }
+    }
+}
+
 fn absolutize_doc_asset_uris(doc: &mut XrdsSceneDocument, scene_dir: &std::path::Path) {
     let resolve = |uri: &str| -> Option<String> {
         if uri.is_empty() || std::path::Path::new(uri).is_absolute() {
