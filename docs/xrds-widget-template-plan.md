@@ -159,6 +159,82 @@ breaks silently on the second. It needs an author-time diagnostic:
 Severity: warning, not error. It is legitimate when the target really is
 global (one shared door, many call buttons).
 
+Note this hazard is about **targeting, not timing**. One press is enough to
+show it: press the third-floor button and the ground-floor door opens. The
+timing problem is separate, and worse — next section.
+
+## 5b. The concurrency gap: one Track cannot run per-instance
+
+Three call buttons firing Track `OpenDoor`, pressed at about the same time.
+Today each press **kills the previous agent and restarts**, because
+`spawn_track_agent_in_world`'s same-Track re-fire rule is keyed on the Track's
+**name** alone:
+
+```rust
+.filter(|(_, agent)| agent.name == name)   // ← name, nothing else
+```
+
+So only one agent ever exists. The last press wins and the first two are cut
+off mid-animation. Not a crash or a race — a silent "only the last button did
+anything", which is exactly the sort of thing that reads as flaky input.
+
+**The model already had the right machinery; one rule was keyed too coarsely.**
+The two mechanisms disagreed about identity:
+
+| | keyed on |
+|---|---|
+| same-Track restart | Track **name** |
+| `XrdsTrackAssetLocks` conflict guard | resolved **entities** |
+
+If those three buttons use `TriggerSource`-relative rows they resolve to three
+*different* doors — disjoint lock sets — so the conflict guard would happily
+run all three concurrently. Only the name-based restart forbade it.
+
+### Decided and landed: first run has priority
+
+Policy: **a running Track is never preempted except by an explicit stop.**
+
+The fix was to *delete* the same-name special case rather than re-key it. Once
+gone, the existing entity-keyed guard answers all three cases with no new
+mechanism:
+
+| Situation | Before | Now |
+|---|---|---|
+| same button pressed twice | restart, first cut off | **refused**, first keeps running |
+| 3 buttons → 3 different doors | last wins, 2 cut off | **3 run concurrently** |
+| 3 buttons → the same door | last wins | **first wins**, rest refused |
+
+Simpler than the `(name, source)` re-keying first proposed here: that would
+have kept a special case for "same source restarts", which contradicts
+first-run priority. One uniform rule is easier to explain and was less code.
+
+**Preempting is still possible, but must be explicit** — which is the point of
+the wording. `preview_play_track_in_world` stops the current preview before
+starting, and that is exactly what makes the editor's ⏮ restart button work;
+the expert path has `stop_sequences_on`/`stop_all_sequences`.
+
+**Gap worth naming: there is no *authorable* stop.** `XrdsAction` has no
+`StopTrack`, so content cannot halt a Track — only Rust can. A door that opens
+on press and should re-open on a second press within its own run is therefore
+not authorable today. Not blocking, and deliberately not invented here, but
+this policy is what makes it matter.
+
+**This changed behaviour for plain nodes too**, not only elements: two
+different nodes firing one Track used to restart each other. Decided
+deliberately, not slipped in.
+
+Tests: `re_firing_a_running_track_restarts_it_rather_than_conflicting_with_itself`
+was replaced by `..._is_refused_so_the_first_run_keeps_priority`, plus the
+disjoint-concurrency case, the shared-asset case, the explicit-stop case, and
+`previewing_the_same_track_twice_restarts_it_rather_than_being_refused` —
+which guards the ⏮ path, since removing the restart made that stop
+load-bearing and there had been **no preview tests at all**. Mutation-verified:
+restoring the old restart fails 4 of them.
+
+Sequencing note: this was a **Track-model change, not a widget change**, and
+landed independently ahead of this plan. Templates only made it easier to hit,
+because N instances naturally share one Track.
+
 ## 6. Phase B — elements as action targets
 
 For "some elements display something as a consequence", a Track must be able

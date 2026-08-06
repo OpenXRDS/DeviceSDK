@@ -1892,9 +1892,12 @@ fn tracks_with_disjoint_assets_run_concurrently() {
 }
 
 #[test]
-fn re_firing_a_running_track_restarts_it_rather_than_conflicting_with_itself() {
-    // Without the same-name exemption the guard would reject a Track for
-    // conflicting with its own running instance.
+fn re_firing_a_running_track_is_refused_so_the_first_run_keeps_priority() {
+    // Replaces an earlier test that asserted the opposite. A same-name
+    // exemption used to despawn the running instance and restart it, which is
+    // why "three buttons pressed together" meant "only the last one did
+    // anything". The policy is now uniform: a running Track is never
+    // preempted except by an explicit stop.
     let mut app = xrds_test_app();
     let entities = import_bare_nodes_and_tracks(
         &mut app,
@@ -1910,15 +1913,164 @@ fn re_firing_a_running_track_restarts_it_rather_than_conflicting_with_itself() {
 
     let first = start(&mut app, "A", entities[0]).expect("first start");
     app.update();
-    let second = start(&mut app, "A", entities[0]).expect("re-fire must be allowed");
 
-    assert_ne!(first, second, "a re-fire should be a fresh agent");
-    assert_eq!(live_tracks(&mut app), 1, "the previous instance should be replaced, not stacked");
+    assert!(
+        start(&mut app, "A", entities[0]).is_none(),
+        "a second firing must be refused while the first still holds the asset"
+    );
+    assert_eq!(live_tracks(&mut app), 1, "no second agent should exist");
     assert_eq!(
         app.world().resource::<XrdsTrackAssetLocks>().holder_of(entities[0]),
-        Some(second),
-        "the new agent should own the asset"
+        Some(first),
+        "the *first* agent must keep the asset"
     );
+}
+
+#[test]
+fn one_track_fired_from_several_sources_runs_concurrently_on_disjoint_assets() {
+    // The case panel templates make routine: N instances of one template, each
+    // firing the same Track, each driving its own asset through a
+    // `TriggerSource` row. Nothing is contended, so nothing should be refused.
+    //
+    // The old name-keyed restart made this impossible — the second firing
+    // despawned the first regardless of what it was touching.
+    let mut app = xrds_test_app();
+    let entities = import_bare_nodes_and_tracks(
+        &mut app,
+        &[631, 632, 633],
+        vec![XrdsNamedTrack {
+            name: "PerSource".to_string(),
+            // A TriggerSource row resolves to whoever fired it, so each firing
+            // touches a different entity.
+            track: XrdsTrack {
+                assets: vec![XrdsTrackAsset {
+                    target: XrdsActionTarget::TriggerSource,
+                    keys: vec![XrdsTrackKey { at_secs: 0.0, action: long_tween() }],
+                }],
+                ..XrdsTrack::default()
+            },
+        }],
+    );
+
+    // `start` passes the target as both target and source-less, so drive the
+    // source explicitly through the world spawner.
+    let mut agents = Vec::new();
+    for e in &entities {
+        let track = app
+            .world()
+            .resource::<crate::xrds_api::trigger_action::XrdsTrackRegistry>()
+            .0
+            .get("PerSource")
+            .cloned()
+            .expect("registered");
+        let agent = crate::xrds_api::trigger_action::spawn_track_agent_in_world(
+            app.world_mut(), *e, Some(*e), "PerSource", &track, 0, false,
+        );
+        agents.push(agent);
+    }
+
+    assert!(
+        agents.iter().all(Option::is_some),
+        "three firings onto three different assets must all start: {agents:?}"
+    );
+    assert_eq!(live_tracks(&mut app), 3, "all three should be running at once");
+}
+
+#[test]
+fn one_track_fired_from_several_sources_onto_the_same_asset_lets_the_first_win() {
+    // Same shape as above, but every firing lands on one shared asset — so the
+    // existing reject-the-newcomer policy applies instead of a restart.
+    let mut app = xrds_test_app();
+    let entities = import_bare_nodes_and_tracks(
+        &mut app,
+        &[641],
+        vec![XrdsNamedTrack {
+            name: "Shared".to_string(),
+            track: XrdsTrack {
+                assets: vec![node_row(641, vec![(0.0, long_tween())])],
+                ..XrdsTrack::default()
+            },
+        }],
+    );
+
+    let first = start(&mut app, "Shared", entities[0]).expect("first start");
+    app.update();
+    assert!(start(&mut app, "Shared", entities[0]).is_none(), "second refused");
+    assert!(start(&mut app, "Shared", entities[0]).is_none(), "third refused");
+    assert_eq!(
+        app.world().resource::<XrdsTrackAssetLocks>().holder_of(entities[0]),
+        Some(first),
+        "the first firing keeps the asset"
+    );
+}
+
+#[test]
+fn previewing_the_same_track_twice_restarts_it_rather_than_being_refused() {
+    // The editor's ⏮ restart button re-sends PreviewPlayTrack for the Track
+    // that is *already* previewing. With first-run priority that only works
+    // because `preview_play_track_in_world` stops the current preview first,
+    // synchronously, so the locks are free before the new claim.
+    //
+    // Directly regression-guards removing the same-name restart: if that stop
+    // ever became deferred, ⏮ would silently refuse instead of restarting, and
+    // nothing else in the suite would notice — there were no preview tests.
+    use crate::xrds_api::trigger_action::{preview_play_track_in_world, track_preview_state_in_world};
+
+    let mut app = xrds_test_app();
+    let _ = import_bare_nodes_and_tracks(
+        &mut app,
+        &[661],
+        vec![XrdsNamedTrack {
+            name: "P".to_string(),
+            track: XrdsTrack {
+                assets: vec![node_row(661, vec![(0.0, long_tween())])],
+                duration_secs: Some(30.0),
+                ..XrdsTrack::default()
+            },
+        }],
+    );
+
+    let first = preview_play_track_in_world(app.world_mut(), "P").expect("first preview");
+    app.update();
+    let second = preview_play_track_in_world(app.world_mut(), "P")
+        .expect("re-previewing must restart, not be refused");
+
+    assert_ne!(first, second, "restart should be a fresh agent");
+    assert_eq!(live_tracks(&mut app), 1, "exactly one preview agent, not two");
+    assert_eq!(
+        track_preview_state_in_world(app.world_mut()).map(|(n, ..)| n),
+        Some("P".to_string()),
+        "the preview should still be reported as live"
+    );
+}
+
+#[test]
+fn an_explicit_stop_is_what_lets_a_track_be_restarted() {
+    // First-run priority is not a dead end: stopping releases the locks, and
+    // the next firing then starts normally. This is the path the editor's ⏮
+    // restart button takes (`preview_stop_track_in_world` before spawning).
+    let mut app = xrds_test_app();
+    let entities = import_bare_nodes_and_tracks(
+        &mut app,
+        &[651],
+        vec![XrdsNamedTrack {
+            name: "A".to_string(),
+            track: XrdsTrack {
+                assets: vec![node_row(651, vec![(0.0, long_tween())])],
+                ..XrdsTrack::default()
+            },
+        }],
+    );
+
+    let first = start(&mut app, "A", entities[0]).expect("first start");
+    app.update();
+    assert!(start(&mut app, "A", entities[0]).is_none(), "refused while running");
+
+    crate::xrds_api::trigger_action::stop_all_sequences_in_world(app.world_mut());
+    app.update();
+
+    let second = start(&mut app, "A", entities[0]).expect("must start after an explicit stop");
+    assert_ne!(first, second, "a fresh agent");
 }
 
 #[test]

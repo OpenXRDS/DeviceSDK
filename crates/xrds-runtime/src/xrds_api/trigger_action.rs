@@ -590,21 +590,30 @@ pub fn spawn_track_agent_in_world(
     wanted.sort();
     wanted.dedup();
 
-    // Same-Track re-fire replaces the running instance instead of colliding
-    // with it. Collected first so its locks are released before the check.
-    let running_same: Vec<Entity> = world
-        .query::<(Entity, &XrdsTrackAgent)>()
-        .iter(world)
-        .filter(|(_, agent)| agent.name == name)
-        .map(|(entity, _)| entity)
-        .collect();
-    for old in &running_same {
-        if let Some(mut locks) = world.get_resource_mut::<XrdsTrackAssetLocks>() {
-            locks.release_agent(*old);
-        }
-        world.despawn(*old);
-    }
-
+    // **No same-Track re-fire special case.** There used to be one here that
+    // despawned any running agent with this Track's *name* before spawning, so
+    // a second firing silently restarted the first.
+    //
+    // It was keyed too coarsely, and it hid the policy that already exists.
+    // Locks key on resolved *entities*, so the guard below answers all three
+    // cases correctly on its own:
+    //
+    // - Fired twice from the same source: same assets, so the second firing is
+    //   refused and the first run keeps going.
+    // - Fired from several sources onto *disjoint* assets (N instances of one
+    //   panel template, each driving its own door via a `TriggerSource` row):
+    //   they run concurrently, because nothing is contended.
+    // - Fired from several sources onto the *same* asset: the first holds it,
+    //   the rest are refused.
+    //
+    // That is one uniform rule — first run has priority, a running Track is
+    // never preempted — instead of a name-based restart that made "3 buttons
+    // pressed together" mean "only the last one did anything".
+    //
+    // Preempting is still possible, but only *explicitly*: the editor's preview
+    // transport calls `preview_stop_track_in_world` before starting (which is
+    // what makes the ⏮ restart button work), and the expert path has
+    // `stop_sequences_on`/`stop_all_sequences`.
     world.init_resource::<XrdsTrackAssetLocks>();
     let agent = world.spawn_empty().id();
 
