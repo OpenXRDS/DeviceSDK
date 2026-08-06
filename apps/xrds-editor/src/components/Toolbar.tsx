@@ -5,6 +5,9 @@ interface Props {
   snapshot: EditorSnapshot;
   send: (cmd: EditorCommand) => void;
   onSaveAs: () => void;
+  /** Which layout is active — see App.tsx's `workspace` state. */
+  workspace: "scene" | "sequencer";
+  onWorkspaceChange: (w: "scene" | "sequencer") => void;
 }
 
 function sendStereoIpc(enabled: boolean, ipd_mm: number) {
@@ -16,7 +19,7 @@ function sendStereoIpc(enabled: boolean, ipd_mm: number) {
   }));
 }
 
-export function Toolbar({ snapshot, send, onSaveAs }: Props) {
+export function Toolbar({ snapshot, send, onSaveAs, workspace, onWorkspaceChange }: Props) {
   const {
     scene_name, is_dirty, undo_count, redo_count,
     gizmo_mode, camera_mode, show_grid, show_fov_overlay, is_playing, selection,
@@ -31,6 +34,17 @@ export function Toolbar({ snapshot, send, onSaveAs }: Props) {
       {is_dirty && <span className="dirty" title="Unsaved changes">●</span>}
       <span className="meta">undo: {undo_count} / redo: {redo_count}</span>
       <span className="meta">{selection.length === 0 ? "nothing selected" : `${selection.length} selected`}</span>
+
+      {/* Workspace switch — reflows the window between the scene layout and
+        * the Sequencer layout (docs/Sequencer_Editor.dc.html). */}
+      <div className="tb-group" title="Switch workspace layout">
+        {(["scene", "sequencer"] as const).map(w => (
+          <button key={w} className={`tb-btn${workspace === w ? " active" : ""}`}
+            onClick={() => onWorkspaceChange(w)}>
+            {w === "scene" ? "Scene" : "Sequencer"}
+          </button>
+        ))}
+      </div>
 
       {/* Gizmo mode */}
       <div className="tb-group">

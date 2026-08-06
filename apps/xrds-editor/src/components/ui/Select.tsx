@@ -8,6 +8,13 @@ import * as RadixSelect from "@radix-ui/react-select";
 export interface SelectOption {
   value: string;
   label: string;
+  /** Shown, not filtered out, but not selectable — pair with `hint` so the
+   * reason is visible right on the option instead of only in a list that's
+   * mysteriously shorter than expected. */
+  disabled?: boolean;
+  /** Short trailing note rendered dimmed next to the label, e.g. "needs
+   * Grabbable checked" — the point of showing a disabled option at all. */
+  hint?: string;
 }
 
 interface Props {
@@ -42,10 +49,14 @@ export function Select({ value, onValueChange, options, placeholder, disabled, c
               <RadixSelect.Item
                 key={opt.value}
                 value={opt.value}
-                className="flex items-center rounded px-2 py-1 outline-none cursor-pointer
-                  data-[highlighted]:bg-surface0 data-[highlighted]:text-text"
+                disabled={opt.disabled}
+                className="flex items-center justify-between gap-3 rounded px-2 py-1 outline-none cursor-pointer
+                  data-[highlighted]:bg-surface0 data-[highlighted]:text-text
+                  data-[disabled]:opacity-50 data-[disabled]:cursor-not-allowed
+                  data-[disabled]:data-[highlighted]:bg-transparent"
               >
                 <RadixSelect.ItemText>{opt.label}</RadixSelect.ItemText>
+                {opt.hint && <span className="text-[11px] text-overlay0 whitespace-nowrap">{opt.hint}</span>}
               </RadixSelect.Item>
             ))}
           </RadixSelect.Viewport>

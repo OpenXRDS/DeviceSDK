@@ -1,25 +1,54 @@
-import { useState, useEffect, useRef, useCallback } from "react";
-import type { EditorSnapshot, EditorCommand, HierarchyNode } from "../types/bridge";
+import { useState, useEffect, useRef, useMemo } from "react";
+import type { EditorSnapshot, EditorCommand, HierarchyNode, NodeBindingSummary, NodeWatcherSummary } from "../types/bridge";
 import { KIND_ICON } from "../types/bridge";
 
 interface Props {
   snapshot: EditorSnapshot;
   send: (cmd: EditorCommand) => void;
+  /** Opens a named Track in the Sequencer workspace — used by the per-node
+   * Triggers rows below, which are the only place this tree references a
+   * Track. Creating/listing Tracks lives in SequencerListPanel, not here. */
+  onOpenTrack: (name: string) => void;
+}
+
+function groupByNodeId<T extends { node_id: number }>(items: T[]): Map<number, T[]> {
+  const map = new Map<number, T[]>();
+  for (const item of items) {
+    const list = map.get(item.node_id) ?? [];
+    list.push(item);
+    map.set(item.node_id, list);
+  }
+  return map;
 }
 
 interface CtxMenu { id: number; x: number; y: number; }
 
-export function Hierarchy({ snapshot, send }: Props) {
+export function Hierarchy({ snapshot, send, onOpenTrack }: Props) {
   const { hierarchy, selection } = snapshot;
 
   // Expand/collapse state — all nodes start expanded
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
+  // Separate from `expanded` (which tracks real child nodes) — the
+  // synthetic "Triggers" pseudo-row's own expand state, keyed by owning
+  // node id. Two more nested sets (Bindings/Watchers sub-rows) below that.
+  const [expandedTriggers, setExpandedTriggers] = useState<Set<number>>(new Set());
+  const [expandedBindingsFor, setExpandedBindingsFor] = useState<Set<number>>(new Set());
+  const [expandedWatchersFor, setExpandedWatchersFor] = useState<Set<number>>(new Set());
   const [renamingId, setRenamingId] = useState<number | null>(null);
   const [renameVal, setRenameVal] = useState("");
   const [ctxMenu, setCtxMenu] = useState<CtxMenu | null>(null);
   const [draggingId, setDraggingId] = useState<number | null>(null);
   const [dragOverId, setDragOverId] = useState<number | "root" | null>(null);
   const renameRef = useRef<HTMLInputElement>(null);
+
+  const bindingsByNode = useMemo(() => groupByNodeId(snapshot.all_node_bindings), [snapshot.all_node_bindings]);
+  const watchersByNode = useMemo(() => groupByNodeId(snapshot.all_node_watchers), [snapshot.all_node_watchers]);
+
+  function toggleIn(set: Set<number>, id: number, setter: (s: Set<number>) => void) {
+    const next = new Set(set);
+    next.has(id) ? next.delete(id) : next.add(id);
+    setter(next);
+  }
 
   // Auto-expand all on first load / hierarchy change
   useEffect(() => {
@@ -164,8 +193,98 @@ export function Hierarchy({ snapshot, send }: Props) {
           {!isRenaming && <span className="kind">{node.kind}</span>}
         </div>
 
+        {/* Triggers pseudo-row — Bindings/Watchers authored on this node
+         * (Phase D's Hierarchy grouping; see
+         * docs/xrds-sequencer-v2-implementation-plan.md). Kept as two
+         * separate sub-rows rather than one merged list per the design
+         * assessment doc's decision — a Watcher only *fires* a Custom
+         * name some other binding may listen for, it never names a
+         * runnable itself, so conflating the two would obscure that. */}
+        {renderTriggersRow(node, depth + 1)}
+
         {/* Children */}
         {hasChildren && isExpanded && node.children.map(c => renderNode(c, depth + 1))}
+      </div>
+    );
+  }
+
+  function renderTriggersRow(node: HierarchyNode, depth: number): React.ReactNode {
+    const bindings = bindingsByNode.get(node.id) ?? [];
+    const watchers = watchersByNode.get(node.id) ?? [];
+    if (bindings.length === 0 && watchers.length === 0) return null;
+
+    const triggersOpen = expandedTriggers.has(node.id);
+    const pad = 4 + depth * 16;
+
+    return (
+      <div key={`triggers-${node.id}`}>
+        <div className="tree-node" style={{ paddingLeft: pad }}
+          onClick={() => toggleIn(expandedTriggers, node.id, setExpandedTriggers)}>
+          <span className="tree-expand">{triggersOpen ? "▾" : "▸"}</span>
+          <span className="icon">⚡</span>
+          <span>Triggers</span>
+          <span className="kind">{bindings.length + watchers.length}</span>
+        </div>
+        {triggersOpen && (
+          <>
+            {renderSummaryGroup("Bindings", bindings.length, depth + 1, node.id, expandedBindingsFor, setExpandedBindingsFor,
+              bindings.map(b => renderBindingLine(b, depth + 2)))}
+            {renderSummaryGroup("Watchers", watchers.length, depth + 1, node.id, expandedWatchersFor, setExpandedWatchersFor,
+              watchers.map(w => renderWatcherLine(w, depth + 2)))}
+          </>
+        )}
+      </div>
+    );
+  }
+
+  function renderSummaryGroup(
+    label: string, count: number, depth: number, nodeId: number,
+    openSet: Set<number>, setOpenSet: (s: Set<number>) => void, children: React.ReactNode,
+  ): React.ReactNode {
+    if (count === 0) return null;
+    const open = openSet.has(nodeId);
+    return (
+      <div>
+        <div className="tree-node" style={{ paddingLeft: 4 + depth * 16 }}
+          onClick={() => toggleIn(openSet, nodeId, setOpenSet)}>
+          <span className="tree-expand">{open ? "▾" : "▸"}</span>
+          <span className="text-overlay0 text-[10px]">{label}</span>
+          <span className="kind">{count}</span>
+        </div>
+        {open && children}
+      </div>
+    );
+  }
+
+  function renderBindingLine(summary: NodeBindingSummary, depth: number): React.ReactNode {
+    const b = summary.binding;
+    const kindLabel = b.trigger.kind === "Custom" ? `Custom(${b.trigger.data})` : b.trigger.kind;
+    return (
+      <div key={`b-${summary.node_id}-${summary.binding_index}`} className="tree-node"
+        style={{ paddingLeft: 4 + depth * 16, opacity: b.disabled ? 0.45 : 1 }}
+        onClick={e => { e.stopPropagation(); if (b.track) onOpenTrack(b.track); else send({ type: "SelectNode", payload: { id: summary.node_id } }); }}
+        title={b.track ? `Edit "${b.track}"` : "Select this node to edit its inline sequence"}
+      >
+        <span className="tree-expand"> </span>
+        <span className="icon">▶</span>
+        <span>{kindLabel}</span>
+        <span className="kind">{b.track ?? "inline"}</span>
+      </div>
+    );
+  }
+
+  function renderWatcherLine(summary: NodeWatcherSummary, depth: number): React.ReactNode {
+    const w = summary.watcher;
+    return (
+      <div key={`w-${summary.node_id}-${summary.watcher_index}`} className="tree-node"
+        style={{ paddingLeft: 4 + depth * 16, opacity: w.disabled ? 0.45 : 1 }}
+        onClick={e => { e.stopPropagation(); send({ type: "SelectNode", payload: { id: summary.node_id } }); }}
+        title="Select this node to edit this watcher"
+      >
+        <span className="tree-expand"> </span>
+        <span className="icon">👁</span>
+        <span>{w.observable.type} {w.crossing}</span>
+        <span className="kind">→ {w.fires}</span>
       </div>
     );
   }

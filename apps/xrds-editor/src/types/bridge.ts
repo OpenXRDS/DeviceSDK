@@ -39,7 +39,33 @@ export interface MaterialParams {
   metallic: number;
   roughness: number;
   emissive: [number, number, number];
+  /** Currently-assigned texture slots. **Read-only here** — writes go via
+   *  `SetNodeMaterialTexture`, one slot at a time. This same struct is the
+   *  live drag payload, so letting it write textures would round-trip the
+   *  whole slot set on every pointer move and let a stale copy clobber slots
+   *  it never touched. */
+  textures: MaterialTextures;
 }
+
+/** The five texture slots, each an asset id or `null`. */
+export interface MaterialTextures {
+  base_color: string | null;
+  metallic_roughness: string | null;
+  normal: string | null;
+  occlusion: string | null;
+  emissive: string | null;
+}
+
+/** Slot keys of {@link MaterialTextures}, paired with the wire name
+ *  `SetNodeMaterialTexture` expects and a human label. One list so the UI
+ *  cannot drift from the command's accepted values. */
+export const MATERIAL_TEXTURE_SLOTS = [
+  { key: "base_color", wire: "BaseColor", label: "Base Color" },
+  { key: "metallic_roughness", wire: "MetallicRoughness", label: "Metal/Rough" },
+  { key: "normal", wire: "Normal", label: "Normal" },
+  { key: "occlusion", wire: "Occlusion", label: "Occlusion" },
+  { key: "emissive", wire: "Emissive", label: "Emissive" },
+] as const;
 
 export type NodePayload =
   | { type: "Empty" }
@@ -99,15 +125,52 @@ export interface NodeInspector {
 // Trigger-action (Phases 6 / 9 / 9a)
 // ---------------------------------------------------------------------------
 
+/** Texture slots a `SetMaterial` event can drive. */
+export const TEXTURE_SLOTS = [
+  "BaseColor", "MetallicRoughness", "Normal", "Occlusion", "Emissive",
+] as const;
+
+/** One texture-slot assignment. `texture_asset_id: null` *clears* the slot,
+ *  which is why it is nullable rather than the whole `texture` being absent —
+ *  "clear the normal map at t=2s" is a real thing to author. */
+export interface ActionTexture {
+  slot: string;
+  texture_asset_id: string | null;
+}
+
 export type XrdsAction =
   | { kind: "PlayGltfAnimation"; data: { clip_index: number; speed: number; repeat: string; start_paused: boolean } }
   | { kind: "StopGltfAnimation" }
   | { kind: "SetVisible"; data: boolean }
-  | { kind: "Teleport"; data: { destination: [number, number, number] } }
-  | { kind: "ModifyHealth"; data: { target: ActionTarget; delta: ActionValue } }
-  | { kind: "Wait"; data: { seconds: number } }
-  | { kind: "FireCustomEvent"; data: { name: string } }
-  | { kind: "Run"; data: { runnable: string; wait: boolean } }
+  | {
+      kind: "SetTransform";
+      data: {
+        position: [number, number, number] | null;
+        rotation: [number, number, number] | null;
+        scale: [number, number, number] | null;
+        duration_secs: number;
+        /** "Linear" | "Quad" | "Cubic". */
+        ease: string;
+      };
+    }
+  // No `target` field on either of these: both apply to whichever asset row
+  // they sit on, same as every other action. They used to carry their own
+  // target — a leftover from before rows were asset-scoped — which meant one
+  // could silently apply to a *different* node than its row, invisibly to
+  // the cross-Track conflict check.
+  | {
+      kind: "SetMaterial";
+      data: {
+        base_color: [number, number, number, number] | null;
+        metallic: number | null;
+        roughness: number | null;
+        /** One texture slot assignment; `null` leaves every slot alone. */
+        texture: ActionTexture | null;
+      };
+    }
+  | { kind: "ModifyHealth"; data: { delta: ActionValue } }
+  /** An action this build does not recognize — from a newer editor. Skipped
+   *  at runtime and reported by `track_diagnostics`. */
   | { kind: "Unknown" };
 
 export type ActionTarget =
@@ -119,23 +182,6 @@ export type ActionValue =
   | { type: "Fixed"; value: number }
   | { type: "FromTriggerSource" };
 
-export interface XrdsSequenceDto {
-  steps: XrdsAction[];
-}
-
-export interface XrdsTimelineKeyDto {
-  at_secs: number;
-  action: XrdsAction;
-}
-
-export type RunnableBody =
-  | { type: "Sequence"; steps: XrdsAction[] }
-  | { type: "Timeline"; keys: XrdsTimelineKeyDto[]; duration_secs: number | null; looping: boolean };
-
-export interface NamedRunnableDto {
-  name: string;
-  body: RunnableBody;
-}
 
 export type XrdsTriggerKind =
   | { kind: "ZoneEnter" }
@@ -153,13 +199,57 @@ export type XrdsTriggerKind =
   | { kind: "Custom"; data: string }
   | { kind: "Unknown" };
 
+export interface XrdsTrackKeyDto {
+  at_secs: number;
+  action: XrdsAction;
+}
+
+/** One asset row inside a Track — a node plus every event on it.
+ *
+ *  `node_name` is resolved server-side so a row can be labelled without
+ *  walking the hierarchy. It is `null` for a `SelfNode`/`TriggerSource` row
+ *  (no concrete node until the Track is fired) and also for a `Node` target
+ *  that no longer exists — that second case is separately diagnosed. */
+export interface XrdsTrackAssetDto {
+  target: ActionTarget;
+  node_name: string | null;
+  keys: XrdsTrackKeyDto[];
+}
+
+export interface NamedTrackDto {
+  name: string;
+  assets: XrdsTrackAssetDto[];
+  duration_secs: number | null;
+  /** What the ruler should span: `duration_secs` when set, otherwise the span
+   *  the events occupy including a trailing interpolation. Computed in Rust so
+   *  the editor and the runtime cannot disagree. */
+  effective_duration_secs: number;
+  looping: boolean;
+}
+
+/** Live editor preview, or `null` when nothing is previewing. */
+export interface TrackPreviewDto {
+  name: string;
+  elapsed_secs: number;
+  duration_secs: number;
+  playing: boolean;
+}
+
+/** The most recent asset-conflict refusal. In the snapshot because a refused
+ *  Track is otherwise a silent no-op — see the reject-the-newcomer policy. */
+export interface TrackConflictDto {
+  blocked_track: string;
+  contended: string[];
+}
+
 export interface TriggerBindingDto {
   trigger: XrdsTriggerKind;
-  sequence: XrdsSequenceDto;
   disabled: boolean;
   /** "Left" | "Right" | null. */
   hand: string | null;
-  runnable: string | null;
+  /** The Track this binding fires, or `null` for authored-but-unwired. There
+   *  is deliberately no inline alternative. */
+  track: string | null;
 }
 
 export type ObservableDto =
@@ -178,6 +268,14 @@ export interface ThresholdWatcherDto {
   disabled: boolean;
 }
 
+/** One watcher, tagged with its owning node — see `EditorSnapshot.all_node_watchers`. */
+export interface NodeWatcherSummary {
+  node_id: number;
+  node_name: string;
+  watcher_index: number;
+  watcher: ThresholdWatcherDto;
+}
+
 export interface TriggerDiagnosticDto {
   /** null for a registry-level problem (e.g. a Run cycle) — not any one node's fault. */
   node_id: number | null;
@@ -186,11 +284,6 @@ export interface TriggerDiagnosticDto {
   title: string;
   detail: string;
 }
-
-/** Addresses where an XrdsAction step list lives. */
-export type StepTarget =
-  | { type: "Runnable"; name: string }
-  | { type: "Binding"; node_id: number; binding_index: number };
 
 export interface CameraNodeDto {
   id: number;
@@ -209,7 +302,22 @@ export interface ApkPrerequisite {
   hint: string;
 }
 
+/** Must match `BRIDGE_VERSION` in `src-tauri/src/bridge.rs`.
+ *
+ *  This file is a hand-written mirror of that one with nothing linking them, so
+ *  drift produces no compile error on either side. It fails only at runtime, and
+ *  quietly: an unknown command is dropped Rust-side (and `useSendCommand` is
+ *  fire-and-forget, so nothing here ever learns), while a removed snapshot field
+ *  arrives as `undefined` and throws on the first `.map()`. `defaultSnapshot`
+ *  does not shield that — it is only the initial `useState` value and is
+ *  replaced wholesale by the first real snapshot.
+ *
+ *  Bump this together with the Rust constant whenever a DTO changes. */
+export const BRIDGE_VERSION = 5;
+
 export interface EditorSnapshot {
+  /** See {@link BRIDGE_VERSION}. `0` means a build predating the check. */
+  bridge_version: number;
   hierarchy: HierarchyNode[];
   selection: number[];
   selected_node: NodeInspector | null;
@@ -240,9 +348,26 @@ export interface EditorSnapshot {
   /** Tail of the APK build log (last ≤200 lines). Empty when idle. */
   apk_build_log: string[];
   /** Document-level named-runnable registry (Phase 9a). */
-  runnables: NamedRunnableDto[];
+  tracks: NamedTrackDto[];
   /** Registry-level trigger diagnostics only (node_id === null). */
-  runnable_diagnostics: TriggerDiagnosticDto[];
+  track_diagnostics: TriggerDiagnosticDto[];
+  track_preview: TrackPreviewDto | null;
+  track_conflict: TrackConflictDto | null;
+  /** Every trigger binding in the document, tagged with its owning node —
+   * not just the selected node's. Powers the sequencer redesign's
+   * hierarchy-wide "Triggers" grouping and reverse lookup. */
+  all_node_bindings: NodeBindingSummary[];
+  /** Every threshold watcher in the document, tagged with its owning node
+   * — same rationale as `all_node_bindings`. */
+  all_node_watchers: NodeWatcherSummary[];
+}
+
+/** One binding, tagged with its owning node — see `EditorSnapshot.all_node_bindings`. */
+export interface NodeBindingSummary {
+  node_id: number;
+  node_name: string;
+  binding_index: number;
+  binding: TriggerBindingDto;
 }
 
 export interface EnvironmentDto {
@@ -253,6 +378,7 @@ export interface EnvironmentDto {
 }
 
 export const defaultSnapshot: EditorSnapshot = {
+  bridge_version: BRIDGE_VERSION,
   hierarchy: [],
   selection: [],
   selected_node: null,
@@ -280,8 +406,12 @@ export const defaultSnapshot: EditorSnapshot = {
   apk_prerequisites: null,
   is_exporting_apk: false,
   apk_build_log: [],
-  runnables: [],
-  runnable_diagnostics: [],
+  tracks: [],
+  track_diagnostics: [],
+  track_preview: null,
+  track_conflict: null,
+  all_node_bindings: [],
+  all_node_watchers: [],
 };
 
 // ---------------------------------------------------------------------------
@@ -304,6 +434,9 @@ export type EditorCommand =
   | { type: "CommitTransform";  payload: { id: number; translation: [number,number,number]; rotation_euler_degrees: [number,number,number]; scale: [number,number,number] } }
   | { type: "SetMaterial";   payload: { id: number; params: MaterialParams } }
   | { type: "CommitMaterial"; payload: { id: number; params: MaterialParams } }
+  /** Assigns (or with `texture_asset_id: null`, clears) one texture slot on a
+   *  node's authored material. `slot` is a `MATERIAL_TEXTURE_SLOTS[].wire`. */
+  | { type: "SetNodeMaterialTexture"; payload: { id: number; slot: string; texture_asset_id: string | null } }
   | { type: "SetPointLight";       payload: { id: number; color: [number,number,number,number]; intensity: number; range: number } }
   | { type: "SetDirectionalLight"; payload: { id: number; color: [number,number,number,number]; illuminance: number } }
   | { type: "SetSpotLight";        payload: { id: number; color: [number,number,number,number]; intensity: number; range: number; inner_angle: number; outer_angle: number } }
@@ -384,28 +517,35 @@ export type EditorCommand =
   | { type: "CutSelection" }
   | { type: "PasteClipboard" }
   | { type: "SelectAll" }
-  // --- Trigger-action: runnable registry (document-level) ---
-  | { type: "CreateRunnable"; payload: { name: string; kind: string } }
-  | { type: "DeleteRunnable"; payload: { name: string } }
-  | { type: "RenameRunnable"; payload: { old_name: string; new_name: string } }
-  | { type: "SetTimelineLooping";  payload: { name: string; looping: boolean } }
-  | { type: "SetTimelineDuration"; payload: { name: string; duration_secs: number | null } }
-  // --- Trigger-action: steps (registry sequence body OR a binding's inline sequence) ---
-  | { type: "AddActionStep";    payload: { target: StepTarget; kind: string } }
-  | { type: "RemoveActionStep"; payload: { target: StepTarget; index: number } }
-  | { type: "MoveActionStep";   payload: { target: StepTarget; index: number; delta: number } }
-  | { type: "SetActionStep";    payload: { target: StepTarget; index: number; action: XrdsAction } }
-  // --- Trigger-action: timeline keys (registry timeline body only) ---
-  | { type: "AddTimelineKey";    payload: { name: string; at_secs: number; kind: string } }
-  | { type: "RemoveTimelineKey"; payload: { name: string; index: number } }
-  | { type: "SetTimelineKey";    payload: { name: string; index: number; key: XrdsTimelineKeyDto } }
+  // --- Tracks: the registry (document-level) ---
+  | { type: "CreateTrack"; payload: { name: string } }
+  | { type: "DeleteTrack"; payload: { name: string } }
+  | { type: "RenameTrack"; payload: { old_name: string; new_name: string } }
+  | { type: "SetTrackLooping";  payload: { name: string; looping: boolean } }
+  | { type: "SetTrackDuration"; payload: { name: string; duration_secs: number | null } }
+  // --- Tracks: asset rows. Refused server-side if the asset already has a
+  //     row, so the UI cannot create a duplicate the diagnostics would flag. ---
+  | { type: "AddTrackAsset";       payload: { track: string; node_id: number } }
+  | { type: "RemoveTrackAsset";    payload: { track: string; asset_index: number } }
+  | { type: "SetTrackAssetTarget"; payload: { track: string; asset_index: number; node_id: number } }
+  // --- Tracks: events on a row. Row-addressed, because an event belongs to an
+  //     asset row rather than to a flat list. Keys are kept sorted server-side,
+  //     so `key_index` means the same thing on both sides. ---
+  | { type: "AddTrackKey";    payload: { track: string; asset_index: number; at_secs: number; kind: string } }
+  | { type: "RemoveTrackKey"; payload: { track: string; asset_index: number; key_index: number } }
+  | { type: "SetTrackKey";    payload: { track: string; asset_index: number; key_index: number; key: XrdsTrackKeyDto } }
+  // --- Tracks: editor preview transport. Independent of SetPlayMode by
+  //     design — previewing one Track is not running the simulation. ---
+  | { type: "PreviewPlayTrack";  payload: { name: string } }
+  | { type: "PreviewPauseTrack"; payload: { paused: boolean } }
+  | { type: "PreviewStopTrack" }
   // --- Trigger-action: per-node bindings ---
   | { type: "AddTriggerBinding";    payload: { node_id: number } }
   | { type: "RemoveTriggerBinding"; payload: { node_id: number; index: number } }
   | { type: "SetTriggerBindingTrigger";  payload: { node_id: number; index: number; trigger: XrdsTriggerKind } }
   | { type: "SetTriggerBindingHand";     payload: { node_id: number; index: number; hand: string | null } }
   | { type: "SetTriggerBindingDisabled"; payload: { node_id: number; index: number; disabled: boolean } }
-  | { type: "SetTriggerBindingRunnable"; payload: { node_id: number; index: number; runnable: string | null } }
+  | { type: "SetTriggerBindingTrack";    payload: { node_id: number; index: number; track: string | null } }
   // --- Trigger-action: per-node threshold watchers ---
   | { type: "AddWatcher";    payload: { node_id: number } }
   | { type: "RemoveWatcher"; payload: { node_id: number; index: number } }

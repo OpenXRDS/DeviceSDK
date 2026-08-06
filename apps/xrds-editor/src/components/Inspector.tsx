@@ -1,17 +1,25 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import type {
-  EditorSnapshot, EditorCommand, NodeInspector, MaterialParams, EnvironmentDto,
+  EditorSnapshot, EditorCommand, NodeInspector, MaterialParams, MaterialTextures,
+  AssetCatalogEntry, EnvironmentDto,
   ObservableDto, ThresholdWatcherDto, XrdsTriggerKind,
 } from "../types/bridge";
-import { rgbaToHex, hexToRgba } from "../types/bridge";
+import { rgbaToHex, hexToRgba, MATERIAL_TEXTURE_SLOTS } from "../types/bridge";
 import { Select } from "./ui/Select";
 import { Checkbox } from "./ui/Checkbox";
+import { ALL_TRIGGER_KINDS, isHandFilterVisible, unavailableReasonFor } from "../lib/sequencer";
 
 interface Props {
   snapshot: EditorSnapshot;
   send:     (cmd: EditorCommand) => void;
   onEditWorldPanel: (id: number) => void;
-  onEditBindingSequence: (nodeId: number, bindingIndex: number) => void;
+  /** Opens a named Track in the Sequencer workspace. */
+  onOpenTrack: (name: string) => void;
+  /** Whether to show the scene-environment sections (Fog/Exposure/IBL) in
+   * the nothing-selected state. Off in the Sequencer workspace — those are
+   * scene-environment settings, not behaviour authoring, so they're only
+   * noise there. Defaults on. */
+  showEnvironment?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -184,7 +192,8 @@ function ColorRow({ label, color, onLive, onCommit }: {
 // ---------------------------------------------------------------------------
 // Main Inspector
 // ---------------------------------------------------------------------------
-export function Inspector({ snapshot, send, onEditWorldPanel, onEditBindingSequence }: Props) {
+export function Inspector({ snapshot, send, onEditWorldPanel, onOpenTrack,
+                            showEnvironment = true }: Props) {
   const node = snapshot.selected_node;
   const prevId = useRef<number | null>(null);
 
@@ -211,7 +220,13 @@ export function Inspector({ snapshot, send, onEditWorldPanel, onEditBindingSeque
     return (
       <div className="inspector">
         <div className="panel-header">Inspector</div>
-        <SceneEnvironmentSection env={snapshot.environment} send={send} />
+        {showEnvironment ? (
+          <SceneEnvironmentSection env={snapshot.environment} send={send} />
+        ) : (
+          <div className="insp-empty">
+            Select a node to inspect it — or to bind a trigger to it under Triggers.
+          </div>
+        )}
       </div>
     );
   }
@@ -275,7 +290,7 @@ export function Inspector({ snapshot, send, onEditWorldPanel, onEditBindingSeque
       <PayloadSection key={node.id} node={node} send={send} isPlaying={snapshot.is_playing} snapshot={snapshot} onEditWorldPanel={onEditWorldPanel} />
 
       {/* Applies regardless of payload kind — any node can carry triggers/watchers. */}
-      <TriggersSection node={node} snapshot={snapshot} send={send} onEditBindingSequence={onEditBindingSequence} />
+      <TriggersSection node={node} snapshot={snapshot} send={send} onOpenTrack={onOpenTrack} />
       <WatchersSection node={node} send={send} />
     </div>
   );
@@ -286,44 +301,37 @@ export function Inspector({ snapshot, send, onEditWorldPanel, onEditBindingSeque
 // (Phase 6, see docs/xrds-trigger-action-editor-plan.md Stages 3/4)
 // ---------------------------------------------------------------------------
 
-const TRIGGER_KINDS = [
-  // "Unknown" doubles as the "nothing picked yet" placeholder for a freshly
-  // added binding — it already means "never fires" at runtime, matching a
-  // None state exactly (the domain type has no real None variant).
-  "Unknown",
-  "ZoneEnter", "ZoneExit", "Grabbed", "Dropped", "HoverEnter", "HoverExit",
-  "ButtonPress", "ButtonRelease", "SliderChange", "ToggleChange",
-  "AnimationComplete", "RunawayDetected", "Custom",
-] as const;
-
-const TRIGGER_KIND_LABELS: Record<string, string> = {
+// "Unknown" isn't in ALL_TRIGGER_KINDS/validKindsFor (sequencer.ts) since
+// nothing at runtime ever emits it — but it doubles as this picker's
+// "nothing picked yet" placeholder for a freshly added binding (it
+// already means "never fires" at runtime, matching a None state exactly;
+// the domain type has no real None variant), so it's prepended here
+// rather than added to the shared list every other consumer of
+// validKindsFor would also get it.
+const UNKNOWN_KIND_LABEL: Record<string, string> = {
   Unknown: "— none selected —",
 };
-
-/** Kinds that never report a hand — matches the Rust-side diagnostic
- * (`trigger_diagnostics`'s "Hand filter on a trigger kind with no hand"
- * Error) so the UI doesn't let an author set up a binding that can never
- * fire without at least showing why. */
-const HANDLESS_KINDS = new Set([
-  "ZoneEnter", "ZoneExit", "AnimationComplete", "RunawayDetected", "Custom", "Unknown",
-]);
 
 // Radix Select.Item forbids an empty-string value, but `null`/"" is this
 // section's existing "no restriction/no runnable" convention — map to/from
 // these sentinels at the Select boundary instead of touching that convention.
 const HAND_ANY_SENTINEL = "__any__";
-const RUNNABLE_INLINE_SENTINEL = "__inline__";
+const TRACK_NONE_SENTINEL = "__none__";
+/** Radix Select.Item forbids `value=""`, and `null` is the domain's own "no
+ *  texture in this slot" — so the empty choice needs a stand-in value. */
+const TEXTURE_NONE_SENTINEL = "__no_texture__";
 
 function triggerKindFromSelectValue(k: string): XrdsTriggerKind {
   if (k === "Custom") return { kind: "Custom", data: "" };
   return { kind: k } as XrdsTriggerKind;
 }
 
-function TriggersSection({ node, snapshot, send, onEditBindingSequence }: {
+function TriggersSection({ node, snapshot, send, onOpenTrack }: {
   node: NodeInspector;
   snapshot: EditorSnapshot;
   send: (cmd: EditorCommand) => void;
-  onEditBindingSequence: (nodeId: number, bindingIndex: number) => void;
+  /** Opens a named Track in the Sequencer workspace. */
+  onOpenTrack: (name: string) => void;
 }) {
   const id = node.id;
   return (
@@ -337,85 +345,117 @@ function TriggersSection({ node, snapshot, send, onEditBindingSequence }: {
       )}
       {node.triggers.map((b, i) => {
         const kind = b.trigger.kind;
-        const handDisallowed = b.hand !== null && HANDLESS_KINDS.has(kind);
-        const runnableMissing = b.runnable !== null && !snapshot.runnables.some(r => r.name === b.runnable);
+        const handDisallowed = b.hand !== null && !isHandFilterVisible(kind);
+        const trackMissing = b.track !== null && !snapshot.tracks.some(t => t.name === b.track);
+        // Every kind is shown, always — including ones this node can't fire
+        // yet — with a trailing hint saying what's missing, rather than
+        // silently shortening the list. A short, unexplained list is exactly
+        // what prompted this: there was no way to tell "not offered because
+        // it doesn't apply" from "missing/broken".
+        const kindOptions = ALL_TRIGGER_KINDS.map(k => {
+          const reason = unavailableReasonFor(k, node);
+          return { value: k, label: k, disabled: reason !== null, hint: reason ?? undefined };
+        });
         return (
-          <div key={i} className="hud-library-row flex-col items-stretch gap-1">
-            <div className="flex gap-1 items-center flex-wrap">
-              <Select
-                value={kind}
-                onValueChange={v => send({ type: "SetTriggerBindingTrigger", payload: { node_id: id, index: i, trigger: triggerKindFromSelectValue(v) } })}
-                options={TRIGGER_KINDS.map(k => ({ value: k, label: TRIGGER_KIND_LABELS[k] ?? k }))}
-              />
-              {kind === "Custom" && (
-                <input type="text" defaultValue={b.trigger.kind === "Custom" ? b.trigger.data : ""}
-                  placeholder="event name"
-                  className="w-[100px] text-text bg-surface0 rounded px-2 py-1 border border-transparent focus:outline focus:outline-1 focus:outline-blue"
-                  key={`${id}-${i}-custom-${b.trigger.kind === "Custom" ? b.trigger.data : ""}`}
-                  onKeyDown={e => { e.stopPropagation(); if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
-                  onBlur={e => send({ type: "SetTriggerBindingTrigger", payload: { node_id: id, index: i, trigger: { kind: "Custom", data: e.target.value } } })} />
-              )}
-              <Select
-                value={b.hand ?? HAND_ANY_SENTINEL}
-                onValueChange={v => send({ type: "SetTriggerBindingHand", payload: { node_id: id, index: i, hand: v === HAND_ANY_SENTINEL ? null : v } })}
-                options={[
-                  { value: HAND_ANY_SENTINEL, label: "any hand" },
-                  { value: "Left", label: "Left" },
-                  { value: "Right", label: "Right" },
-                ]}
-              />
-              <Checkbox
-                label="disabled"
-                checked={b.disabled}
-                onCheckedChange={v => send({ type: "SetTriggerBindingDisabled", payload: { node_id: id, index: i, disabled: v } })}
-              />
-              <button className="tb-btn text-[10px] ml-auto"
-                title="Fire this binding right now — there's no real ZoneEnter/Grabbed/etc event in the desktop editor to wait for"
-                disabled={b.disabled || handDisallowed}
-                onClick={() => send({ type: "PreviewFireTrigger", payload: { node_id: id, index: i } })}>
-                ▶ Fire
-              </button>
-              <button className="tb-btn text-red text-[10px]"
-                title="Remove this binding"
-                onClick={() => send({ type: "RemoveTriggerBinding", payload: { node_id: id, index: i } })}>✕</button>
+          <div key={i} className="hud-library-row flex-col items-stretch gap-2">
+            <div className="grid grid-cols-[42px_1fr] items-center gap-x-2">
+              <label className="text-[11px] text-overlay0">When</label>
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <Select
+                  value={kind}
+                  onValueChange={v => send({ type: "SetTriggerBindingTrigger", payload: { node_id: id, index: i, trigger: triggerKindFromSelectValue(v) } })}
+                  options={[{ value: "Unknown", label: UNKNOWN_KIND_LABEL.Unknown }, ...kindOptions]}
+                />
+                {kind === "Custom" && (
+                  <input type="text" defaultValue={b.trigger.kind === "Custom" ? b.trigger.data : ""}
+                    placeholder="event name"
+                    className="w-[100px] text-bright bg-well rounded px-2 py-1 border border-surface0 focus:outline focus:outline-1 focus:outline-blue"
+                    key={`${id}-${i}-custom-${b.trigger.kind === "Custom" ? b.trigger.data : ""}`}
+                    onKeyDown={e => { e.stopPropagation(); if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+                    onBlur={e => send({ type: "SetTriggerBindingTrigger", payload: { node_id: id, index: i, trigger: { kind: "Custom", data: e.target.value } } })} />
+                )}
+                {isHandFilterVisible(kind) && (
+                  <Select
+                    value={b.hand ?? HAND_ANY_SENTINEL}
+                    onValueChange={v => send({ type: "SetTriggerBindingHand", payload: { node_id: id, index: i, hand: v === HAND_ANY_SENTINEL ? null : v } })}
+                    options={[
+                      { value: HAND_ANY_SENTINEL, label: "any hand" },
+                      { value: "Left", label: "Left" },
+                      { value: "Right", label: "Right" },
+                    ]}
+                  />
+                )}
+                <span className="flex-1" />
+                <Checkbox
+                  label="disabled"
+                  checked={b.disabled}
+                  onCheckedChange={v => send({ type: "SetTriggerBindingDisabled", payload: { node_id: id, index: i, disabled: v } })}
+                />
+                <button className="tb-btn text-[11px]"
+                  title="Fire this binding right now — there's no real ZoneEnter/Grabbed/etc event in the desktop editor to wait for"
+                  disabled={b.disabled || handDisallowed}
+                  onClick={() => send({ type: "PreviewFireTrigger", payload: { node_id: id, index: i } })}>
+                  ▶ Fire
+                </button>
+                <button className="tb-btn text-red text-[11px]"
+                  title="Remove this binding"
+                  onClick={() => send({ type: "RemoveTriggerBinding", payload: { node_id: id, index: i } })}>✕</button>
+              </div>
             </div>
 
             {handDisallowed && (
-              <span className="text-[10px] text-red">
-                ⚠ {kind} never reports a hand — this binding can never fire
-              </span>
+              <div className="grid grid-cols-[42px_1fr] gap-x-2">
+                <span />
+                <span className="text-[11px] text-red">
+                  ⚠ {kind} never reports a hand — this binding can never fire
+                </span>
+              </div>
             )}
 
-            <div className="flex gap-1.5 items-center flex-wrap">
-              <label className="text-[10px] text-overlay0">Runs</label>
-              <Select
-                value={b.runnable ?? RUNNABLE_INLINE_SENTINEL}
-                onValueChange={v => send({ type: "SetTriggerBindingRunnable", payload: { node_id: id, index: i, runnable: v === RUNNABLE_INLINE_SENTINEL ? null : v } })}
-                options={[
-                  { value: RUNNABLE_INLINE_SENTINEL, label: "— inline sequence —" },
-                  ...snapshot.runnables.map(r => ({ value: r.name, label: r.name })),
-                ]}
-              />
-              {b.runnable !== null ? (
-                runnableMissing && <span className="text-[10px] text-red">⚠ "{b.runnable}" has no matching runnable</span>
-              ) : (
-                <button className="tb-btn text-[10px] py-px px-[7px]"
-                  onClick={() => onEditBindingSequence(id, i)}>
-                  Edit inline sequence… ({b.sequence.steps.length} step{b.sequence.steps.length !== 1 ? "s" : ""})
-                </button>
-              )}
+            {/* A binding names a Track. There is no inline alternative, so
+              * this is a plain picker rather than an inline-vs-named choice. */}
+            <div className="grid grid-cols-[42px_1fr] items-center gap-x-2">
+              <label className="text-[11px] text-overlay0">Fires</label>
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <Select
+                  value={b.track ?? TRACK_NONE_SENTINEL}
+                  onValueChange={v => send({
+                    type: "SetTriggerBindingTrack",
+                    payload: { node_id: id, index: i, track: v === TRACK_NONE_SENTINEL ? null : v },
+                  })}
+                  options={[
+                    { value: TRACK_NONE_SENTINEL, label: "— nothing —" },
+                    ...snapshot.tracks.map(t => ({ value: t.name, label: t.name })),
+                  ]}
+                />
+                {b.track === null && (
+                  <span className="text-[11px] text-yellow">
+                    ⚠ fires nothing yet
+                  </span>
+                )}
+                {trackMissing && (
+                  <span className="text-[11px] text-red">⚠ "{b.track}" is not in this document</span>
+                )}
+                {b.track !== null && !trackMissing && (
+                  <button className="tb-btn text-[11px] py-px px-[7px]"
+                    title={`Open "${b.track}" in the Sequencer`}
+                    onClick={() => onOpenTrack(b.track!)}>
+                    Open ↗
+                  </button>
+                )}
+              </div>
             </div>
           </div>
         );
       })}
-      <button className="tb-btn text-[10px] px-2 py-0.5"
+      <button className="tb-btn text-[11px] px-2 py-0.5"
         onClick={() => send({ type: "AddTriggerBinding", payload: { node_id: id } })}>
         + Add binding
       </button>
       {node.trigger_diagnostics.length > 0 && (
         <div className="flex flex-col gap-0.5 mt-1">
           {node.trigger_diagnostics.map((d, i) => (
-            <span key={i} className={`text-[10px] ${d.severity === "error" ? "text-red" : "text-overlay0"}`} title={d.detail}>
+            <span key={i} className={`text-[11px] ${d.severity === "error" ? "text-red" : "text-overlay0"}`} title={d.detail}>
               ⚠ {d.title}
             </span>
           ))}
@@ -443,8 +483,8 @@ function WatchersSection({ node, send }: {
   const id = node.id;
   const setWatcher = (i: number, watcher: ThresholdWatcherDto) =>
     send({ type: "SetWatcher", payload: { node_id: id, index: i, watcher } });
-  const numCls = "text-text bg-surface0 rounded px-2 py-1 border border-transparent focus:outline focus:outline-1 focus:outline-blue font-mono";
-  const textCls = "text-text bg-surface0 rounded px-2 py-1 border border-transparent focus:outline focus:outline-1 focus:outline-blue";
+  const numCls = "text-bright bg-well rounded px-2 py-1 border border-surface0 focus:outline focus:outline-1 focus:outline-blue font-mono";
+  const textCls = "text-bright bg-well rounded px-2 py-1 border border-surface0 focus:outline focus:outline-1 focus:outline-blue";
 
   return (
     <div className="insp-section">
@@ -640,7 +680,7 @@ function PayloadSection({ node, send, isPlaying, snapshot, onEditWorldPanel }: {
   // Tetrahedron is mapped to Cube DTO on the Rust side
   if (payload.type === "Cube" || payload.type === "Sphere" || payload.type === "Cylinder" ||
       payload.type === "Plane") {
-    return <PrimitiveSection id={id} mat={payload.material} physics_body={payload.physics_body} gravity_scale={payload.gravity_scale} mass={payload.mass} send={send} />;
+    return <PrimitiveSection id={id} mat={payload.material} assets={snapshot.asset_catalog} physics_body={payload.physics_body} gravity_scale={payload.gravity_scale} mass={payload.mass} send={send} />;
   }
   if (payload.type === "PointLight") {
     return <PointLightSection id={id} p={payload} send={send} />;
@@ -686,7 +726,7 @@ function PayloadSection({ node, send, isPlaying, snapshot, onEditWorldPanel }: {
 
 const PHYSICS_BODY_OPTIONS = ["None", "Static", "Dynamic"] as const;
 
-function PrimitiveSection({ id, mat, physics_body, gravity_scale, mass, send }: { id: number; mat: MaterialParams; physics_body: string; gravity_scale: number; mass: number; send: (c: EditorCommand) => void }) {
+function PrimitiveSection({ id, mat, assets, physics_body, gravity_scale, mass, send }: { id: number; mat: MaterialParams; assets: AssetCatalogEntry[]; physics_body: string; gravity_scale: number; mass: number; send: (c: EditorCommand) => void }) {
   const [local, setLocal] = useState<MaterialParams>(mat);
   const isDragging = useRef(false);
   useEffect(() => { if (!isDragging.current) setLocal(mat); }, [mat]);
@@ -725,11 +765,60 @@ function PrimitiveSection({ id, mat, physics_body, gravity_scale, mass, send }: 
         onLive={v => { const m = {...local, roughness: v}; setLocal(m); upd(m); }}
         onCommit={v => { const m = {...local, roughness: v}; setLocal(m); commit(m); }}
       />
+      <TextureSlotRows id={id} textures={mat.textures} assets={assets} send={send} />
     </div>
   );
 }
 
-function MaterialSection({ id, mat, send }: { id: number; mat: MaterialParams; send: (c: EditorCommand) => void }) {
+/** Texture-slot pickers for a node's authored material.
+ *
+ * Writes one slot at a time via `SetNodeMaterialTexture` rather than folding
+ * into the `SetMaterial`/`CommitMaterial` params, so assigning a base-colour
+ * map cannot drop an authored normal map — and so a colour *drag* never
+ * carries texture data at all. Reads come from `mat.textures`, which the
+ * snapshot keeps current.
+ *
+ * Shared by both material sections; `MaterialParams` is all it needs. */
+function TextureSlotRows({ id, textures, assets, send }: {
+  id: number;
+  textures: MaterialTextures;
+  assets: AssetCatalogEntry[];
+  send: (c: EditorCommand) => void;
+}) {
+  const textureAssets = assets.filter(a => a.kind === "Texture");
+  return (
+    <>
+      <div className="text-[10px] text-overlay0 mt-1 mb-0.5">TEXTURES</div>
+      {textureAssets.length === 0 && (
+        <div className="text-[10px] text-yellow">
+          ⚠ no texture assets imported yet
+        </div>
+      )}
+      {MATERIAL_TEXTURE_SLOTS.map(slot => (
+        <div key={slot.key} className="flex items-center gap-1.5 mb-1">
+          <label className="text-[10.5px] text-overlay0 w-[86px] shrink-0">{slot.label}</label>
+          <Select
+            value={textures[slot.key] ?? TEXTURE_NONE_SENTINEL}
+            onValueChange={v => send({
+              type: "SetNodeMaterialTexture",
+              payload: {
+                id,
+                slot: slot.wire,
+                texture_asset_id: v === TEXTURE_NONE_SENTINEL ? null : v,
+              },
+            })}
+            options={[
+              { value: TEXTURE_NONE_SENTINEL, label: "— none —" },
+              ...textureAssets.map(a => ({ value: a.id, label: a.name })),
+            ]}
+          />
+        </div>
+      ))}
+    </>
+  );
+}
+
+function MaterialSection({ id, mat, assets, send }: { id: number; mat: MaterialParams; assets: AssetCatalogEntry[]; send: (c: EditorCommand) => void }) {
   const [local, setLocal] = useState<MaterialParams>(mat);
   const isDragging = useRef(false);
   // Sync from snapshot only when not dragging (prevents overwrite during slider drag)
@@ -751,6 +840,9 @@ function MaterialSection({ id, mat, send }: { id: number; mat: MaterialParams; s
         onLive={v => { const m = {...local, roughness: v}; setLocal(m); upd(m); }}
         onCommit={v => { const m = {...local, roughness: v}; setLocal(m); commit(m); }}
       />
+      {/* Reads `mat`, not `local`: texture writes are their own command and
+        * never part of the drag draft, so the snapshot is the truth. */}
+      <TextureSlotRows id={id} textures={mat.textures} assets={assets} send={send} />
     </div>
   );
 }

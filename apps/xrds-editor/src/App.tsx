@@ -14,9 +14,11 @@ import { HudCanvasOverlay } from "./components/HudCanvasOverlay";
 import { WorldPanelCanvasOverlay } from "./components/WorldPanelCanvasOverlay";
 import { HudLibraryPanel } from "./components/HudLibraryPanel";
 import { ApkExportDialog } from "./components/ApkExportDialog";
-import { TriggerActionLibraryPanel } from "./components/TriggerActionLibraryPanel";
-import { TriggerActionEditorOverlay } from "./components/TriggerActionEditorOverlay";
-import type { EditorCommand, StepTarget } from "./types/bridge";
+import { SequencerWorkspace } from "./components/SequencerWorkspace";
+import type { SelectedEvent } from "./components/SequencerInspector";
+import { SequencerListPanel } from "./components/SequencerListPanel";
+import { BridgeMismatchBanner } from "./components/BridgeMismatchBanner";
+import type { EditorCommand } from "./types/bridge";
 
 // ---------------------------------------------------------------------------
 // IPC helpers
@@ -47,7 +49,23 @@ export default function App() {
   const [hudTemplateId,  setHudTemplateId]  = useState<number | null>(null);
   const [worldPanelId,   setWorldPanelId]   = useState<number | null>(null);
   const [showApkExport,  setShowApkExport]  = useState(false);
-  const [editingStepTarget, setEditingStepTarget] = useState<StepTarget | null>(null);
+  // Which Track the Sequencer has open, by name. There is no longer an
+  // inline-sequence alternative to address, so a name is the whole target.
+  const [openTrack, setOpenTrack] = useState<string | null>(null);
+  // Which workspace layout is active. "sequencer" reflows the whole window
+  // after docs/Sequencer_Editor.dc.html — viewport + hierarchy on top, the
+  // Sequencer taking roughly half the height below, its own status bar at
+  // the base — rather than squeezing a sequencer strip under the normal
+  // scene layout. The Bevy viewport stays live in both (its hole just
+  // moves; the ResizeObserver below re-reports the new bounds).
+  const [workspace, setWorkspace] = useState<"scene" | "sequencer">("scene");
+  const seqMode = workspace === "sequencer";
+  // Which event the Sequencer's inspector is editing — a row plus a key
+  // within it, since events belong to asset rows rather than a flat list.
+  // Lives here (not local to the Sequencer) only so it can be reset whenever
+  // the open Track changes.
+  const [selectedEvent, setSelectedEvent] = useState<SelectedEvent | null>(null);
+  useEffect(() => setSelectedEvent(null), [openTrack]);
 
   // Handle sits on the sidebar's right edge — drag right to grow it.
   const sidebar = useResizable({ axis: "x", initial: 240, min: 180, max: 520 });
@@ -68,7 +86,10 @@ export default function App() {
     ro.observe(el);
     notify();
     return () => ro.disconnect();
-  }, []);
+    // `workspace` is a real dependency, not noise: switching layouts can
+    // unmount/remount .editor-center, which would leave the observer bound
+    // to a detached node and freeze the Bevy viewport hole in place.
+  }, [workspace]);
 
   // Global keyboard shortcuts
   useEffect(() => {
@@ -140,8 +161,20 @@ export default function App() {
     if (path) send({ type: "SaveSceneAs", payload: { path } });
   }
 
+  // Opening something to edit also switches into the Sequencer workspace —
+  // otherwise clicking a sequencer in the Hierarchy would load it into a
+  // panel that isn't on screen.
+  function openTrackByName(name: string) {
+    setOpenTrack(name);
+    setWorkspace("sequencer");
+  }
+
   return (
     <>
+      {/* Rendered ahead of the editor: a bridge mismatch means the snapshot
+        * shape is untrustworthy, so panels reading it may throw. The banner has
+        * to survive that. */}
+      <BridgeMismatchBanner snapshot={snapshot} />
       <div className="editor-root">
         <Menubar
           snapshot={snapshot}
@@ -155,7 +188,8 @@ export default function App() {
           onSaveAs={handleSaveAs}
           onShowShortcuts={() => setShowShortcuts(true)}
         />
-        <Toolbar snapshot={snapshot} send={send} onSaveAs={handleSaveAs} />
+        <Toolbar snapshot={snapshot} send={send} onSaveAs={handleSaveAs}
+          workspace={workspace} onWorkspaceChange={setWorkspace} />
 
         {snapshot.is_exporting && (
           <div className="export-bar">
@@ -169,11 +203,20 @@ export default function App() {
         )}
 
         <div className="editor-panels">
-          <div className="left-sidebar" style={{ width: sidebar.size }}>
-            <Hierarchy snapshot={snapshot} send={send} />
-            <PlayerPanel snapshot={snapshot} send={send} />
-            <HudLibraryPanel snapshot={snapshot} send={send} onEditTemplate={id => setHudTemplateId(id)} />
-            <TriggerActionLibraryPanel snapshot={snapshot} send={send} onEditRunnable={name => setEditingStepTarget({ type: "Runnable", name })} />
+          {/* Left column. Scene mode: the scene tree + player/HUD libraries.
+            * Sequencer mode: the Sequencers list, since a sequencer isn't a
+            * scene node and the tree was the wrong home for it. */}
+          <div className="left-sidebar" key="left" style={{ width: sidebar.size }}>
+            {seqMode ? (
+              <SequencerListPanel snapshot={snapshot} send={send}
+                openTrack={openTrack} onOpenTrack={openTrackByName} />
+            ) : (
+              <>
+                <Hierarchy snapshot={snapshot} send={send} onOpenTrack={openTrackByName} />
+                <PlayerPanel snapshot={snapshot} send={send} />
+                <HudLibraryPanel snapshot={snapshot} send={send} onEditTemplate={id => setHudTemplateId(id)} />
+              </>
+            )}
             <button className={`panel-lock-btn${sidebar.locked ? " locked" : ""}`}
               style={{ top: 6, right: 6 }} onClick={sidebar.toggleLock}
               title={sidebar.locked ? "Unlock sidebar width" : "Lock sidebar width"}>
@@ -182,10 +225,32 @@ export default function App() {
             <div className={`panel-resize-handle--v${sidebar.dragging ? " dragging" : ""}${sidebar.locked ? " locked" : ""}`}
               style={{ right: -4 }} onPointerDown={sidebar.onPointerDown} title={sidebar.locked ? "Sidebar width is locked" : "Drag to resize"} />
           </div>
-          <div className="editor-center" ref={centerRef}>
-            <ViewportCanvas send={send} />
+
+          {/* Centre column: viewport, with the Sequencer docked *under it*
+            * rather than across the whole window. That's what lets the
+            * left and right panels keep the full window height — the node
+            * Inspector stops needing to scroll, which was the point. */}
+          <div className={`editor-column${seqMode ? " editor-column--seq" : ""}`}>
+            <div className="editor-center" key="center" ref={centerRef}>
+              <ViewportCanvas send={send} />
+            </div>
+            {seqMode && (
+              <SequencerWorkspace
+                track={openTrack}
+                snapshot={snapshot}
+                send={send}
+                selected={selectedEvent}
+                onSelectedChange={setSelectedEvent}
+              />
+            )}
           </div>
-          <div className="inspector-wrap" style={{ width: inspector.size }}>
+
+          {/* Node Inspector, both modes — still needed in Sequencer mode to
+            * bind a trigger to a node. It gets the column's full height
+            * there (nothing stacked below it), which is what stops it
+            * needing to scroll. Fog/Exposure/IBL are suppressed: they're
+            * scene-environment settings, not behaviour authoring. */}
+          <div className="inspector-wrap" key="right" style={{ width: inspector.size }}>
             <button className={`panel-lock-btn${inspector.locked ? " locked" : ""}`}
               style={{ top: 6, left: 6 }} onClick={inspector.toggleLock}
               title={inspector.locked ? "Unlock inspector width" : "Lock inspector width"}>
@@ -194,11 +259,11 @@ export default function App() {
             <div className={`panel-resize-handle--v${inspector.dragging ? " dragging" : ""}${inspector.locked ? " locked" : ""}`}
               style={{ left: -4 }} onPointerDown={inspector.onPointerDown} title={inspector.locked ? "Inspector width is locked" : "Drag to resize"} />
             <Inspector snapshot={snapshot} send={send} onEditWorldPanel={id => setWorldPanelId(id)}
-              onEditBindingSequence={(nodeId, bindingIndex) => setEditingStepTarget({ type: "Binding", node_id: nodeId, binding_index: bindingIndex })} />
+              onOpenTrack={openTrackByName} showEnvironment={!seqMode} />
           </div>
         </div>
 
-        <Palette snapshot={snapshot} send={send} />
+        {!seqMode && <Palette snapshot={snapshot} send={send} />}
       </div>
 
       {showShortcuts && <KeyboardShortcutsModal onClose={() => setShowShortcuts(false)} />}
@@ -225,14 +290,6 @@ export default function App() {
           send={send}
           onPickAsset={() => ipcDialog("pick_texture")}
           onClose={() => setWorldPanelId(null)}
-        />
-      )}
-      {editingStepTarget !== null && (
-        <TriggerActionEditorOverlay
-          target={editingStepTarget}
-          snapshot={snapshot}
-          send={send}
-          onClose={() => setEditingStepTarget(null)}
         />
       )}
     </>
