@@ -1,0 +1,497 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet data-dc-atomics><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet"><style>html,body{margin:0;padding:0;background:#0c0e11}a{color:#4c9df0;text-decoration:none}a:hover{color:#78b6f5}*{box-sizing:border-box}</style></helmet>
+<div style="width:1920px;height:1080px;display:flex;flex-direction:column;background:#0c0e11;font-family:'IBM Plex Sans','Helvetica Neue',Helvetica,sans-serif;color:#ced3db;overflow:hidden;-webkit-font-smoothing:antialiased">
+
+  <div style="height:36px;flex:none;display:flex;align-items:center;gap:2px;padding:0 12px;background:#12151a;border-bottom:1px solid #23282f">
+    <div style="display:flex;align-items:center;gap:9px;padding-right:14px;margin-right:6px;border-right:1px solid #23282f">
+      <div style="width:15px;height:15px;border:1.5px solid #4c9df0;border-radius:3px;transform:rotate(45deg)"></div>
+      <span style="font-size:12.5px;font-weight:600;letter-spacing:.14em;color:#e6eaf0">AXIS</span>
+    </div>
+    <div style="display:flex;gap:1px;font-size:12.5px;color:#a8aeb8">
+      <span style="padding:5px 9px;border-radius:4px">File</span>
+      <span style="padding:5px 9px;border-radius:4px">Edit</span>
+      <span style="padding:5px 9px;border-radius:4px">Sequencer</span>
+      <span style="padding:5px 9px;border-radius:4px">Track</span>
+      <span style="padding:5px 9px;border-radius:4px">View</span>
+      <span style="padding:5px 9px;border-radius:4px">Window</span>
+      <span style="padding:5px 9px;border-radius:4px">Help</span>
+    </div>
+    <div style="flex:1"></div>
+    <div style="display:flex;align-items:center;gap:14px;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#6e7681">
+      <span>harbor_scenario.axseq</span>
+      <span style="color:#3b424b">/</span>
+      <span>editing</span>
+      <span style="display:flex;align-items:center;gap:5px;color:#6cc48f"><span style="width:6px;height:6px;border-radius:50%;background:#6cc48f"></span>saved 2m ago</span>
+    </div>
+  </div>
+
+  <div style="height:44px;flex:none;display:flex;align-items:center;gap:8px;padding:0 12px;background:#14171c;border-bottom:1px solid #23282f">
+    <div style="display:flex;background:#0f1216;border:1px solid #262c34;border-radius:5px;overflow:hidden">
+      <span style="padding:6px 12px;font-size:11.5px;background:#26303d;color:#9fcaf7;border-right:1px solid #262c34">Select</span>
+      <span style="padding:6px 12px;font-size:11.5px;color:#9aa1ab;border-right:1px solid #262c34">Move</span>
+      <span style="padding:6px 12px;font-size:11.5px;color:#9aa1ab;border-right:1px solid #262c34">Rotate</span>
+      <span style="padding:6px 12px;font-size:11.5px;color:#9aa1ab">Scale</span>
+    </div>
+    <div style="width:1px;height:22px;background:#262c34;margin:0 4px"></div>
+    <div style="display:flex;align-items:center;gap:6px;padding:5px 10px;background:#0f1216;border:1px solid #262c34;border-radius:5px;font-size:11.5px;color:#9aa1ab">World<span style="color:#5a616b;font-size:9px">▾</span></div>
+    <div style="display:flex;align-items:center;gap:7px;padding:5px 10px;background:#0f1216;border:1px solid #262c34;border-radius:5px;font-size:11.5px;color:#9aa1ab"><span style="width:7px;height:7px;border:1px solid #4c9df0;background:#4c9df0"></span>Snap<span style="font-family:'IBM Plex Mono',monospace;color:#6e7681">1f</span></div>
+    <div style="width:1px;height:22px;background:#262c34;margin:0 4px"></div>
+    <div style="display:flex;align-items:center;gap:7px;padding:5px 11px;background:rgba(226,104,95,.12);border:1px solid rgba(226,104,95,.4);border-radius:5px;font-size:11.5px;color:#e88c85"><span style="width:7px;height:7px;border-radius:50%;background:#e2685f"></span>Auto-Key</div>
+    <div style="flex:1"></div>
+    <div style="display:flex;align-items:center;gap:6px;font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#6e7681"><span style="padding:4px 8px;border:1px solid #262c34;border-radius:4px">30 fps</span><span style="padding:4px 8px;border:1px solid #262c34;border-radius:4px">1440 frames</span></div>
+    <div style="width:1px;height:22px;background:#262c34;margin:0 4px"></div>
+    <div style="display:flex;align-items:center;gap:6px;padding:5px 10px;background:#0f1216;border:1px solid #262c34;border-radius:5px;font-size:11.5px;color:#9aa1ab">Layout: Scripting<span style="color:#5a616b;font-size:9px">▾</span></div>
+  </div>
+
+  <div style="flex:1;min-height:0;display:flex;gap:1px;background:#23282f">
+
+    <div style="flex:1;min-width:0;display:flex;flex-direction:column;background:#14171c">
+      <div style="height:31px;flex:none;display:flex;align-items:stretch;background:#12151a;border-bottom:1px solid #23282f">
+        <div style="display:flex;align-items:center;gap:8px;padding:0 14px;background:#14171c;border-right:1px solid #23282f;border-top:2px solid #4c9df0;font-size:11.5px;color:#e6eaf0">Perspective<span style="color:#5a616b">×</span></div>
+        <div style="display:flex;align-items:center;gap:8px;padding:0 14px;border-right:1px solid #23282f;font-size:11.5px;color:#7e8691">Top<span style="color:#3b424b">×</span></div>
+        <div style="display:flex;align-items:center;padding:0 12px;font-size:14px;color:#5a616b">+</div>
+        <div style="flex:1"></div>
+        <div style="display:flex;align-items:center;gap:9px;padding:0 12px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#6e7681"><span>Lit</span><span style="color:#3b424b">|</span><span>Shadows</span><span style="color:#3b424b">|</span><span>Gizmos</span></div>
+      </div>
+      <div style="flex:1;min-height:0;position:relative;overflow:hidden;background:radial-gradient(120% 90% at 50% 8%,#2a3340 0%,#171b21 55%,#0e1114 100%)">
+        <div style="position:absolute;left:-40%;right:-40%;bottom:0;height:58%;transform:perspective(560px) rotateX(66deg);transform-origin:bottom center;background-image:linear-gradient(#3d4959 1px,transparent 1px),linear-gradient(90deg,#3d4959 1px,transparent 1px);background-size:60px 60px;opacity:.55"></div>
+        <div style="position:absolute;left:0;right:0;bottom:0;height:34%;background:linear-gradient(to top,#0e1114,rgba(14,17,20,0))"></div>
+        <div style="position:absolute;left:50%;top:52%;width:0;height:0">
+          <div style="position:absolute;left:0;top:-1px;width:96px;height:2px;background:#e2685f"></div>
+          <div style="position:absolute;left:92px;top:-4px;width:8px;height:8px;background:#e2685f"></div>
+          <div style="position:absolute;left:-1px;top:-96px;width:2px;height:96px;background:#6cc48f"></div>
+          <div style="position:absolute;left:-4px;top:-100px;width:8px;height:8px;background:#6cc48f"></div>
+          <div style="position:absolute;left:-70px;top:-1px;width:72px;height:2px;background:#4c9df0;transform:rotate(-27deg);transform-origin:right center"></div>
+          <div style="position:absolute;left:-92px;top:31px;width:8px;height:8px;background:#4c9df0"></div>
+          <div style="position:absolute;left:-64px;top:-64px;width:128px;height:128px;border:1px dashed rgba(255,255,255,.28)"></div>
+        </div>
+        <div style="position:absolute;left:14px;top:12px;display:flex;flex-direction:column;gap:3px;font-family:'IBM Plex Mono',monospace;font-size:10.5px;line-height:1.6;color:rgba(206,211,219,.72)">
+          <span style="color:#e6eaf0;font-size:11px">Sequence 1 · Harbor Alert</span>
+          <span>cam persp · fov 55 · f 4.2</span>
+          <span>sel: Asset 1 / crane_arm · pin @ 0:02</span>
+          <span style="color:#6cc48f">62.4 fps · 3.1 ms</span>
+        </div>
+        <div style="position:absolute;right:14px;top:12px;display:flex;flex-direction:column;gap:5px;align-items:flex-end;font-family:'IBM Plex Mono',monospace;font-size:10px;color:rgba(206,211,219,.6)">
+          <span style="padding:3px 8px;background:rgba(12,14,17,.66);border:1px solid #2c323b;border-radius:3px">PREVIEW · interpolating</span>
+          <span style="padding:3px 8px;background:rgba(12,14,17,.66);border:1px solid #2c323b;border-radius:3px">block-rel 0:02.4</span>
+        </div>
+        <div style="position:absolute;right:22px;bottom:22px;width:64px;height:64px">
+          <div style="position:absolute;left:50%;top:50%;width:5px;height:5px;margin:-2.5px;border-radius:50%;background:#8b929c"></div>
+          <div style="position:absolute;left:50%;top:50%;width:26px;height:1.5px;background:#e2685f"></div>
+          <div style="position:absolute;left:50%;top:50%;width:1.5px;height:26px;background:#6cc48f;transform:translateY(-26px)"></div>
+          <div style="position:absolute;left:50%;top:50%;width:22px;height:1.5px;background:#4c9df0;transform:rotate(150deg);transform-origin:left center"></div>
+          <div style="position:absolute;left:calc(50% + 26px);top:calc(50% - 5px);font-family:'IBM Plex Mono',monospace;font-size:9px;color:#e2685f">X</div>
+          <div style="position:absolute;left:calc(50% + 3px);top:calc(50% - 38px);font-family:'IBM Plex Mono',monospace;font-size:9px;color:#6cc48f">Y</div>
+          <div style="position:absolute;left:calc(50% - 30px);top:calc(50% + 8px);font-family:'IBM Plex Mono',monospace;font-size:9px;color:#4c9df0">Z</div>
+        </div>
+        <div style="position:absolute;left:0;right:0;bottom:0;height:24px;display:flex;align-items:center;gap:14px;padding:0 14px;background:rgba(12,14,17,.8);border-top:1px solid #23282f;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#6e7681">
+          <span>tris 184k</span><span>draws 412</span><span>objects 96</span><span style="flex:1"></span><span>grid 1.0 m</span><span>shading: lit</span>
+        </div>
+      </div>
+    </div>
+
+    <div style="width:452px;flex:none;display:flex;flex-direction:column;background:#14171c;position:relative">
+      <div style="height:31px;flex:none;display:flex;align-items:center;gap:8px;padding:0 12px;background:#12151a;border-bottom:1px solid #23282f">
+        <span style="font-size:11.5px;font-weight:600;color:#e6eaf0">Scene / Node Hierarchy</span>
+        <span style="flex:1"></span>
+        <span style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:#6e7681">96 nodes</span>
+      </div>
+      <div style="flex:none;display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid #23282f">
+        <div style="flex:1;display:flex;align-items:center;gap:7px;padding:5px 9px;background:#0f1216;border:1px solid #262c34;border-radius:5px">
+          <div style="width:9px;height:9px;border:1.4px solid #5a616b;border-radius:50%"></div>
+          <span style="font-size:11px;color:#5a616b">Search nodes</span>
+          <span style="flex:1"></span>
+          <span style="font-family:'IBM Plex Mono',monospace;font-size:9.5px;color:#3b424b">⌘F</span>
+        </div>
+      </div>
+      <div style="flex:1;min-height:0;overflow:hidden;padding:5px 0;font-size:11.5px">
+        <div style="display:flex;align-items:center;gap:7px;height:26px;padding:0 12px;color:#c3c9d1"><span style="width:9px;color:#6e7681;font-size:8px">▾</span><span style="width:3px;height:11px;background:#4c9df0;border-radius:1px"></span>Scenario Root<span style="flex:1"></span><span style="color:#4a515b">◉</span></div>
+        <div style="display:flex;align-items:center;gap:7px;height:26px;padding:0 12px 0 28px;color:#c3c9d1"><span style="width:9px;color:#6e7681;font-size:8px">▾</span>Environment<span style="flex:1"></span><span style="color:#4a515b">◉</span></div>
+        <div style="display:flex;align-items:center;gap:7px;height:26px;padding:0 12px 0 46px;color:#9aa1ab"><span style="width:9px"></span>harbor_terrain<span style="flex:1"></span><span style="color:#4a515b">◉</span><span style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:#3b424b">L</span></div>
+        <div style="display:flex;align-items:center;gap:7px;height:26px;padding:0 12px 0 46px;color:#5a616b"><span style="width:9px"></span>fog_volume<span style="flex:1"></span><span style="color:#2c323b">◌</span></div>
+        <div style="display:flex;align-items:center;gap:7px;height:26px;padding:0 12px 0 28px;color:#c3c9d1"><span style="width:9px;color:#6e7681;font-size:8px">▾</span>Actors<span style="flex:1"></span><span style="color:#4a515b">◉</span></div>
+        <div style="display:flex;align-items:center;gap:7px;height:26px;padding:0 12px 0 46px;color:#9aa1ab"><span style="width:9px"></span>crane_arm<span style="flex:1"></span><span style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:#5a616b">ASSET 1</span><span style="color:#4a515b">◉</span></div>
+        <div style="display:flex;align-items:center;gap:7px;height:26px;padding:0 12px 0 46px;color:#9aa1ab"><span style="width:9px"></span>cargo_ship<span style="flex:1"></span><span style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:#5a616b">ASSET 2</span><span style="color:#4a515b">◉</span></div>
+        <div style="display:flex;align-items:center;gap:7px;height:26px;padding:0 12px 0 28px;color:#c3c9d1"><span style="width:9px;color:#6e7681;font-size:8px">▾</span>Triggers<span style="flex:1"></span><span style="color:#4a515b">◉</span></div>
+        <div style="display:flex;align-items:center;gap:7px;height:26px;padding:0 12px 0 46px;color:#9aa1ab"><span style="width:9px"></span><span style="color:#f0c04a;font-size:10px">⚡</span>OnZoneEnter<span style="flex:1"></span><span style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:#5a616b">TRIGGER NODE</span></div>
+        <div style="display:flex;align-items:center;gap:7px;height:26px;padding:0 12px 0 28px;color:#c3c9d1"><span style="width:9px;color:#6e7681;font-size:8px">▾</span>Sequencers<span style="flex:1"></span><span style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:#5a616b">2</span></div>
+        <div style="display:flex;align-items:center;gap:7px;height:26px;padding:0 12px 0 46px;background:#26303d;border-left:2px solid #4c9df0;color:#e6eaf0"><span style="width:9px"></span><span style="width:8px;height:8px;border-radius:2px;background:#4c9df0"></span>Sequence 1<span style="flex:1"></span><span style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:#9fcaf7">LOADED BELOW</span></div>
+        <div style="display:flex;align-items:center;gap:7px;height:26px;padding:0 12px 0 46px;color:#9aa1ab"><span style="width:9px"></span><span style="width:8px;height:8px;border-radius:2px;background:#f0c04a"></span>Sequence 2<span style="flex:1"></span><span style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:#4a515b">MUTED</span></div>
+      </div>
+      <div style="flex:none;display:flex;align-items:center;gap:8px;padding:8px 12px;border-top:1px solid #23282f;font-family:'IBM Plex Mono',monospace;font-size:9.5px;color:#5a616b">
+        <span>right-click → Add ▸ Sequencer · Asset · Trigger Node</span>
+      </div>
+
+      <sc-if value="{{ showContextMenu }}" hint-placeholder-val="{{ true }}">
+      <div style="position:absolute;left:172px;top:262px;width:238px;background:#1a1e25;border:1px solid #363d47;border-radius:7px;box-shadow:0 18px 44px rgba(0,0,0,.62);padding:5px;font-size:11.5px;z-index:20">
+        <div style="display:flex;align-items:center;gap:7px;margin:2px 3px 5px;padding:5px 8px;background:#0f1216;border:1px solid #2c323b;border-radius:5px">
+          <div style="width:9px;height:9px;border:1.4px solid #5a616b;border-radius:50%"></div>
+          <span style="font-size:11px;color:#9aa1ab">seq<span style="border-right:1px solid #9fcaf7;margin-left:1px"></span></span>
+          <span style="flex:1"></span>
+          <span style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:#3b424b">⏎</span>
+        </div>
+        <div style="padding:4px 11px;font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:.08em;color:#5a616b">ADD ▸</div>
+        <div style="display:flex;align-items:center;gap:8px;padding:5px 11px;border-radius:4px;background:#26303d;color:#e6eaf0">Sequencer<span style="flex:1"></span><span style="font-size:8px;color:#9fcaf7">▸</span></div>
+        <div style="display:flex;align-items:center;gap:8px;padding:5px 11px;border-radius:4px;color:#c3c9d1">Asset Reference<span style="flex:1"></span><span style="font-size:8px;color:#5a616b">▸</span></div>
+        <div style="display:flex;align-items:center;gap:8px;padding:5px 11px;border-radius:4px;color:#c3c9d1">Trigger Node<span style="flex:1"></span><span style="font-size:8px;color:#5a616b">▸</span></div>
+        <div style="display:flex;align-items:center;gap:8px;padding:5px 11px;border-radius:4px;color:#c3c9d1">Empty Node<span style="flex:1"></span><span style="font-family:'IBM Plex Mono',monospace;font-size:9.5px;color:#4a515b">⇧N</span></div>
+        <div style="height:1px;margin:5px 8px;background:#2c323b"></div>
+        <div style="display:flex;align-items:center;gap:8px;padding:5px 11px;border-radius:4px;color:#c3c9d1">Rename<span style="flex:1"></span><span style="font-family:'IBM Plex Mono',monospace;font-size:9.5px;color:#4a515b">F2</span></div>
+        <div style="display:flex;align-items:center;gap:8px;padding:5px 11px;border-radius:4px;color:#c3c9d1">Duplicate<span style="flex:1"></span><span style="font-family:'IBM Plex Mono',monospace;font-size:9.5px;color:#4a515b">⌘D</span></div>
+        <div style="display:flex;align-items:center;gap:8px;padding:5px 11px;border-radius:4px;color:#e88c85">Delete<span style="flex:1"></span><span style="font-family:'IBM Plex Mono',monospace;font-size:9.5px;color:#4a515b">⌫</span></div>
+        <div style="position:absolute;left:-212px;top:38px;width:208px;background:#1a1e25;border:1px solid #363d47;border-radius:7px;box-shadow:0 18px 44px rgba(0,0,0,.62);padding:5px">
+          <div style="padding:4px 11px;font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:.08em;color:#5a616b">SEQUENCER</div>
+          <div style="padding:5px 11px;border-radius:4px;color:#c3c9d1">Blank Sequencer</div>
+          <div style="padding:5px 11px;border-radius:4px;color:#c3c9d1">Bound to Trigger Node…</div>
+          <div style="padding:5px 11px;border-radius:4px;color:#c3c9d1">Sub-sequence of Sequence 1</div>
+          <div style="padding:5px 11px;border-radius:4px;color:#c3c9d1">From Template…</div>
+          <div style="padding:5px 11px;border-radius:4px;color:#5a616b">Import .axseq…</div>
+        </div>
+      </div>
+      </sc-if>
+    </div>
+  </div>
+
+  <div style="height:486px;flex:none;display:flex;flex-direction:column;background:#14171c;border-top:1px solid #23282f">
+
+    <div style="height:38px;flex:none;display:flex;align-items:center;gap:10px;padding:0 12px;background:#12151a;border-bottom:1px solid #23282f">
+      <div style="display:flex;align-items:center;gap:8px">
+        <span style="font-size:12px;font-weight:600;color:#e6eaf0">Sequencer</span>
+        <span style="color:#3b424b">—</span>
+        <span style="display:flex;align-items:center;gap:6px;padding:3px 8px;background:#26303d;border:1px solid rgba(76,157,240,.4);border-radius:4px;font-size:11.5px;color:#9fcaf7"><span style="width:7px;height:7px;border-radius:2px;background:#4c9df0"></span>Sequence 1</span>
+        <span style="font-size:11px;color:#6e7681">selected in hierarchy</span>
+      </div>
+      <div style="width:1px;height:20px;background:#262c34"></div>
+      <div style="display:flex;align-items:center;gap:2px">
+        <span style="padding:4px 8px;font-size:11px;color:#9aa1ab">|◀</span>
+        <span style="padding:4px 8px;font-size:11px;color:#9aa1ab">◀|</span>
+        <span style="display:flex;align-items:center;justify-content:center;width:30px;height:24px;background:#4c9df0;border-radius:5px;font-size:11px;color:#0c0e11">▶</span>
+        <span style="padding:4px 8px;font-size:11px;color:#9aa1ab">|▶</span>
+        <span style="padding:4px 8px;font-size:11px;color:#9aa1ab">▶|</span>
+        <span style="padding:4px 9px;font-size:12px;color:#9fcaf7;background:rgba(76,157,240,.14);border:1px solid rgba(76,157,240,.34);border-radius:5px;margin-left:5px">↻</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:9px;font-family:'IBM Plex Mono',monospace">
+        <span style="font-size:14px;font-weight:500;color:#e6eaf0;letter-spacing:.02em">00:00:06:12</span>
+        <span style="font-size:10.5px;color:#5a616b">/ 00:00:48:00</span>
+        <span style="padding:3px 8px;border:1px solid #262c34;border-radius:4px;font-size:10.5px;color:#9aa1ab">f 0192</span>
+      </div>
+      <div style="flex:1"></div>
+      <div style="display:flex;align-items:center;gap:9px;padding:3px 9px;background:#0f1216;border:1px solid #262c34;border-radius:5px;font-size:11px">
+        <span style="color:#6e7681">start:</span>
+        <span style="display:flex;align-items:center;gap:5px;color:#7e8691"><span style="width:9px;height:9px;border-radius:50%;border:1.4px solid #4a515b"></span>time-based</span>
+        <span style="display:flex;align-items:center;gap:5px;color:#e6eaf0"><span style="width:9px;height:9px;border-radius:50%;border:1.4px solid #4c9df0;background:radial-gradient(circle,#4c9df0 0 45%,transparent 46%)"></span>trigger-based</span>
+        <span style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:#f0c04a">⚡ OnZoneEnter</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:7px;padding:4px 9px;background:#0f1216;border:1px solid #262c34;border-radius:5px;font-size:11px;color:#9aa1ab"><span style="width:7px;height:7px;background:#4c9df0"></span>Snap to frame</div>
+      <div style="display:flex;align-items:center;gap:8px;padding-left:2px">
+        <span style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:#5a616b">zoom</span>
+        <div style="position:relative;width:96px;height:3px;background:#262c34;border-radius:2px">
+          <div style="position:absolute;left:0;top:0;bottom:0;width:58px;background:#4c9df0;border-radius:2px"></div>
+          <div style="position:absolute;left:52px;top:-4px;width:11px;height:11px;border-radius:50%;background:#c3c9d1;border:1px solid #0c0e11"></div>
+        </div>
+      </div>
+    </div>
+
+    <div style="flex:1;min-height:0;display:flex;gap:1px;background:#23282f">
+
+      <div style="width:300px;flex:none;display:flex;flex-direction:column;background:#14171c">
+        <div style="height:34px;flex:none;display:flex;align-items:center;gap:7px;padding:0 10px;border-bottom:1px solid #23282f;background:#161a20">
+          <div style="flex:1;display:flex;align-items:center;gap:7px;padding:4px 8px;background:#0f1216;border:1px solid #262c34;border-radius:5px">
+            <div style="width:9px;height:9px;border:1.4px solid #5a616b;border-radius:50%"></div>
+            <span style="font-size:10.5px;color:#5a616b">Filter tracks</span>
+          </div>
+          <span style="font-family:'IBM Plex Mono',monospace;font-size:9.5px;padding:3px 6px;border:1px solid #262c34;border-radius:4px;color:#7e8691">+ Track</span>
+        </div>
+
+        <div style="flex:1;min-height:0;display:flex;flex-direction:column">
+          <div style="height:36px;flex:none;display:flex;align-items:center;gap:8px;padding:0 10px;background:#12151a;border-bottom:1px solid #23282f">
+            <span style="font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:.09em;color:#5a616b">MASTER TIMELINE</span>
+            <span style="flex:1"></span>
+            <span style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:#4a515b">absolute</span>
+          </div>
+
+          <div style="height:34px;flex:none;display:flex;align-items:center;gap:8px;padding:0 10px;background:#1d232b;border-bottom:1px solid #23282f">
+            <span style="width:9px;font-size:8px;color:#9aa1ab">▾</span>
+            <span style="color:#7e8691;font-size:11px">◉</span>
+            <span style="width:3px;height:14px;border-radius:2px;background:#4c9df0"></span>
+            <span style="font-size:12px;font-weight:600;color:#e6eaf0">Sequence 1</span>
+            <span style="font-family:'IBM Plex Mono',monospace;font-size:8.5px;padding:1px 5px;border:1px solid #2c323b;border-radius:3px;color:#7e8691">BLOCK-RELATIVE</span>
+            <span style="flex:1"></span>
+            <span style="display:flex;gap:3px;font-family:'IBM Plex Mono',monospace;font-size:9px">
+              <span style="padding:2px 4px;border:1px solid #2c323b;border-radius:3px;color:#5a616b">M</span>
+              <span style="padding:2px 4px;border:1px solid #2c323b;border-radius:3px;color:#5a616b">S</span>
+              <span style="padding:2px 4px;border:1px solid #2c323b;border-radius:3px;color:#5a616b">L</span>
+            </span>
+          </div>
+
+          <div style="height:44px;flex:none;display:flex;align-items:center;gap:8px;padding:0 10px 0 26px;background:#26303d;border-bottom:1px solid #23282f;border-left:2px solid #45b6d6">
+            <span style="color:#9aa1ab;font-size:11px">◉</span>
+            <span style="width:8px;height:8px;border-radius:50%;background:#45b6d6"></span>
+            <div style="display:flex;flex-direction:column;gap:1px">
+              <span style="font-size:12px;color:#e6eaf0">Asset 1 · Transform</span>
+              <span style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:#7e8691">crane_arm</span>
+            </div>
+            <span style="flex:1"></span>
+            <span style="display:flex;gap:3px;font-family:'IBM Plex Mono',monospace;font-size:9px">
+              <span style="padding:2px 4px;border:1px solid #363d47;border-radius:3px;color:#7e8691">M</span>
+              <span style="padding:2px 4px;border:1px solid #363d47;border-radius:3px;color:#7e8691">S</span>
+              <span style="padding:2px 4px;border:1px solid #363d47;border-radius:3px;color:#7e8691">L</span>
+            </span>
+          </div>
+
+          <div style="height:44px;flex:none;display:flex;align-items:center;gap:8px;padding:0 10px 0 26px;background:#171b21;border-bottom:1px solid #23282f">
+            <span style="color:#4a515b;font-size:11px">◉</span>
+            <span style="width:8px;height:8px;border-radius:50%;background:#f0c04a"></span>
+            <div style="display:flex;flex-direction:column;gap:1px">
+              <span style="font-size:12px;color:#c3c9d1">Asset 2 · State</span>
+              <span style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:#5a616b">cargo_ship</span>
+            </div>
+            <span style="flex:1"></span>
+            <span style="display:flex;gap:3px;font-family:'IBM Plex Mono',monospace;font-size:9px">
+              <span style="padding:2px 4px;border:1px solid #2c323b;border-radius:3px;color:#5a616b">M</span>
+              <span style="padding:2px 4px;border:1px solid #2c323b;border-radius:3px;color:#5a616b">S</span>
+              <span style="padding:2px 4px;border:1px solid #2c323b;border-radius:3px;color:#e88c85">L</span>
+            </span>
+          </div>
+
+          <div style="height:44px;flex:none;display:flex;align-items:center;gap:8px;padding:0 10px 0 26px;background:#14171c;border-bottom:1px solid #23282f">
+            <span style="color:#4a515b;font-size:11px">◉</span>
+            <span style="width:9px;font-size:8px;color:#7e8691">▸</span>
+            <span style="width:8px;height:8px;border-radius:2px;background:#6cc48f"></span>
+            <div style="display:flex;flex-direction:column;gap:1px">
+              <span style="font-size:12px;color:#c3c9d1">dock_lights</span>
+              <span style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:#5a616b">nested sequencer</span>
+            </div>
+            <span style="flex:1"></span>
+            <span style="display:flex;gap:3px;font-family:'IBM Plex Mono',monospace;font-size:9px">
+              <span style="padding:2px 4px;border:1px solid #2c323b;border-radius:3px;color:#5a616b">M</span>
+              <span style="padding:2px 4px;border:1px solid #2c323b;border-radius:3px;color:#5a616b">S</span>
+              <span style="padding:2px 4px;border:1px solid #2c323b;border-radius:3px;color:#5a616b">L</span>
+            </span>
+          </div>
+
+          <div style="height:34px;flex:none;display:flex;align-items:center;gap:8px;padding:0 10px;background:#1d232b;border-bottom:1px solid #23282f;border-top:1px solid #23282f">
+            <span style="width:9px;font-size:8px;color:#9aa1ab">▸</span>
+            <span style="color:#4a515b;font-size:11px">◌</span>
+            <span style="width:3px;height:14px;border-radius:2px;background:#f0c04a;opacity:.5"></span>
+            <span style="font-size:12px;font-weight:600;color:#9aa1ab">Sequence 2</span>
+            <span style="font-family:'IBM Plex Mono',monospace;font-size:8.5px;color:#4a515b">3 TRACKS</span>
+            <span style="flex:1"></span>
+            <span style="display:flex;gap:3px;font-family:'IBM Plex Mono',monospace;font-size:9px">
+              <span style="padding:2px 4px;background:#e2685f;border:1px solid #e2685f;border-radius:3px;color:#14171c">M</span>
+              <span style="padding:2px 4px;border:1px solid #2c323b;border-radius:3px;color:#5a616b">S</span>
+              <span style="padding:2px 4px;border:1px solid #2c323b;border-radius:3px;color:#5a616b">L</span>
+            </span>
+          </div>
+          <div style="flex:1;background:#101317"></div>
+        </div>
+      </div>
+
+      <div style="flex:1;min-width:0;position:relative;background:#101317;overflow:hidden">
+        <div style="height:34px;position:relative;border-bottom:1px solid #23282f;background:#161a20">
+          <div style="position:absolute;left:0;right:0;bottom:0;height:9px;background-image:linear-gradient(90deg,#3b424b 1px,transparent 1px);background-size:26px 100%"></div>
+          <div style="position:absolute;left:0;right:0;bottom:0;height:16px;background-image:linear-gradient(90deg,#5a616b 1px,transparent 1px);background-size:130px 100%"></div>
+          <div style="position:absolute;left:0;right:0;top:5px;height:13px;font-family:'IBM Plex Mono',monospace;font-size:9.5px;color:#7e8691">
+            <span style="position:absolute;left:4px">0:00</span>
+            <span style="position:absolute;left:12.5%;padding-left:4px">0:05</span>
+            <span style="position:absolute;left:25%;padding-left:4px">0:10</span>
+            <span style="position:absolute;left:37.5%;padding-left:4px">0:15</span>
+            <span style="position:absolute;left:50%;padding-left:4px">0:20</span>
+            <span style="position:absolute;left:62.5%;padding-left:4px">0:25</span>
+            <span style="position:absolute;left:75%;padding-left:4px">0:30</span>
+            <span style="position:absolute;left:87.5%;padding-left:4px">0:35</span>
+          </div>
+        </div>
+
+        <div style="position:absolute;left:0;right:0;top:34px;bottom:0">
+
+          <div style="height:36px;position:relative;background:#12151a;border-bottom:1px solid #23282f;overflow:hidden">
+            <div style="position:absolute;inset:0;background-image:linear-gradient(90deg,rgba(90,97,107,.14) 1px,transparent 1px);background-size:130px 100%"></div>
+            <div style="position:absolute;left:8%;width:32%;top:6px;height:23px;border-radius:4px;background:linear-gradient(180deg,rgba(76,157,240,.34),rgba(76,157,240,.14));border:1px solid #4c9df0;display:flex;align-items:center;gap:7px;padding:0 8px;box-shadow:0 0 0 1px rgba(76,157,240,.18)">
+              <span style="width:3px;height:13px;border-radius:2px;background:#9fcaf7"></span>
+              <span style="font-size:11px;font-weight:500;color:#e6eaf0">Sequence 1 block</span>
+              <span style="flex:1"></span>
+              <span style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:#9fcaf7">⚡ trigger</span>
+              <span style="width:4px;height:13px;border-radius:2px;background:#9fcaf7"></span>
+            </div>
+            <div style="position:absolute;left:46%;width:26%;top:6px;height:23px;border-radius:4px;background:linear-gradient(180deg,rgba(240,192,74,.22),rgba(240,192,74,.08));border:1px solid rgba(240,192,74,.6);display:flex;align-items:center;gap:7px;padding:0 8px;opacity:.72">
+              <span style="width:3px;height:13px;border-radius:2px;background:#f0c04a"></span>
+              <span style="font-size:11px;color:#e3d3a8">Sequence 2 block</span>
+              <span style="flex:1"></span>
+              <span style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:#a89468">muted</span>
+            </div>
+          </div>
+
+          <div style="height:22px;position:relative;background:#171d24;border-bottom:1px solid #23282f;overflow:hidden">
+            <div style="position:absolute;left:0;width:8%;top:0;bottom:0;background:rgba(12,14,17,.5)"></div>
+            <div style="position:absolute;left:8%;width:32%;top:0;bottom:0;border-left:1px solid rgba(76,157,240,.6);border-right:1px dashed rgba(76,157,240,.35)">
+              <div style="position:absolute;left:0;right:0;bottom:0;height:7px;background-image:linear-gradient(90deg,rgba(159,202,247,.4) 1px,transparent 1px);background-size:33.3px 100%"></div>
+              <div style="position:absolute;left:0;right:0;top:3px;font-family:'IBM Plex Mono',monospace;font-size:9px;color:#7e93ab">
+                <span style="position:absolute;left:4px">rel 0:00</span>
+                <span style="position:absolute;left:19.5%">0:02</span>
+                <span style="position:absolute;left:39%">0:04</span>
+                <span style="position:absolute;left:58.5%">0:06</span>
+                <span style="position:absolute;left:78%">0:08</span>
+              </div>
+            </div>
+            <div style="position:absolute;left:41%;top:4px;font-family:'IBM Plex Mono',monospace;font-size:9px;color:#4a515b">time relative to block start</div>
+          </div>
+
+          <div style="height:44px;position:relative;background:#171d24;border-bottom:1px solid #23282f">
+            <div style="position:absolute;inset:0;background-image:linear-gradient(90deg,rgba(90,97,107,.14) 1px,transparent 1px);background-size:130px 100%"></div>
+            <div style="position:absolute;left:0;width:8%;top:0;bottom:0;background:rgba(12,14,17,.45)"></div>
+            <div style="position:absolute;left:14.4%;width:16.2%;top:17px;height:10px;border-radius:5px;background:linear-gradient(90deg,#3f8fd8,#5fb2ee);box-shadow:0 0 12px rgba(76,157,240,.35)"></div>
+            <div style="position:absolute;left:14.4%;top:14px;width:16px;height:16px;margin-left:-8px;border-radius:50%;background:#45b6d6;border:2px solid #eaf7fc;box-shadow:0 0 0 4px rgba(69,182,214,.3)"></div>
+            <div style="position:absolute;left:30.6%;top:15px;width:14px;height:14px;margin-left:-7px;border-radius:50%;background:#101317;border:2.5px solid #cfeef8"></div>
+            <div style="position:absolute;left:14.4%;top:1px;font-family:'IBM Plex Mono',monospace;font-size:8.5px;color:#9fcaf7;margin-left:2px">interpolate 1.4 s</div>
+            <div style="position:absolute;left:36%;top:16px;width:12px;height:12px;border-radius:50%;background:#45b6d6;border:1px solid #1c5c6e"></div>
+          </div>
+
+          <div style="height:44px;position:relative;background:#131720;border-bottom:1px solid #23282f">
+            <div style="position:absolute;inset:0;background-image:linear-gradient(90deg,rgba(90,97,107,.14) 1px,transparent 1px);background-size:130px 100%"></div>
+            <div style="position:absolute;left:0;width:8%;top:0;bottom:0;background:rgba(12,14,17,.45)"></div>
+            <div style="position:absolute;left:19%;top:16px;width:12px;height:12px;border-radius:50%;background:#f0c04a;border:1px solid #7a5f14"></div>
+            <div style="position:absolute;left:19%;top:2px;font-family:'IBM Plex Mono',monospace;font-size:8.5px;color:#a89468;margin-left:-2px">teleport</div>
+            <div style="position:absolute;left:26.5%;top:16px;width:12px;height:12px;border-radius:50%;background:#f0c04a;border:1px solid #7a5f14"></div>
+            <div style="position:absolute;left:34.2%;top:16px;width:12px;height:12px;border-radius:50%;background:#f0c04a;border:1px solid #7a5f14"></div>
+          </div>
+
+          <div style="height:44px;position:relative;background:#111519;border-bottom:1px solid #23282f">
+            <div style="position:absolute;inset:0;background-image:linear-gradient(90deg,rgba(90,97,107,.14) 1px,transparent 1px);background-size:130px 100%"></div>
+            <div style="position:absolute;left:0;width:8%;top:0;bottom:0;background:rgba(12,14,17,.45)"></div>
+            <div style="position:absolute;left:22%;width:14%;top:11px;height:22px;border-radius:4px;background:repeating-linear-gradient(135deg,rgba(108,196,143,.2) 0 7px,rgba(108,196,143,.07) 7px 14px);border:1px solid rgba(108,196,143,.5);display:flex;align-items:center;gap:7px;padding:0 8px">
+              <span style="width:6px;height:6px;border-radius:1px;background:#6cc48f"></span>
+              <span style="font-family:'IBM Plex Mono',monospace;font-size:9.5px;color:#9ddcb5">dock_lights</span>
+            </div>
+          </div>
+
+          <div style="height:34px;position:relative;background:#141a20;border-bottom:1px solid #23282f;border-top:1px solid #23282f;opacity:.45">
+            <div style="position:absolute;left:46%;width:26%;top:8px;height:18px;border-radius:4px;background:rgba(90,97,107,.2);border:1px dashed #4a515b;display:flex;align-items:center;padding:0 8px">
+              <span style="font-family:'IBM Plex Mono',monospace;font-size:9.5px;color:#7e8691">collapsed · 3 tracks</span>
+            </div>
+          </div>
+          <div style="position:absolute;left:0;right:0;top:228px;bottom:0;background:#0e1114"></div>
+        </div>
+
+        <div style="position:absolute;left:19.6%;top:0;bottom:0;width:1px;background:#e2685f;z-index:6"></div>
+        <div style="position:absolute;left:19.6%;top:2px;transform:translateX(-50%);display:flex;flex-direction:column;align-items:center;z-index:7">
+          <div style="padding:2px 6px;background:#e2685f;border-radius:3px;font-family:'IBM Plex Mono',monospace;font-size:9.5px;color:#12151a;font-weight:600">0:06:12</div>
+          <div style="width:9px;height:6px;background:#e2685f;clip-path:polygon(0 0,100% 0,50% 100%)"></div>
+        </div>
+      </div>
+
+      <div style="width:360px;flex:none;display:flex;flex-direction:column;background:#14171c">
+        <div style="height:34px;flex:none;display:flex;align-items:center;gap:8px;padding:0 12px;background:#161a20;border-bottom:1px solid #23282f">
+          <span style="font-size:11.5px;font-weight:600;color:#e6eaf0">Inspector</span>
+          <span style="font-family:'IBM Plex Mono',monospace;font-size:9px;padding:1px 6px;border:1px solid #2c323b;border-radius:3px;color:#7e8691">TIME-PIN</span>
+          <span style="flex:1"></span>
+          <span style="font-family:'IBM Plex Mono',monospace;font-size:9.5px;color:#5a616b">1 selected</span>
+        </div>
+
+        <div style="flex:none;display:flex;flex-direction:column;gap:5px;padding:11px 12px;border-bottom:1px solid #23282f;background:#161a20">
+          <div style="display:flex;align-items:center;gap:8px">
+            <span style="width:12px;height:12px;border-radius:50%;background:#45b6d6;border:2px solid #eaf7fc"></span>
+            <span style="font-size:12.5px;font-weight:600;color:#e6eaf0">Asset 1 · Transform</span>
+            <span style="flex:1"></span>
+            <span style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:#9fcaf7">@ 0:02</span>
+          </div>
+          <div style="font-family:'IBM Plex Mono',monospace;font-size:9.5px;color:#6e7681">Sequence 1 ▸ crane_arm · relative to block start</div>
+        </div>
+
+        <div style="flex:1;min-height:0;overflow:hidden;padding:13px 12px;display:flex;flex-direction:column;gap:14px">
+
+          <div style="display:flex;flex-direction:column;gap:6px">
+            <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:.1em;color:#5a616b">ACTION TYPE</div>
+            <div style="display:flex;align-items:center;gap:8px;padding:7px 9px;background:#0f1216;border:1px solid #262c34;border-radius:5px;font-size:12px;color:#e6eaf0">
+              <span style="width:7px;height:7px;border-radius:50%;background:#45b6d6"></span>Transform<span style="flex:1"></span><span style="color:#5a616b;font-size:9px">▾</span>
+            </div>
+          </div>
+
+          <div style="display:flex;flex-direction:column;gap:6px">
+            <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:.1em;color:#5a616b">MODE</div>
+            <div style="display:flex;background:#0f1216;border:1px solid #262c34;border-radius:5px;overflow:hidden">
+              <span style="flex:1;display:flex;align-items:center;justify-content:center;gap:7px;padding:7px;font-size:11.5px;color:#9aa1ab;border-right:1px solid #262c34"><span style="width:9px;height:9px;border-radius:50%;background:#5a616b"></span>Teleport</span>
+              <span style="flex:1;display:flex;align-items:center;justify-content:center;gap:7px;padding:7px;font-size:11.5px;background:#26303d;color:#e6eaf0"><span style="width:20px;height:5px;border-radius:3px;background:linear-gradient(90deg,#3f8fd8,#5fb2ee)"></span>Interpolate</span>
+            </div>
+            <div style="font-size:10.5px;color:#6e7681;line-height:1.45">A dot is an instant change; a bar between two pins interpolates over its duration.</div>
+          </div>
+
+          <div style="display:flex;flex-direction:column;gap:6px">
+            <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:.1em;color:#5a616b">DURATION <span style="color:#3b424b">(INTERPOLATE ONLY)</span></div>
+            <div style="display:flex;align-items:center;gap:9px;padding:7px 9px;background:#0f1216;border:1px solid #262c34;border-radius:5px;font-family:'IBM Plex Mono',monospace;font-size:11.5px;color:#e6eaf0">
+              1.40 s<span style="color:#3b424b">→</span><span style="color:#9aa1ab">next pin @ 0:07</span><span style="flex:1"></span><span style="color:#5a616b">42 f</span>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:6px;padding:8px 9px;background:#12161b;border:1px solid #23282f;border-radius:5px">
+              <div style="display:flex;align-items:center;gap:8px;font-size:11px;color:#7e8691">Ease<span style="flex:1"></span><span style="font-family:'IBM Plex Mono',monospace;color:#c3c9d1">Cubic Out</span><span style="color:#5a616b;font-size:9px">▾</span></div>
+              <div style="position:relative;height:34px;background:#0f1216;border:1px solid #23282f;border-radius:4px;overflow:hidden">
+                <div style="position:absolute;inset:0;background-image:linear-gradient(90deg,rgba(90,97,107,.16) 1px,transparent 1px),linear-gradient(rgba(90,97,107,.16) 1px,transparent 1px);background-size:25% 50%"></div>
+                <div style="position:absolute;left:4px;right:4px;top:4px;bottom:4px;border-bottom:2px solid transparent;background:radial-gradient(120% 160% at 0% 100%,transparent 58%,rgba(76,157,240,.85) 59%,rgba(76,157,240,.85) 62%,transparent 63%)"></div>
+              </div>
+            </div>
+          </div>
+
+          <div style="display:flex;flex-direction:column;gap:6px">
+            <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:.1em;color:#5a616b">FIRES WHEN <span style="color:#3b424b">(READ-ONLY)</span></div>
+            <div style="display:flex;align-items:center;gap:9px;padding:7px 9px;background:rgba(240,192,74,.07);border:1px solid rgba(240,192,74,.3);border-radius:5px;font-size:11.5px;color:#e3d3a8">
+              <span style="color:#f0c04a">⚡</span>Trigger Node:<span style="font-family:'IBM Plex Mono',monospace;color:#f0c04a">OnZoneEnter</span><span style="flex:1"></span><span style="font-size:10px;color:#7e8691">open ↗</span>
+            </div>
+            <div style="font-size:10.5px;color:#6e7681;line-height:1.45">Condition logic is authored inside the Trigger Node — this only binds the sequence to it.</div>
+          </div>
+
+          <div style="flex:1"></div>
+          <div style="display:flex;gap:7px">
+            <div style="flex:1;text-align:center;padding:7px;background:#26303d;border:1px solid rgba(76,157,240,.42);border-radius:5px;font-size:11.5px;color:#9fcaf7">Apply to pin</div>
+            <div style="padding:7px 11px;border:1px solid #262c34;border-radius:5px;font-size:11.5px;color:#9aa1ab">Reset</div>
+          </div>
+        </div>
+      </div>
+
+      <sc-if value="{{ showUndoHistory }}" hint-placeholder-val="{{ true }}">
+      <div style="width:206px;flex:none;display:flex;flex-direction:column;background:#14171c">
+        <div style="height:34px;flex:none;display:flex;align-items:center;gap:8px;padding:0 11px;background:#161a20;border-bottom:1px solid #23282f">
+          <span style="font-size:11.5px;font-weight:600;color:#e6eaf0">Undo History</span>
+          <span style="flex:1"></span>
+          <span style="font-family:'IBM Plex Mono',monospace;font-size:9.5px;color:#5a616b">32</span>
+        </div>
+        <div style="flex:1;min-height:0;overflow:hidden;padding:6px 0;font-size:11px">
+          <div style="display:flex;align-items:center;gap:8px;padding:5px 11px;color:#5a616b"><span style="width:5px;height:5px;border-radius:50%;background:#2c323b"></span>Add nested dock_lights</div>
+          <div style="display:flex;align-items:center;gap:8px;padding:5px 11px;color:#7e8691"><span style="width:5px;height:5px;border-radius:50%;background:#3b424b"></span>Mute Sequence 2</div>
+          <div style="display:flex;align-items:center;gap:8px;padding:5px 11px;color:#9aa1ab"><span style="width:5px;height:5px;border-radius:50%;background:#4a515b"></span>Move block → 0:04</div>
+          <div style="display:flex;align-items:center;gap:8px;padding:5px 11px;color:#9aa1ab"><span style="width:5px;height:5px;border-radius:50%;background:#4a515b"></span>Bind OnZoneEnter</div>
+          <div style="display:flex;align-items:center;gap:8px;padding:5px 11px;background:#26303d;color:#e6eaf0"><span style="width:5px;height:5px;border-radius:50%;background:#4c9df0"></span>Set pin → Interpolate</div>
+          <div style="display:flex;align-items:center;gap:8px;padding:5px 11px;color:#4a515b"><span style="width:5px;height:5px;border-radius:50%;border:1px solid #363d47"></span>Set ease Cubic Out</div>
+          <div style="display:flex;align-items:center;gap:8px;padding:5px 11px;color:#3b424b"><span style="width:5px;height:5px;border-radius:50%;border:1px solid #2c323b"></span>Lock cargo_ship</div>
+        </div>
+        <div style="flex:none;display:flex;gap:6px;padding:9px 11px;border-top:1px solid #23282f;font-family:'IBM Plex Mono',monospace;font-size:9.5px;color:#7e8691">
+          <span style="flex:1;text-align:center;padding:4px;border:1px solid #262c34;border-radius:4px">⌘Z</span>
+          <span style="flex:1;text-align:center;padding:4px;border:1px solid #262c34;border-radius:4px">⇧⌘Z</span>
+        </div>
+      </div>
+      </sc-if>
+    </div>
+  </div>
+
+  <div style="height:26px;flex:none;display:flex;align-items:center;gap:14px;padding:0 12px;background:#12151a;border-top:1px solid #23282f;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#6e7681">
+    <span style="color:#9aa1ab">Ready</span>
+    <span style="color:#3b424b">|</span>
+    <span>1 pin selected · Asset 1 · Transform</span>
+    <span style="color:#3b424b">|</span>
+    <span>snap 1f · 30 fps</span>
+    <span style="flex:1"></span>
+    <span>Sequence 1 · 3 tracks · 7 pins · trigger-bound</span>
+    <span style="color:#3b424b">|</span>
+    <span style="color:#6cc48f">no validation errors</span>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1920,&quot;height&quot;:1080},&quot;showContextMenu&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Demo state&quot;},&quot;showUndoHistory&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Demo state&quot;}}"></script>
+</body>
+</html>
