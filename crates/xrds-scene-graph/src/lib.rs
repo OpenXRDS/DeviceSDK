@@ -26,7 +26,8 @@ use xrds_components::{
     CameraProjectionParams, OrthographicCameraParams, PerspectiveCameraParams, TransformParams,
     XrdsColor, XrdsId, XrdsLinearRgba, XrdsMaterialAlphaMode, XrdsMaterialParams,
     XrdsMaterialPbrParams, XrdsMaterialTextureFilterMode, XrdsMaterialTextureRef,
-    XrdsMaterialTextureSamplerParams, XrdsMaterialTextureSlots, XrdsMaterialTextureUvParams,
+    XrdsMaterialTextureSamplerParams, XrdsMaterialTextureSlotKind, XrdsMaterialTextureSlots,
+    XrdsMaterialTextureUvParams,
     XrdsMaterialTextureUvTransformMode,
     XrdsMaterialTextureWrapMode,
 };

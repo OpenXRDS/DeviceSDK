@@ -77,12 +77,12 @@ pub struct XrdsSceneDocument {
     pub gltf_node_authoring: BTreeMap<u64, XrdsSceneGltfNodeAuthoring>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub hud_library: Vec<XrdsHudTemplate>,
-    /// Named `XrdsSequence`/`XrdsTimeline` templates, referenced by
-    /// `XrdsTriggerBinding::runnable` and `XrdsAction::Run` by name. See
-    /// `docs/done/xrds-trigger-action-v1.md` Phase 9a — this is the
-    /// *template* half of the template/instance split.
+    /// Named [`XrdsTrack`] templates, referenced by
+    /// `XrdsTriggerBinding::track` by name — the *template* half of the
+    /// template/instance split: one piece of choreography, fired from many
+    /// bindings, edited in one place.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub runnables: Vec<XrdsNamedRunnable>,
+    pub tracks: Vec<XrdsNamedTrack>,
 }
 
 impl Default for XrdsSceneDocument {
@@ -94,7 +94,7 @@ impl Default for XrdsSceneDocument {
             nodes: Vec::new(),
             gltf_node_authoring: BTreeMap::new(),
             hud_library: Vec::new(),
-            runnables: Vec::new(),
+            tracks: Vec::new(),
         }
     }
 }
@@ -214,14 +214,14 @@ impl XrdsSceneDocument {
         )
     }
 
-    /// Looks up a document-level runnable by name — the registry entries
-    /// `XrdsTriggerBinding::runnable` and `XrdsAction::Run` resolve against.
-    pub fn runnable(&self, name: &str) -> Option<&XrdsNamedRunnable> {
-        self.runnables.iter().find(|r| r.name == name)
+    /// Looks up a Track by name — what `XrdsTriggerBinding::track`
+    /// resolves against.
+    pub fn track(&self, name: &str) -> Option<&XrdsNamedTrack> {
+        self.tracks.iter().find(|t| t.name == name)
     }
 
-    pub fn runnable_mut(&mut self, name: &str) -> Option<&mut XrdsNamedRunnable> {
-        self.runnables.iter_mut().find(|r| r.name == name)
+    pub fn track_mut(&mut self, name: &str) -> Option<&mut XrdsNamedTrack> {
+        self.tracks.iter_mut().find(|t| t.name == name)
     }
 
     pub(crate) fn gltf_node_authoring_entry(
@@ -281,7 +281,7 @@ impl XrdsSceneDocument {
             // Cloned through unfiltered, same as hud_library above — an
             // unreferenced registry entry in the subset is harmless, just
             // unused, same as any other unreferenced asset.
-            runnables: self.runnables.clone(),
+            tracks: self.tracks.clone(),
         })
     }
 }

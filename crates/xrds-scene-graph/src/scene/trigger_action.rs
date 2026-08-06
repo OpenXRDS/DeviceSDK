@@ -22,7 +22,7 @@ use super::*;
 /// fallback below: `#[serde(other)]` is only permitted on internally- or
 /// adjacently-tagged enums, and internal tagging cannot represent the
 /// newtype variant `SetVisible(bool)`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "kind", content = "data")]
 pub enum XrdsAction {
     /// Reuses the existing `XrdsSceneGltfPlayback` (selector + repeat +
@@ -33,52 +33,67 @@ pub enum XrdsAction {
     },
     StopGltfAnimation,
     SetVisible(bool),
-    Teleport {
-        destination: [f32; 3],
-    },
-    ModifyHealth {
+    /// Moves translation/rotation/scale toward the given values over
+    /// `duration_secs`, easing by `ease`. Each of `position`/`rotation`/`scale`
+    /// is independently optional — `None` leaves that component untouched,
+    /// matching how a partial keyframe override (e.g. only Position Y, not
+    /// Rotation) is expressed in the editor.
+    ///
+    /// `rotation` is Euler XYZ degrees, matching [`XrdsAxis`]'s convention
+    /// elsewhere in this module.
+    ///
+    /// **`duration_secs <= 0.0` applies instantly.** That case is what a
+    /// separate `Teleport` action used to be, and it was deleted as redundant:
+    /// the runtime's zero-duration path writes the target transform directly,
+    /// taking the current rotation/scale for unset fields — byte-for-byte what
+    /// `Teleport` did, except this can also set rotation and scale instantly,
+    /// which `Teleport` could not. Named `SetTransform`, not
+    /// `AnimateTransform`: "animate" would misdescribe half its uses.
+    ///
+    /// This is the only action with a duration of its own. Each Track key runs
+    /// as its own one-step agent (see the runtime's `fire_track_key`), so that
+    /// duration never delays the Track's own advancement — it only decides how
+    /// long this one tween takes, which is what the editor draws as a bar
+    /// rather than a dot.
+    SetTransform {
+        position: Option<[f32; 3]>,
+        rotation: Option<[f32; 3]>,
+        scale: Option<[f32; 3]>,
+        duration_secs: f32,
         #[serde(default)]
-        target: XrdsActionTarget,
+        ease: XrdsEaseCurve,
+    },
+    /// Instant material override. Each field independently optional —
+    /// `None` leaves that property as whatever it already was. No
+    /// interpolated counterpart yet (unlike `SetTransform`) — add one later by
+    /// reusing `SetTransform`'s interpolator infrastructure if a real case
+    /// needs it.
+    ///
+    /// No `target` field: applies to whichever asset row it sits on, same as
+    /// every other action. It used to carry its own target — a leftover from
+    /// before rows were asset-scoped — which meant it could silently apply to
+    /// a *different* node than its row, invisibly to the cross-Track conflict
+    /// check (see the deleted "Action escapes its asset row" diagnostic).
+    SetMaterial {
+        base_color: Option<[f32; 4]>,
+        metallic: Option<f32>,
+        roughness: Option<f32>,
+        /// Swaps the image in **one** texture slot. `None` leaves every slot
+        /// alone; `Some` with a `texture_asset_id` of `None` *clears* that one
+        /// slot.
+        ///
+        /// One slot per event, deliberately: a whole-slot-set replacement
+        /// would make "set the base colour map" silently drop an authored
+        /// normal map. Driving several slots at one instant is just several
+        /// events sharing a timestamp on the same row, which the sequencer
+        /// stacks into sub-lanes.
+        #[serde(default)]
+        texture: Option<XrdsActionTexture>,
+    },
+    /// No `target` field, for the same reason as [`SetMaterial`](XrdsAction::SetMaterial).
+    ModifyHealth {
         delta: XrdsActionValue,
     },
-    Wait {
-        seconds: f32,
-    },
-    /// Escape hatch into expert-layer Rust for anything not yet modeled as
-    /// a first-class variant above.
-    FireCustomEvent {
-        name: String,
-    },
-
-    /// Starts a named entry from `XrdsSceneDocument::runnables` — how a
-    /// sequence starts a timeline, a timeline starts a sequence, or either
-    /// starts another instance of itself (see the cycle-detection note
-    /// below).
-    ///
-    /// **Takes a bare name, not an inline runnable.** This is the
-    /// recursion firewall: a name cannot contain another `XrdsAction`, so
-    /// `Run` cannot make this data structure nest arbitrarily the way an
-    /// inline reference could.
-    ///
-    /// `wait` is honored when this runs inside an `XrdsSequence` (blocks
-    /// the queue until the started runnable finishes — natural, since a
-    /// sequence is already completion-chained) and ignored, with a
-    /// warning, when it fires from an `XrdsTimeline` key (a timeline that
-    /// paused would break the absolute timing that is its entire purpose).
-    ///
-    /// **Cycles are not prevented, only escaped.** `A runs B runs A` is
-    /// statically detectable in the registry and is flagged as an `Error`
-    /// by `XrdsSceneDocument::trigger_diagnostics`, but authoring a loop is
-    /// not blocked outright — other engines permit intentional event
-    /// loops too. What is guaranteed is an escape: a causal chain depth is
-    /// tracked at runtime and capped, and exceeding it fires
-    /// `XrdsTriggerKind::RunawayDetected` rather than hanging silently.
-    Run {
-        runnable: String,
-        #[serde(default = "default_run_wait")]
-        wait: bool,
-    },
-
     /// Any action variant this build does not recognize.
     ///
     /// **Why this exists:** without it, a document written by a newer
@@ -90,18 +105,188 @@ pub enum XrdsAction {
     ///
     /// An unrecognized action degrades to a logged no-op instead.
     ///
-    /// **Known limitation:** this is lossy. `#[serde(other)]` requires a
-    /// unit variant, so the original payload cannot be retained — an older
-    /// build that loads and re-exports a document will drop actions it did
-    /// not understand. Total parse failure is the worse harm, so this
-    /// trade is deliberate; making it lossless needs a hand-written
-    /// `Deserialize`, tracked as a follow-up.
-    #[serde(other)]
+    /// **Lossy, deliberately:** an older build that loads and re-exports a
+    /// document will drop actions it did not understand rather than
+    /// preserve them byte-for-byte. Total parse failure is the worse harm.
+    ///
+    /// Not `#[serde(other)]`: that attribute requires a unit variant, and
+    /// the derive still feeds the adjacent `data` payload to whichever
+    /// variant it lands on — including the fallback — so a payload-carrying
+    /// unknown action (e.g. a future `PlayAudio { clip }`) would fail to
+    /// deserialize and take the *entire* document down with it, defeating
+    /// the point. See the hand-written `Deserialize` impl below, which
+    /// checks the tag against the known set *before* touching `data` at
+    /// all, so an unrecognized tag never gets its payload parsed.
     Unknown,
 }
 
-fn default_run_wait() -> bool {
-    true
+/// One texture-slot assignment for [`XrdsAction::SetMaterial`].
+///
+/// Only the asset id is authored here — `uv`/`sampler` on the underlying
+/// [`XrdsSceneTextureRef`] keep their defaults. Per-event UV offset/tiling is
+/// a real thing to want eventually (scrolling a texture over time), but it is
+/// a separate feature: it needs interpolation to be useful, and this variant
+/// applies instantly.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct XrdsActionTexture {
+    pub slot: XrdsSceneMaterialTextureSlotKind,
+    /// Id of a `XrdsSceneAssetKind::Texture` entry in the document's asset
+    /// catalog. `None` clears the slot instead of assigning one.
+    #[serde(default)]
+    pub texture_asset_id: Option<String>,
+}
+
+/// Shadow of [`XrdsAction`] holding only its real variants, used solely by
+/// the `Deserialize` impl below. Must be kept in sync by hand whenever a
+/// variant is added to `XrdsAction` — same cost as growing `XrdsAction`
+/// itself, and the reason `KNOWN_ACTION_KINDS` sits right next to it.
+#[derive(Deserialize)]
+#[serde(tag = "kind", content = "data")]
+enum XrdsActionKnown {
+    PlayGltfAnimation {
+        playback: XrdsSceneGltfPlayback,
+    },
+    StopGltfAnimation,
+    SetVisible(bool),
+    SetTransform {
+        position: Option<[f32; 3]>,
+        rotation: Option<[f32; 3]>,
+        scale: Option<[f32; 3]>,
+        duration_secs: f32,
+        #[serde(default)]
+        ease: XrdsEaseCurve,
+    },
+    SetMaterial {
+        base_color: Option<[f32; 4]>,
+        metallic: Option<f32>,
+        roughness: Option<f32>,
+        #[serde(default)]
+        texture: Option<XrdsActionTexture>,
+    },
+    ModifyHealth {
+        delta: XrdsActionValue,
+    },
+}
+
+impl From<XrdsActionKnown> for XrdsAction {
+    fn from(known: XrdsActionKnown) -> Self {
+        match known {
+            XrdsActionKnown::PlayGltfAnimation { playback } => {
+                XrdsAction::PlayGltfAnimation { playback }
+            }
+            XrdsActionKnown::StopGltfAnimation => XrdsAction::StopGltfAnimation,
+            XrdsActionKnown::SetVisible(visible) => XrdsAction::SetVisible(visible),
+            XrdsActionKnown::SetTransform { position, rotation, scale, duration_secs, ease } => {
+                XrdsAction::SetTransform { position, rotation, scale, duration_secs, ease }
+            }
+            XrdsActionKnown::SetMaterial { base_color, metallic, roughness, texture } => {
+                XrdsAction::SetMaterial { base_color, metallic, roughness, texture }
+            }
+            XrdsActionKnown::ModifyHealth { delta } => {
+                XrdsAction::ModifyHealth { delta }
+            }
+        }
+    }
+}
+
+/// Wire tag strings for every real `XrdsAction` variant — the exact tag
+/// values `#[serde(tag = "kind")]` produces, i.e. the Rust identifiers,
+/// since no variant renames `kind`. Add to this whenever a variant is added.
+const KNOWN_ACTION_KINDS: &[&str] = &[
+    "PlayGltfAnimation",
+    "StopGltfAnimation",
+    "SetVisible",
+    "SetTransform",
+    "SetMaterial",
+    "ModifyHealth",
+];
+
+impl<'de> Deserialize<'de> for XrdsAction {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        // Capture the whole `{"kind": ..., "data": ...}` shape as a generic
+        // value first, so the tag can be checked *before* `data` is parsed
+        // against anything. That ordering is the entire fix: it is what lets
+        // an unrecognized tag skip past its payload instead of the derive
+        // trying (and failing) to fit that payload into a unit variant.
+        let value = serde_json::Value::deserialize(deserializer)?;
+        let kind = value.get("kind").and_then(serde_json::Value::as_str).unwrap_or_default();
+        if !KNOWN_ACTION_KINDS.contains(&kind) {
+            return Ok(XrdsAction::Unknown);
+        }
+        XrdsActionKnown::deserialize(value)
+            .map(XrdsAction::from)
+            .map_err(serde::de::Error::custom)
+    }
+}
+
+/// Ease curve for [`XrdsAction::SetTransform`]. Each variant is
+/// implicitly ease-*out* only for v1 (matching how these are commonly
+/// shown/labeled in NLE-style tools) — `Linear` has no direction to speak
+/// of, so it's exact either way. `QuadIn`/`QuadInOut`/`CubicIn`/
+/// `CubicInOut` are cheap to add later as new variants if a real case
+/// needs them; not built now since nothing has asked for one yet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum XrdsEaseCurve {
+    Linear,
+    Quad,
+    #[default]
+    Cubic,
+}
+
+impl XrdsAction {
+    /// How long this action itself takes, in seconds. Non-zero only for
+    /// [`SetTransform`](XrdsAction::SetTransform) — every other
+    /// action applies instantly, including glTF playback, which is
+    /// deliberately fire-and-forget (requesting playback completes at
+    /// once; the clip's own length is not waited on).
+    ///
+    /// Drives a Track's fallback duration and the editor's dot-vs-bar
+    /// rendering, so both agree on what "instant" means without either
+    /// re-deriving it.
+    pub fn self_duration_secs(&self) -> f32 {
+        match self {
+            XrdsAction::SetTransform { duration_secs, .. } => duration_secs.max(0.0),
+            _ => 0.0,
+        }
+    }
+
+    /// Whether this action is valid inside a Track.
+    ///
+    /// Everything in the current vocabulary is, which is the point: the
+    /// actions that were not (`Wait`, `Run`, `FireCustomEvent`) no longer
+    /// exist. Only `Unknown` is rejected, so a document from a *newer*
+    /// editor reports one clear diagnostic rather than silently dropping a
+    /// key.
+    pub fn is_valid_in_track(&self) -> bool {
+        !matches!(self, XrdsAction::Unknown)
+    }
+
+}
+
+impl XrdsTriggerKind {
+    /// Whether this kind's runtime event reports which hand caused it.
+    ///
+    /// A `hand` filter on a kind that reports none can never match, making
+    /// the binding permanently and silently unfireable — see
+    /// `track_diagnostics`. Kept as one method rather than an inline
+    /// `matches!` so the editor's picker and the diagnostic cannot drift
+    /// apart on which kinds qualify.
+    pub fn carries_hand(&self) -> bool {
+        matches!(
+            self,
+            XrdsTriggerKind::Grabbed
+                | XrdsTriggerKind::Dropped
+                | XrdsTriggerKind::HoverEnter
+                | XrdsTriggerKind::HoverExit
+                | XrdsTriggerKind::ButtonPress
+                | XrdsTriggerKind::ButtonRelease
+                | XrdsTriggerKind::SliderChange
+                | XrdsTriggerKind::ToggleChange
+        )
+    }
 }
 
 /// Which entity an `XrdsAction` applies to.
@@ -135,14 +320,6 @@ impl Default for XrdsActionValue {
     }
 }
 
-/// An ordered list of `XrdsAction`s — purely data, no execution state.
-/// Runs sequentially, matching `bevy-sequential-actions`' actual, spike-
-/// verified behavior (see the design doc's evaluation section).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
-pub struct XrdsSequence {
-    #[serde(default)]
-    pub steps: Vec<XrdsAction>,
-}
 
 /// The recognized trigger kinds an author can pick from today (e.g. in an
 /// `xrds-editor` dropdown). Grows by one variant each time a new
@@ -244,24 +421,21 @@ pub enum XrdsTriggerKind {
 pub struct XrdsTriggerBinding {
     #[serde(default)]
     pub trigger: XrdsTriggerKind,
-    /// Inline sequence, used when `runnable` is `None`. Ignored (with a
-    /// diagnostic) when `runnable` is `Some` — see the field below.
-    #[serde(default)]
-    pub sequence: XrdsSequence,
-    /// Names an entry in `XrdsSceneDocument::runnables` to run instead of
-    /// `sequence` — the template case (Phase 9a): the same named
-    /// `XrdsRunnable` (a `Sequence` **or** a `Timeline`) can be referenced
-    /// by many bindings, and editing the registry entry affects all of
-    /// them at once.
+    /// Names an entry in `XrdsSceneDocument::tracks`.
     ///
-    /// Deliberately additive rather than replacing `sequence` with a
-    /// `Named`/`Inline` enum: this keeps every existing inline-sequence
-    /// binding (and every existing test literal) working unchanged.
-    /// `Some` and a non-empty `sequence` set together is diagnosable
-    /// author confusion (`sequence` is simply ignored), not a runtime
-    /// error — see `trigger_diagnostics`.
+    /// `None` is authored-but-unwired: the binding exists and its trigger
+    /// is chosen, but nothing runs yet. `track_diagnostics` reports it as a
+    /// warning rather than an error, since it is the normal intermediate
+    /// state while authoring.
+    ///
+    /// There is deliberately no inline alternative. The previous schema
+    /// carried both an inline `sequence` and this name, which meant two
+    /// ways to author the same thing and a diagnostic for the case where an
+    /// author set both. One way is simpler to author, explain and validate,
+    /// and referencing by name is the form that lets several bindings share
+    /// one piece of choreography.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub runnable: Option<String>,
+    pub track: Option<String>,
     /// When true this rule is parked: it stays authored but never fires.
     ///
     /// For switching one rule off without deleting it — isolating which of
@@ -329,121 +503,64 @@ pub enum XrdsSceneTriggerDiagnosticSeverity {
 }
 
 impl XrdsSceneDocument {
-    /// Validates authored trigger-action data, catching the failure modes
-    /// that are otherwise **silent at runtime**.
+    /// Validates authored Track data, catching the failure modes that are
+    /// otherwise **silent at runtime**.
     ///
-    /// The worst of these is a `Custom` trigger whose name nothing emits:
-    /// "never fires" is indistinguishable from "not triggered yet", so
-    /// without a diagnostic there is nothing to debug against. Dangling node
-    /// targets and actions needing a payload the node lacks are the same
-    /// story — a runtime `warn!` only helps if someone happens to be
-    /// watching the log at that moment.
+    /// Silence is the whole reason this exists. A binding naming a Track
+    /// that no longer exists, an event aimed at a deleted node, or two
+    /// Tracks fighting over one asset all produce *nothing happening* —
+    /// indistinguishable from "not triggered yet". A runtime `warn!` only
+    /// helps someone already watching the log.
     ///
-    /// Also covers Phase 9a's registry: a `runnable`/`Run` reference naming
-    /// an entry `XrdsSceneDocument::runnables` doesn't have, and a static
-    /// cycle in the registry's own `Run`-graph (`A runs B runs A`) — the
-    /// latter is `node_id: None` since a registry entry isn't any one
-    /// node's fault.
-    pub fn trigger_diagnostics(&self) -> Vec<XrdsSceneTriggerDiagnostic> {
+    /// Diagnostics with `node_id: None` come from the Track registry
+    /// itself: a registry entry may be referenced by many bindings or none,
+    /// so it is not any one node's fault.
+    pub fn track_diagnostics(&self) -> Vec<XrdsSceneTriggerDiagnostic> {
         use XrdsSceneTriggerDiagnosticSeverity as Severity;
 
         let mut out = Vec::new();
-        let known_ids: HashSet<XrdsSceneNodeId> = self.nodes.iter().map(|n| n.id).collect();
-        let known_runnables: HashSet<&str> =
-            self.runnables.iter().map(|r| r.name.as_str()).collect();
+        let node_ids: std::collections::HashSet<XrdsSceneNodeId> =
+            self.nodes.iter().map(|n| n.id).collect();
+        let gltf_nodes: std::collections::HashSet<XrdsSceneNodeId> = self
+            .nodes
+            .iter()
+            .filter(|n| matches!(n.payload, XrdsSceneNodePayload::GltfAsset(_)))
+            .map(|n| n.id)
+            .collect();
 
-        // Custom names bound somewhere in this document, and custom names it
-        // emits. Either side can legitimately live in application code, so a
-        // mismatch is Info rather than Error.
-        let mut bound_custom: HashSet<&str> = HashSet::new();
-        let mut emitted_custom: HashSet<&str> = HashSet::new();
+        // -- Per-node bindings ------------------------------------------------
         for node in &self.nodes {
-            for binding in &node.triggers {
-                // Disabled bindings neither listen nor emit. Counting them
-                // would let a parked emitter suppress the "nothing fires
-                // this" warning on a live listener.
-                if binding.disabled {
-                    continue;
-                }
-                if let XrdsTriggerKind::Custom(name) = &binding.trigger {
-                    bound_custom.insert(name.as_str());
-                }
-                for step in &binding.sequence.steps {
-                    if let XrdsAction::FireCustomEvent { name } = step {
-                        emitted_custom.insert(name.as_str());
-                    }
-                }
-            }
-            // A threshold watcher is also a Custom emitter — a binding
-            // listening for what a watcher fires must not be flagged as
-            // "nothing fires this" just because no FireCustomEvent action
-            // happens to emit the same name.
-            for watcher in &node.watchers {
-                if !watcher.disabled {
-                    emitted_custom.insert(watcher.fires.as_str());
-                }
-            }
-        }
+            for (i, binding) in node.triggers.iter().enumerate() {
+                let where_ = format!("node {:?} binding #{i}", node.id);
 
-        for node in &self.nodes {
-            let node_is_gltf = matches!(node.payload, XrdsSceneNodePayload::GltfAsset(_));
-
-            for (index, binding) in node.triggers.iter().enumerate() {
-                // A parked binding is deliberately inert, so nagging about
-                // its contents is noise the author has to dismiss on every
-                // pass. Anything genuinely wrong resurfaces the moment it is
-                // re-enabled, since diagnostics run continuously.
-                if binding.disabled {
-                    continue;
-                }
-
-                let where_ = format!("binding #{index} on node {:?}", node.id);
-
-                match &binding.trigger {
-                    XrdsTriggerKind::Unknown => out.push(XrdsSceneTriggerDiagnostic {
+                match &binding.track {
+                    None => out.push(XrdsSceneTriggerDiagnostic {
                         node_id: Some(node.id),
                         severity: Severity::Warning,
-                        title: "No trigger kind selected".to_string(),
+                        title: "Binding runs nothing".to_string(),
                         detail: format!(
-                            "{where_} has no recognized trigger kind, so it can never fire. \
-                             Either the author hasn't picked one yet (this is the editor's \
-                             placeholder for a freshly added binding), or the scene was \
-                             authored by a newer editor build using a kind this one doesn't know."
+                            "{where_} has no Track selected, so the trigger fires and nothing \
+                             happens. Normal while authoring; pick a Track to wire it up."
                         ),
                     }),
-                    XrdsTriggerKind::Custom(name) if !emitted_custom.contains(name.as_str()) => {
+                    Some(name) if self.track(name).is_none() => {
                         out.push(XrdsSceneTriggerDiagnostic {
                             node_id: Some(node.id),
-                            severity: Severity::Info,
-                            title: "Custom trigger has no emitter in this document".to_string(),
+                            severity: Severity::Error,
+                            title: "Binding names a missing Track".to_string(),
                             detail: format!(
-                                "{where_} listens for Custom({name}), which nothing in this \
-                                 document fires. Fine if application code fires it; otherwise \
-                                 it is a typo and the binding will silently never run."
+                                "{where_} names Track {name:?}, which is not in the document. It \
+                                 was probably renamed or deleted; nothing will run."
                             ),
-                        });
+                        })
                     }
-                    _ => {}
+                    Some(_) => {}
                 }
 
-                // A hand filter on a trigger kind that never reports a hand
-                // (ZoneEnter/Exit, AnimationComplete, Custom) can never
-                // match — the binding is permanently unfireable, and
-                // silently so. Error, not Warning: this is not "might not
-                // behave as intended," it genuinely cannot work.
-                if binding.hand.is_some()
-                    && !matches!(
-                        binding.trigger,
-                        XrdsTriggerKind::Grabbed
-                            | XrdsTriggerKind::Dropped
-                            | XrdsTriggerKind::HoverEnter
-                            | XrdsTriggerKind::HoverExit
-                            | XrdsTriggerKind::ButtonPress
-                            | XrdsTriggerKind::ButtonRelease
-                            | XrdsTriggerKind::SliderChange
-                            | XrdsTriggerKind::ToggleChange
-                    )
-                {
+                // A hand filter on a kind that never reports a hand can never
+                // match. Error, not Warning: this is not "might misbehave", it
+                // genuinely cannot fire.
+                if binding.hand.is_some() && !binding.trigger.carries_hand() {
                     out.push(XrdsSceneTriggerDiagnostic {
                         node_id: Some(node.id),
                         severity: Severity::Error,
@@ -455,125 +572,192 @@ impl XrdsSceneDocument {
                         ),
                     });
                 }
+            }
+        }
 
-                // `runnable: Some(name)` takes priority over the inline
-                // `sequence` at runtime (see `XrdsTriggerBinding::runnable`),
-                // so the two are mutually exclusive in what actually
-                // executes. Check the named case here; only walk the inline
-                // sequence's own steps below when there is no named runnable
-                // to defer to — otherwise "Empty sequence" and per-step
-                // diagnostics would fire on dead data that never runs.
-                if let Some(name) = &binding.runnable {
-                    if !known_runnables.contains(name.as_str()) {
-                        out.push(XrdsSceneTriggerDiagnostic {
-                            node_id: Some(node.id),
-                            severity: Severity::Error,
-                            title: "Binding references unknown runnable".to_string(),
-                            detail: format!(
-                                "{where_} names runnable {name:?}, which has no matching entry \
-                                 in XrdsSceneDocument::runnables — this binding will fire \
-                                 nothing at runtime."
-                            ),
-                        });
-                    }
-                    if !binding.sequence.steps.is_empty() {
-                        out.push(XrdsSceneTriggerDiagnostic {
-                            node_id: Some(node.id),
-                            severity: Severity::Info,
-                            title: "Binding has both a named runnable and an inline sequence"
-                                .to_string(),
-                            detail: format!(
-                                "{where_} sets runnable: Some({name:?}) but also has inline \
-                                 sequence steps — the named runnable takes priority and the \
-                                 inline sequence is ignored at runtime."
-                            ),
-                        });
-                    }
+        // -- Track registry ---------------------------------------------------
+        for entry in &self.tracks {
+            let where_ = format!("Track {:?}", entry.name);
+            let track = &entry.track;
+
+            if track.assets.is_empty() {
+                out.push(XrdsSceneTriggerDiagnostic {
+                    node_id: None,
+                    severity: Severity::Warning,
+                    title: "Empty Track".to_string(),
+                    detail: format!("{where_} has no assets, so firing it does nothing."),
+                });
+            }
+
+            // An asset appears at most once per Track: all of its events
+            // belong on its single row. Two rows for one asset means two
+            // schedules driving one node from inside the same Track, which is
+            // exactly the fight the one-row rule exists to prevent.
+            let mut seen: Vec<&XrdsActionTarget> = Vec::new();
+            for asset in &track.assets {
+                if seen.contains(&&asset.target) {
+                    out.push(XrdsSceneTriggerDiagnostic {
+                        node_id: None,
+                        severity: Severity::Error,
+                        title: "Asset appears twice in one Track".to_string(),
+                        detail: format!(
+                            "{where_} has more than one row for {:?}. Merge them: an asset gets \
+                             one row per Track, holding all of its events.",
+                            asset.target
+                        ),
+                    });
                 } else {
-                    if binding.sequence.steps.is_empty() {
+                    seen.push(&asset.target);
+                }
+
+                if asset.keys.is_empty() {
+                    out.push(XrdsSceneTriggerDiagnostic {
+                        node_id: None,
+                        severity: Severity::Warning,
+                        title: "Asset row has no events".to_string(),
+                        detail: format!(
+                            "{where_}'s row for {:?} has no events, so it does nothing. It still \
+                             reserves the asset against other Tracks.",
+                            asset.target
+                        ),
+                    });
+                }
+
+                if let XrdsActionTarget::Node(id) = asset.target {
+                    if !node_ids.contains(&id) {
                         out.push(XrdsSceneTriggerDiagnostic {
-                            node_id: Some(node.id),
-                            severity: Severity::Info,
-                            title: "Empty sequence".to_string(),
-                            detail: format!("{where_} has no steps, so firing it does nothing."),
+                            node_id: None,
+                            severity: Severity::Error,
+                            title: "Asset row targets a missing node".to_string(),
+                            detail: format!(
+                                "{where_} has a row for node {id:?}, which is not in the \
+                                 document. It was probably deleted; the row will do nothing."
+                            ),
+                        });
+                    }
+                }
+
+                for (k, key) in asset.keys.iter().enumerate() {
+                    let at = format!(
+                        "{where_}, {:?} @ {:.2}s (event #{k})",
+                        asset.target, key.at_secs
+                    );
+
+                    if key.at_secs < 0.0 {
+                        out.push(XrdsSceneTriggerDiagnostic {
+                            node_id: None,
+                            severity: Severity::Error,
+                            title: "Event at a negative time".to_string(),
+                            detail: format!(
+                                "{at} sits before the Track starts, so it fires immediately."
+                            ),
                         });
                     }
 
-                    for (step_index, step) in binding.sequence.steps.iter().enumerate() {
-                        let at = format!("{where_}, step #{step_index}");
+                    if !key.action.is_valid_in_track() {
+                        out.push(XrdsSceneTriggerDiagnostic {
+                            node_id: None,
+                            severity: Severity::Error,
+                            title: "Unrecognized action".to_string(),
+                            detail: format!(
+                                "{at} is an action this build does not understand — written by a \
+                                 newer editor than this one. It is skipped at runtime."
+                            ),
+                        });
+                    }
 
-                        match step {
-                            XrdsAction::Unknown => out.push(XrdsSceneTriggerDiagnostic {
-                                node_id: Some(node.id),
-                                severity: Severity::Warning,
-                                title: "Unrecognized action".to_string(),
-                                detail: format!(
-                                    "{at} is an action this build does not know and will be \
-                                     skipped at runtime. The scene was likely authored by a \
-                                     newer editor."
-                                ),
-                            }),
+                    // No "action escapes its own row" check any more: that
+                    // was only reachable through SetMaterial/ModifyHealth's
+                    // own `target` field, which is gone (see their doc
+                    // comments) — every action now applies to whichever
+                    // asset row it sits on, with nothing left to escape to.
 
-                            XrdsAction::PlayGltfAnimation { .. } | XrdsAction::StopGltfAnimation
-                                if !node_is_gltf =>
-                            {
+                    // glTF playback needs a node that has a glTF payload; on
+                    // anything else it is a silent no-op.
+                    let needs_gltf = matches!(
+                        key.action,
+                        XrdsAction::PlayGltfAnimation { .. } | XrdsAction::StopGltfAnimation
+                    );
+                    if needs_gltf {
+                        if let XrdsActionTarget::Node(id) = asset.target {
+                            if node_ids.contains(&id) && !gltf_nodes.contains(&id) {
                                 out.push(XrdsSceneTriggerDiagnostic {
-                                    node_id: Some(node.id),
-                                    severity: Severity::Warning,
-                                    title: "glTF animation action on a non-glTF node".to_string(),
-                                    detail: format!(
-                                        "{at} drives glTF animation, but this node payload is \
-                                         not a glTF asset, so it will do nothing."
-                                    ),
-                                });
-                            }
-
-                            XrdsAction::FireCustomEvent { name }
-                                if !bound_custom.contains(name.as_str()) =>
-                            {
-                                out.push(XrdsSceneTriggerDiagnostic {
-                                    node_id: Some(node.id),
-                                    severity: Severity::Info,
-                                    title: "Custom event has no listener in this document"
-                                        .to_string(),
-                                    detail: format!(
-                                        "{at} fires Custom({name}), which no binding in this \
-                                         document listens for. Fine if application code handles \
-                                         it."
-                                    ),
-                                });
-                            }
-
-                            XrdsAction::Run { runnable, .. }
-                                if !known_runnables.contains(runnable.as_str()) =>
-                            {
-                                out.push(XrdsSceneTriggerDiagnostic {
-                                    node_id: Some(node.id),
+                                    node_id: None,
                                     severity: Severity::Error,
-                                    title: "Run references unknown runnable".to_string(),
+                                    title: "glTF action on a non-glTF node".to_string(),
                                     detail: format!(
-                                        "{at} runs {runnable:?}, which has no matching entry in \
-                                         XrdsSceneDocument::runnables."
+                                        "{at} controls glTF playback, but node {id:?} has no \
+                                         glTF payload — nothing will play."
                                     ),
                                 });
                             }
+                        }
+                    }
 
-                            _ => {}
+                    // `duration_secs` is deliberately not bound: the only check
+                    // that read it was the zero-duration warning, deleted when
+                    // `Teleport` was removed (duration 0 is now the normal way
+                    // to author an instant change).
+                    if let XrdsAction::SetTransform { position, rotation, scale, .. } = &key.action
+                    {
+                        if position.is_none() && rotation.is_none() && scale.is_none() {
+                            out.push(XrdsSceneTriggerDiagnostic {
+                                node_id: None,
+                                severity: Severity::Warning,
+                                title: "Interpolation changes nothing".to_string(),
+                                detail: format!(
+                                    "{at} leaves position, rotation and scale all unset, so it \
+                                     animates to where the asset already is."
+                                ),
+                            });
+                        }
+                        // Deliberately NO zero-duration warning. With
+                        // `Teleport` deleted, `duration_secs == 0` is the
+                        // normal way to author an instant change — warning on
+                        // it would flag correct authoring, which is how you
+                        // train people to ignore diagnostics.
+                    }
+
+                    if let XrdsAction::SetMaterial {
+                        base_color,
+                        metallic,
+                        roughness,
+                        texture,
+                    } = &key.action
+                    {
+                        if base_color.is_none()
+                            && metallic.is_none()
+                            && roughness.is_none()
+                            && texture.is_none()
+                        {
+                            out.push(XrdsSceneTriggerDiagnostic {
+                                node_id: None,
+                                severity: Severity::Warning,
+                                title: "Material change sets nothing".to_string(),
+                                detail: format!("{at} leaves every material property unset."),
+                            });
                         }
 
-                        // Dangling explicit node target — the one genuinely
-                        // unworkable case, hence Error.
-                        if let XrdsAction::ModifyHealth { target, .. } = step {
-                            if let XrdsActionTarget::Node(id) = target {
-                                if !known_ids.contains(id) {
+                        // A texture id that names nothing in the catalog
+                        // resolves to no image at runtime, so the slot is left
+                        // as-is and the event looks like it silently did
+                        // nothing. Worth an error rather than a warning: unlike
+                        // an unset field, this is never intentional.
+                        if let Some(t) = texture {
+                            if let Some(id) = &t.texture_asset_id {
+                                let known = self.assets.iter().any(|a| {
+                                    a.id == *id && a.kind == XrdsSceneAssetKind::Texture
+                                });
+                                if !known {
                                     out.push(XrdsSceneTriggerDiagnostic {
-                                        node_id: Some(node.id),
+                                        node_id: None,
                                         severity: Severity::Error,
-                                        title: "Action targets a node that does not exist"
-                                            .to_string(),
+                                        title: "Texture asset is not in the catalog".to_string(),
                                         detail: format!(
-                                            "{at} targets node {id:?}, which is not in this \
-                                             document."
+                                            "{at} assigns {id:?} to the {:?} slot, but no texture \
+                                             asset with that id exists in this document. The slot \
+                                             will keep whatever it already had.",
+                                            t.slot
                                         ),
                                     });
                                 }
@@ -583,176 +767,203 @@ impl XrdsSceneDocument {
                 }
             }
 
-            for (index, watcher) in node.watchers.iter().enumerate() {
+            // Events past an authored duration never fire.
+            if let Some(duration) = track.duration_secs {
+                for asset in &track.assets {
+                    for key in &asset.keys {
+                        if key.at_secs > duration {
+                            out.push(XrdsSceneTriggerDiagnostic {
+                                node_id: None,
+                                severity: Severity::Warning,
+                                title: "Event past the Track's end".to_string(),
+                                detail: format!(
+                                    "{where_} runs for {duration}s, but {:?} has an event at \
+                                     {:.2}s — it will never fire.",
+                                    asset.target, key.at_secs
+                                ),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        out.extend(self.watcher_diagnostics(&node_ids));
+        out.extend(self.track_conflict_diagnostics());
+        out
+    }
+
+    /// Threshold-watcher problems, plus the `Custom`-trigger-with-no-emitter
+    /// check.
+    ///
+    /// That last one is the most valuable diagnostic here and the reason the
+    /// whole family exists: a `Custom` binding whose name nothing fires is
+    /// indistinguishable at runtime from one that simply has not been
+    /// triggered yet, so without this there is nothing to debug against.
+    ///
+    /// Emitters are enabled watchers' `fires` names. It is a **warning**, not
+    /// an error, because expert-layer Rust can fire a custom trigger too —
+    /// the document cannot see that, so "nothing in this document emits it"
+    /// is a suspicion, not a proof.
+    fn watcher_diagnostics(
+        &self,
+        node_ids: &std::collections::HashSet<XrdsSceneNodeId>,
+    ) -> Vec<XrdsSceneTriggerDiagnostic> {
+        use XrdsSceneTriggerDiagnosticSeverity as Severity;
+        let mut out = Vec::new();
+
+        // Disabled watchers are parked, so they neither emit nor warrant
+        // complaints of their own.
+        let emitted: std::collections::HashSet<&str> = self
+            .nodes
+            .iter()
+            .flat_map(|n| n.watchers.iter())
+            .filter(|w| !w.disabled)
+            .map(|w| w.fires.as_str())
+            .collect();
+
+        for node in &self.nodes {
+            for (i, binding) in node.triggers.iter().enumerate() {
+                if binding.disabled {
+                    continue;
+                }
+                if let XrdsTriggerKind::Custom(name) = &binding.trigger {
+                    if !emitted.contains(name.as_str()) {
+                        out.push(XrdsSceneTriggerDiagnostic {
+                            node_id: Some(node.id),
+                            severity: Severity::Warning,
+                            title: "Nothing emits this Custom trigger".to_string(),
+                            detail: format!(
+                                "node {:?} binding #{i} listens for Custom({name:?}), which no \
+                                 threshold watcher in this document fires. Fine if application \
+                                 code fires it; otherwise this binding never runs.",
+                                node.id
+                            ),
+                        });
+                    }
+                }
+            }
+
+            for (i, watcher) in node.watchers.iter().enumerate() {
                 if watcher.disabled {
                     continue;
                 }
-                let where_ = format!("watcher #{index} on node {:?}", node.id);
+                let where_ = format!("node {:?} watcher #{i}", node.id);
 
-                if let XrdsObservable::DistanceTo { node: target } = &watcher.observable {
-                    if !known_ids.contains(target) {
+                if let XrdsObservable::DistanceTo { node: other } = watcher.observable {
+                    if !node_ids.contains(&other) {
                         out.push(XrdsSceneTriggerDiagnostic {
                             node_id: Some(node.id),
                             severity: Severity::Error,
-                            title: "Watcher measures distance to a node that does not exist"
-                                .to_string(),
+                            title: "Watcher measures distance to a missing node".to_string(),
                             detail: format!(
-                                "{where_} measures DistanceTo({target:?}), which is not in \
-                                 this document."
+                                "{where_} measures distance to node {other:?}, which is not in \
+                                 the document — the distance can never be computed."
                             ),
                         });
                     }
                 }
 
+                // Hysteresis is a dead-band width; a negative one has no
+                // meaning and would widen rather than damp the band.
                 if watcher.hysteresis < 0.0 {
                     out.push(XrdsSceneTriggerDiagnostic {
                         node_id: Some(node.id),
-                        severity: Severity::Warning,
-                        title: "Negative hysteresis".to_string(),
+                        severity: Severity::Error,
+                        title: "Watcher has negative hysteresis".to_string(),
                         detail: format!(
-                            "{where_} has a negative hysteresis ({}); treated as 0.0 at \
-                             runtime, so this has no effect.",
+                            "{where_} has hysteresis {}, which is not a meaningful dead-band \
+                             width. Use 0 for none.",
                             watcher.hysteresis
                         ),
                     });
                 }
 
-                if !bound_custom.contains(watcher.fires.as_str()) {
+                if watcher.fires.trim().is_empty() {
                     out.push(XrdsSceneTriggerDiagnostic {
                         node_id: Some(node.id),
-                        severity: Severity::Info,
-                        title: "Watcher fires a Custom trigger with no listener".to_string(),
-                        detail: format!(
-                            "{where_} fires Custom({}), which no binding in this document \
-                             listens for. Fine if application code handles it.",
-                            watcher.fires
-                        ),
-                    });
-                }
-            }
-        }
-
-        // --- Registry-level: unknown Run targets and Run-graph cycles ---
-        // These are node-less (a registry entry may be referenced by many
-        // nodes, or none yet), unlike everything above.
-        let registry_map: std::collections::HashMap<String, &XrdsNamedRunnable> =
-            self.runnables.iter().map(|r| (r.name.clone(), r)).collect();
-
-        for entry in &self.runnables {
-            for target in run_targets(&entry.runnable) {
-                if !registry_map.contains_key(target) {
-                    out.push(XrdsSceneTriggerDiagnostic {
-                        node_id: None,
                         severity: Severity::Error,
-                        title: "Named runnable references unknown runnable".to_string(),
+                        title: "Watcher fires an empty name".to_string(),
                         detail: format!(
-                            "Runnable {:?} contains Run({target:?}), which has no matching \
-                             entry in XrdsSceneDocument::runnables.",
-                            entry.name
+                            "{where_} has no name to fire, so nothing can listen for it."
                         ),
                     });
                 }
-            }
-        }
-
-        // `A runs B runs A` is not prevented — other engines permit
-        // intentional event loops too — but it is flagged, since the
-        // runtime only escapes it via the chain-depth cap
-        // (`XrdsTriggerKind::RunawayDetected`), not by refusing to run.
-        let mut done: HashSet<&str> = HashSet::new();
-        let mut reported: HashSet<&str> = HashSet::new();
-        for entry in &self.runnables {
-            if !done.contains(entry.name.as_str()) {
-                let mut stack: Vec<&str> = Vec::new();
-                visit_runnable_for_cycles(
-                    &entry.name,
-                    &registry_map,
-                    &mut stack,
-                    &mut done,
-                    &mut reported,
-                    &mut out,
-                );
             }
         }
 
         out
     }
-}
 
-/// Every name a `Run` action inside `runnable` targets — used only by the
-/// registry-level cycle/unknown-reference checks in `trigger_diagnostics`.
-fn run_targets(runnable: &XrdsRunnable) -> Vec<&str> {
-    match runnable {
-        XrdsRunnable::Sequence(seq) => seq
-            .steps
-            .iter()
-            .filter_map(|action| match action {
-                XrdsAction::Run { runnable, .. } => Some(runnable.as_str()),
-                _ => None,
-            })
-            .collect(),
-        XrdsRunnable::Timeline(timeline) => timeline
-            .keys
-            .iter()
-            .filter_map(|key| match &key.action {
-                XrdsAction::Run { runnable, .. } => Some(runnable.as_str()),
-                _ => None,
-            })
-            .collect(),
-    }
-}
+    /// Cross-Track asset conflicts.
+    ///
+    /// Two Tracks driving the same asset cannot run at the same time — the
+    /// runtime refuses to start a Track whose assets are already held
+    /// (reject-the-newcomer). Authoring the overlap is allowed, since the
+    /// two may never actually be fired together; it is reported so the
+    /// author learns the constraint before hitting it.
+    ///
+    /// A *looping* Track is different in kind: it never releases its assets,
+    /// so anything sharing one can never run at all. Permanent rather than
+    /// situational, so it is an error.
+    fn track_conflict_diagnostics(&self) -> Vec<XrdsSceneTriggerDiagnostic> {
+        use XrdsSceneTriggerDiagnosticSeverity as Severity;
+        let mut out = Vec::new();
 
-/// DFS cycle detection over the registry's `Run`-graph. `stack` is the
-/// current path; finding `name` already on it means everything from its
-/// first occurrence onward forms a cycle. `done` short-circuits re-walking
-/// an already-fully-explored (acyclic-from-here) name; `reported` stops the
-/// same cycle being pushed once per member node.
-fn visit_runnable_for_cycles<'a>(
-    name: &'a str,
-    registry_map: &std::collections::HashMap<String, &'a XrdsNamedRunnable>,
-    stack: &mut Vec<&'a str>,
-    done: &mut HashSet<&'a str>,
-    reported: &mut HashSet<&'a str>,
-    out: &mut Vec<XrdsSceneTriggerDiagnostic>,
-) {
-    if done.contains(name) {
-        return;
-    }
-    if let Some(pos) = stack.iter().position(|n| *n == name) {
-        let cycle_path = &stack[pos..];
-        for member in cycle_path {
-            if reported.insert(member) {
-                out.push(XrdsSceneTriggerDiagnostic {
-                    node_id: None,
-                    severity: XrdsSceneTriggerDiagnosticSeverity::Error,
-                    title: "Cycle in the Run registry".to_string(),
-                    detail: format!(
-                        "Named runnable {member:?} is part of a Run cycle ({}). Not rejected \
-                         — intentional event loops are allowed — but the runtime only escapes \
-                         it via the chain-depth cap (see XrdsTriggerKind::RunawayDetected), so \
-                         double check this is deliberate.",
-                        cycle_path
-                            .iter()
-                            .map(|n| format!("{n:?}"))
-                            .collect::<Vec<_>>()
-                            .join(" -> ")
-                    ),
-                });
+        for (i, a) in self.tracks.iter().enumerate() {
+            for b in self.tracks.iter().skip(i + 1) {
+                let a_nodes = a.track.owned_nodes();
+                let shared: Vec<XrdsSceneNodeId> = b
+                    .track
+                    .owned_nodes()
+                    .into_iter()
+                    .filter(|id| a_nodes.contains(id))
+                    .collect();
+                if shared.is_empty() {
+                    continue;
+                }
+
+                let list = shared
+                    .iter()
+                    .map(|id| format!("{id:?}"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+
+                // Name the looping side: it is the one making this permanent.
+                let looping = match (a.track.looping, b.track.looping) {
+                    (true, _) => Some((&a.name, &b.name)),
+                    (_, true) => Some((&b.name, &a.name)),
+                    _ => None,
+                };
+
+                match looping {
+                    Some((loops, blocked)) => out.push(XrdsSceneTriggerDiagnostic {
+                        node_id: None,
+                        severity: Severity::Error,
+                        title: "A looping Track blocks another forever".to_string(),
+                        detail: format!(
+                            "Track {loops:?} loops and shares {list} with Track {blocked:?}. A \
+                             looping Track never releases its assets, so {blocked:?} can never \
+                             run. Stop looping {loops:?}, or give them separate assets."
+                        ),
+                    }),
+                    None => out.push(XrdsSceneTriggerDiagnostic {
+                        node_id: None,
+                        severity: Severity::Warning,
+                        title: "Two Tracks share an asset".to_string(),
+                        detail: format!(
+                            "Tracks {:?} and {:?} both drive {list}, so they cannot run at the \
+                             same time — whichever is fired second is refused while the first is \
+                             still running.",
+                            a.name, b.name
+                        ),
+                    }),
+                }
             }
         }
-        return;
-    }
 
-    stack.push(name);
-    if let Some(entry) = registry_map.get(name) {
-        for target in run_targets(&entry.runnable) {
-            if registry_map.contains_key(target) {
-                visit_runnable_for_cycles(target, registry_map, stack, done, reported, out);
-            }
-        }
+        out
     }
-    stack.pop();
-    done.insert(name);
 }
 
 // ---------------------------------------------------------------------------

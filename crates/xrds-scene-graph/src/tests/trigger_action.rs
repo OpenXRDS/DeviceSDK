@@ -1,835 +1,985 @@
+//! Tests for authored Track data and `track_diagnostics`.
+//!
+//! Rewritten wholesale for the Track model — see
+//! `docs/xrds-track-model-plan.md`. The previous version of this file was
+//! built around `XrdsSequence`, `Wait`, `Run` and `FireCustomEvent`, none of
+//! which exist any more, so most of it was testing features rather than
+//! needing porting.
+//!
+//! There are deliberately **no migration tests**: nothing was ever persisted
+//! in the old schema, so there is no migration to test (plan doc §3).
+
 use super::*;
 
-#[test]
-fn trigger_binding_round_trips_every_v1_action_variant() {
-    let binding = XrdsTriggerBinding {
+// ---------------------------------------------------------------------------
+// Fixtures
+// ---------------------------------------------------------------------------
+
+fn node(id: u64) -> XrdsSceneNode {
+    XrdsSceneNode {
+        id: XrdsSceneNodeId(id),
+        parent_id: None,
+        name: format!("Node{id}"),
+        enabled: true,
+        visible: true,
+        grabbable: false,
+        transform: XrdsSceneTransform::default(),
+        payload: XrdsSceneNodePayload::Empty,
+        editor: XrdsEditorMetadata::default(),
+        triggers: Vec::new(),
+        watchers: Vec::new(),
+    }
+}
+
+fn node_with_binding(id: u64, binding: XrdsTriggerBinding) -> XrdsSceneNode {
+    XrdsSceneNode { triggers: vec![binding], ..node(id) }
+}
+
+fn node_with_watcher(id: u64, watcher: XrdsThresholdWatcher) -> XrdsSceneNode {
+    XrdsSceneNode { watchers: vec![watcher], ..node(id) }
+}
+
+fn binding_for(track: &str) -> XrdsTriggerBinding {
+    XrdsTriggerBinding {
         trigger: XrdsTriggerKind::ZoneEnter,
-        sequence: XrdsSequence {
-            steps: vec![
-                XrdsAction::PlayGltfAnimation {
-                    playback: XrdsSceneGltfPlayback {
-                        selector: XrdsSceneGltfAnimationSelector::Name("Open".to_string()),
-                        repeat: XrdsSceneAnimationRepeatMode::Once,
-                        speed: 1.5,
-                        start_paused: false,
-                    },
-                },
-                XrdsAction::StopGltfAnimation,
-                XrdsAction::SetVisible(false),
-                XrdsAction::Teleport { destination: [1.0, 2.0, 3.0] },
-                XrdsAction::ModifyHealth {
-                    target: XrdsActionTarget::TriggerSource,
-                    delta: XrdsActionValue::FromTriggerSource,
-                },
-                XrdsAction::Wait { seconds: 0.5 },
-                XrdsAction::FireCustomEvent { name: "door_opened".to_string() },
-            ],
-        },
+        track: Some(track.to_string()),
         disabled: false,
         hand: None,
-        runnable: None,
-    };
-
-    let json = serde_json::to_string_pretty(&binding).expect("serialise");
-    let restored: XrdsTriggerBinding = serde_json::from_str(&json).expect("deserialise");
-    assert_eq!(binding, restored, "round-trip produced a different binding");
+    }
 }
 
-#[test]
-fn trigger_binding_minimal_json_uses_defaults_and_deserializes_from_empty_object() {
-    // An older/hand-authored document with no fields at all should still
-    // deserialize, given every field here has a #[serde(default)] — this
-    // is the additive-schema-evolution guarantee the implementation plan
-    // calls for in Phase 1.
-    let restored: XrdsTriggerBinding = serde_json::from_str("{}").expect("deserialise from {}");
-    assert_eq!(restored.trigger, XrdsTriggerKind::ZoneEnter);
-    assert_eq!(restored.sequence, XrdsSequence::default());
-    assert!(restored.sequence.steps.is_empty());
+/// One asset row driving `node_id`, with the given keys.
+fn row(node_id: u64, keys: Vec<XrdsTrackKey>) -> XrdsTrackAsset {
+    XrdsTrackAsset { target: XrdsActionTarget::Node(XrdsSceneNodeId(node_id)), keys }
 }
 
-#[test]
-fn unknown_action_variant_does_not_destroy_the_whole_document() {
-    // The failure this guards against: a scene authored by a newer editor
-    // containing an action this build has never heard of. Without the
-    // Unknown fallback, serde errors on the unknown variant and — because
-    // the action is nested inside the document — the ENTIRE scene fails to
-    // load, not just that step.
-    //
-    // Built by serializing a real document and renaming one action's tag,
-    // rather than hand-writing document JSON that would break every time an
-    // unrelated field is added to the schema.
-    let doc = XrdsSceneDocument {
-        metadata: XrdsSceneMetadata { name: "from-a-newer-editor".to_string(), ..Default::default() },
-        nodes: vec![XrdsSceneNode {
-            id: XrdsSceneNodeId(1),
-            parent_id: None,
-            name: "Door".to_string(),
-            enabled: true,
-            visible: true,
-            grabbable: false,
-            transform: XrdsSceneTransform::default(),
-            payload: XrdsSceneNodePayload::Empty,
-            editor: XrdsEditorMetadata::default(),
-            triggers: vec![XrdsTriggerBinding {
-                trigger: XrdsTriggerKind::ZoneEnter,
-                sequence: XrdsSequence {
-                    steps: vec![
-                        // Stands in for the future action; renamed below.
-                        XrdsAction::StopGltfAnimation,
-                        XrdsAction::Teleport { destination: [1.0, 2.0, 3.0] },
-                    ],
-                },
-                disabled: false,
-                hand: None,
-                runnable: None,
-            }],
-            watchers: Vec::new(),
-        }],
-        ..Default::default()
-    };
-
-    let json = serde_json::to_string(&doc)
-        .expect("serialise")
-        .replace("\"StopGltfAnimation\"", "\"PlayAudio\"");
-    assert!(json.contains("PlayAudio"), "test setup: the rename must have applied");
-
-    let doc: XrdsSceneDocument =
-        serde_json::from_str(&json).expect("document with an unknown action must still load");
-
-    assert_eq!(doc.nodes.len(), 1, "the node must survive");
-    assert_eq!(doc.nodes[0].name, "Door");
-
-    let steps = &doc.nodes[0].triggers[0].sequence.steps;
-    assert_eq!(steps.len(), 2, "both steps should be present");
-    assert_eq!(
-        steps[0],
-        XrdsAction::Unknown,
-        "the unrecognized action should degrade to Unknown"
-    );
-    assert_eq!(
-        steps[1],
-        XrdsAction::Teleport { destination: [1.0, 2.0, 3.0] },
-        "the recognized action after it must be unaffected"
-    );
+fn key(at_secs: f32, action: XrdsAction) -> XrdsTrackKey {
+    XrdsTrackKey { at_secs, action }
 }
 
-#[test]
-fn unknown_trigger_kind_loads_and_is_inert() {
-    let json = r#"{ "trigger": { "kind": "SomeFutureTrigger" },
-                    "sequence": { "steps": [] } }"#; // adjacently tagged
-    let binding: XrdsTriggerBinding =
-        serde_json::from_str(json).expect("unknown trigger kind must still load");
-    assert_eq!(binding.trigger, XrdsTriggerKind::Unknown);
-    // Nothing emits Unknown, so this binding can never fire — inert, not
-    // misfiring.
+/// A zero-duration `SetTransform`, i.e. what the deleted `Teleport` action was.
+/// Kept under the old name so the many call sites below still read as "an
+/// instant change".
+fn teleport() -> XrdsAction {
+    XrdsAction::SetTransform {
+        position: Some([1.0, 0.0, 0.0]),
+        rotation: None,
+        scale: None,
+        duration_secs: 0.0,
+        ease: XrdsEaseCurve::Linear,
+    }
 }
 
-#[test]
-fn action_target_and_value_defaults_are_self_node_and_fixed_zero() {
-    assert_eq!(XrdsActionTarget::default(), XrdsActionTarget::SelfNode);
-    assert_eq!(XrdsActionValue::default(), XrdsActionValue::Fixed(0.0));
+fn animate(duration_secs: f32) -> XrdsAction {
+    XrdsAction::SetTransform {
+        position: Some([1.0, 0.0, 0.0]),
+        rotation: None,
+        scale: None,
+        duration_secs,
+        ease: XrdsEaseCurve::Cubic,
+    }
 }
 
-#[test]
-fn modify_health_target_defaults_when_omitted_from_json() {
-    // Adjacently tagged since the Unknown fallback was added; XrdsActionValue
-    // itself is still externally tagged, hence the bare `{"Fixed": ...}`.
-    let json = r#"{ "kind": "ModifyHealth", "data": { "delta": { "Fixed": -10.0 } } }"#;
-    let action: XrdsAction = serde_json::from_str(json).expect("deserialise");
-    assert_eq!(
-        action,
-        XrdsAction::ModifyHealth {
-            target: XrdsActionTarget::SelfNode,
-            delta: XrdsActionValue::Fixed(-10.0),
-        }
-    );
+fn named(name: &str, track: XrdsTrack) -> XrdsNamedTrack {
+    XrdsNamedTrack { name: name.to_string(), track }
 }
 
-#[test]
-fn trigger_diagnostics_catch_the_silent_failure_modes() {
-    use XrdsSceneTriggerDiagnosticSeverity as Severity;
+fn doc(nodes: Vec<XrdsSceneNode>, tracks: Vec<XrdsNamedTrack>) -> XrdsSceneDocument {
+    XrdsSceneDocument { nodes, tracks, ..XrdsSceneDocument::default() }
+}
 
-    let doc = XrdsSceneDocument {
-        metadata: XrdsSceneMetadata { name: "diag".to_string(), ..Default::default() },
-        nodes: vec![XrdsSceneNode {
-            id: XrdsSceneNodeId(1),
-            parent_id: None,
-            name: "Thing".to_string(),
-            enabled: true,
-            visible: true,
-            grabbable: false,
-            transform: XrdsSceneTransform::default(),
-            // Not a glTF payload — so the animation action below is bogus.
-            payload: XrdsSceneNodePayload::Empty,
-            editor: XrdsEditorMetadata::default(),
-            triggers: vec![
-                XrdsTriggerBinding {
-                    trigger: XrdsTriggerKind::ZoneEnter,
-                    sequence: XrdsSequence {
-                        steps: vec![
-                            XrdsAction::StopGltfAnimation,
-                            XrdsAction::ModifyHealth {
-                                target: XrdsActionTarget::Node(XrdsSceneNodeId(999)),
-                                delta: XrdsActionValue::Fixed(-1.0),
+/// Same as [`doc`] but with an asset catalog, for the texture-slot checks.
+fn doc_with_assets(
+    nodes: Vec<XrdsSceneNode>,
+    tracks: Vec<XrdsNamedTrack>,
+    assets: Vec<XrdsSceneAsset>,
+) -> XrdsSceneDocument {
+    XrdsSceneDocument { nodes, tracks, assets, ..XrdsSceneDocument::default() }
+}
+
+fn texture_asset(id: &str) -> XrdsSceneAsset {
+    XrdsSceneAsset {
+        id: id.to_string(),
+        uri: format!("textures/{id}.png"),
+        kind: XrdsSceneAssetKind::Texture,
+    }
+}
+
+/// A `SetMaterial` that assigns `id` to the base-colour slot.
+fn set_base_texture(id: Option<&str>) -> XrdsAction {
+    XrdsAction::SetMaterial {
+        base_color: None,
+        metallic: None,
+        roughness: None,
+        texture: Some(XrdsActionTexture {
+            slot: XrdsSceneMaterialTextureSlotKind::BaseColor,
+            texture_asset_id: id.map(str::to_string),
+        }),
+    }
+}
+
+/// Titles of every diagnostic, for order-independent assertions.
+fn titles(d: &XrdsSceneDocument) -> Vec<String> {
+    d.track_diagnostics().into_iter().map(|x| x.title).collect()
+}
+
+fn has(d: &XrdsSceneDocument, title: &str) -> bool {
+    titles(d).iter().any(|t| t == title)
+}
+
+fn find(d: &XrdsSceneDocument, title: &str) -> XrdsSceneTriggerDiagnostic {
+    d.track_diagnostics()
+        .into_iter()
+        .find(|x| x.title == title)
+        .unwrap_or_else(|| panic!("expected a {title:?} diagnostic, got {:?}", titles(d)))
+}
+
+// ---------------------------------------------------------------------------
+// Round-trip / serde defaults
+// ---------------------------------------------------------------------------
+
+#[test]
+fn track_round_trips_every_surviving_action_variant() {
+    let track = XrdsTrack {
+        assets: vec![
+            row(
+                1,
+                vec![
+                    key(
+                        0.0,
+                        XrdsAction::PlayGltfAnimation {
+                            playback: XrdsSceneGltfPlayback {
+                                selector: XrdsSceneGltfAnimationSelector::Name("Open".to_string()),
+                                repeat: XrdsSceneAnimationRepeatMode::Once,
+                                speed: 1.5,
+                                start_paused: false,
                             },
-                            XrdsAction::FireCustomEvent { name: "nobody_listens".to_string() },
-                        ],
-                    },
-                    disabled: false,
-                    hand: None,
-                    runnable: None,
-                },
-                // Listens for a name nothing fires.
-                XrdsTriggerBinding {
-                    trigger: XrdsTriggerKind::Custom("never_fired".to_string()),
-                    sequence: XrdsSequence { steps: vec![] },
-                    disabled: false,
-                    hand: None,
-                    runnable: None,
-                },
-            ],
-            watchers: Vec::new(),
-        }],
-        ..Default::default()
+                        },
+                    ),
+                    key(0.5, XrdsAction::StopGltfAnimation),
+                    key(1.0, XrdsAction::SetVisible(false)),
+                    key(1.5, teleport()),
+                    key(2.0, animate(0.75)),
+                ],
+            ),
+            XrdsTrackAsset {
+                target: XrdsActionTarget::TriggerSource,
+                keys: vec![
+                    key(
+                        0.0,
+                        XrdsAction::ModifyHealth {
+                            delta: XrdsActionValue::FromTriggerSource,
+                        },
+                    ),
+                    key(
+                        0.25,
+                        XrdsAction::SetMaterial {
+                            base_color: Some([1.0, 0.0, 0.0, 1.0]),
+                            metallic: Some(0.25),
+                            roughness: None,
+                            texture: None,
+                        },
+                    ),
+                ],
+            },
+        ],
+        duration_secs: Some(3.0),
+        looping: true,
     };
 
-    let diags = doc.trigger_diagnostics();
-    let titles: Vec<&str> = diags.iter().map(|d| d.title.as_str()).collect();
-
-    assert!(
-        titles.iter().any(|t| t.contains("non-glTF node")),
-        "should flag a glTF animation action on a non-glTF node, got {titles:?}"
-    );
-    assert!(
-        diags.iter().any(|d| d.severity == Severity::Error
-            && d.title.contains("node that does not exist")),
-        "a dangling node target is unworkable and must be an Error, got {diags:?}"
-    );
-    assert!(
-        titles.iter().any(|t| t.contains("no listener")),
-        "should flag a fired custom event nothing listens for, got {titles:?}"
-    );
-    assert!(
-        titles.iter().any(|t| t.contains("no emitter")),
-        "should flag a custom trigger nothing emits, got {titles:?}"
-    );
-    assert!(
-        titles.iter().any(|t| t.contains("Empty sequence")),
-        "should flag the empty sequence, got {titles:?}"
-    );
+    let json = serde_json::to_string_pretty(&track).expect("serialise");
+    let restored: XrdsTrack = serde_json::from_str(&json).expect("deserialise");
+    assert_eq!(track, restored, "round-trip produced a different Track");
 }
 
 #[test]
-fn trigger_diagnostics_are_quiet_on_a_healthy_document() {
-    let doc = XrdsSceneDocument {
-        metadata: XrdsSceneMetadata { name: "healthy".to_string(), ..Default::default() },
-        nodes: vec![XrdsSceneNode {
-            id: XrdsSceneNodeId(1),
-            parent_id: None,
-            name: "Pad".to_string(),
-            enabled: true,
-            visible: true,
-            grabbable: false,
-            transform: XrdsSceneTransform::default(),
-            payload: XrdsSceneNodePayload::Empty,
-            editor: XrdsEditorMetadata::default(),
-            triggers: vec![
-                XrdsTriggerBinding {
-                    trigger: XrdsTriggerKind::ZoneEnter,
-                    sequence: XrdsSequence {
-                        steps: vec![
-                            XrdsAction::Teleport { destination: [1.0, 0.0, 0.0] },
-                            XrdsAction::FireCustomEvent { name: "arrived".to_string() },
-                        ],
-                    },
-                    disabled: false,
-                    hand: None,
-                    runnable: None,
-                },
-                XrdsTriggerBinding {
-                    trigger: XrdsTriggerKind::Custom("arrived".to_string()),
-                    sequence: XrdsSequence {
-                        steps: vec![XrdsAction::SetVisible(false)],
-                    },
-                    disabled: false,
-                    hand: None,
-                    runnable: None,
-                },
-            ],
-            watchers: Vec::new(),
-        }],
-        ..Default::default()
-    };
+fn track_and_binding_deserialize_from_an_empty_object() {
+    // Every field carries #[serde(default)], so a hand-authored minimal
+    // document still loads — the additive-schema-evolution guarantee.
+    let track: XrdsTrack = serde_json::from_str("{}").expect("track from {}");
+    assert!(track.assets.is_empty());
+    assert_eq!(track.duration_secs, None);
+    assert!(!track.looping);
 
+    let binding: XrdsTriggerBinding = serde_json::from_str("{}").expect("binding from {}");
+    assert_eq!(binding.trigger, XrdsTriggerKind::ZoneEnter);
+    assert_eq!(binding.track, None);
+    assert!(!binding.disabled);
+    assert_eq!(binding.hand, None);
+}
+
+#[test]
+fn asset_row_target_defaults_to_self_node() {
+    let asset: XrdsTrackAsset = serde_json::from_str("{}").expect("asset from {}");
+    assert_eq!(asset.target, XrdsActionTarget::SelfNode);
+    assert!(asset.keys.is_empty());
+}
+
+#[test]
+fn set_transform_ease_defaults_to_cubic_when_omitted() {
+    let json = r#"{"at_secs":0.0,"action":{"kind":"SetTransform","data":{
+        "position":null,"rotation":null,"scale":null,"duration_secs":1.0}}}"#;
+    let k: XrdsTrackKey = serde_json::from_str(json).expect("deserialise");
+    match k.action {
+        XrdsAction::SetTransform { ease, .. } => assert_eq!(ease, XrdsEaseCurve::Cubic),
+        other => panic!("expected AnimateTransform, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_payload_less_unrecognized_action_does_not_destroy_the_whole_document() {
+    // Forward compatibility: an action tag this build has never heard of
+    // must degrade to one skipped key, not a failed scene load. Realistic
+    // here because scenes get pushed to a Quest APK that may lag the editor.
+    //
+    // NOTE this only holds for a *payload-less* unknown tag. See the ignored
+    // test below for the payload-carrying case, which is broken.
+    let json = r#"{
+        "assets":[{"target":{"Node":7},"keys":[
+            {"at_secs":0.0,"action":{"kind":"SomeFutureAction"}},
+            {"at_secs":1.0,"action":{"kind":"StopGltfAnimation"}}
+        ]}]
+    }"#;
+    let track: XrdsTrack = serde_json::from_str(json).expect("document must still load");
+    assert_eq!(track.assets[0].keys.len(), 2);
+    assert_eq!(track.assets[0].keys[0].action, XrdsAction::Unknown);
+    assert_eq!(track.assets[0].keys[1].action, XrdsAction::StopGltfAnimation);
+    assert!(!track.assets[0].keys[0].action.is_valid_in_track());
+}
+
+/// Was a known bug, recorded as an executable spec rather than prose, now
+/// fixed: `XrdsAction` has a hand-written `Deserialize` that checks the
+/// `kind` tag against a known-tags list *before* touching `data`, so an
+/// unrecognized action with a payload degrades to `Unknown` instead of
+/// failing the whole document. See `XrdsAction::Unknown`'s doc comment and
+/// `docs/xrds-track-model-plan.md` §9.
+#[test]
+fn a_payload_carrying_unrecognized_action_should_not_destroy_the_whole_document() {
+    let json = r#"{
+        "assets":[{"target":{"Node":7},"keys":[
+            {"at_secs":0.0,"action":{"kind":"PlayAudio","data":{"clip":"ding.ogg"}}}
+        ]}]
+    }"#;
+    let track: XrdsTrack =
+        serde_json::from_str(json).expect("a newer editor's action must not break the load");
+    assert_eq!(track.assets[0].keys[0].action, XrdsAction::Unknown);
+}
+
+#[test]
+fn an_unknown_trigger_kind_loads_and_is_inert() {
+    let json = r#"{"trigger":{"kind":"SomeFutureTrigger"},"track":"T"}"#;
+    let binding: XrdsTriggerBinding = serde_json::from_str(json).expect("must still load");
+    assert_eq!(binding.trigger, XrdsTriggerKind::Unknown);
+}
+
+// ---------------------------------------------------------------------------
+// XrdsTrack / XrdsAction helpers
+// ---------------------------------------------------------------------------
+
+#[test]
+fn self_duration_is_non_zero_only_for_interpolation() {
+    assert_eq!(animate(1.5).self_duration_secs(), 1.5);
+    assert_eq!(teleport().self_duration_secs(), 0.0);
+    assert_eq!(XrdsAction::StopGltfAnimation.self_duration_secs(), 0.0);
+    // A negative authored duration must not produce a negative span.
+    assert_eq!(animate(-2.0).self_duration_secs(), 0.0);
+}
+
+#[test]
+fn effective_duration_includes_the_last_keys_interpolation_tail() {
+    // The whole point of the tail: a Track whose final key animates for 2s
+    // must not report a duration that cuts that animation off.
+    let track = XrdsTrack {
+        assets: vec![row(1, vec![key(3.0, animate(2.0))])],
+        ..XrdsTrack::default()
+    };
+    assert_eq!(track.effective_duration_secs(), 5.0);
+}
+
+#[test]
+fn an_authored_duration_wins_over_the_computed_span() {
+    let track = XrdsTrack {
+        assets: vec![row(1, vec![key(3.0, animate(2.0))])],
+        duration_secs: Some(10.0),
+        ..XrdsTrack::default()
+    };
+    assert_eq!(track.effective_duration_secs(), 10.0);
+}
+
+#[test]
+fn effective_duration_spans_every_row_not_just_the_first() {
+    let track = XrdsTrack {
+        assets: vec![
+            row(1, vec![key(1.0, teleport())]),
+            row(2, vec![key(8.0, teleport())]),
+        ],
+        ..XrdsTrack::default()
+    };
+    assert_eq!(track.effective_duration_secs(), 8.0);
+}
+
+#[test]
+fn effective_duration_of_an_empty_track_is_zero() {
+    assert_eq!(XrdsTrack::default().effective_duration_secs(), 0.0);
+}
+
+#[test]
+fn flattened_keys_sorts_across_rows_and_keeps_each_keys_own_target() {
+    let track = XrdsTrack {
+        assets: vec![
+            row(1, vec![key(2.0, teleport()), key(0.0, teleport())]),
+            row(2, vec![key(1.0, teleport())]),
+        ],
+        ..XrdsTrack::default()
+    };
+    let flat = track.flattened_keys();
+    let times: Vec<f32> = flat.iter().map(|(_, k)| k.at_secs).collect();
+    assert_eq!(times, vec![0.0, 1.0, 2.0], "must be sorted by time across rows");
+
+    // The row's target has to travel with the key — that is the whole
+    // mechanism by which one Track drives several nodes.
+    let owners: Vec<XrdsActionTarget> = flat.iter().map(|(t, _)| *t).collect();
+    assert_eq!(owners[0], XrdsActionTarget::Node(XrdsSceneNodeId(1)));
+    assert_eq!(owners[1], XrdsActionTarget::Node(XrdsSceneNodeId(2)));
+    assert_eq!(owners[2], XrdsActionTarget::Node(XrdsSceneNodeId(1)));
+}
+
+#[test]
+fn two_keys_sharing_a_timestamp_both_survive_flattening() {
+    // Concurrency on one beat is a feature, not a duplicate to collapse.
+    let track = XrdsTrack {
+        assets: vec![
+            row(1, vec![key(1.0, teleport())]),
+            row(2, vec![key(1.0, teleport())]),
+        ],
+        ..XrdsTrack::default()
+    };
+    assert_eq!(track.flattened_keys().len(), 2);
+    assert_eq!(track.key_count(), 2);
+}
+
+#[test]
+fn owned_nodes_reports_only_concrete_node_rows() {
+    // SelfNode/TriggerSource resolve at fire time, so they have no
+    // authoring-time identity and cannot take part in conflict checks.
+    let track = XrdsTrack {
+        assets: vec![
+            row(1, vec![]),
+            XrdsTrackAsset { target: XrdsActionTarget::SelfNode, keys: vec![] },
+            XrdsTrackAsset { target: XrdsActionTarget::TriggerSource, keys: vec![] },
+            row(2, vec![]),
+        ],
+        ..XrdsTrack::default()
+    };
+    assert_eq!(track.owned_nodes(), vec![XrdsSceneNodeId(1), XrdsSceneNodeId(2)]);
+}
+
+// ---------------------------------------------------------------------------
+// Binding diagnostics
+// ---------------------------------------------------------------------------
+
+fn healthy_track() -> XrdsTrack {
+    XrdsTrack { assets: vec![row(1, vec![key(0.0, teleport())])], ..XrdsTrack::default() }
+}
+
+#[test]
+fn diagnostics_are_quiet_on_a_healthy_document() {
+    let d = doc(
+        vec![node_with_binding(1, binding_for("Open"))],
+        vec![named("Open", healthy_track())],
+    );
+    assert_eq!(d.track_diagnostics(), Vec::new(), "healthy document produced diagnostics");
+}
+
+#[test]
+fn diagnostics_flag_a_binding_naming_a_missing_track() {
+    let d = doc(vec![node_with_binding(1, binding_for("Nope"))], Vec::new());
+    let diag = find(&d, "Binding names a missing Track");
+    assert_eq!(diag.severity, XrdsSceneTriggerDiagnosticSeverity::Error);
+    assert_eq!(diag.node_id, Some(XrdsSceneNodeId(1)));
+    assert!(diag.detail.contains("\"Nope\""), "detail should quote the name: {}", diag.detail);
+}
+
+#[test]
+fn diagnostics_warn_about_a_binding_that_runs_nothing() {
+    // Authored-but-unwired is the normal intermediate state, so this is a
+    // warning rather than an error.
+    let binding = XrdsTriggerBinding { track: None, ..binding_for("unused") };
+    let d = doc(vec![node_with_binding(1, binding)], Vec::new());
     assert_eq!(
-        doc.trigger_diagnostics(),
-        vec![],
-        "a document whose custom event and listener match should produce no diagnostics"
+        find(&d, "Binding runs nothing").severity,
+        XrdsSceneTriggerDiagnosticSeverity::Warning
     );
-}
-
-#[test]
-fn disabled_flag_defaults_to_false_so_existing_documents_stay_active() {
-    // The trap this guards against: if the field were named `enabled`,
-    // serde's bool default of `false` would silently switch off every
-    // binding in every existing document on load. The negative name makes
-    // the default correct.
-    let restored: XrdsTriggerBinding = serde_json::from_str("{}").expect("deserialise");
-    assert!(!restored.disabled, "a binding with no flag present must be active");
-
-    // And it stays out of serialized output when unset.
-    let json = serde_json::to_string(&XrdsTriggerBinding::default()).expect("serialise");
-    assert!(
-        !json.contains("disabled"),
-        "an unset flag should not appear in output, got {json}"
-    );
-}
-
-#[test]
-fn diagnostics_stay_quiet_about_disabled_bindings() {
-    // A parked binding is deliberately inert, so nagging about its contents
-    // is noise. Anything genuinely wrong resurfaces when it is re-enabled.
-    let broken_but_parked = XrdsTriggerBinding {
-        trigger: XrdsTriggerKind::Custom("never_fired".to_string()),
-        sequence: XrdsSequence { steps: vec![] }, // empty AND unlistened-for
-        disabled: true,
-        hand: None,
-        runnable: None,
-    };
-
-    let doc = XrdsSceneDocument {
-        metadata: XrdsSceneMetadata { name: "parked".to_string(), ..Default::default() },
-        nodes: vec![XrdsSceneNode {
-            id: XrdsSceneNodeId(1),
-            parent_id: None,
-            name: "Thing".to_string(),
-            enabled: true,
-            visible: true,
-            grabbable: false,
-            transform: XrdsSceneTransform::default(),
-            payload: XrdsSceneNodePayload::Empty,
-            editor: XrdsEditorMetadata::default(),
-            triggers: vec![broken_but_parked.clone()],
-            watchers: Vec::new(),
-        }],
-        ..Default::default()
-    };
-    assert_eq!(
-        doc.trigger_diagnostics(),
-        vec![],
-        "a disabled binding should produce no diagnostics"
-    );
-
-    // Re-enabling it surfaces the problems again.
-    let mut doc = doc;
-    doc.nodes[0].triggers[0].disabled = false;
-    assert!(
-        !doc.trigger_diagnostics().is_empty(),
-        "re-enabling must bring the diagnostics back"
-    );
-}
-
-#[test]
-fn hand_filter_round_trips_and_defaults_to_none() {
-    let with_hand = XrdsTriggerBinding {
-        trigger: XrdsTriggerKind::Grabbed,
-        sequence: XrdsSequence { steps: vec![] },
-        disabled: false,
-        hand: Some(xrds_components::XrGrabHand::Left),
-        runnable: None,
-    };
-    let json = serde_json::to_string(&with_hand).expect("serialise");
-    let restored: XrdsTriggerBinding = serde_json::from_str(&json).expect("deserialise");
-    assert_eq!(with_hand, restored);
-
-    // Absent from JSON entirely (older document) -> None, not an error.
-    let restored: XrdsTriggerBinding = serde_json::from_str("{}").expect("deserialise from {}");
-    assert_eq!(restored.hand, None);
-
-    // And an unset filter stays out of serialized output.
-    let no_hand = XrdsTriggerBinding::default();
-    let json = serde_json::to_string(&no_hand).expect("serialise");
-    assert!(!json.contains("hand"), "an unset hand filter should not appear in output, got {json}");
 }
 
 #[test]
 fn diagnostics_flag_a_hand_filter_on_a_handless_trigger_kind() {
-    let doc = XrdsSceneDocument {
-        metadata: XrdsSceneMetadata { name: "bad-hand".to_string(), ..Default::default() },
-        nodes: vec![XrdsSceneNode {
-            id: XrdsSceneNodeId(1),
-            parent_id: None,
-            name: "Zone".to_string(),
-            enabled: true,
-            visible: true,
-            grabbable: false,
-            transform: XrdsSceneTransform::default(),
-            payload: XrdsSceneNodePayload::Empty,
-            editor: XrdsEditorMetadata::default(),
-            triggers: vec![XrdsTriggerBinding {
-                // ZoneEnter never reports a hand, so this can never fire.
-                trigger: XrdsTriggerKind::ZoneEnter,
-                sequence: XrdsSequence {
-                    steps: vec![XrdsAction::Teleport { destination: [1.0, 0.0, 0.0] }],
-                },
-                disabled: false,
-                hand: Some(xrds_components::XrGrabHand::Left),
-                runnable: None,
-            }],
-            watchers: Vec::new(),
-        }],
-        ..Default::default()
+    let binding = XrdsTriggerBinding {
+        trigger: XrdsTriggerKind::ZoneEnter,
+        hand: Some(xrds_components::XrGrabHand::Left),
+        ..binding_for("Open")
     };
-
-    let diags = doc.trigger_diagnostics();
-    assert!(
-        diags.iter().any(|d| {
-            d.severity == XrdsSceneTriggerDiagnosticSeverity::Error
-                && d.title.contains("Hand filter")
-        }),
-        "a hand filter on ZoneEnter must be flagged as an Error (unfireable), got {diags:?}"
+    let d = doc(vec![node_with_binding(1, binding)], vec![named("Open", healthy_track())]);
+    // Error, not Warning: it cannot ever fire, it does not merely misbehave.
+    assert_eq!(
+        find(&d, "Hand filter on a trigger kind with no hand").severity,
+        XrdsSceneTriggerDiagnosticSeverity::Error
     );
 }
 
 #[test]
 fn diagnostics_allow_a_hand_filter_on_a_grab_binding() {
-    let doc = XrdsSceneDocument {
-        metadata: XrdsSceneMetadata { name: "good-hand".to_string(), ..Default::default() },
-        nodes: vec![XrdsSceneNode {
-            id: XrdsSceneNodeId(1),
-            parent_id: None,
-            name: "Item".to_string(),
-            enabled: true,
-            visible: true,
-            grabbable: true,
-            transform: XrdsSceneTransform::default(),
-            payload: XrdsSceneNodePayload::Empty,
-            editor: XrdsEditorMetadata::default(),
-            triggers: vec![XrdsTriggerBinding {
-                trigger: XrdsTriggerKind::Grabbed,
-                sequence: XrdsSequence {
-                    steps: vec![XrdsAction::Teleport { destination: [1.0, 0.0, 0.0] }],
-                },
-                disabled: false,
-                hand: Some(xrds_components::XrGrabHand::Right),
-                runnable: None,
-            }],
-            watchers: Vec::new(),
-        }],
-        ..Default::default()
+    let binding = XrdsTriggerBinding {
+        trigger: XrdsTriggerKind::Grabbed,
+        hand: Some(xrds_components::XrGrabHand::Right),
+        ..binding_for("Open")
     };
+    let d = doc(vec![node_with_binding(1, binding)], vec![named("Open", healthy_track())]);
+    assert!(!has(&d, "Hand filter on a trigger kind with no hand"), "{:?}", titles(&d));
+}
 
-    assert_eq!(
-        doc.trigger_diagnostics(),
+#[test]
+fn carries_hand_agrees_with_the_hand_filter_diagnostic() {
+    // One source of truth: the editor's kind picker and this diagnostic both
+    // read `carries_hand`, so drift between them would be a real bug.
+    for kind in [
+        XrdsTriggerKind::Grabbed,
+        XrdsTriggerKind::Dropped,
+        XrdsTriggerKind::HoverEnter,
+        XrdsTriggerKind::HoverExit,
+        XrdsTriggerKind::ButtonPress,
+        XrdsTriggerKind::ButtonRelease,
+        XrdsTriggerKind::SliderChange,
+        XrdsTriggerKind::ToggleChange,
+    ] {
+        assert!(kind.carries_hand(), "{kind:?} should carry a hand");
+    }
+    for kind in [
+        XrdsTriggerKind::ZoneEnter,
+        XrdsTriggerKind::ZoneExit,
+        XrdsTriggerKind::AnimationComplete,
+        XrdsTriggerKind::Custom("x".to_string()),
+        XrdsTriggerKind::Unknown,
+    ] {
+        assert!(!kind.carries_hand(), "{kind:?} should not carry a hand");
+    }
+}
+
+#[test]
+fn diagnostics_stay_quiet_about_disabled_bindings() {
+    // A parked binding is intentionally inert; complaining about it would
+    // make the "switch this off to isolate a problem" workflow noisy.
+    let binding = XrdsTriggerBinding {
+        trigger: XrdsTriggerKind::Custom("never_emitted".to_string()),
+        disabled: true,
+        ..binding_for("Open")
+    };
+    let d = doc(vec![node_with_binding(1, binding)], vec![named("Open", healthy_track())]);
+    assert!(!has(&d, "Nothing emits this Custom trigger"), "{:?}", titles(&d));
+}
+
+// ---------------------------------------------------------------------------
+// Track-shape diagnostics
+// ---------------------------------------------------------------------------
+
+#[test]
+fn diagnostics_flag_an_asset_appearing_twice_in_one_track() {
+    // The one-row-per-asset rule: two rows for one node means two schedules
+    // fighting over it from inside the same Track.
+    let d = doc(
+        vec![node(1)],
+        vec![named(
+            "T",
+            XrdsTrack {
+                assets: vec![
+                    row(1, vec![key(0.0, teleport())]),
+                    row(1, vec![key(1.0, teleport())]),
+                ],
+                ..XrdsTrack::default()
+            },
+        )],
+    );
+    let diag = find(&d, "Asset appears twice in one Track");
+    assert_eq!(diag.severity, XrdsSceneTriggerDiagnosticSeverity::Error);
+    assert_eq!(diag.node_id, None, "a registry problem is not one node's fault");
+}
+
+#[test]
+fn diagnostics_flag_an_asset_row_targeting_a_missing_node() {
+    let d = doc(
+        vec![node(1)],
+        vec![named(
+            "T",
+            XrdsTrack { assets: vec![row(99, vec![key(0.0, teleport())])], ..XrdsTrack::default() },
+        )],
+    );
+    assert!(has(&d, "Asset row targets a missing node"), "{:?}", titles(&d));
+}
+
+#[test]
+fn diagnostics_flag_an_empty_track_and_an_empty_row() {
+    let d = doc(vec![node(1)], vec![named("Empty", XrdsTrack::default())]);
+    assert!(has(&d, "Empty Track"), "{:?}", titles(&d));
+
+    let d2 = doc(
+        vec![node(1)],
+        vec![named("T", XrdsTrack { assets: vec![row(1, vec![])], ..XrdsTrack::default() })],
+    );
+    assert!(has(&d2, "Asset row has no events"), "{:?}", titles(&d2));
+}
+
+#[test]
+fn diagnostics_flag_a_negative_event_time() {
+    let d = doc(
+        vec![node(1)],
+        vec![named(
+            "T",
+            XrdsTrack { assets: vec![row(1, vec![key(-1.0, teleport())])], ..XrdsTrack::default() },
+        )],
+    );
+    assert!(has(&d, "Event at a negative time"), "{:?}", titles(&d));
+}
+
+#[test]
+fn diagnostics_flag_an_event_past_the_authored_duration() {
+    let d = doc(
+        vec![node(1)],
+        vec![named(
+            "T",
+            XrdsTrack {
+                assets: vec![row(1, vec![key(9.0, teleport())])],
+                duration_secs: Some(2.0),
+                ..XrdsTrack::default()
+            },
+        )],
+    );
+    assert!(has(&d, "Event past the Track's end"), "{:?}", titles(&d));
+}
+
+#[test]
+fn diagnostics_flag_an_unrecognized_action_in_a_track() {
+    let d = doc(
+        vec![node(1)],
+        vec![named(
+            "T",
+            XrdsTrack {
+                assets: vec![row(1, vec![key(0.0, XrdsAction::Unknown)])],
+                ..XrdsTrack::default()
+            },
+        )],
+    );
+    assert!(has(&d, "Unrecognized action"), "{:?}", titles(&d));
+}
+
+#[test]
+fn diagnostics_flag_gltf_playback_on_a_non_gltf_node() {
+    let d = doc(
+        vec![node(1)],
+        vec![named(
+            "T",
+            XrdsTrack {
+                assets: vec![row(1, vec![key(0.0, XrdsAction::StopGltfAnimation)])],
+                ..XrdsTrack::default()
+            },
+        )],
+    );
+    assert!(has(&d, "glTF action on a non-glTF node"), "{:?}", titles(&d));
+}
+
+#[test]
+fn diagnostics_skip_the_gltf_check_for_a_self_node_row() {
+    // A SelfNode row's node is unknown until fire time, so there is nothing
+    // to check the payload of — guessing would be a false positive.
+    let d = doc(
+        vec![node(1)],
+        vec![named(
+            "T",
+            XrdsTrack {
+                assets: vec![XrdsTrackAsset {
+                    target: XrdsActionTarget::SelfNode,
+                    keys: vec![key(0.0, XrdsAction::StopGltfAnimation)],
+                }],
+                ..XrdsTrack::default()
+            },
+        )],
+    );
+    assert!(!has(&d, "glTF action on a non-glTF node"), "{:?}", titles(&d));
+}
+
+#[test]
+fn diagnostics_flag_a_transform_that_changes_nothing() {
+    let no_op = XrdsAction::SetTransform {
+        position: None,
+        rotation: None,
+        scale: None,
+        duration_secs: 1.0,
+        ease: XrdsEaseCurve::Cubic,
+    };
+    let d = doc(
+        vec![node(1)],
+        vec![named(
+            "T",
+            XrdsTrack {
+                assets: vec![row(1, vec![key(0.0, no_op), key(1.0, animate(0.0))])],
+                ..XrdsTrack::default()
+            },
+        )],
+    );
+    let t = titles(&d);
+    assert!(t.contains(&"Interpolation changes nothing".to_string()), "{t:?}");
+    // Deliberately NOT warned about: with `Teleport` deleted, duration 0 is the
+    // normal way to author an instant change. Warning on it would flag correct
+    // authoring.
+    assert!(!t.contains(&"Interpolation has no duration".to_string()), "{t:?}");
+}
+
+// ---------------------------------------------------------------------------
+// SetMaterial texture slots
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_texture_slot_assignment_round_trips() {
+    let track = XrdsTrack {
+        assets: vec![row(1, vec![key(0.0, set_base_texture(Some("asset:wood")))])],
+        ..XrdsTrack::default()
+    };
+    let json = serde_json::to_string(&track).expect("serialise");
+    let restored: XrdsTrack = serde_json::from_str(&json).expect("deserialise");
+    assert_eq!(track, restored);
+}
+
+#[test]
+fn set_material_texture_defaults_to_none_when_omitted() {
+    // Additive-schema guarantee: a document written before texture slots
+    // existed must still load, with no slot assignment.
+    let json = r#"{"kind":"SetMaterial","data":{
+        "base_color":null,"metallic":0.5,"roughness":null}}"#;
+    let action: XrdsAction = serde_json::from_str(json).expect("deserialise");
+    match action {
+        XrdsAction::SetMaterial { texture, metallic, .. } => {
+            assert_eq!(texture, None);
+            assert_eq!(metallic, Some(0.5));
+        }
+        other => panic!("expected SetMaterial, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_texture_slot_assignment_counts_as_setting_something() {
+    // Assigning only a texture must NOT trip "Material change sets nothing" —
+    // that check predates texture slots and would otherwise flag correct
+    // authoring, which is how authors learn to ignore diagnostics.
+    let d = doc_with_assets(
+        vec![node(1)],
+        vec![named(
+            "T",
+            XrdsTrack {
+                assets: vec![row(1, vec![key(0.0, set_base_texture(Some("asset:wood")))])],
+                ..XrdsTrack::default()
+            },
+        )],
+        vec![texture_asset("asset:wood")],
+    );
+    assert!(!has(&d, "Material change sets nothing"), "{:?}", titles(&d));
+}
+
+#[test]
+fn clearing_a_slot_also_counts_as_setting_something() {
+    // `texture_asset_id: None` means "clear this slot", a real thing to
+    // author — not an unset field.
+    let d = doc_with_assets(
+        vec![node(1)],
+        vec![named(
+            "T",
+            XrdsTrack {
+                assets: vec![row(1, vec![key(0.0, set_base_texture(None))])],
+                ..XrdsTrack::default()
+            },
+        )],
         vec![],
-        "a hand filter on a Grabbed binding is legitimate and should not be flagged"
+    );
+    assert!(!has(&d, "Material change sets nothing"), "{:?}", titles(&d));
+    assert!(!has(&d, "Texture asset is not in the catalog"), "{:?}", titles(&d));
+}
+
+#[test]
+fn diagnostics_flag_a_texture_id_that_is_not_in_the_catalog() {
+    let d = doc_with_assets(
+        vec![node(1)],
+        vec![named(
+            "T",
+            XrdsTrack {
+                assets: vec![row(1, vec![key(0.0, set_base_texture(Some("asset:missing")))])],
+                ..XrdsTrack::default()
+            },
+        )],
+        vec![texture_asset("asset:wood")],
+    );
+    let d1 = find(&d, "Texture asset is not in the catalog");
+    assert_eq!(d1.severity, XrdsSceneTriggerDiagnosticSeverity::Error);
+    assert!(d1.detail.contains("asset:missing"), "{}", d1.detail);
+}
+
+#[test]
+fn diagnostics_reject_a_non_texture_asset_in_a_texture_slot() {
+    // An id that exists but names a glTF/audio asset resolves to no image at
+    // runtime, so it is the same silent failure as a missing id.
+    let d = doc_with_assets(
+        vec![node(1)],
+        vec![named(
+            "T",
+            XrdsTrack {
+                assets: vec![row(1, vec![key(0.0, set_base_texture(Some("asset:model")))])],
+                ..XrdsTrack::default()
+            },
+        )],
+        vec![XrdsSceneAsset {
+            id: "asset:model".to_string(),
+            uri: "models/thing.glb".to_string(),
+            kind: XrdsSceneAssetKind::Gltf,
+        }],
+    );
+    assert!(has(&d, "Texture asset is not in the catalog"), "{:?}", titles(&d));
+}
+
+#[test]
+fn diagnostics_flag_a_material_change_that_sets_nothing() {
+    let d = doc(
+        vec![node(1)],
+        vec![named(
+            "T",
+            XrdsTrack {
+                assets: vec![row(
+                    1,
+                    vec![key(
+                        0.0,
+                        XrdsAction::SetMaterial {
+                            base_color: None,
+                            metallic: None,
+                            roughness: None,
+                            texture: None,
+                        },
+                    )],
+                )],
+                ..XrdsTrack::default()
+            },
+        )],
+    );
+    assert!(has(&d, "Material change sets nothing"), "{:?}", titles(&d));
+}
+
+// ---------------------------------------------------------------------------
+// Cross-Track conflicts
+// ---------------------------------------------------------------------------
+
+#[test]
+fn diagnostics_warn_when_two_tracks_share_an_asset() {
+    // Authoring the overlap is allowed — the two may never be fired
+    // together. It is reported so the author learns the constraint before
+    // hitting the runtime's reject-the-newcomer guard.
+    let d = doc(
+        vec![node(1), node(2)],
+        vec![
+            named(
+                "A",
+                XrdsTrack {
+                    assets: vec![row(1, vec![key(0.0, teleport())])],
+                    ..XrdsTrack::default()
+                },
+            ),
+            named(
+                "B",
+                XrdsTrack {
+                    assets: vec![
+                        row(1, vec![key(0.0, teleport())]),
+                        row(2, vec![key(0.0, teleport())]),
+                    ],
+                    ..XrdsTrack::default()
+                },
+            ),
+        ],
+    );
+    let diag = find(&d, "Two Tracks share an asset");
+    assert_eq!(diag.severity, XrdsSceneTriggerDiagnosticSeverity::Warning);
+    assert!(
+        diag.detail.contains("\"A\"") && diag.detail.contains("\"B\""),
+        "should name both Tracks: {}",
+        diag.detail
     );
 }
 
 #[test]
-fn threshold_watcher_round_trips_and_defaults() {
-    let watcher = XrdsThresholdWatcher {
-        observable: XrdsObservable::RotationDegrees { axis: XrdsAxis::Y },
+fn diagnostics_are_quiet_when_tracks_have_disjoint_assets() {
+    // The whole point of the rule: disjoint Tracks may run concurrently.
+    let d = doc(
+        vec![node(1), node(2)],
+        vec![
+            named(
+                "A",
+                XrdsTrack {
+                    assets: vec![row(1, vec![key(0.0, teleport())])],
+                    ..XrdsTrack::default()
+                },
+            ),
+            named(
+                "B",
+                XrdsTrack {
+                    assets: vec![row(2, vec![key(0.0, teleport())])],
+                    ..XrdsTrack::default()
+                },
+            ),
+        ],
+    );
+    assert!(!has(&d, "Two Tracks share an asset"), "{:?}", titles(&d));
+}
+
+#[test]
+fn a_looping_track_sharing_an_asset_is_an_error_not_a_warning() {
+    // A looping Track never releases its assets, so the other can never run
+    // at all — permanent rather than situational.
+    let d = doc(
+        vec![node(1)],
+        vec![
+            named(
+                "Ambient",
+                XrdsTrack {
+                    assets: vec![row(1, vec![key(0.0, teleport())])],
+                    looping: true,
+                    ..XrdsTrack::default()
+                },
+            ),
+            named(
+                "Blocked",
+                XrdsTrack {
+                    assets: vec![row(1, vec![key(0.0, teleport())])],
+                    ..XrdsTrack::default()
+                },
+            ),
+        ],
+    );
+    let diag = find(&d, "A looping Track blocks another forever");
+    assert_eq!(diag.severity, XrdsSceneTriggerDiagnosticSeverity::Error);
+    // It must name the looping side as the cause, not merely list both.
+    assert!(
+        diag.detail.contains("\"Ambient\" loops"),
+        "should name the looping Track as the cause: {}",
+        diag.detail
+    );
+    assert!(
+        !has(&d, "Two Tracks share an asset"),
+        "the looping error replaces the plain warning rather than doubling it"
+    );
+}
+
+#[test]
+fn self_node_rows_never_produce_a_false_conflict() {
+    // Two Tracks each using SelfNode resolve to different entities at fire
+    // time, so treating them as a shared asset would be wrong.
+    let self_row =
+        || XrdsTrackAsset { target: XrdsActionTarget::SelfNode, keys: vec![key(0.0, teleport())] };
+    let d = doc(
+        vec![node(1)],
+        vec![
+            named("A", XrdsTrack { assets: vec![self_row()], ..XrdsTrack::default() }),
+            named("B", XrdsTrack { assets: vec![self_row()], ..XrdsTrack::default() }),
+        ],
+    );
+    assert!(!has(&d, "Two Tracks share an asset"), "{:?}", titles(&d));
+    assert!(!has(&d, "A looping Track blocks another forever"), "{:?}", titles(&d));
+}
+
+// ---------------------------------------------------------------------------
+// Threshold watchers
+// ---------------------------------------------------------------------------
+
+fn watcher(fires: &str) -> XrdsThresholdWatcher {
+    XrdsThresholdWatcher {
+        observable: XrdsObservable::Height,
         crossing: XrdsCrossing::Above,
-        value: 90.0,
-        hysteresis: 2.0,
-        fires: "valve_opened".to_string(),
+        value: 1.0,
+        hysteresis: 0.0,
+        fires: fires.to_string(),
         disabled: false,
-    };
-    let json = serde_json::to_string(&watcher).expect("serialise");
+    }
+}
+
+#[test]
+fn threshold_watcher_round_trips() {
+    let w = watcher("lifted");
+    let json = serde_json::to_string_pretty(&w).expect("serialise");
     let restored: XrdsThresholdWatcher = serde_json::from_str(&json).expect("deserialise");
-    assert_eq!(watcher, restored);
-
-    assert_eq!(XrdsAxis::default(), XrdsAxis::Y);
-    assert_eq!(XrdsCrossing::default(), XrdsCrossing::Either);
+    assert_eq!(w, restored);
 }
 
 #[test]
-fn node_watchers_field_defaults_to_empty_and_stays_out_of_output() {
-    // Serialize a real node, then strip the "watchers" key by hand — this
-    // simulates an older saved document (predating this field) far more
-    // robustly than hand-writing node JSON, which breaks every time an
-    // unrelated field is added to XrdsSceneNode/XrdsEditorMetadata.
-    let node = XrdsSceneNode {
-        id: XrdsSceneNodeId(1),
-        parent_id: None,
-        name: "n".to_string(),
-        enabled: true,
-        visible: true,
-        grabbable: false,
-        transform: XrdsSceneTransform::default(),
-        payload: XrdsSceneNodePayload::Empty,
-        editor: XrdsEditorMetadata::default(),
-        triggers: Vec::new(),
-        watchers: Vec::new(),
+fn a_watcher_counts_as_an_emitter_for_a_custom_binding() {
+    let listener = XrdsTriggerBinding {
+        trigger: XrdsTriggerKind::Custom("lifted".to_string()),
+        ..binding_for("T")
     };
-    let json = serde_json::to_string(&node).expect("serialise");
-    assert!(!json.contains("watchers"), "empty watchers must not appear in output, got {json}");
-
-    let restored: XrdsSceneNode =
-        serde_json::from_str(&json).expect("older document with no watchers field must still load");
-    assert!(restored.watchers.is_empty());
-}
-
-fn node_with_watcher(id: u64, watcher: XrdsThresholdWatcher) -> XrdsSceneNode {
-    XrdsSceneNode {
-        id: XrdsSceneNodeId(id),
-        parent_id: None,
-        name: format!("Node{id}"),
-        enabled: true,
-        visible: true,
-        grabbable: false,
-        transform: XrdsSceneTransform::default(),
-        payload: XrdsSceneNodePayload::Empty,
-        editor: XrdsEditorMetadata::default(),
-        triggers: Vec::new(),
-        watchers: vec![watcher],
-    }
+    let d = doc(
+        vec![node_with_binding(1, listener), node_with_watcher(2, watcher("lifted"))],
+        vec![named("T", healthy_track())],
+    );
+    assert!(!has(&d, "Nothing emits this Custom trigger"), "{:?}", titles(&d));
 }
 
 #[test]
-fn diagnostics_flag_distance_watcher_targeting_a_missing_node() {
-    let doc = XrdsSceneDocument {
-        metadata: XrdsSceneMetadata { name: "d".to_string(), ..Default::default() },
-        nodes: vec![node_with_watcher(
-            1,
-            XrdsThresholdWatcher {
-                observable: XrdsObservable::DistanceTo { node: XrdsSceneNodeId(999) },
-                crossing: XrdsCrossing::Below,
-                value: 1.0,
-                hysteresis: 0.0,
-                fires: "close".to_string(),
-                disabled: false,
-            },
-        )],
-        ..Default::default()
+fn diagnostics_warn_about_a_custom_trigger_nothing_emits() {
+    // The most valuable diagnostic here: "never fires" and "not triggered
+    // yet" are indistinguishable at runtime.
+    let listener = XrdsTriggerBinding {
+        trigger: XrdsTriggerKind::Custom("nobody_fires_this".to_string()),
+        ..binding_for("T")
     };
-    let diags = doc.trigger_diagnostics();
-    assert!(
-        diags.iter().any(|d| {
-            d.severity == XrdsSceneTriggerDiagnosticSeverity::Error
-                && d.title.contains("does not exist")
-        }),
-        "DistanceTo a missing node must be an Error, got {diags:?}"
-    );
-}
-
-#[test]
-fn diagnostics_flag_negative_hysteresis() {
-    let doc = XrdsSceneDocument {
-        metadata: XrdsSceneMetadata { name: "d".to_string(), ..Default::default() },
-        nodes: vec![node_with_watcher(
-            1,
-            XrdsThresholdWatcher {
-                observable: XrdsObservable::Height,
-                crossing: XrdsCrossing::Above,
-                value: 1.0,
-                hysteresis: -0.5,
-                fires: "up".to_string(),
-                disabled: false,
-            },
-        )],
-        ..Default::default()
-    };
-    assert!(
-        doc.trigger_diagnostics()
-            .iter()
-            .any(|d| d.title.contains("Negative hysteresis"))
-    );
-}
-
-#[test]
-fn watcher_counts_as_a_custom_emitter_for_diagnostics() {
-    // A binding listening for what a watcher fires must not be flagged as
-    // "nothing fires this" — the watcher is a legitimate emitter.
-    let mut listener_node = node_with_watcher(
-        2,
-        XrdsThresholdWatcher {
-            observable: XrdsObservable::ScaleMagnitude,
-            crossing: XrdsCrossing::Above,
-            value: 2.0,
-            hysteresis: 0.0,
-            fires: "grown".to_string(),
-            disabled: false,
-        },
-    );
-    listener_node.watchers.clear();
-    listener_node.triggers = vec![XrdsTriggerBinding {
-        trigger: XrdsTriggerKind::Custom("grown".to_string()),
-        sequence: XrdsSequence { steps: vec![] },
-        disabled: false,
-        hand: None,
-        runnable: None,
-    }];
-
-    let emitter_node = node_with_watcher(
-        3,
-        XrdsThresholdWatcher {
-            observable: XrdsObservable::ScaleMagnitude,
-            crossing: XrdsCrossing::Above,
-            value: 2.0,
-            hysteresis: 0.0,
-            fires: "grown".to_string(),
-            disabled: false,
-        },
-    );
-
-    let doc = XrdsSceneDocument {
-        metadata: XrdsSceneMetadata { name: "d".to_string(), ..Default::default() },
-        nodes: vec![listener_node, emitter_node],
-        ..Default::default()
-    };
-
-    assert!(
-        !doc.trigger_diagnostics()
-            .iter()
-            .any(|d| d.title.contains("no emitter") || d.title.contains("no listener")),
-        "the watcher's fires name should satisfy the binding's listener, got {:?}",
-        doc.trigger_diagnostics()
-    );
-}
-
-#[test]
-fn disabled_watcher_produces_no_diagnostics_and_is_not_an_emitter() {
-    let doc = XrdsSceneDocument {
-        metadata: XrdsSceneMetadata { name: "d".to_string(), ..Default::default() },
-        nodes: vec![node_with_watcher(
-            1,
-            XrdsThresholdWatcher {
-                // Both problems at once — neither should surface while parked.
-                observable: XrdsObservable::DistanceTo { node: XrdsSceneNodeId(999) },
-                crossing: XrdsCrossing::Above,
-                value: 1.0,
-                hysteresis: -1.0,
-                fires: "x".to_string(),
-                disabled: true,
-            },
-        )],
-        ..Default::default()
-    };
-    assert_eq!(doc.trigger_diagnostics(), vec![]);
-}
-
-// ---------------------------------------------------------------------------
-// Phase 9a — Run / runnable-registry diagnostics
-// ---------------------------------------------------------------------------
-
-fn node_with_binding(id: u64, binding: XrdsTriggerBinding) -> XrdsSceneNode {
-    XrdsSceneNode {
-        id: XrdsSceneNodeId(id),
-        parent_id: None,
-        name: format!("Node{id}"),
-        enabled: true,
-        visible: true,
-        grabbable: false,
-        transform: XrdsSceneTransform::default(),
-        payload: XrdsSceneNodePayload::Empty,
-        editor: XrdsEditorMetadata::default(),
-        triggers: vec![binding],
-        watchers: Vec::new(),
-    }
-}
-
-#[test]
-fn diagnostics_flag_a_binding_naming_an_unregistered_runnable() {
-    let doc = XrdsSceneDocument {
-        metadata: XrdsSceneMetadata { name: "d".to_string(), ..Default::default() },
-        nodes: vec![node_with_binding(
-            1,
-            XrdsTriggerBinding {
-                trigger: XrdsTriggerKind::ZoneEnter,
-                sequence: XrdsSequence::default(),
-                disabled: false,
-                hand: None,
-                runnable: Some("does-not-exist".to_string()),
-            },
-        )],
-        ..Default::default()
-    };
-    let diags = doc.trigger_diagnostics();
-    assert!(
-        diags.iter().any(|d| d.severity == XrdsSceneTriggerDiagnosticSeverity::Error
-            && d.title.contains("unknown runnable")
-            && d.node_id == Some(XrdsSceneNodeId(1))),
-        "a binding naming a nonexistent runnable must be an Error attributed to its node, got \
-         {diags:?}"
-    );
-}
-
-#[test]
-fn diagnostics_flag_a_binding_with_both_a_runnable_and_an_inline_sequence() {
-    let doc = XrdsSceneDocument {
-        metadata: XrdsSceneMetadata { name: "d".to_string(), ..Default::default() },
-        runnables: vec![XrdsNamedRunnable {
-            name: "teleport".to_string(),
-            runnable: XrdsRunnable::Sequence(XrdsSequence {
-                steps: vec![XrdsAction::Teleport { destination: [1.0, 1.0, 1.0] }],
-            }),
-        }],
-        nodes: vec![node_with_binding(
-            1,
-            XrdsTriggerBinding {
-                trigger: XrdsTriggerKind::ZoneEnter,
-                // Both set — the inline sequence is dead data at runtime.
-                sequence: XrdsSequence {
-                    steps: vec![XrdsAction::SetVisible(false)],
-                },
-                disabled: false,
-                hand: None,
-                runnable: Some("teleport".to_string()),
-            },
-        )],
-        ..Default::default()
-    };
-    let diags = doc.trigger_diagnostics();
-    assert!(
-        diags.iter().any(|d| d.title.contains("both a named runnable and an inline sequence")),
-        "should flag the nonsensical both-set state, got {diags:?}"
-    );
-    // The named runnable resolves fine, so there must be no "unknown runnable" Error.
-    assert!(
-        !diags.iter().any(|d| d.title.contains("unknown runnable")),
-        "the runnable name IS registered, so it must not be flagged as unknown, got {diags:?}"
-    );
-}
-
-#[test]
-fn diagnostics_are_quiet_on_a_binding_naming_a_valid_runnable() {
-    let doc = XrdsSceneDocument {
-        metadata: XrdsSceneMetadata { name: "d".to_string(), ..Default::default() },
-        runnables: vec![XrdsNamedRunnable {
-            name: "teleport".to_string(),
-            runnable: XrdsRunnable::Sequence(XrdsSequence {
-                steps: vec![XrdsAction::Teleport { destination: [1.0, 1.0, 1.0] }],
-            }),
-        }],
-        nodes: vec![node_with_binding(
-            1,
-            XrdsTriggerBinding {
-                trigger: XrdsTriggerKind::ZoneEnter,
-                sequence: XrdsSequence::default(),
-                disabled: false,
-                hand: None,
-                runnable: Some("teleport".to_string()),
-            },
-        )],
-        ..Default::default()
-    };
+    let d = doc(vec![node_with_binding(1, listener)], vec![named("T", healthy_track())]);
+    // Warning, not Error: expert-layer Rust can fire custom triggers, and
+    // the document cannot see that.
     assert_eq!(
-        doc.trigger_diagnostics(),
-        vec![],
-        "a binding naming a registered runnable, with no inline sequence, should be quiet"
+        find(&d, "Nothing emits this Custom trigger").severity,
+        XrdsSceneTriggerDiagnosticSeverity::Warning
     );
 }
 
 #[test]
-fn diagnostics_flag_a_run_action_referencing_an_unknown_runnable() {
-    let doc = XrdsSceneDocument {
-        metadata: XrdsSceneMetadata { name: "d".to_string(), ..Default::default() },
-        nodes: vec![node_with_binding(
-            1,
-            XrdsTriggerBinding {
-                trigger: XrdsTriggerKind::ZoneEnter,
-                sequence: XrdsSequence {
-                    steps: vec![XrdsAction::Run {
-                        runnable: "does-not-exist".to_string(),
-                        wait: true,
-                    }],
-                },
-                disabled: false,
-                hand: None,
-                runnable: None,
-            },
-        )],
-        ..Default::default()
+fn a_disabled_watcher_is_not_an_emitter_and_reports_nothing_itself() {
+    let listener = XrdsTriggerBinding {
+        trigger: XrdsTriggerKind::Custom("lifted".to_string()),
+        ..binding_for("T")
     };
-    let diags = doc.trigger_diagnostics();
+    let mut w = watcher("lifted");
+    w.disabled = true;
+    w.hysteresis = -5.0; // would otherwise be flagged
+    let d = doc(
+        vec![node_with_binding(1, listener), node_with_watcher(2, w)],
+        vec![named("T", healthy_track())],
+    );
     assert!(
-        diags.iter().any(|d| d.severity == XrdsSceneTriggerDiagnosticSeverity::Error
-            && d.title.contains("Run references unknown runnable")),
-        "a Run step naming a nonexistent runnable must be an Error, got {diags:?}"
+        has(&d, "Nothing emits this Custom trigger"),
+        "a parked watcher must not count as an emitter: {:?}",
+        titles(&d)
     );
-}
-
-#[test]
-fn diagnostics_flag_a_cycle_in_the_run_registry() {
-    // A runs B, B runs A — a static cycle in the registry itself, not tied
-    // to any one node.
-    let doc = XrdsSceneDocument {
-        metadata: XrdsSceneMetadata { name: "d".to_string(), ..Default::default() },
-        runnables: vec![
-            XrdsNamedRunnable {
-                name: "a".to_string(),
-                runnable: XrdsRunnable::Sequence(XrdsSequence {
-                    steps: vec![XrdsAction::Run { runnable: "b".to_string(), wait: false }],
-                }),
-            },
-            XrdsNamedRunnable {
-                name: "b".to_string(),
-                runnable: XrdsRunnable::Sequence(XrdsSequence {
-                    steps: vec![XrdsAction::Run { runnable: "a".to_string(), wait: false }],
-                }),
-            },
-        ],
-        ..Default::default()
-    };
-    let diags = doc.trigger_diagnostics();
     assert!(
-        diags.iter().any(|d| d.severity == XrdsSceneTriggerDiagnosticSeverity::Error
-            && d.title.contains("Cycle in the Run registry")
-            && d.node_id.is_none()),
-        "a registry cycle must be flagged, node-less since it isn't any one node's fault, got \
-         {diags:?}"
-    );
-    // Both members of the cycle should be reported, not just one.
-    let cycle_diag_count = diags.iter().filter(|d| d.title.contains("Cycle")).count();
-    assert_eq!(cycle_diag_count, 2, "each member of the cycle should get its own diagnostic");
-}
-
-#[test]
-fn diagnostics_flag_an_unknown_run_target_inside_the_registry_itself() {
-    let doc = XrdsSceneDocument {
-        metadata: XrdsSceneMetadata { name: "d".to_string(), ..Default::default() },
-        runnables: vec![XrdsNamedRunnable {
-            name: "a".to_string(),
-            runnable: XrdsRunnable::Sequence(XrdsSequence {
-                steps: vec![XrdsAction::Run { runnable: "ghost".to_string(), wait: false }],
-            }),
-        }],
-        ..Default::default()
-    };
-    let diags = doc.trigger_diagnostics();
-    assert!(
-        diags.iter().any(|d| d.severity == XrdsSceneTriggerDiagnosticSeverity::Error
-            && d.title.contains("Named runnable references unknown runnable")
-            && d.node_id.is_none()),
-        "an unresolvable Run target inside a registry entry must be flagged, got {diags:?}"
+        !has(&d, "Watcher has negative hysteresis"),
+        "a parked watcher should not report its own problems: {:?}",
+        titles(&d)
     );
 }
 
 #[test]
-fn diagnostics_are_quiet_on_a_healthy_run_registry() {
-    let doc = XrdsSceneDocument {
-        metadata: XrdsSceneMetadata { name: "d".to_string(), ..Default::default() },
-        runnables: vec![
-            XrdsNamedRunnable {
-                name: "step-one".to_string(),
-                runnable: XrdsRunnable::Sequence(XrdsSequence {
-                    steps: vec![XrdsAction::Run { runnable: "step-two".to_string(), wait: true }],
-                }),
-            },
-            XrdsNamedRunnable {
-                name: "step-two".to_string(),
-                runnable: XrdsRunnable::Sequence(XrdsSequence {
-                    steps: vec![XrdsAction::Teleport { destination: [0.0, 0.0, 0.0] }],
-                }),
-            },
-        ],
-        ..Default::default()
-    };
-    assert_eq!(
-        doc.trigger_diagnostics(),
-        vec![],
-        "a non-cyclic chain of valid Run references should produce no diagnostics"
-    );
+fn diagnostics_flag_a_distance_watcher_targeting_a_missing_node() {
+    let mut w = watcher("close");
+    w.observable = XrdsObservable::DistanceTo { node: XrdsSceneNodeId(99) };
+    let d = doc(vec![node_with_watcher(1, w)], Vec::new());
+    assert!(has(&d, "Watcher measures distance to a missing node"), "{:?}", titles(&d));
+}
+
+#[test]
+fn diagnostics_flag_negative_hysteresis_and_an_empty_fires_name() {
+    let mut w = watcher("");
+    w.hysteresis = -1.0;
+    let d = doc(vec![node_with_watcher(1, w)], Vec::new());
+    let t = titles(&d);
+    assert!(t.contains(&"Watcher has negative hysteresis".to_string()), "{t:?}");
+    assert!(t.contains(&"Watcher fires an empty name".to_string()), "{t:?}");
 }

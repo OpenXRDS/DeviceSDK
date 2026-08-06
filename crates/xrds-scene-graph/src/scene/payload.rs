@@ -290,6 +290,30 @@ pub enum XrdsSceneMaterialTextureSlotKind {
     Emissive,
 }
 
+impl From<XrdsSceneMaterialTextureSlotKind> for XrdsMaterialTextureSlotKind {
+    fn from(value: XrdsSceneMaterialTextureSlotKind) -> Self {
+        match value {
+            XrdsSceneMaterialTextureSlotKind::BaseColor => Self::BaseColor,
+            XrdsSceneMaterialTextureSlotKind::MetallicRoughness => Self::MetallicRoughness,
+            XrdsSceneMaterialTextureSlotKind::Normal => Self::Normal,
+            XrdsSceneMaterialTextureSlotKind::Occlusion => Self::Occlusion,
+            XrdsSceneMaterialTextureSlotKind::Emissive => Self::Emissive,
+        }
+    }
+}
+
+impl From<XrdsMaterialTextureSlotKind> for XrdsSceneMaterialTextureSlotKind {
+    fn from(value: XrdsMaterialTextureSlotKind) -> Self {
+        match value {
+            XrdsMaterialTextureSlotKind::BaseColor => Self::BaseColor,
+            XrdsMaterialTextureSlotKind::MetallicRoughness => Self::MetallicRoughness,
+            XrdsMaterialTextureSlotKind::Normal => Self::Normal,
+            XrdsMaterialTextureSlotKind::Occlusion => Self::Occlusion,
+            XrdsMaterialTextureSlotKind::Emissive => Self::Emissive,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct XrdsSceneMaterialTextureSlots {
     #[serde(default, skip_serializing_if = "Option::is_none")]
