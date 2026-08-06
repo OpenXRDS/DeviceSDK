@@ -212,12 +212,8 @@ name = "scene_document_import"
 path = "examples/xrds_first/scene_document_import.rs"
 
 [[example]]
-name = "trigger_action_sequence"
-path = "examples/xrds_first/trigger_action_sequence.rs"
-
-[[example]]
-name = "trigger_action_timeline"
-path = "examples/xrds_first/trigger_action_timeline.rs"
+name = "trigger_action_track"
+path = "examples/xrds_first/trigger_action_track.rs"
 
 [[example]]
 name = "scene_document_environment_import"
