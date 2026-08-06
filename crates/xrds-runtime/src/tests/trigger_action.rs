@@ -4,120 +4,198 @@
 //! asserted.
 use super::*;
 use crate::xrds_api::trigger_action::{
-    XrdsCustomTriggerEvent, XrdsHealth, XrdsSequenceAgent, XrdsTimelineAgent, XrdsTriggerValue,
+    XrdsCustomTriggerEvent, XrdsHealth, XrdsSequenceAgent, XrdsTrackAgent,
+    XrdsTrackAssetLocks, XrdsTransformTween, XrdsTriggerValue,
 };
-use xrds_scene_graph::{XrdsNamedRunnable, XrdsRunnable, XrdsTimeline, XrdsTimelineKey};
+use xrds_scene_graph::{XrdsNamedTrack, XrdsTrack, XrdsTrackAsset, XrdsTrackKey};
 
-/// Imports a single node carrying `bindings`, returns its live entity.
-fn import_node_with_triggers(
-    app: &mut App,
-    node_id: u64,
-    bindings: Vec<XrdsTriggerBinding>,
-) -> Entity {
-    let document = XrdsSceneDocument {
-        nodes: vec![XrdsSceneNode {
-            id: XrdsSceneNodeId(node_id),
-            parent_id: None,
-            name: format!("TriggerNode{node_id}"),
-            enabled: true,
-            visible: true,
-            transform: XrdsSceneTransform::default(),
-            payload: XrdsSceneNodePayload::Empty,
-            grabbable: false,
-            editor: XrdsEditorMetadata::default(),
-            triggers: bindings,
-            watchers: Vec::new(),
-        }],
-        ..Default::default()
-    };
+/// Test-local stand-in for what used to be a binding with an inline
+/// sequence.
+///
+/// A binding now names a Track, so every test that used to say "this trigger
+/// runs these actions" has to author a Track too. Rather than repeat that
+/// two-part construction ~40 times, `Bound` describes the intent and
+/// [`import_bound`] generates the binding *and* its Track.
+///
+/// `steps` all land at t=0 on a single `SelfNode` asset row, which reproduces
+/// the old inline-sequence semantics for the common single-action case. A test
+/// that genuinely needs events at *different* times builds its Track
+/// directly — the old file leaned on `Wait` for that, which no longer exists.
+#[derive(Default)]
+struct Bound {
+    trigger: XrdsTriggerKind,
+    /// Actions at t=0, concurrently.
+    steps: Vec<XrdsAction>,
+    disabled: bool,
+    hand: Option<xrds_components::XrGrabHand>,
+}
 
+impl Bound {
+    /// Splits into the binding and the Track it names.
+    fn split(self, track_name: String) -> (XrdsTriggerBinding, XrdsNamedTrack) {
+        let keys: Vec<XrdsTrackKey> = self
+            .steps
+            .into_iter()
+            .map(|action| XrdsTrackKey { at_secs: 0.0, action })
+            .collect();
+
+        let binding = XrdsTriggerBinding {
+            trigger: self.trigger,
+            track: Some(track_name.clone()),
+            disabled: self.disabled,
+            hand: self.hand,
+        };
+        let track = XrdsNamedTrack {
+            name: track_name,
+            track: XrdsTrack {
+                assets: vec![XrdsTrackAsset {
+                    target: XrdsActionTarget::SelfNode,
+                    keys,
+                }],
+                ..XrdsTrack::default()
+            },
+        };
+        (binding, track)
+    }
+}
+
+fn scene_node(node_id: u64, name: &str) -> XrdsSceneNode {
+    XrdsSceneNode {
+        id: XrdsSceneNodeId(node_id),
+        parent_id: None,
+        name: format!("{name}{node_id}"),
+        enabled: true,
+        visible: true,
+        transform: XrdsSceneTransform::default(),
+        payload: XrdsSceneNodePayload::Empty,
+        grabbable: false,
+        editor: XrdsEditorMetadata::default(),
+        triggers: Vec::new(),
+        watchers: Vec::new(),
+    }
+}
+
+fn import_document(app: &mut App, document: &XrdsSceneDocument, node_id: u64) -> Entity {
     {
         let mut xrds = XrdsAPI::attach(app);
-        xrds.import_scene_document(&document)
-            .expect("import should succeed");
+        xrds.import_scene_document(document).expect("import should succeed");
     }
-
     app.world()
         .resource::<XrdsIdIndex>()
         .entity_of(XrdsId(node_id))
         .expect("imported node should be indexed")
 }
 
-/// Imports a single node carrying `watchers` (and optionally `triggers`,
-/// for the bindings a watcher's `Custom` firing should drive), returns its
-/// live entity.
+/// Imports one node whose bindings each get an auto-generated Track.
+fn import_bound(app: &mut App, node_id: u64, bound: Vec<Bound>) -> Entity {
+    let mut bindings = Vec::new();
+    let mut tracks = Vec::new();
+    for (i, b) in bound.into_iter().enumerate() {
+        let (binding, track) = b.split(format!("track_{node_id}_{i}"));
+        bindings.push(binding);
+        tracks.push(track);
+    }
+    let document = XrdsSceneDocument {
+        nodes: vec![XrdsSceneNode { triggers: bindings, ..scene_node(node_id, "TriggerNode") }],
+        tracks,
+        ..Default::default()
+    };
+    import_document(app, &document, node_id)
+}
+
+/// Imports several nodes, each with its own auto-generated Tracks, in a
+/// single document.
+///
+/// Tracks live in a document-level registry that import replaces wholesale,
+/// so importing node A and then node B would drop A's Tracks. Multi-node
+/// tests must build one document.
+fn import_many_bound(app: &mut App, entries: Vec<(u64, Vec<Bound>)>) -> Vec<Entity> {
+    let mut nodes = Vec::new();
+    let mut tracks = Vec::new();
+    let ids: Vec<u64> = entries.iter().map(|(id, _)| *id).collect();
+    for (node_id, bound) in entries {
+        let mut bindings = Vec::new();
+        for (i, b) in bound.into_iter().enumerate() {
+            let (binding, track) = b.split(format!("track_{node_id}_{i}"));
+            bindings.push(binding);
+            tracks.push(track);
+        }
+        nodes.push(XrdsSceneNode { triggers: bindings, ..scene_node(node_id, "Node") });
+    }
+    let document = XrdsSceneDocument { nodes, tracks, ..Default::default() };
+    {
+        let mut xrds = XrdsAPI::attach(app);
+        xrds.import_scene_document(&document).expect("import should succeed");
+    }
+    let index = app.world().resource::<XrdsIdIndex>();
+    ids.iter()
+        .map(|id| index.entity_of(XrdsId(*id)).expect("node should be indexed"))
+        .collect()
+}
+
+/// Imports one node whose binding fires a Track with explicitly-timed events.
+/// For tests about the Track's own clock, where `Bound`'s everything-at-t=0
+/// shape is not enough.
+fn import_timed_track(
+    app: &mut App,
+    node_id: u64,
+    trigger: XrdsTriggerKind,
+    keys: Vec<(f32, XrdsAction)>,
+) -> Entity {
+    let name = format!("timed_{node_id}");
+    let document = XrdsSceneDocument {
+        nodes: vec![XrdsSceneNode {
+            triggers: vec![XrdsTriggerBinding {
+                trigger,
+                track: Some(name.clone()),
+                disabled: false,
+                hand: None,
+            }],
+            ..scene_node(node_id, "TimedNode")
+        }],
+        tracks: vec![XrdsNamedTrack {
+            name,
+            track: XrdsTrack {
+                assets: vec![XrdsTrackAsset {
+                    target: XrdsActionTarget::SelfNode,
+                    keys: keys
+                        .into_iter()
+                        .map(|(at_secs, action)| XrdsTrackKey { at_secs, action })
+                        .collect(),
+                }],
+                ..XrdsTrack::default()
+            },
+        }],
+        ..Default::default()
+    };
+    import_document(app, &document, node_id)
+}
+
+/// Imports one node carrying `watchers` (and any bindings a watcher's
+/// `Custom` firing should drive).
 fn import_node_with_watchers(
     app: &mut App,
     node_id: u64,
     watchers: Vec<XrdsThresholdWatcher>,
-    triggers: Vec<XrdsTriggerBinding>,
+    bound: Vec<Bound>,
 ) -> Entity {
-    let document = XrdsSceneDocument {
-        nodes: vec![XrdsSceneNode {
-            id: XrdsSceneNodeId(node_id),
-            parent_id: None,
-            name: format!("WatcherNode{node_id}"),
-            enabled: true,
-            visible: true,
-            transform: XrdsSceneTransform::default(),
-            payload: XrdsSceneNodePayload::Empty,
-            grabbable: false,
-            editor: XrdsEditorMetadata::default(),
-            triggers,
-            watchers,
-        }],
-        ..Default::default()
-    };
-
-    {
-        let mut xrds = XrdsAPI::attach(app);
-        xrds.import_scene_document(&document)
-            .expect("import should succeed");
+    let mut bindings = Vec::new();
+    let mut tracks = Vec::new();
+    for (i, b) in bound.into_iter().enumerate() {
+        let (binding, track) = b.split(format!("track_{node_id}_{i}"));
+        bindings.push(binding);
+        tracks.push(track);
     }
-
-    app.world()
-        .resource::<XrdsIdIndex>()
-        .entity_of(XrdsId(node_id))
-        .expect("imported node should be indexed")
-}
-
-/// Imports a single node carrying `bindings`, plus a document-level
-/// `runnables` registry (Phase 9a) — for `XrdsAction::Run` and
-/// `XrdsTriggerBinding::runnable` tests.
-fn import_node_with_triggers_and_runnables(
-    app: &mut App,
-    node_id: u64,
-    bindings: Vec<XrdsTriggerBinding>,
-    runnables: Vec<XrdsNamedRunnable>,
-) -> Entity {
     let document = XrdsSceneDocument {
         nodes: vec![XrdsSceneNode {
-            id: XrdsSceneNodeId(node_id),
-            parent_id: None,
-            name: format!("RunnableNode{node_id}"),
-            enabled: true,
-            visible: true,
-            transform: XrdsSceneTransform::default(),
-            payload: XrdsSceneNodePayload::Empty,
-            grabbable: false,
-            editor: XrdsEditorMetadata::default(),
             triggers: bindings,
-            watchers: Vec::new(),
+            watchers,
+            ..scene_node(node_id, "WatcherNode")
         }],
-        runnables,
+        tracks,
         ..Default::default()
     };
-
-    {
-        let mut xrds = XrdsAPI::attach(app);
-        xrds.import_scene_document(&document)
-            .expect("import should succeed");
-    }
-
-    app.world()
-        .resource::<XrdsIdIndex>()
-        .entity_of(XrdsId(node_id))
-        .expect("imported node should be indexed")
+    import_document(app, &document, node_id)
 }
 
 /// Drives enough frames for a trigger message to be consumed and its
@@ -132,17 +210,20 @@ fn pump(app: &mut App, frames: usize) {
 fn zone_enter_trigger_runs_authored_teleport_action() {
     let mut app = xrds_test_app();
 
-    let entity = import_node_with_triggers(
+    let entity = import_bound(
         &mut app,
         930,
-        vec![XrdsTriggerBinding {
+        vec![Bound {
             trigger: XrdsTriggerKind::ZoneEnter,
-            sequence: XrdsSequence {
-                steps: vec![XrdsAction::Teleport { destination: [5.0, 6.0, 7.0] }],
-            },
+            steps: vec![XrdsAction::SetTransform {
+                            position: Some([5.0, 6.0, 7.0]),
+                            rotation: None,
+                            scale: None,
+                            duration_secs: 0.0,
+                            ease: XrdsEaseCurve::Linear,
+                        }],
             disabled: false,
             hand: None,
-            runnable: None,
         }],
     );
 
@@ -172,17 +253,20 @@ fn zone_enter_trigger_runs_authored_teleport_action() {
 fn zone_exit_binding_does_not_fire_on_enter() {
     let mut app = xrds_test_app();
 
-    let entity = import_node_with_triggers(
+    let entity = import_bound(
         &mut app,
         931,
-        vec![XrdsTriggerBinding {
+        vec![Bound {
             trigger: XrdsTriggerKind::ZoneExit,
-            sequence: XrdsSequence {
-                steps: vec![XrdsAction::Teleport { destination: [9.0, 9.0, 9.0] }],
-            },
+            steps: vec![XrdsAction::SetTransform {
+                            position: Some([9.0, 9.0, 9.0]),
+                            rotation: None,
+                            scale: None,
+                            duration_secs: 0.0,
+                            ease: XrdsEaseCurve::Linear,
+                        }],
             disabled: false,
             hand: None,
-            runnable: None,
         }],
     );
 
@@ -205,20 +289,16 @@ fn zone_exit_binding_does_not_fire_on_enter() {
 fn modify_health_reads_value_from_trigger_source() {
     let mut app = xrds_test_app();
 
-    let target = import_node_with_triggers(
+    let target = import_bound(
         &mut app,
         932,
-        vec![XrdsTriggerBinding {
+        vec![Bound {
             trigger: XrdsTriggerKind::ZoneEnter,
-            sequence: XrdsSequence {
-                steps: vec![XrdsAction::ModifyHealth {
-                    target: XrdsActionTarget::SelfNode,
+            steps: vec![XrdsAction::ModifyHealth {
                     delta: XrdsActionValue::FromTriggerSource,
                 }],
-            },
             disabled: false,
             hand: None,
-            runnable: None,
         }],
     );
 
@@ -249,77 +329,54 @@ fn modify_health_reads_value_from_trigger_source() {
 }
 
 #[test]
-fn two_distinct_sources_each_fire_their_own_sequence() {
-    // The case that ruled out "ignore while a sequence is running": two
-    // different sources firing the same trigger are independent, valid
-    // events and must both run — matching Unity/Unreal/Godot semantics.
+fn each_firing_resolves_from_trigger_source_against_its_own_source() {
+    // What this originally asserted was that `FromTriggerSource` reads the
+    // entity that actually fired, per firing — verified by firing the *same*
+    // binding twice from two sources and watching two concurrent agents.
+    //
+    // Two firings of one Track no longer run concurrently: a re-fire of a
+    // Track that is already running restarts it (plan doc §4), so the old
+    // shape can't express this. Two targets, each with its own Track, tests
+    // the same property without depending on concurrency that is now
+    // deliberately impossible.
     let mut app = xrds_test_app();
 
-    let target = import_node_with_triggers(
-        &mut app,
-        933,
-        vec![XrdsTriggerBinding {
-            trigger: XrdsTriggerKind::ZoneEnter,
-            sequence: XrdsSequence {
-                steps: vec![
-                    // A Wait keeps the first sequence in flight while the
-                    // second fires, so a suppress-while-running policy
-                    // would visibly lose one of the two.
-                    XrdsAction::Wait { seconds: 0.05 },
-                    XrdsAction::ModifyHealth {
-                        target: XrdsActionTarget::SelfNode,
-                        delta: XrdsActionValue::Fixed(-10.0),
-                    },
-                ],
-            },
-            disabled: false,
-            hand: None,
-            runnable: None,
+    let bound = || Bound {
+        trigger: XrdsTriggerKind::ZoneEnter,
+        steps: vec![XrdsAction::ModifyHealth {
+            delta: XrdsActionValue::FromTriggerSource,
         }],
-    );
-    app.world_mut().entity_mut(target).insert(XrdsHealth(100.0));
+        ..Default::default()
+    };
+    let targets = import_many_bound(&mut app, vec![(933, vec![bound()]), (934, vec![bound()])]);
 
-    for (index, source_id) in [9331_u64, 9332].into_iter().enumerate() {
-        let source = app.world_mut().spawn_empty().id();
-        app.world_mut()
-            .resource_mut::<XrdsIdIndex>()
-            .register(XrdsId(source_id), source);
-        app.world_mut()
-            .write_message(xrds_components::XrZoneEnterEvent {
-                zone_id: XrdsId(933),
-                entity_id: XrdsId(source_id),
-            });
-        // Advance one frame between the two so the first sequence is
-        // genuinely mid-flight (inside its Wait) when the second arrives.
-        if index == 0 {
-            app.update();
-        }
-    }
-    // Consume the second message too — consume_triggers only runs during an
-    // update, so without this the second agent wouldn't exist yet.
-    app.update();
-
-    // Both agents should exist concurrently, each with its own queue.
-    let live_agents = app
-        .world_mut()
-        .query::<&XrdsSequenceAgent>()
-        .iter(app.world())
-        .count();
-    assert_eq!(
-        live_agents, 2,
-        "each firing should get its own ephemeral agent, not share one queue"
-    );
-
-    // Let both Waits elapse.
-    for _ in 0..12 {
-        app.update();
-        std::thread::sleep(Duration::from_millis(10));
+    for entity in &targets {
+        app.world_mut().entity_mut(*entity).insert(XrdsHealth(100.0));
     }
 
+    // Two sources carrying different values.
+    for (i, (source_id, value)) in [(9331_u64, -10.0_f32), (9332, -25.0)].into_iter().enumerate() {
+        let source = app.world_mut().spawn(XrdsTriggerValue(value)).id();
+        app.world_mut().resource_mut::<XrdsIdIndex>().register(XrdsId(source_id), source);
+        app.world_mut().write_message(xrds_components::XrZoneEnterEvent {
+            zone_id: XrdsId(if i == 0 { 933 } else { 934 }),
+            entity_id: XrdsId(source_id),
+        });
+    }
+
+    pump(&mut app, 4);
+
+    // Each target should have taken its own source's delta, not the other's
+    // and not one applied twice.
     assert_eq!(
-        app.world().get::<XrdsHealth>(target).map(|h| h.0),
-        Some(80.0),
-        "both firings should have applied their -10, not just one"
+        app.world().get::<XrdsHealth>(targets[0]).map(|h| h.0),
+        Some(90.0),
+        "node 933 should have read -10 from its own source"
+    );
+    assert_eq!(
+        app.world().get::<XrdsHealth>(targets[1]).map(|h| h.0),
+        Some(75.0),
+        "node 934 should have read -25 from its own source"
     );
 }
 
@@ -327,17 +384,14 @@ fn two_distinct_sources_each_fire_their_own_sequence() {
 fn finished_sequence_agents_are_despawned() {
     let mut app = xrds_test_app();
 
-    import_node_with_triggers(
+    import_bound(
         &mut app,
         934,
-        vec![XrdsTriggerBinding {
+        vec![Bound {
             trigger: XrdsTriggerKind::ZoneEnter,
-            sequence: XrdsSequence {
-                steps: vec![XrdsAction::SetVisible(false)],
-            },
+            steps: vec![XrdsAction::SetVisible(false)],
             disabled: false,
             hand: None,
-            runnable: None,
         }],
     );
 
@@ -368,17 +422,20 @@ fn trigger_targeting_an_already_despawned_entity_is_ignored() {
     // degrade to "skip this event", not panic.
     let mut app = xrds_test_app();
 
-    let entity = import_node_with_triggers(
+    let entity = import_bound(
         &mut app,
         936,
-        vec![XrdsTriggerBinding {
+        vec![Bound {
             trigger: XrdsTriggerKind::ZoneEnter,
-            sequence: XrdsSequence {
-                steps: vec![XrdsAction::Teleport { destination: [3.0, 3.0, 3.0] }],
-            },
+            steps: vec![XrdsAction::SetTransform {
+                            position: Some([3.0, 3.0, 3.0]),
+                            rotation: None,
+                            scale: None,
+                            duration_secs: 0.0,
+                            ease: XrdsEaseCurve::Linear,
+                        }],
             disabled: false,
             hand: None,
-            runnable: None,
         }],
     );
 
@@ -412,28 +469,37 @@ fn target_despawned_mid_sequence_does_not_panic() {
     // when its target dies, so a later action runs against a dead entity.
     let mut app = xrds_test_app();
 
-    let entity = import_node_with_triggers(
+    let entity = import_bound(
         &mut app,
         937,
-        vec![XrdsTriggerBinding {
+        vec![Bound {
             trigger: XrdsTriggerKind::ZoneEnter,
-            sequence: XrdsSequence {
-                steps: vec![
-                    XrdsAction::Wait { seconds: 0.05 },
+            steps: vec![
+                    // Keeps the agent in flight so the despawn lands mid-run.
+                    XrdsAction::SetTransform {
+                        position: None,
+                        rotation: None,
+                        scale: Some([1.0, 1.0, 1.0]),
+                        duration_secs: 0.05,
+                        ease: XrdsEaseCurve::Linear,
+                    },
                     // Every remaining action type that touches the target,
                     // so a missing entity is exercised on each path.
                     XrdsAction::SetVisible(false),
-                    XrdsAction::Teleport { destination: [1.0, 1.0, 1.0] },
+                    XrdsAction::SetTransform {
+                            position: Some([1.0, 1.0, 1.0]),
+                            rotation: None,
+                            scale: None,
+                            duration_secs: 0.0,
+                            ease: XrdsEaseCurve::Linear,
+                        },
                     XrdsAction::ModifyHealth {
-                        target: XrdsActionTarget::SelfNode,
                         delta: XrdsActionValue::Fixed(-5.0),
                     },
                     XrdsAction::StopGltfAnimation,
                 ],
-            },
             disabled: false,
             hand: None,
-            runnable: None,
         }],
     );
 
@@ -443,15 +509,19 @@ fn target_despawned_mid_sequence_does_not_panic() {
             entity_id: XrdsId(937),
         });
 
-    // One frame: the agent spawns and enters its Wait.
+    // Two frames, not one: `consume_triggers` queues the Track spawn as a
+    // command, so the Track agent exists on frame 2 and `advance_tracks` fires
+    // its t=0 keys then. The interpolating key's own one-step agent is what
+    // stays in flight.
     app.update();
-    assert_eq!(
+    app.update();
+    assert!(
         app.world_mut()
             .query::<&XrdsSequenceAgent>()
             .iter(app.world())
-            .count(),
-        1,
-        "sequence should be in flight before the despawn"
+            .count()
+            > 0,
+        "an action agent should be in flight before the despawn"
     );
 
     // Kill the target out from under the running sequence.
@@ -482,17 +552,20 @@ fn grab_event_fires_its_authored_sequence() {
     // XrdsTriggerRef::Id resolution path.
     let mut app = xrds_test_app();
 
-    let entity = import_node_with_triggers(
+    let entity = import_bound(
         &mut app,
         950,
-        vec![XrdsTriggerBinding {
+        vec![Bound {
             trigger: XrdsTriggerKind::Grabbed,
-            sequence: XrdsSequence {
-                steps: vec![XrdsAction::Teleport { destination: [2.0, 0.0, 0.0] }],
-            },
+            steps: vec![XrdsAction::SetTransform {
+                            position: Some([2.0, 0.0, 0.0]),
+                            rotation: None,
+                            scale: None,
+                            duration_secs: 0.0,
+                            ease: XrdsEaseCurve::Linear,
+                        }],
             disabled: false,
             hand: None,
-            runnable: None,
         }],
     );
 
@@ -516,17 +589,20 @@ fn button_press_fires_via_the_entity_ref_path() {
     // the other half of XrdsTriggerRef, and the reason that enum exists.
     let mut app = xrds_test_app();
 
-    let entity = import_node_with_triggers(
+    let entity = import_bound(
         &mut app,
         951,
-        vec![XrdsTriggerBinding {
+        vec![Bound {
             trigger: XrdsTriggerKind::ButtonPress,
-            sequence: XrdsSequence {
-                steps: vec![XrdsAction::Teleport { destination: [0.0, 7.0, 0.0] }],
-            },
+            steps: vec![XrdsAction::SetTransform {
+                            position: Some([0.0, 7.0, 0.0]),
+                            rotation: None,
+                            scale: None,
+                            duration_secs: 0.0,
+                            ease: XrdsEaseCurve::Linear,
+                        }],
             disabled: false,
             hand: None,
-            runnable: None,
         }],
     );
 
@@ -574,17 +650,20 @@ fn app_defined_custom_trigger_fires_without_any_sdk_change() {
         crate::xrds_api::trigger_action::consume_triggers::<ValveOpenedEvent>,
     );
 
-    let entity = import_node_with_triggers(
+    let entity = import_bound(
         &mut app,
         952,
-        vec![XrdsTriggerBinding {
+        vec![Bound {
             trigger: XrdsTriggerKind::Custom("valve_opened".to_string()),
-            sequence: XrdsSequence {
-                steps: vec![XrdsAction::Teleport { destination: [8.0, 0.0, 0.0] }],
-            },
+            steps: vec![XrdsAction::SetTransform {
+                            position: Some([8.0, 0.0, 0.0]),
+                            rotation: None,
+                            scale: None,
+                            duration_secs: 0.0,
+                            ease: XrdsEaseCurve::Linear,
+                        }],
             disabled: false,
             hand: None,
-            runnable: None,
         }],
     );
 
@@ -611,17 +690,20 @@ fn custom_trigger_with_a_different_name_does_not_fire() {
         crate::xrds_api::trigger_action::consume_triggers::<ValveOpenedEvent>,
     );
 
-    let entity = import_node_with_triggers(
+    let entity = import_bound(
         &mut app,
         953,
-        vec![XrdsTriggerBinding {
+        vec![Bound {
             trigger: XrdsTriggerKind::Custom("some_other_name".to_string()),
-            sequence: XrdsSequence {
-                steps: vec![XrdsAction::Teleport { destination: [8.0, 0.0, 0.0] }],
-            },
+            steps: vec![XrdsAction::SetTransform {
+                            position: Some([8.0, 0.0, 0.0]),
+                            rotation: None,
+                            scale: None,
+                            duration_secs: 0.0,
+                            ease: XrdsEaseCurve::Linear,
+                        }],
             disabled: false,
             hand: None,
-            runnable: None,
         }],
     );
 
@@ -645,10 +727,10 @@ fn custom_trigger_with_a_different_name_does_not_fire() {
 fn spawn_node_with_finishing_animation(
     app: &mut App,
     node_id: u64,
-    bindings: Vec<XrdsTriggerBinding>,
+    bindings: Vec<Bound>,
     repeat: XrdsAnimationRepeatMode,
 ) -> Entity {
-    let root = import_node_with_triggers(app, node_id, bindings);
+    let root = import_bound(app, node_id, bindings);
 
     let mut clip = AnimationClip::default();
     clip.set_duration(0.05);
@@ -779,14 +861,17 @@ fn animation_complete_fires_as_an_authored_trigger() {
     let root = spawn_node_with_finishing_animation(
         &mut app,
         942,
-        vec![XrdsTriggerBinding {
+        vec![Bound {
             trigger: XrdsTriggerKind::AnimationComplete,
-            sequence: XrdsSequence {
-                steps: vec![XrdsAction::Teleport { destination: [4.0, 0.0, 4.0] }],
-            },
+            steps: vec![XrdsAction::SetTransform {
+                            position: Some([4.0, 0.0, 4.0]),
+                            rotation: None,
+                            scale: None,
+                            duration_secs: 0.0,
+                            ease: XrdsEaseCurve::Linear,
+                        }],
             disabled: false,
             hand: None,
-            runnable: None,
         }],
         XrdsAnimationRepeatMode::Once,
     );
@@ -807,63 +892,25 @@ fn animation_complete_fires_as_an_authored_trigger() {
 }
 
 #[test]
-fn fire_custom_event_emits_message_with_target_and_source() {
-    let mut app = xrds_test_app();
-
-    let target = import_node_with_triggers(
-        &mut app,
-        935,
-        vec![XrdsTriggerBinding {
-            trigger: XrdsTriggerKind::ZoneEnter,
-            sequence: XrdsSequence {
-                steps: vec![XrdsAction::FireCustomEvent { name: "door_opened".to_string() }],
-            },
-            disabled: false,
-            hand: None,
-            runnable: None,
-        }],
-    );
-
-    let source = app.world_mut().spawn_empty().id();
-    app.world_mut()
-        .resource_mut::<XrdsIdIndex>()
-        .register(XrdsId(9350), source);
-
-    app.world_mut()
-        .write_message(xrds_components::XrZoneEnterEvent {
-            zone_id: XrdsId(935),
-            entity_id: XrdsId(9350),
-        });
-
-    pump(&mut app, 3);
-
-    let messages = app.world().resource::<Messages<XrdsCustomTriggerEvent>>();
-    let mut cursor = messages.get_cursor();
-    let emitted: Vec<_> = cursor.read(messages).collect();
-
-    assert_eq!(emitted.len(), 1, "expected exactly one custom trigger event");
-    assert_eq!(emitted[0].name, "door_opened");
-    assert_eq!(emitted[0].target, target);
-    assert_eq!(emitted[0].source, Some(source));
-}
-
-#[test]
 fn fire_trigger_runs_bindings_without_a_real_event() {
     // The editor "preview this sequence" path, and how app tests should
     // stage a sequence rather than faking a zone collision.
     let mut app = xrds_test_app();
 
-    let entity = import_node_with_triggers(
+    let entity = import_bound(
         &mut app,
         960,
-        vec![XrdsTriggerBinding {
+        vec![Bound {
             trigger: XrdsTriggerKind::ButtonPress,
-            sequence: XrdsSequence {
-                steps: vec![XrdsAction::Teleport { destination: [3.0, 0.0, 0.0] }],
-            },
+            steps: vec![XrdsAction::SetTransform {
+                            position: Some([3.0, 0.0, 0.0]),
+                            rotation: None,
+                            scale: None,
+                            duration_secs: 0.0,
+                            ease: XrdsEaseCurve::Linear,
+                        }],
             disabled: false,
             hand: None,
-            runnable: None,
         }],
     );
 
@@ -885,15 +932,14 @@ fn fire_trigger_runs_bindings_without_a_real_event() {
 #[test]
 fn fire_trigger_reports_zero_when_nothing_is_bound() {
     let mut app = xrds_test_app();
-    import_node_with_triggers(
+    import_bound(
         &mut app,
         961,
-        vec![XrdsTriggerBinding {
+        vec![Bound {
             trigger: XrdsTriggerKind::ZoneEnter,
-            sequence: XrdsSequence { steps: vec![XrdsAction::SetVisible(false)] },
+            steps: vec![XrdsAction::SetVisible(false)],
             disabled: false,
             hand: None,
-            runnable: None,
         }],
     );
 
@@ -911,21 +957,23 @@ fn fire_trigger_reports_zero_when_nothing_is_bound() {
 fn stop_sequences_on_cancels_in_flight_work() {
     let mut app = xrds_test_app();
 
-    let entity = import_node_with_triggers(
+    let entity = import_bound(
         &mut app,
         962,
-        vec![XrdsTriggerBinding {
+        vec![Bound {
             trigger: XrdsTriggerKind::ZoneEnter,
-            sequence: XrdsSequence {
-                steps: vec![
-                    XrdsAction::Wait { seconds: 5.0 },
-                    // Must never run — we cancel during the Wait.
-                    XrdsAction::Teleport { destination: [9.0, 9.0, 9.0] },
+            steps: vec![
+                    // Long enough that the cancel below lands mid-flight.
+                    XrdsAction::SetTransform {
+                        position: None,
+                        rotation: None,
+                        scale: Some([2.0, 2.0, 2.0]),
+                        duration_secs: 5.0,
+                        ease: XrdsEaseCurve::Linear,
+                    },
                 ],
-            },
             disabled: false,
             hand: None,
-            runnable: None,
         }],
     );
 
@@ -957,40 +1005,37 @@ fn stop_sequences_on_cancels_in_flight_work() {
 }
 
 #[test]
-fn wait_respects_paused_virtual_time() {
-    // Res<Time> is Time<Virtual> in Bevy, so pausing the app SHOULD pause a
-    // Wait mid-sequence. That was assumed but never verified — and it is
-    // exactly the kind of thing that is silently wrong until someone pauses
-    // during a cutscene.
+fn a_tracks_own_clock_respects_paused_virtual_time() {
+    // `advance_tracks` reads `Res<Time>`, which is `Time<Virtual>` in Bevy, so
+    // pausing the app SHOULD freeze a Track mid-play. Previously this was
+    // asserted about `Wait`; with the Track model the same property matters
+    // more, because it now governs the whole Track's schedule rather than one
+    // action. Exactly the kind of thing that is silently wrong until someone
+    // pauses during a cutscene.
     let mut app = xrds_test_app();
 
-    let entity = import_node_with_triggers(
+    let entity = import_timed_track(
         &mut app,
         963,
-        vec![XrdsTriggerBinding {
-            trigger: XrdsTriggerKind::ZoneEnter,
-            sequence: XrdsSequence {
-                steps: vec![
-                    XrdsAction::Wait { seconds: 0.08 },
-                    XrdsAction::Teleport { destination: [4.0, 0.0, 0.0] },
-                ],
-            },
-            disabled: false,
-            hand: None,
-            runnable: None,
-        }],
+        XrdsTriggerKind::ZoneEnter,
+        vec![(0.08, XrdsAction::SetTransform {
+                            position: Some([4.0, 0.0, 0.0]),
+                            rotation: None,
+                            scale: None,
+                            duration_secs: 0.0,
+                            ease: XrdsEaseCurve::Linear,
+                        })],
     );
 
-    app.world_mut()
-        .write_message(xrds_components::XrZoneEnterEvent {
-            zone_id: XrdsId(963),
-            entity_id: XrdsId(963),
-        });
+    app.world_mut().write_message(xrds_components::XrZoneEnterEvent {
+        zone_id: XrdsId(963),
+        entity_id: XrdsId(963),
+    });
     app.update();
 
     app.world_mut().resource_mut::<Time<Virtual>>().pause();
 
-    // Well past the 0.08s wait in wall-clock terms.
+    // Well past 0.08s in wall-clock terms.
     for _ in 0..20 {
         app.update();
         std::thread::sleep(Duration::from_millis(10));
@@ -998,7 +1043,7 @@ fn wait_respects_paused_virtual_time() {
     assert_eq!(
         app.world().get::<Transform>(entity).map(|t| t.translation),
         Some(Vec3::ZERO),
-        "a Wait must not elapse while virtual time is paused"
+        "a Track must not advance while virtual time is paused"
     );
 
     app.world_mut().resource_mut::<Time<Virtual>>().unpause();
@@ -1009,7 +1054,7 @@ fn wait_respects_paused_virtual_time() {
     assert_eq!(
         app.world().get::<Transform>(entity).map(|t| t.translation),
         Some(Vec3::new(4.0, 0.0, 0.0)),
-        "the sequence must resume once unpaused"
+        "the event should fire once virtual time resumes"
     );
 }
 
@@ -1017,17 +1062,20 @@ fn wait_respects_paused_virtual_time() {
 fn disabled_binding_does_not_fire() {
     let mut app = xrds_test_app();
 
-    let entity = import_node_with_triggers(
+    let entity = import_bound(
         &mut app,
         970,
-        vec![XrdsTriggerBinding {
+        vec![Bound {
             trigger: XrdsTriggerKind::ZoneEnter,
-            sequence: XrdsSequence {
-                steps: vec![XrdsAction::Teleport { destination: [6.0, 0.0, 0.0] }],
-            },
+            steps: vec![XrdsAction::SetTransform {
+                            position: Some([6.0, 0.0, 0.0]),
+                            rotation: None,
+                            scale: None,
+                            duration_secs: 0.0,
+                            ease: XrdsEaseCurve::Linear,
+                        }],
             disabled: true,
             hand: None,
-            runnable: None,
         }],
     );
 
@@ -1051,33 +1099,25 @@ fn disabling_one_binding_leaves_its_siblings_running() {
     // others on the same node and trigger kind.
     let mut app = xrds_test_app();
 
-    let target = import_node_with_triggers(
+    let target = import_bound(
         &mut app,
         971,
         vec![
-            XrdsTriggerBinding {
+            Bound {
                 trigger: XrdsTriggerKind::ZoneEnter,
-                sequence: XrdsSequence {
-                    steps: vec![XrdsAction::ModifyHealth {
-                        target: XrdsActionTarget::SelfNode,
+                steps: vec![XrdsAction::ModifyHealth {
                         delta: XrdsActionValue::Fixed(-1.0),
                     }],
-                },
                 disabled: true,
                 hand: None,
-                runnable: None,
             },
-            XrdsTriggerBinding {
+            Bound {
                 trigger: XrdsTriggerKind::ZoneEnter,
-                sequence: XrdsSequence {
-                    steps: vec![XrdsAction::ModifyHealth {
-                        target: XrdsActionTarget::SelfNode,
+                steps: vec![XrdsAction::ModifyHealth {
                         delta: XrdsActionValue::Fixed(-10.0),
                     }],
-                },
                 disabled: false,
                 hand: None,
-                runnable: None,
             },
         ],
     );
@@ -1102,17 +1142,14 @@ fn fire_trigger_skips_disabled_bindings() {
     // An editor preview that ran parked rules would misrepresent runtime.
     let mut app = xrds_test_app();
 
-    import_node_with_triggers(
+    import_bound(
         &mut app,
         972,
-        vec![XrdsTriggerBinding {
+        vec![Bound {
             trigger: XrdsTriggerKind::ButtonPress,
-            sequence: XrdsSequence {
-                steps: vec![XrdsAction::SetVisible(false)],
-            },
+            steps: vec![XrdsAction::SetVisible(false)],
             disabled: true,
             hand: None,
-            runnable: None,
         }],
     );
 
@@ -1129,17 +1166,20 @@ fn fire_trigger_skips_disabled_bindings() {
 fn hand_filter_matches_the_specified_hand_only() {
     let mut app = xrds_test_app();
 
-    let entity = import_node_with_triggers(
+    let entity = import_bound(
         &mut app,
         980,
-        vec![XrdsTriggerBinding {
+        vec![Bound {
             trigger: XrdsTriggerKind::Grabbed,
-            sequence: XrdsSequence {
-                steps: vec![XrdsAction::Teleport { destination: [5.0, 0.0, 0.0] }],
-            },
+            steps: vec![XrdsAction::SetTransform {
+                            position: Some([5.0, 0.0, 0.0]),
+                            rotation: None,
+                            scale: None,
+                            duration_secs: 0.0,
+                            ease: XrdsEaseCurve::Linear,
+                        }],
             disabled: false,
             hand: Some(xrds_components::XrGrabHand::Left),
-            runnable: None,
         }],
     );
 
@@ -1174,17 +1214,20 @@ fn no_hand_filter_matches_either_hand() {
     // keep working exactly as before this feature existed.
     let mut app = xrds_test_app();
 
-    let entity = import_node_with_triggers(
+    let entity = import_bound(
         &mut app,
         981,
-        vec![XrdsTriggerBinding {
+        vec![Bound {
             trigger: XrdsTriggerKind::Grabbed,
-            sequence: XrdsSequence {
-                steps: vec![XrdsAction::Teleport { destination: [6.0, 0.0, 0.0] }],
-            },
+            steps: vec![XrdsAction::SetTransform {
+                            position: Some([6.0, 0.0, 0.0]),
+                            rotation: None,
+                            scale: None,
+                            duration_secs: 0.0,
+                            ease: XrdsEaseCurve::Linear,
+                        }],
             disabled: false,
             hand: None,
-            runnable: None,
         }],
     );
 
@@ -1205,15 +1248,14 @@ fn no_hand_filter_matches_either_hand() {
 fn fire_trigger_honors_the_hand_argument() {
     let mut app = xrds_test_app();
 
-    import_node_with_triggers(
+    import_bound(
         &mut app,
         982,
-        vec![XrdsTriggerBinding {
+        vec![Bound {
             trigger: XrdsTriggerKind::ButtonPress,
-            sequence: XrdsSequence { steps: vec![XrdsAction::SetVisible(false)] },
+            steps: vec![XrdsAction::SetVisible(false)],
             disabled: false,
             hand: Some(xrds_components::XrGrabHand::Right),
-            runnable: None,
         }],
     );
 
@@ -1249,14 +1291,17 @@ fn height_watcher_fires_custom_trigger_on_crossing_above() {
             fires: "risen".to_string(),
             disabled: false,
         }],
-        vec![XrdsTriggerBinding {
+        vec![Bound {
             trigger: XrdsTriggerKind::Custom("risen".to_string()),
-            sequence: XrdsSequence {
-                steps: vec![XrdsAction::Teleport { destination: [7.0, 7.0, 7.0] }],
-            },
+            steps: vec![XrdsAction::SetTransform {
+                            position: Some([7.0, 7.0, 7.0]),
+                            rotation: None,
+                            scale: None,
+                            duration_secs: 0.0,
+                            ease: XrdsEaseCurve::Linear,
+                        }],
             disabled: false,
             hand: None,
-            runnable: None,
         }],
     );
 
@@ -1295,17 +1340,13 @@ fn crossing_above_only_does_not_fire_on_the_way_back_down() {
             fires: "risen".to_string(),
             disabled: false,
         }],
-        vec![XrdsTriggerBinding {
+        vec![Bound {
             trigger: XrdsTriggerKind::Custom("risen".to_string()),
-            sequence: XrdsSequence {
-                steps: vec![XrdsAction::ModifyHealth {
-                    target: XrdsActionTarget::SelfNode,
+            steps: vec![XrdsAction::ModifyHealth {
                     delta: XrdsActionValue::Fixed(-1.0),
                 }],
-            },
             disabled: false,
             hand: None,
-            runnable: None,
         }],
     );
     app.world_mut().entity_mut(entity).insert(XrdsHealth(100.0));
@@ -1339,17 +1380,13 @@ fn hysteresis_suppresses_chatter_at_the_boundary() {
             fires: "wobble".to_string(),
             disabled: false,
         }],
-        vec![XrdsTriggerBinding {
+        vec![Bound {
             trigger: XrdsTriggerKind::Custom("wobble".to_string()),
-            sequence: XrdsSequence {
-                steps: vec![XrdsAction::ModifyHealth {
-                    target: XrdsActionTarget::SelfNode,
+            steps: vec![XrdsAction::ModifyHealth {
                     delta: XrdsActionValue::Fixed(-1.0),
                 }],
-            },
             disabled: false,
             hand: None,
-            runnable: None,
         }],
     );
     app.world_mut().entity_mut(entity).insert(XrdsHealth(100.0));
@@ -1395,17 +1432,13 @@ fn either_crossing_re_arms_and_fires_both_directions() {
             fires: "crossed".to_string(),
             disabled: false,
         }],
-        vec![XrdsTriggerBinding {
+        vec![Bound {
             trigger: XrdsTriggerKind::Custom("crossed".to_string()),
-            sequence: XrdsSequence {
-                steps: vec![XrdsAction::ModifyHealth {
-                    target: XrdsActionTarget::SelfNode,
+            steps: vec![XrdsAction::ModifyHealth {
                     delta: XrdsActionValue::Fixed(-1.0),
                 }],
-            },
             disabled: false,
             hand: None,
-            runnable: None,
         }],
     );
     app.world_mut().entity_mut(entity).insert(XrdsHealth(100.0));
@@ -1439,17 +1472,22 @@ fn distance_to_watcher_uses_world_space_positions() {
             fires: "close".to_string(),
             disabled: false,
         }],
-        vec![XrdsTriggerBinding {
+        vec![Bound {
             trigger: XrdsTriggerKind::Custom("close".to_string()),
-            sequence: XrdsSequence {
-                steps: vec![XrdsAction::SetVisible(false)],
-            },
+            steps: vec![XrdsAction::SetVisible(false)],
             disabled: false,
             hand: None,
-            runnable: None,
         }],
     );
-    let other = import_node_with_watchers(&mut app, 995, Vec::new(), Vec::new());
+    // 995 must be in the *same* document as 994: import replaces the Track
+    // registry wholesale, so a second import would drop 994's Track and its
+    // binding would resolve to nothing.
+    let other = app.world_mut().spawn_empty().id();
+    app.world_mut().resource_mut::<XrdsIdIndex>().register(XrdsId(995), other);
+    app.world_mut().entity_mut(other).insert((
+        Transform::default(),
+        GlobalTransform::default(),
+    ));
     app.world_mut().entity_mut(other).insert(Transform::from_xyz(10.0, 0.0, 0.0));
     app.update(); // primes far (distance 10 > 2, so "not below" == Above)
 
@@ -1478,14 +1516,17 @@ fn disabled_watcher_never_evaluates() {
             fires: "risen".to_string(),
             disabled: true,
         }],
-        vec![XrdsTriggerBinding {
+        vec![Bound {
             trigger: XrdsTriggerKind::Custom("risen".to_string()),
-            sequence: XrdsSequence {
-                steps: vec![XrdsAction::Teleport { destination: [1.0, 1.0, 1.0] }],
-            },
+            steps: vec![XrdsAction::SetTransform {
+                            position: Some([1.0, 1.0, 1.0]),
+                            rotation: None,
+                            scale: None,
+                            duration_secs: 0.0,
+                            ease: XrdsEaseCurve::Linear,
+                        }],
             disabled: false,
             hand: None,
-            runnable: None,
         }],
     );
     app.update();
@@ -1500,332 +1541,976 @@ fn disabled_watcher_never_evaluates() {
 }
 
 // ---------------------------------------------------------------------------
-// Phase 9 / 9a — timelines, the runnable registry, and Run (below)
+// AnimateTransform / SetMaterial (sequencer redesign)
 // ---------------------------------------------------------------------------
 
 #[test]
-fn run_action_resolves_named_sequence_and_waits_for_it_to_finish() {
+fn set_transform_with_zero_duration_applies_instantly_and_leaves_unset_fields_alone() {
+    // duration_secs <= 0.0 is the "instant" path (no XrdsTransformTween
+    // component ever inserted) — deterministic, so this test doesn't need
+    // to depend on real elapsed time between frames like the >0 case below.
     let mut app = xrds_test_app();
 
-    let entity = import_node_with_triggers_and_runnables(
+    let entity = import_bound(
         &mut app,
-        960,
-        vec![XrdsTriggerBinding {
+        940,
+        vec![Bound {
             trigger: XrdsTriggerKind::ZoneEnter,
-            sequence: XrdsSequence {
-                steps: vec![
-                    XrdsAction::Run { runnable: "teleport-away".to_string(), wait: true },
-                    XrdsAction::SetVisible(false),
-                ],
-            },
+            steps: vec![XrdsAction::SetTransform {
+                    position: None,
+                    rotation: Some([0.0, 90.0, 0.0]),
+                    scale: None,
+                    duration_secs: 0.0,
+                    ease: XrdsEaseCurve::Linear,
+                }],
             disabled: false,
             hand: None,
-            runnable: None,
-        }],
-        vec![XrdsNamedRunnable {
-            name: "teleport-away".to_string(),
-            runnable: XrdsRunnable::Sequence(XrdsSequence {
-                steps: vec![XrdsAction::Teleport { destination: [3.0, 4.0, 5.0] }],
-            }),
         }],
     );
 
     app.world_mut().write_message(xrds_components::XrZoneEnterEvent {
-        zone_id: XrdsId(960),
-        entity_id: XrdsId(960),
+        zone_id: XrdsId(940),
+        entity_id: XrdsId(940),
     });
-    pump(&mut app, 4);
+    pump(&mut app, 3);
+
+    let transform = app.world().get::<Transform>(entity).copied().expect("has Transform");
+    assert_eq!(
+        transform.translation,
+        Vec3::ZERO,
+        "position was unset (None), so translation must be untouched"
+    );
+    assert_eq!(
+        transform.scale,
+        Vec3::ONE,
+        "scale was unset (None), so it must be untouched"
+    );
+    let (_, y, _) = transform.rotation.to_euler(EulerRot::XYZ);
+    assert!(
+        (y.to_degrees() - 90.0).abs() < 0.01,
+        "rotation was Some([0, 90, 0]), so Y rotation should be ~90 degrees, got {}",
+        y.to_degrees()
+    );
+    assert_eq!(
+        app.world_mut().query::<&XrdsTransformTween>().iter(app.world()).count(),
+        0,
+        "duration_secs <= 0.0 must never insert a tween component"
+    );
+}
+
+#[test]
+fn set_transform_reaches_target_and_blocks_the_sequence_queue() {
+    let mut app = xrds_test_app();
+
+    let entity = import_bound(
+        &mut app,
+        941,
+        vec![Bound {
+            trigger: XrdsTriggerKind::ZoneEnter,
+            steps: vec![
+                    XrdsAction::SetTransform {
+                        position: Some([5.0, 0.0, 0.0]),
+                        rotation: None,
+                        scale: None,
+                        duration_secs: 0.05,
+                        ease: XrdsEaseCurve::Cubic,
+                    },
+                    // Only runs once the tween above finishes — proves
+                    // SetTransform with a duration blocks its own one-step agent.
+                    XrdsAction::ModifyHealth {
+                        delta: XrdsActionValue::Fixed(-10.0),
+                    },
+                ],
+            disabled: false,
+            hand: None,
+        }],
+    );
+    app.world_mut().entity_mut(entity).insert(XrdsHealth(100.0));
+
+    app.world_mut().write_message(xrds_components::XrZoneEnterEvent {
+        zone_id: XrdsId(941),
+        entity_id: XrdsId(941),
+    });
+
+    // One frame in: the tween has started but 0.05s hasn't elapsed yet
+    // (real time, same assumption the existing Wait tests already make),
+    // so the queue must still be blocked on it.
+    pump(&mut app, 1);
+    assert_eq!(
+        app.world().get::<XrdsHealth>(entity).map(|h| h.0),
+        Some(100.0),
+        "ModifyHealth must not run until the SetTransform ahead of it finishes"
+    );
+
+    // Plenty of frames to guarantee 0.05s of real time has passed.
+    pump(&mut app, 60);
 
     assert_eq!(
         app.world().get::<Transform>(entity).map(|t| t.translation),
-        Some(Vec3::new(3.0, 4.0, 5.0)),
-        "Run should have started the named runnable and applied its Teleport"
+        Some(Vec3::new(5.0, 0.0, 0.0)),
+        "SetTransform should have reached its target position exactly"
     );
     assert_eq!(
-        app.world().get::<Visibility>(entity),
-        Some(&Visibility::Hidden),
-        "wait: true should block the outer sequence until the child finishes, then run SetVisible"
+        app.world().get::<XrdsHealth>(entity).map(|h| h.0),
+        Some(90.0),
+        "the queue should have advanced to ModifyHealth once the tween finished"
+    );
+    assert_eq!(
+        app.world_mut().query::<&XrdsTransformTween>().iter(app.world()).count(),
+        0,
+        "the tween component should have been removed on completion"
     );
 }
 
 #[test]
-fn run_action_wait_false_does_not_block_the_outer_sequence() {
+fn set_material_applies_only_the_provided_fields() {
     let mut app = xrds_test_app();
 
-    let entity = import_node_with_triggers_and_runnables(
-        &mut app,
-        961,
-        vec![XrdsTriggerBinding {
-            trigger: XrdsTriggerKind::ZoneEnter,
-            sequence: XrdsSequence {
-                steps: vec![
-                    XrdsAction::Run { runnable: "slow".to_string(), wait: false },
-                    XrdsAction::SetVisible(false),
-                ],
+    // A single document import (Cube payload + its own trigger binding),
+    // same as every other test in this file — mixing `xrds.spawn()` and a
+    // later `import_scene_document` for the *same* node id isn't a
+    // supported "reimport" path (import_scene_document is for a fresh
+    // document, confirmed empirically: it errors with DuplicateRuntimeId).
+    let cube_id = XrdsId(942);
+    let document = XrdsSceneDocument {
+        nodes: vec![XrdsSceneNode {
+            id: XrdsSceneNodeId(cube_id.0),
+            parent_id: None,
+            name: "MaterialCube".to_string(),
+            enabled: true,
+            visible: true,
+            transform: XrdsSceneTransform::default(),
+            payload: XrdsSceneNodePayload::Cube(XrdsSceneCube::default()),
+            grabbable: false,
+            editor: XrdsEditorMetadata::default(),
+            triggers: vec![XrdsTriggerBinding {
+                trigger: XrdsTriggerKind::ZoneEnter,
+                track: Some("recolour".to_string()),
+                disabled: false,
+                hand: None,
+            }],
+            watchers: Vec::new(),
+        }],
+        tracks: vec![XrdsNamedTrack {
+            name: "recolour".to_string(),
+            track: XrdsTrack {
+                assets: vec![XrdsTrackAsset {
+                    target: XrdsActionTarget::SelfNode,
+                    keys: vec![XrdsTrackKey {
+                        at_secs: 0.0,
+                        action: XrdsAction::SetMaterial {
+                            base_color: Some([1.0, 0.0, 0.0, 1.0]),
+                            metallic: None,
+                            roughness: Some(0.9),
+                            texture: None,
+                        },
+                    }],
+                }],
+                ..XrdsTrack::default()
             },
-            disabled: false,
-            hand: None,
-            runnable: None,
         }],
-        vec![XrdsNamedRunnable {
-            name: "slow".to_string(),
-            runnable: XrdsRunnable::Sequence(XrdsSequence {
-                steps: vec![
-                    XrdsAction::Wait { seconds: 5.0 },
-                    XrdsAction::Teleport { destination: [9.0, 9.0, 9.0] },
-                ],
-            }),
-        }],
-    );
-
-    app.world_mut().write_message(xrds_components::XrZoneEnterEvent {
-        zone_id: XrdsId(961),
-        entity_id: XrdsId(961),
-    });
-    pump(&mut app, 3);
-
-    assert_eq!(
-        app.world().get::<Visibility>(entity),
-        Some(&Visibility::Hidden),
-        "wait: false must not block the outer sequence on the slow child"
-    );
-    assert_eq!(
-        app.world().get::<Transform>(entity).map(|t| t.translation),
-        Some(Vec3::ZERO),
-        "the child's own Teleport should not have run yet — it's still inside its own Wait"
-    );
-}
-
-#[test]
-fn run_action_with_unknown_runnable_name_skips_and_continues_sequence() {
-    let mut app = xrds_test_app();
-
-    let entity = import_node_with_triggers(
-        &mut app,
-        962,
-        vec![XrdsTriggerBinding {
-            trigger: XrdsTriggerKind::ZoneEnter,
-            sequence: XrdsSequence {
-                steps: vec![
-                    XrdsAction::Run { runnable: "does-not-exist".to_string(), wait: true },
-                    XrdsAction::SetVisible(false),
-                ],
-            },
-            disabled: false,
-            hand: None,
-            runnable: None,
-        }],
-    );
-
-    app.world_mut().write_message(xrds_components::XrZoneEnterEvent {
-        zone_id: XrdsId(962),
-        entity_id: XrdsId(962),
-    });
-    pump(&mut app, 3);
-
-    assert_eq!(
-        app.world().get::<Visibility>(entity),
-        Some(&Visibility::Hidden),
-        "an unresolvable Run must be skipped, not stall the rest of the sequence"
-    );
-}
-
-#[test]
-fn trigger_binding_runnable_field_resolves_through_the_registry() {
-    let mut app = xrds_test_app();
-
-    let entity = import_node_with_triggers_and_runnables(
-        &mut app,
-        963,
-        vec![XrdsTriggerBinding {
-            trigger: XrdsTriggerKind::ZoneEnter,
-            // Inline sequence is present but must be ignored: `runnable`
-            // takes priority per XrdsTriggerBinding's documented fallback.
-            sequence: XrdsSequence {
-                steps: vec![XrdsAction::Teleport { destination: [1.0, 1.0, 1.0] }],
-            },
-            disabled: false,
-            hand: None,
-            runnable: Some("named-teleport".to_string()),
-        }],
-        vec![XrdsNamedRunnable {
-            name: "named-teleport".to_string(),
-            runnable: XrdsRunnable::Sequence(XrdsSequence {
-                steps: vec![XrdsAction::Teleport { destination: [8.0, 8.0, 8.0] }],
-            }),
-        }],
-    );
-
-    app.world_mut().write_message(xrds_components::XrZoneEnterEvent {
-        zone_id: XrdsId(963),
-        entity_id: XrdsId(963),
-    });
-    pump(&mut app, 3);
-
-    assert_eq!(
-        app.world().get::<Transform>(entity).map(|t| t.translation),
-        Some(Vec3::new(8.0, 8.0, 8.0)),
-        "a binding naming a runnable should run the registry entry, not its own inline sequence"
-    );
-}
-
-#[test]
-fn run_action_starting_a_timeline_fires_keys_at_their_times() {
-    let mut app = xrds_test_app();
-
-    let entity = import_node_with_triggers_and_runnables(
-        &mut app,
-        964,
-        vec![XrdsTriggerBinding {
-            trigger: XrdsTriggerKind::ZoneEnter,
-            sequence: XrdsSequence {
-                steps: vec![XrdsAction::Run { runnable: "blink-timeline".to_string(), wait: false }],
-            },
-            disabled: false,
-            hand: None,
-            runnable: None,
-        }],
-        vec![XrdsNamedRunnable {
-            name: "blink-timeline".to_string(),
-            runnable: XrdsRunnable::Timeline(XrdsTimeline {
-                keys: vec![
-                    XrdsTimelineKey { at_secs: 0.0, action: XrdsAction::SetVisible(false) },
-                    XrdsTimelineKey { at_secs: 0.05, action: XrdsAction::SetVisible(true) },
-                ],
-                duration_secs: None,
-                looping: false,
-            }),
-        }],
-    );
-
-    app.world_mut().write_message(xrds_components::XrZoneEnterEvent {
-        zone_id: XrdsId(964),
-        entity_id: XrdsId(964),
-    });
-    pump(&mut app, 3);
-
-    assert_eq!(
-        app.world().get::<Visibility>(entity),
-        Some(&Visibility::Hidden),
-        "the at_secs: 0.0 key should have fired on the timeline's first advance"
-    );
-
-    for _ in 0..15 {
-        std::thread::sleep(Duration::from_millis(10));
-        app.update();
+        ..Default::default()
+    };
+    {
+        let mut xrds = XrdsAPI::attach(&mut app);
+        xrds.import_scene_document(&document).expect("import should succeed");
     }
 
-    assert_eq!(
-        app.world().get::<Visibility>(entity),
-        Some(&Visibility::Inherited),
-        "the at_secs: 0.05 key should have fired once enough time elapsed"
-    );
-    assert_eq!(
-        app.world_mut().query::<&XrdsTimelineAgent>().iter(app.world()).count(),
-        0,
-        "a non-looping timeline should despawn once its duration has elapsed"
-    );
-}
-
-#[test]
-fn run_action_runaway_chain_is_capped_and_fires_runaway_detected() {
-    // A registry entry that Runs itself, fire-and-forget, forever. The
-    // escape hatch (chain-depth cap) must stop this — cycles are allowed to
-    // be *authored*, just not allowed to hang the runtime.
-    let mut app = xrds_test_app();
-
-    let entity = import_node_with_triggers_and_runnables(
-        &mut app,
-        965,
-        vec![
-            XrdsTriggerBinding {
-                trigger: XrdsTriggerKind::ZoneEnter,
-                sequence: XrdsSequence {
-                    steps: vec![XrdsAction::Run { runnable: "loop".to_string(), wait: false }],
-                },
-                disabled: false,
-                hand: None,
-                runnable: None,
-            },
-            XrdsTriggerBinding {
-                trigger: XrdsTriggerKind::RunawayDetected,
-                sequence: XrdsSequence {
-                    steps: vec![XrdsAction::Teleport { destination: [42.0, 42.0, 42.0] }],
-                },
-                disabled: false,
-                hand: None,
-                runnable: None,
-            },
-        ],
-        vec![XrdsNamedRunnable {
-            name: "loop".to_string(),
-            runnable: XrdsRunnable::Sequence(XrdsSequence {
-                steps: vec![XrdsAction::Run { runnable: "loop".to_string(), wait: false }],
-            }),
-        }],
-    );
-
     app.world_mut().write_message(xrds_components::XrZoneEnterEvent {
-        zone_id: XrdsId(965),
-        entity_id: XrdsId(965),
-    });
-
-    pump(&mut app, 200);
-
-    assert_eq!(
-        app.world().get::<Transform>(entity).map(|t| t.translation),
-        Some(Vec3::new(42.0, 42.0, 42.0)),
-        "hitting the chain-depth cap should fire RunawayDetected instead of recursing forever"
-    );
-}
-
-#[test]
-fn stop_all_sequences_also_cancels_in_flight_timelines() {
-    let mut app = xrds_test_app();
-
-    import_node_with_triggers_and_runnables(
-        &mut app,
-        966,
-        vec![XrdsTriggerBinding {
-            trigger: XrdsTriggerKind::ZoneEnter,
-            sequence: XrdsSequence {
-                steps: vec![XrdsAction::Run { runnable: "loop-timeline".to_string(), wait: false }],
-            },
-            disabled: false,
-            hand: None,
-            runnable: None,
-        }],
-        vec![XrdsNamedRunnable {
-            name: "loop-timeline".to_string(),
-            runnable: XrdsRunnable::Timeline(XrdsTimeline {
-                keys: vec![XrdsTimelineKey { at_secs: 1.0, action: XrdsAction::SetVisible(false) }],
-                duration_secs: None,
-                looping: true,
-            }),
-        }],
-    );
-
-    app.world_mut().write_message(xrds_components::XrZoneEnterEvent {
-        zone_id: XrdsId(966),
-        entity_id: XrdsId(966),
+        zone_id: cube_id,
+        entity_id: cube_id,
     });
     pump(&mut app, 3);
 
+    let params = {
+        let xrds = XrdsAPI::attach(&mut app);
+        let cube = xrds.handle_of::<XrdsCube>(cube_id).unwrap();
+        xrds.material_params(&cube).expect("cube should have a material")
+    };
     assert_eq!(
-        app.world_mut().query::<&XrdsTimelineAgent>().iter(app.world()).count(),
-        1,
-        "the looping timeline should still be in flight before its first key fires"
+        params.base_color.rgba,
+        [1.0, 0.0, 0.0, 1.0],
+        "base_color was Some, so it should have been overridden"
+    );
+    assert_eq!(
+        params.pbr.roughness, 0.9,
+        "roughness was Some, so it should have been overridden"
+    );
+    assert_eq!(
+        params.pbr.metallic, 0.0,
+        "metallic was None, so it should still be the default"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Cross-Track asset conflicts (reject-the-newcomer) and lock lifecycle
+// ---------------------------------------------------------------------------
+
+/// One asset row driving `node_id`.
+fn node_row(node_id: u64, keys: Vec<(f32, XrdsAction)>) -> XrdsTrackAsset {
+    XrdsTrackAsset {
+        target: XrdsActionTarget::Node(XrdsSceneNodeId(node_id)),
+        keys: keys
+            .into_iter()
+            .map(|(at_secs, action)| XrdsTrackKey { at_secs, action })
+            .collect(),
+    }
+}
+
+/// A long interpolation, so a Track stays in flight (and keeps its locks)
+/// across the frames a test needs.
+fn long_tween() -> XrdsAction {
+    XrdsAction::SetTransform {
+        position: Some([5.0, 0.0, 0.0]),
+        rotation: None,
+        scale: None,
+        duration_secs: 10.0,
+        ease: XrdsEaseCurve::Linear,
+    }
+}
+
+/// Imports `node_ids` as plain nodes plus a Track registry, with no bindings.
+/// Tracks are started directly so a test controls the exact firing order.
+fn import_bare_nodes_and_tracks(
+    app: &mut App,
+    node_ids: &[u64],
+    tracks: Vec<XrdsNamedTrack>,
+) -> Vec<Entity> {
+    let document = XrdsSceneDocument {
+        nodes: node_ids.iter().map(|id| scene_node(*id, "Asset")).collect(),
+        tracks,
+        ..Default::default()
+    };
+    {
+        let mut xrds = XrdsAPI::attach(app);
+        xrds.import_scene_document(&document).expect("import should succeed");
+    }
+    let index = app.world().resource::<XrdsIdIndex>();
+    node_ids
+        .iter()
+        .map(|id| index.entity_of(XrdsId(*id)).expect("indexed"))
+        .collect()
+}
+
+fn start(app: &mut App, name: &str, on: Entity) -> Option<Entity> {
+    let track = app
+        .world()
+        .resource::<crate::xrds_api::trigger_action::XrdsTrackRegistry>()
+        .0
+        .get(name)
+        .cloned()
+        .expect("track should be registered");
+    crate::xrds_api::trigger_action::spawn_track_agent_in_world(
+        app.world_mut(),
+        on,
+        None,
+        name,
+        &track,
+        0,
+        false,
+    )
+}
+
+fn live_tracks(app: &mut App) -> usize {
+    app.world_mut().query::<&XrdsTrackAgent>().iter(app.world()).count()
+}
+
+#[test]
+fn a_track_sharing_an_asset_with_a_running_one_is_refused() {
+    let mut app = xrds_test_app();
+    let entities = import_bare_nodes_and_tracks(
+        &mut app,
+        &[601, 602],
+        vec![
+            XrdsNamedTrack {
+                name: "A".to_string(),
+                track: XrdsTrack {
+                    assets: vec![node_row(601, vec![(0.0, long_tween())])],
+                    ..XrdsTrack::default()
+                },
+            },
+            // Shares 601 with A, and also drives 602.
+            XrdsNamedTrack {
+                name: "B".to_string(),
+                track: XrdsTrack {
+                    assets: vec![
+                        node_row(601, vec![(0.0, long_tween())]),
+                        node_row(602, vec![(0.0, long_tween())]),
+                    ],
+                    ..XrdsTrack::default()
+                },
+            },
+        ],
     );
 
-    let stopped = {
-        let mut xrds = XrdsAPI::attach(&mut app);
-        xrds.stop_all_sequences()
-    };
-    assert_eq!(stopped, 1, "stop_all_sequences should also cancel in-flight timelines");
+    assert!(start(&mut app, "A", entities[0]).is_some(), "A should start");
+    assert!(
+        start(&mut app, "B", entities[0]).is_none(),
+        "B shares an asset with the running A, so it must be refused"
+    );
+    assert_eq!(live_tracks(&mut app), 1, "only A should be running");
+
+    // Atomic refusal: B must not have partially started on 602 either.
+    let locks = app.world().resource::<XrdsTrackAssetLocks>();
+    assert!(
+        locks.holder_of(entities[1]).is_none(),
+        "a refused Track must not hold any asset - refusal is all-or-nothing"
+    );
+    let conflict = locks.last_conflict.as_ref().expect("the refusal should be reported");
+    assert_eq!(conflict.blocked_track, "B");
+    assert_eq!(conflict.contended, vec![entities[0]]);
+}
+
+#[test]
+fn tracks_with_disjoint_assets_run_concurrently() {
+    // The point of the whole rule: disjoint Tracks are free to overlap.
+    let mut app = xrds_test_app();
+    let entities = import_bare_nodes_and_tracks(
+        &mut app,
+        &[611, 612],
+        vec![
+            XrdsNamedTrack {
+                name: "A".to_string(),
+                track: XrdsTrack {
+                    assets: vec![node_row(611, vec![(0.0, long_tween())])],
+                    ..XrdsTrack::default()
+                },
+            },
+            XrdsNamedTrack {
+                name: "B".to_string(),
+                track: XrdsTrack {
+                    assets: vec![node_row(612, vec![(0.0, long_tween())])],
+                    ..XrdsTrack::default()
+                },
+            },
+        ],
+    );
+
+    assert!(start(&mut app, "A", entities[0]).is_some());
+    assert!(start(&mut app, "B", entities[1]).is_some(), "disjoint assets must not conflict");
+    assert_eq!(live_tracks(&mut app), 2);
+}
+
+#[test]
+fn re_firing_a_running_track_restarts_it_rather_than_conflicting_with_itself() {
+    // Without the same-name exemption the guard would reject a Track for
+    // conflicting with its own running instance.
+    let mut app = xrds_test_app();
+    let entities = import_bare_nodes_and_tracks(
+        &mut app,
+        &[621],
+        vec![XrdsNamedTrack {
+            name: "A".to_string(),
+            track: XrdsTrack {
+                assets: vec![node_row(621, vec![(0.0, long_tween())])],
+                ..XrdsTrack::default()
+            },
+        }],
+    );
+
+    let first = start(&mut app, "A", entities[0]).expect("first start");
+    app.update();
+    let second = start(&mut app, "A", entities[0]).expect("re-fire must be allowed");
+
+    assert_ne!(first, second, "a re-fire should be a fresh agent");
+    assert_eq!(live_tracks(&mut app), 1, "the previous instance should be replaced, not stacked");
+    assert_eq!(
+        app.world().resource::<XrdsTrackAssetLocks>().holder_of(entities[0]),
+        Some(second),
+        "the new agent should own the asset"
+    );
+}
+
+#[test]
+fn locks_are_released_when_a_track_finishes_so_another_can_then_run() {
+    // The leak this guards against is permanent and silent: a lock that
+    // outlives its agent blocks every Track sharing that asset forever, and
+    // presents as "the trigger just stopped working".
+    let mut app = xrds_test_app();
+    let entities = import_bare_nodes_and_tracks(
+        &mut app,
+        &[631],
+        vec![
+            XrdsNamedTrack {
+                name: "Short".to_string(),
+                track: XrdsTrack {
+                    assets: vec![node_row(631, vec![(0.0, XrdsAction::SetVisible(false))])],
+                    duration_secs: Some(0.01),
+                    ..XrdsTrack::default()
+                },
+            },
+            XrdsNamedTrack {
+                name: "After".to_string(),
+                track: XrdsTrack {
+                    assets: vec![node_row(631, vec![(0.0, XrdsAction::SetVisible(true))])],
+                    ..XrdsTrack::default()
+                },
+            },
+        ],
+    );
+
+    assert!(start(&mut app, "Short", entities[0]).is_some());
+    assert!(
+        app.world().resource::<XrdsTrackAssetLocks>().holder_of(entities[0]).is_some(),
+        "a running Track should hold its asset"
+    );
+
+    // Let it run to completion.
+    for _ in 0..6 {
+        app.update();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    assert_eq!(live_tracks(&mut app), 0, "the Track should have finished");
+    assert!(
+        app.world().resource::<XrdsTrackAssetLocks>().is_empty(),
+        "finishing must release every lock, or nothing can drive this asset again"
+    );
+    assert!(
+        start(&mut app, "After", entities[0]).is_some(),
+        "a later Track should be able to claim the freed asset"
+    );
+}
+
+#[test]
+fn stopping_a_track_releases_its_locks() {
+    let mut app = xrds_test_app();
+    let entities = import_bare_nodes_and_tracks(
+        &mut app,
+        &[641],
+        vec![XrdsNamedTrack {
+            name: "A".to_string(),
+            track: XrdsTrack {
+                assets: vec![node_row(641, vec![(0.0, long_tween())])],
+                ..XrdsTrack::default()
+            },
+        }],
+    );
+
+    assert!(start(&mut app, "A", entities[0]).is_some());
+    let stopped = crate::xrds_api::trigger_action::stop_all_sequences_in_world(app.world_mut());
+    assert!(stopped > 0, "the running Track should have been stopped");
+    assert!(
+        app.world().resource::<XrdsTrackAssetLocks>().is_empty(),
+        "an explicit stop must release locks too, not just natural completion"
+    );
+}
+
+#[test]
+fn a_looping_track_keeps_its_locks_forever_which_is_why_it_is_diagnosed() {
+    // Runtime counterpart to the `track_diagnostics` error: a looping Track
+    // never releases, so a sharer can never start. Asserted here so the
+    // diagnostic and the runtime cannot drift apart on the claim.
+    let mut app = xrds_test_app();
+    let entities = import_bare_nodes_and_tracks(
+        &mut app,
+        &[651],
+        vec![
+            XrdsNamedTrack {
+                name: "Ambient".to_string(),
+                track: XrdsTrack {
+                    assets: vec![node_row(651, vec![(0.0, XrdsAction::SetVisible(false))])],
+                    duration_secs: Some(0.01),
+                    looping: true,
+                },
+            },
+            XrdsNamedTrack {
+                name: "Blocked".to_string(),
+                track: XrdsTrack {
+                    assets: vec![node_row(651, vec![(0.0, XrdsAction::SetVisible(true))])],
+                    ..XrdsTrack::default()
+                },
+            },
+        ],
+    );
+
+    assert!(start(&mut app, "Ambient", entities[0]).is_some());
+    for _ in 0..6 {
+        app.update();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(live_tracks(&mut app), 1, "a looping Track should still be running");
+    assert!(
+        start(&mut app, "Blocked", entities[0]).is_none(),
+        "nothing sharing an asset with a looping Track can ever start"
+    );
+}
+
+#[test]
+fn one_track_drives_several_assets_from_their_own_rows() {
+    // The core of the Track model: per-row targets, so one Track moves several
+    // nodes. Under the old single-implicit-target timeline this was impossible.
+    let mut app = xrds_test_app();
+    let entities = import_bare_nodes_and_tracks(
+        &mut app,
+        &[661, 662],
+        vec![XrdsNamedTrack {
+            name: "Both".to_string(),
+            track: XrdsTrack {
+                assets: vec![
+                    node_row(
+                        661,
+                        vec![(0.0, XrdsAction::SetTransform {
+                            position: Some([1.0, 0.0, 0.0]),
+                            rotation: None,
+                            scale: None,
+                            duration_secs: 0.0,
+                            ease: XrdsEaseCurve::Linear,
+                        })],
+                    ),
+                    node_row(
+                        662,
+                        vec![(0.0, XrdsAction::SetTransform {
+                            position: Some([0.0, 2.0, 0.0]),
+                            rotation: None,
+                            scale: None,
+                            duration_secs: 0.0,
+                            ease: XrdsEaseCurve::Linear,
+                        })],
+                    ),
+                ],
+                ..XrdsTrack::default()
+            },
+        }],
+    );
+
+    // Fired at 661, but 662's row must still drive 662 - not the firing target.
+    assert!(start(&mut app, "Both", entities[0]).is_some());
+    pump(&mut app, 3);
 
     assert_eq!(
-        app.world_mut().query::<&XrdsTimelineAgent>().iter(app.world()).count(),
-        0,
-        "the timeline agent should have been despawned"
+        app.world().get::<Transform>(entities[0]).map(|t| t.translation),
+        Some(Vec3::new(1.0, 0.0, 0.0)),
+    );
+    assert_eq!(
+        app.world().get::<Transform>(entities[1]).map(|t| t.translation),
+        Some(Vec3::new(0.0, 2.0, 0.0)),
+        "each row must apply to its own asset, not to the firing target"
+    );
+}
+
+#[test]
+fn a_paused_track_does_not_advance_but_keeps_its_assets() {
+    let mut app = xrds_test_app();
+    let entities = import_bare_nodes_and_tracks(
+        &mut app,
+        &[671],
+        vec![
+            XrdsNamedTrack {
+                name: "Preview".to_string(),
+                track: XrdsTrack {
+                    assets: vec![node_row(
+                        671,
+                        vec![(0.05, XrdsAction::SetTransform {
+                            position: Some([7.0, 0.0, 0.0]),
+                            rotation: None,
+                            scale: None,
+                            duration_secs: 0.0,
+                            ease: XrdsEaseCurve::Linear,
+                        })],
+                    )],
+                    ..XrdsTrack::default()
+                },
+            },
+            XrdsNamedTrack {
+                name: "Other".to_string(),
+                track: XrdsTrack {
+                    assets: vec![node_row(671, vec![(0.0, XrdsAction::SetVisible(false))])],
+                    ..XrdsTrack::default()
+                },
+            },
+        ],
+    );
+
+    let agent = start(&mut app, "Preview", entities[0]).expect("start");
+    app.world_mut().get_mut::<XrdsTrackAgent>(agent).unwrap().paused = true;
+
+    for _ in 0..8 {
+        app.update();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(
+        app.world().get::<Transform>(entities[0]).map(|t| t.translation),
+        Some(Vec3::ZERO),
+        "a paused Track must not fire its events"
+    );
+    assert_eq!(
+        app.world().get::<XrdsTrackAgent>(agent).map(|a| a.elapsed_secs()),
+        Some(0.0),
+        "a paused Track clock must not advance"
+    );
+    // Pausing is not releasing: the preview still owns the asset.
+    assert!(
+        start(&mut app, "Other", entities[0]).is_none(),
+        "a paused Track still holds its assets"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Looping restores its assets' initial state
+//
+// "A loop is a repeated Track. It doesn't rewind the world — it just puts the
+// assets it owns back to the state they started in." Captured at spawn, not
+// read from the document, so a Track fired while its assets sit somewhere the
+// document never described still repeats from where *it* began.
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Live edits reach already-running agents
+//
+// `XrdsTrackAgent` is a snapshot taken at spawn, so without an explicit
+// re-sync a running Track ignores every authored change. Reported symptom:
+// editing a looping Track's duration and watching it keep lapping at the old
+// one.
+// ---------------------------------------------------------------------------
+
+/// Rewrites a registered Track in place, the way an editor command does.
+fn edit_registered_track(app: &mut App, name: &str, edit: impl FnOnce(&mut XrdsTrack)) {
+    let mut registry = app
+        .world_mut()
+        .resource_mut::<crate::xrds_api::trigger_action::XrdsTrackRegistry>();
+    let track = registry.0.get_mut(name).expect("track should be registered");
+    edit(track);
+}
+
+#[test]
+fn changing_a_running_looping_tracks_duration_takes_effect_immediately() {
+    let mut app = xrds_test_app();
+    let entities = import_bare_nodes_and_tracks(
+        &mut app,
+        &[700],
+        vec![XrdsNamedTrack {
+            name: "Loop".to_string(),
+            track: XrdsTrack {
+                assets: vec![node_row(700, vec![(0.0, XrdsAction::SetVisible(false))])],
+                duration_secs: Some(60.0),
+                looping: true,
+            },
+        }],
+    );
+    let agent = start(&mut app, "Loop", entities[0]).expect("start");
+    app.update();
+    assert_eq!(
+        app.world().get::<XrdsTrackAgent>(agent).unwrap().duration_secs(),
+        60.0
+    );
+
+    edit_registered_track(&mut app, "Loop", |t| t.duration_secs = Some(0.05));
+    app.update();
+
+    assert_eq!(
+        app.world().get::<XrdsTrackAgent>(agent).unwrap().duration_secs(),
+        0.05,
+        "a running agent must adopt the Track's new duration, not keep lapping at the old one"
+    );
+}
+
+#[test]
+fn shortening_the_duration_below_the_clock_wraps_instead_of_stalling() {
+    // Otherwise elapsed sits past the end and the Track waits out one more full
+    // lap at the *old* length before the new duration is felt.
+    let mut app = xrds_test_app();
+    let entities = import_bare_nodes_and_tracks(
+        &mut app,
+        &[701],
+        vec![XrdsNamedTrack {
+            name: "Loop".to_string(),
+            track: XrdsTrack {
+                assets: vec![node_row(701, vec![(0.0, XrdsAction::SetVisible(false))])],
+                duration_secs: Some(60.0),
+                looping: true,
+            },
+        }],
+    );
+    let agent = start(&mut app, "Loop", entities[0]).expect("start");
+    for _ in 0..3 {
+        app.update();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let before = app.world().get::<XrdsTrackAgent>(agent).unwrap().elapsed_secs();
+    assert!(before > 0.0, "clock should have advanced");
+
+    // Shrink the duration to well under the elapsed time.
+    edit_registered_track(&mut app, "Loop", |t| t.duration_secs = Some(0.005));
+    app.update();
+
+    let after = app.world().get::<XrdsTrackAgent>(agent).unwrap().elapsed_secs();
+    assert!(
+        after < 0.005,
+        "elapsed ({after}) must be wrapped into the new duration, was {before}"
+    );
+}
+
+#[test]
+fn toggling_looping_off_while_running_lets_the_track_finish() {
+    let mut app = xrds_test_app();
+    let entities = import_bare_nodes_and_tracks(
+        &mut app,
+        &[702],
+        vec![XrdsNamedTrack {
+            name: "Loop".to_string(),
+            track: XrdsTrack {
+                assets: vec![node_row(702, vec![(0.0, XrdsAction::SetVisible(false))])],
+                duration_secs: Some(0.03),
+                looping: true,
+            },
+        }],
+    );
+    let agent = start(&mut app, "Loop", entities[0]).expect("start");
+    app.update();
+    assert!(app.world().get::<XrdsTrackAgent>(agent).unwrap().looping());
+
+    edit_registered_track(&mut app, "Loop", |t| t.looping = false);
+
+    // Now it must reach its end and despawn instead of lapping forever.
+    assert!(
+        spin_until(&mut app, 40, 5, |app| app.world().get::<XrdsTrackAgent>(agent).is_none()),
+        "un-checking Loop on a running Track must let it finish"
+    );
+}
+
+#[test]
+fn a_structural_edit_is_not_adopted_mid_flight() {
+    // Adopting a changed asset set would mean rewriting the lock table while
+    // the Track runs; getting that wrong leaks a lock and blocks the asset for
+    // the rest of the session. The Track keeps its original schedule and the
+    // author re-fires to pick the change up.
+    let mut app = xrds_test_app();
+    let entities = import_bare_nodes_and_tracks(
+        &mut app,
+        &[703, 704],
+        vec![XrdsNamedTrack {
+            name: "Loop".to_string(),
+            track: XrdsTrack {
+                assets: vec![node_row(703, vec![(0.0, XrdsAction::SetVisible(false))])],
+                duration_secs: Some(60.0),
+                looping: true,
+            },
+        }],
+    );
+    let agent = start(&mut app, "Loop", entities[0]).expect("start");
+    app.update();
+
+    // Add a second asset row *and* change the duration in one edit.
+    edit_registered_track(&mut app, "Loop", |t| {
+        t.assets.push(node_row(704, vec![(0.0, XrdsAction::SetVisible(false))]));
+        t.duration_secs = Some(0.05);
+    });
+    app.update();
+
+    assert_eq!(
+        app.world().get::<XrdsTrackAgent>(agent).unwrap().duration_secs(),
+        60.0,
+        "a structural edit must be skipped whole, not half-adopted"
+    );
+    let _ = entities[1];
+}
+
+/// Pumps the app until `pred` holds, or gives up after `tries`.
+///
+/// Both phases of the looping tests below need this rather than "update N
+/// times, then assert": a key's effect is deferred (fire → command → spawn a
+/// one-step agent → `SequentialActions` runs `on_start`), and these tests
+/// advance real wall-clock time, which jitters when the suite runs in
+/// parallel. Asserting after a fixed count made them pass alone and fail in
+/// the full run.
+fn spin_until(app: &mut App, tries: u32, ms: u64, mut pred: impl FnMut(&App) -> bool) -> bool {
+    for _ in 0..tries {
+        app.update();
+        std::thread::sleep(Duration::from_millis(ms));
+        if pred(app) {
+            return true;
+        }
+    }
+    false
+}
+
+#[test]
+fn a_looping_track_puts_its_asset_back_before_each_new_lap() {
+    let mut app = xrds_test_app();
+    let entities = import_bare_nodes_and_tracks(
+        &mut app,
+        &[690],
+        vec![XrdsNamedTrack {
+            name: "Loop".to_string(),
+            track: XrdsTrack {
+                // Moves away and never moves back — only the loop restore can
+                // return it, so this cannot pass by the Track undoing itself.
+                assets: vec![node_row(
+                    690,
+                    vec![(0.02, XrdsAction::SetTransform {
+                        position: Some([9.0, 0.0, 0.0]),
+                        rotation: None,
+                        scale: None,
+                        duration_secs: 0.0,
+                        ease: XrdsEaseCurve::Linear,
+                    })],
+                )],
+                duration_secs: Some(0.08),
+                looping: true,
+            },
+        }],
+    );
+
+    // Park it somewhere the document does *not* say, to prove the restore
+    // target is the spawn-time state rather than the authored transform.
+    app.world_mut().get_mut::<Transform>(entities[0]).unwrap().translation = Vec3::new(-4.0, 1.0, 2.0);
+
+    start(&mut app, "Loop", entities[0]).expect("start");
+
+    // Phase 1: the event moves it away.
+    assert!(
+        spin_until(&mut app, 20, 5, |app| {
+            app.world().get::<Transform>(entities[0]).map(|t| t.translation.x) == Some(9.0)
+        }),
+        "the event should have moved the asset before any lap boundary"
+    );
+
+    // Phase 2: cross a lap boundary and catch the window *after* the restore
+    // but *before* the 0.02s event re-fires.
+    assert!(
+        spin_until(&mut app, 60, 4, |app| {
+            let x = app.world().get::<Transform>(entities[0]).unwrap().translation.x;
+            (x - (-4.0)).abs() < 0.001
+        }),
+        "a looping Track must put its asset back to its spawn-time state at the top of a lap"
+    );
+}
+
+#[test]
+fn a_looping_track_restores_visibility_too_not_just_transform() {
+    let mut app = xrds_test_app();
+    let entities = import_bare_nodes_and_tracks(
+        &mut app,
+        &[691],
+        vec![XrdsNamedTrack {
+            name: "Blink".to_string(),
+            track: XrdsTrack {
+                assets: vec![node_row(691, vec![(0.02, XrdsAction::SetVisible(false))])],
+                duration_secs: Some(0.08),
+                looping: true,
+            },
+        }],
+    );
+
+    start(&mut app, "Blink", entities[0]).expect("start");
+    assert!(
+        spin_until(&mut app, 20, 5, |app| matches!(
+            app.world().get::<Visibility>(entities[0]),
+            Some(Visibility::Hidden)
+        )),
+        "the event should have hidden it first"
+    );
+    assert!(
+        spin_until(&mut app, 60, 4, |app| !matches!(
+            app.world().get::<Visibility>(entities[0]),
+            Some(Visibility::Hidden)
+        )),
+        "looping restore must cover visibility, not only transform"
+    );
+}
+
+#[test]
+fn a_non_looping_track_captures_no_initial_state() {
+    // The capture is not free (it reads material params per asset), so a
+    // one-shot Track — which can never lap — must not pay for it.
+    let mut app = xrds_test_app();
+    let entities = import_bare_nodes_and_tracks(
+        &mut app,
+        &[692],
+        vec![XrdsNamedTrack {
+            name: "Once".to_string(),
+            track: XrdsTrack {
+                assets: vec![node_row(692, vec![(0.0, XrdsAction::SetVisible(false))])],
+                duration_secs: Some(1.0),
+                looping: false,
+            },
+        }],
+    );
+    let agent = start(&mut app, "Once", entities[0]).expect("start");
+    assert!(
+        !app.world().get::<XrdsTrackAgent>(agent).unwrap().has_initial_state(),
+        "a non-looping Track should not capture initial state"
+    );
+}
+
+#[test]
+fn a_looping_track_does_capture_initial_state() {
+    let mut app = xrds_test_app();
+    let entities = import_bare_nodes_and_tracks(
+        &mut app,
+        &[693],
+        vec![XrdsNamedTrack {
+            name: "Round".to_string(),
+            track: XrdsTrack {
+                assets: vec![node_row(693, vec![(0.0, XrdsAction::SetVisible(false))])],
+                duration_secs: Some(1.0),
+                looping: true,
+            },
+        }],
+    );
+    let agent = start(&mut app, "Round", entities[0]).expect("start");
+    assert!(
+        app.world().get::<XrdsTrackAgent>(agent).unwrap().has_initial_state(),
+        "a looping Track must capture what to put back"
+    );
+}
+
+/// Regression test: pausing a Track only stopped `advance_tracks` from
+/// firing *new* keys. A `SetTransform` already mid-flight lives on the
+/// target as an `XrdsTransformTween`, with no link back to the agent that
+/// started it, and `advance_transform_tweens` advanced every tween in the
+/// world unconditionally — so a pause landing mid-glide looked like it did
+/// nothing at all, since the cube kept sliding to its destination anyway.
+#[test]
+fn pausing_a_track_also_freezes_its_own_in_flight_interpolation() {
+    let mut app = xrds_test_app();
+    let entities = import_bare_nodes_and_tracks(
+        &mut app,
+        &[672],
+        vec![XrdsNamedTrack {
+            name: "Glide".to_string(),
+            track: XrdsTrack {
+                assets: vec![node_row(
+                    672,
+                    vec![(0.0, XrdsAction::SetTransform {
+                        position: Some([10.0, 0.0, 0.0]),
+                        rotation: None,
+                        scale: None,
+                        duration_secs: 1.0,
+                        ease: XrdsEaseCurve::Linear,
+                    })],
+                )],
+                ..XrdsTrack::default()
+            },
+        }],
+    );
+
+    let agent = start(&mut app, "Glide", entities[0]).expect("start");
+
+    // Run partway into the tween, so it is genuinely in flight, not merely
+    // scheduled.
+    for _ in 0..4 {
+        app.update();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let mid_x = app
+        .world()
+        .get::<Transform>(entities[0])
+        .expect("cube has a transform")
+        .translation
+        .x;
+    assert!(mid_x > 0.0 && mid_x < 10.0, "must be genuinely mid-glide, got x={mid_x}");
+
+    app.world_mut().get_mut::<XrdsTrackAgent>(agent).unwrap().paused = true;
+
+    for _ in 0..8 {
+        app.update();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(
+        app.world().get::<Transform>(entities[0]).map(|t| t.translation.x),
+        Some(mid_x),
+        "a paused Track's in-flight interpolation must not keep advancing"
     );
 }

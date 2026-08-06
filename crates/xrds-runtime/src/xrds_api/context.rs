@@ -1019,4 +1019,35 @@ impl XrdsUpdateContext<'_> {
     ) -> usize {
         super::trigger_action::fire_trigger_in_world(self.world, node, kind, hand)
     }
+
+    /// Starts a named Track as an editor preview, replacing any current one.
+    ///
+    /// Deliberately distinct from play mode: previewing one Track is not running
+    /// the simulation. Goes through the ordinary asset-conflict guard, so a
+    /// preview of a Track whose assets are already held is refused exactly as a
+    /// real firing would be — the preview should show what would actually
+    /// happen, including the refusal.
+    ///
+    /// Returns `false` when there was nothing to preview.
+    pub fn preview_play_track(&mut self, name: &str) -> bool {
+        super::trigger_action::preview_play_track_in_world(self.world, name).is_some()
+    }
+
+    /// Pauses or resumes the preview. A paused Track keeps its asset locks.
+    pub fn preview_pause_track(&mut self, paused: bool) -> bool {
+        super::trigger_action::preview_pause_track_in_world(self.world, paused)
+    }
+
+    /// Stops the preview and returns every node it was driving, so the caller
+    /// can restore those nodes from its authored document. The runtime cannot do
+    /// that itself — only the editor holds the document to restore from.
+    pub fn preview_stop_track(&mut self) -> Vec<XrdsId> {
+        super::trigger_action::preview_stop_track_in_world(self.world)
+    }
+
+    /// `(name, elapsed_secs, duration_secs, playing)` for the preview, or `None`
+    /// when nothing is previewing. Drives the transport readout and playhead.
+    pub fn track_preview_state(&mut self) -> Option<(String, f32, f32, bool)> {
+        super::trigger_action::track_preview_state_in_world(self.world)
+    }
 }

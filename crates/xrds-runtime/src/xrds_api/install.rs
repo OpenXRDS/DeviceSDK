@@ -70,7 +70,11 @@ pub(super) fn install_xrds(app: &mut App) {
     // play mode) drive it synthetically from mouse input.
     app.init_resource::<xrds_openxr::XrInput>();
     app.init_resource::<crate::xrds_api::environment::XrdsAnchorExposureOverride>();
-    app.init_resource::<crate::xrds_api::trigger_action::XrdsRunnableRegistry>();
+    app.init_resource::<crate::xrds_api::trigger_action::XrdsTrackRegistry>();
+    // Which entities each running Track holds. Must exist before any Track
+    // can start — `spawn_track_agent_in_world` consults it to decide whether
+    // to reject a newcomer.
+    app.init_resource::<crate::xrds_api::trigger_action::XrdsTrackAssetLocks>();
     app.add_message::<xrds_components::XrGrabEvent>();
     app.add_message::<xrds_components::XrDropEvent>();
     app.add_message::<xrds_components::XrZoneEnterEvent>();
@@ -207,7 +211,16 @@ pub(super) fn install_xrds(app: &mut App) {
     // Timeline scheduler (docs/done/xrds-trigger-action-v1.md Phase 9) —
     // absolute-time, concurrent choreography, run independently of the
     // trigger/sequence machinery below.
-    app.add_systems(Update, crate::xrds_api::trigger_action::advance_timelines);
+    // Adopt authored edits into already-running agents *before* advancing them,
+    // so a duration/looping change made while a Track is playing takes effect
+    // on this frame rather than a lap later. Explicitly ordered rather than
+    // relying on registration order, which Bevy does not guarantee.
+    app.add_systems(
+        Update,
+        crate::xrds_api::trigger_action::sync_live_track_agents
+            .before(crate::xrds_api::trigger_action::advance_tracks),
+    );
+    app.add_systems(Update, crate::xrds_api::trigger_action::advance_tracks);
     // Trigger-action sequencing (docs/done/xrds-trigger-action-v1.md
     // Phase 3). Explicitly ordered after zone_collision_system rather than
     // relying on Bevy's event double-buffering to hide a missing constraint:
@@ -272,6 +285,13 @@ pub(super) fn install_xrds(app: &mut App) {
             crate::xrds_api::trigger_action::despawn_finished_sequence_agents,
         ),
     );
+    // Advances in-flight SetTransform tweens. No explicit ordering
+    // against SequentialActionsPlugin's own per-frame advancement — if it
+    // happens to run first on a given frame, `is_finished` just sees this
+    // tween's completion one frame later, the same one-frame-latency cost
+    // already accepted for `evaluate_threshold_watchers` above, not a
+    // correctness issue either way.
+    app.add_systems(Update, crate::xrds_api::trigger_action::advance_transform_tweens);
     app.add_systems(Update, crate::xrds_api::world_ui_pointer::world_ui_pointer_system);
     app.add_systems(Startup, crate::xrds_api::world_ui_pointer::spawn_world_ui_cursors_system);
     // Layout runs after the pointer system (so pointer state is fresh) but before the

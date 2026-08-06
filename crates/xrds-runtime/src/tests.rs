@@ -20,7 +20,7 @@ use xrds_components::{
     XrdsMaterialTextureUvTransformMode,
 };
 use xrds_scene_graph::{
-    XrdsAction, XrdsActionTarget, XrdsActionValue, XrdsAxis, XrdsCrossing, XrdsEditorMetadata,
+    XrdsAction, XrdsActionTarget, XrdsActionValue, XrdsAxis, XrdsCrossing, XrdsEaseCurve, XrdsEditorMetadata,
     XrdsGltfAssetExportPolicy, XrdsObservable, XrdsThresholdWatcher, XrdsSceneAmbientLight,
     XrdsSceneAnimationRepeatMode, XrdsSceneAsset, XrdsSceneAssetKind, XrdsSceneAudioClip,
     XrdsSceneCamera, XrdsSceneCameraProjection, XrdsSceneCube, XrdsSceneDirectionalLight,
@@ -33,7 +33,7 @@ use xrds_scene_graph::{
     XrdsSceneNodeId, XrdsSceneNodePayload, XrdsScenePointLight, XrdsSceneSkyboxEnvironment,
     XrdsSceneSpotLight, XrdsSceneText, XrdsSceneTextAlignment, XrdsSceneTextureFilterMode,
     XrdsSceneTextureRef, XrdsSceneTextureSamplerParams, XrdsSceneTextureUvParams,
-    XrdsSceneTextureUvTransformMode, XrdsSceneTextureWrapMode, XrdsSceneTransform, XrdsSequence,
+    XrdsSceneTextureUvTransformMode, XrdsSceneTextureWrapMode, XrdsSceneTransform,
     XrdsSourceLink, XrdsTriggerBinding, XrdsTriggerKind,
 };
 

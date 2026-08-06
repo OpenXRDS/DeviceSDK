@@ -820,12 +820,28 @@ fn trigger_bindings_survive_import_export_round_trip() {
 
     let bindings = vec![XrdsTriggerBinding {
         trigger: XrdsTriggerKind::ZoneEnter,
-        sequence: XrdsSequence {
-            steps: vec![XrdsAction::Teleport { destination: [1.0, 0.0, 2.0] }],
-        },
+        track: Some("teleport".to_string()),
         disabled: false,
         hand: None,
-        runnable: None,
+    }];
+    let tracks = vec![xrds_scene_graph::XrdsNamedTrack {
+        name: "teleport".to_string(),
+        track: xrds_scene_graph::XrdsTrack {
+            assets: vec![xrds_scene_graph::XrdsTrackAsset {
+                target: XrdsActionTarget::SelfNode,
+                keys: vec![xrds_scene_graph::XrdsTrackKey {
+                    at_secs: 0.0,
+                    action: XrdsAction::SetTransform {
+                            position: Some([1.0, 0.0, 2.0]),
+                            rotation: None,
+                            scale: None,
+                            duration_secs: 0.0,
+                            ease: XrdsEaseCurve::Linear,
+                        },
+                }],
+            }],
+            ..Default::default()
+        },
     }];
 
     let document = XrdsSceneDocument {
@@ -850,6 +866,7 @@ fn trigger_bindings_survive_import_export_round_trip() {
             triggers: bindings.clone(),
             watchers: Vec::new(),
         }],
+        tracks: tracks.clone(),
         ..Default::default()
     };
 
@@ -882,6 +899,9 @@ fn trigger_bindings_survive_import_export_round_trip() {
 
     let node = exported.node(XrdsSceneNodeId(920)).expect("node should export");
     assert_eq!(node.triggers, bindings);
+    // The Track a binding names has to survive too, or the exported document
+    // would round-trip a binding that resolves to nothing.
+    assert_eq!(exported.tracks, tracks);
 }
 
 #[test]

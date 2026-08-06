@@ -22,9 +22,9 @@ use super::*;
 use bevy::prelude::*;
 use bevy_sequential_actions::*;
 use xrds_scene_graph::{
-    XrdsAction, XrdsActionTarget, XrdsActionValue, XrdsAxis, XrdsCrossing, XrdsObservable,
-    XrdsRunnable, XrdsSceneAnimationRepeatMode, XrdsSceneGltfAnimationSelector,
-    XrdsSceneGltfPlayback, XrdsSequence, XrdsThresholdWatcher, XrdsTimeline, XrdsTimelineKey,
+    XrdsAction, XrdsActionTarget, XrdsActionValue, XrdsAxis, XrdsCrossing, XrdsEaseCurve,
+    XrdsObservable, XrdsSceneAnimationRepeatMode, XrdsSceneGltfAnimationSelector,
+    XrdsSceneGltfPlayback, XrdsThresholdWatcher, XrdsTrack,
     XrdsTriggerBinding, XrdsTriggerKind,
 };
 
@@ -133,14 +133,88 @@ pub fn sync_completed_gltf_animation_triggers(world: &mut World) {
 /// `SliderChange`); chain depth can. See `XrdsTriggerKind::RunawayDetected`.
 pub const MAX_RUN_CHAIN_DEPTH: u32 = 64;
 
-/// Runtime mirror of `XrdsSceneDocument::runnables` — the document-level
-/// name → `XrdsRunnable` lookup that `XrdsTriggerBinding::runnable` and
-/// `XrdsAction::Run` resolve against. Replaced wholesale on every full
-/// document import (see `reimport::sync_runnable_registry`), matching how
-/// the rest of import treats the document as complete, authoritative state
-/// rather than something to merge into.
+/// Runtime mirror of `XrdsSceneDocument::tracks` — the document-level
+/// name → [`XrdsTrack`] lookup that `XrdsTriggerBinding::track` resolves
+/// against. Replaced wholesale on every full document import (see
+/// `reimport::sync_track_registry`), matching how the rest of import treats
+/// the document as complete, authoritative state rather than something to
+/// merge into.
 #[derive(Resource, Debug, Clone, Default)]
-pub struct XrdsRunnableRegistry(pub std::collections::HashMap<String, XrdsRunnable>);
+pub struct XrdsTrackRegistry(pub std::collections::HashMap<String, XrdsTrack>);
+
+/// Which entities are currently being driven by which running Track.
+///
+/// This is the runtime half of the one-asset-at-a-time rule: a Track will not
+/// start if any asset it drives is already held by another running Track.
+/// See `docs/xrds-track-model-plan.md` §4 for why the policy is
+/// *reject the newcomer* rather than preempt or queue — briefly, a scenario
+/// that completes is worth more than one that starts, and a partially-applied
+/// Track plays *wrong* rather than not at all, which is far harder to debug.
+///
+/// Keyed on the **resolved `Entity`**, deliberately, not on the authored
+/// target: `SelfNode`/`TriggerSource` only become concrete when fired, so two
+/// Tracks both using `SelfNode` on different nodes must not collide.
+#[derive(Resource, Debug, Default)]
+pub struct XrdsTrackAssetLocks {
+    /// entity → the agent holding it.
+    held: std::collections::HashMap<Entity, Entity>,
+    /// The most recent refusal, for the editor to surface. Without this a
+    /// rejected Track is a silent no-op, which is the one real weakness of
+    /// the reject policy.
+    pub last_conflict: Option<XrdsTrackConflict>,
+}
+
+/// Why a Track refused to start.
+#[derive(Debug, Clone)]
+pub struct XrdsTrackConflict {
+    pub blocked_track: String,
+    pub contended: Vec<Entity>,
+}
+
+impl XrdsTrackAssetLocks {
+    /// Entities from `wanted` that some *other* agent already holds.
+    fn conflicts(&self, wanted: &[Entity], me: Entity) -> Vec<Entity> {
+        wanted
+            .iter()
+            .copied()
+            .filter(|e| self.held.get(e).is_some_and(|holder| *holder != me))
+            .collect()
+    }
+
+    fn acquire(&mut self, wanted: &[Entity], agent: Entity) {
+        for e in wanted {
+            self.held.insert(*e, agent);
+        }
+    }
+
+    /// Drops every lock held by `agent`.
+    ///
+    /// **Load-bearing.** If this is missed when an agent despawns, the locks
+    /// leak and every Track sharing those assets is blocked forever — the
+    /// single most likely bug in this design, so it has its own test.
+    pub fn release_agent(&mut self, agent: Entity) {
+        self.held.retain(|_, holder| *holder != agent);
+    }
+
+    /// Every entity `agent` currently holds. The record of what a running
+    /// Track has touched, which is what an editor preview needs in order to
+    /// restore those nodes when it stops.
+    pub fn entities_held_by(&self, agent: Entity) -> Vec<Entity> {
+        self.held
+            .iter()
+            .filter(|(_, holder)| **holder == agent)
+            .map(|(entity, _)| *entity)
+            .collect()
+    }
+
+    pub fn holder_of(&self, entity: Entity) -> Option<Entity> {
+        self.held.get(&entity).copied()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.held.is_empty()
+    }
+}
 
 /// Marks an ephemeral per-firing agent entity and records which entities
 /// its actions apply to. One is spawned per trigger firing and despawned
@@ -346,7 +420,7 @@ pub fn consume_triggers<E: XrdsTriggerEvent>(
     mut events: MessageReader<E>,
     bindings: Query<&XrdsTriggerBindings>,
     id_index: Res<XrdsIdIndex>,
-    registry: Res<XrdsRunnableRegistry>,
+    registry: Res<XrdsTrackRegistry>,
     mut commands: Commands,
 ) {
     for event in events.read() {
@@ -369,7 +443,7 @@ pub fn consume_triggers<E: XrdsTriggerEvent>(
             // which is correct: it has nothing to compare against.
             !b.disabled && b.trigger == kind && (b.hand.is_none() || b.hand == hand)
         }) {
-            spawn_binding_runnable(&mut commands, target, source, binding, &registry, false);
+            spawn_binding_track(&mut commands, target, source, binding, &registry, false);
         }
     }
 }
@@ -382,125 +456,411 @@ pub fn consume_triggers<E: XrdsTriggerEvent>(
 ///
 /// `is_recovery` is `true` only when this firing came from
 /// [`fire_runaway_detected_in_world`] — see [`XrdsSequenceAgent::is_recovery`].
-fn spawn_binding_runnable(
+fn spawn_binding_track(
     commands: &mut Commands,
     target: Entity,
     source: Option<Entity>,
     binding: &XrdsTriggerBinding,
-    registry: &XrdsRunnableRegistry,
+    registry: &XrdsTrackRegistry,
     is_recovery: bool,
 ) {
-    match &binding.runnable {
-        Some(name) => match registry.0.get(name) {
-            Some(XrdsRunnable::Sequence(sequence)) => {
-                spawn_sequence_agent_with_depth(commands, target, source, sequence, 0, is_recovery);
-            }
-            Some(XrdsRunnable::Timeline(timeline)) => {
-                spawn_timeline_agent_with_depth(commands, target, source, timeline, 0, is_recovery);
-            }
-            None => {
-                log::warn!(
-                    "XrdsTriggerBinding.runnable named {name:?} on {target:?}, which has no \
-                     matching entry in XrdsSceneDocument::runnables — nothing fired."
-                );
-            }
-        },
-        None => {
-            spawn_sequence_agent_with_depth(
-                commands,
-                target,
-                source,
-                &binding.sequence,
-                0,
-                is_recovery,
-            );
+    let Some(name) = binding.track.as_deref() else {
+        // Authored but unwired. `track_diagnostics` already warns about this
+        // at author time, so staying quiet here avoids a per-firing log spam
+        // for a state the editor is already flagging.
+        return;
+    };
+    match registry.0.get(name) {
+        Some(track) => {
+            spawn_track_agent_deferred(commands, target, source, name, track, 0, is_recovery);
+        }
+        None => log::warn!(
+            "XrdsTriggerBinding.track named {name:?} on {target:?}, which has no matching entry              in XrdsSceneDocument::tracks — nothing fired."
+        ),
+    }
+}
+
+/// Resolves an authored [`XrdsActionTarget`] to a concrete entity.
+///
+/// Free function rather than a method so a Track's asset rows can be resolved
+/// at spawn time — the asset locks have to be taken on real entities, and
+/// `SelfNode`/`TriggerSource` only become concrete once a firing supplies
+/// `self_entity`/`source`.
+pub fn resolve_action_target(
+    selector: &XrdsActionTarget,
+    self_entity: Entity,
+    source: Option<Entity>,
+    id_index: Option<&XrdsIdIndex>,
+) -> Option<Entity> {
+    match selector {
+        XrdsActionTarget::SelfNode => Some(self_entity),
+        XrdsActionTarget::TriggerSource => source,
+        XrdsActionTarget::Node(node_id) => {
+            id_index.and_then(|index| index.entity_of((*node_id).into()))
         }
     }
 }
 
-/// Spawns one ephemeral agent carrying the whole sequence, at chain depth 0.
-/// Public so expert-layer code and tests can kick off an authored sequence
-/// directly without going through a trigger.
-pub fn spawn_sequence_agent(
-    commands: &mut Commands,
+/// Spawns a [`XrdsTrackAgent`] for one Track — absolute-time, concurrent
+/// choreography over a set of assets, on its own clock.
+///
+/// Returns `None` without spawning when the Track has no events, or when
+/// **any asset it drives is already held by another running Track**. That
+/// second case is the reject-the-newcomer guard (plan doc §4): the refusal is
+/// logged *and* recorded in [`XrdsTrackAssetLocks::last_conflict`], because a
+/// silently-refused Track is otherwise indistinguishable from one that was
+/// never triggered.
+///
+/// Re-firing a Track that is already running is **not** a conflict — the
+/// running agent is despawned and a fresh one started, so a re-trigger
+/// replays from the beginning rather than rejecting itself.
+///
+/// Takes `&mut World` rather than `Commands` so the conflict check, the lock
+/// acquisition and the spawn happen as one atomic step. Two Tracks fired in
+/// the same frame would otherwise both pass a deferred check and both
+/// acquire.
+/// Flattens a Track's rows into one time-sorted schedule, resolving each
+/// row's target to a concrete entity.
+///
+/// Shared by [`spawn_track_agent_in_world`] and [`sync_live_track_agents`] on
+/// purpose: a running agent re-reading the authored Track must schedule it
+/// *identically* to a fresh spawn, and two copies of this would drift.
+fn schedule_track_keys(
+    track: &XrdsTrack,
     target: Entity,
     source: Option<Entity>,
-    sequence: &XrdsSequence,
-) -> Option<Entity> {
-    spawn_sequence_agent_with_depth(commands, target, source, sequence, 0, false)
-}
-
-/// Same as [`spawn_sequence_agent`] but at an explicit chain depth and
-/// recovery flag — used by `XrdsAction::Run` to propagate `chain_depth + 1`
-/// and `is_recovery` to the runnable it starts. Returns `None` (and spawns
-/// nothing) for an empty sequence.
-pub fn spawn_sequence_agent_with_depth(
-    commands: &mut Commands,
-    target: Entity,
-    source: Option<Entity>,
-    sequence: &XrdsSequence,
-    chain_depth: u32,
-    is_recovery: bool,
-) -> Option<Entity> {
-    if sequence.steps.is_empty() {
-        return None;
-    }
-
-    let agent = commands
-        .spawn((
-            SequentialActions,
-            XrdsSequenceAgent { target, source, chain_depth, is_recovery },
-        ))
-        .id();
-
-    let runners: Vec<BoxedAction> = sequence
-        .steps
+    id_index: Option<&XrdsIdIndex>,
+) -> Vec<XrdsTrackScheduledKey> {
+    let resolved: Vec<Option<Entity>> = track
+        .assets
         .iter()
-        .map(|action| {
-            Box::new(XrdsActionRunner::new(action.clone(), target, source, chain_depth, is_recovery))
-                as BoxedAction
-        })
+        .map(|asset| resolve_action_target(&asset.target, target, source, id_index))
         .collect();
 
-    commands.actions(agent).add(runners);
-    Some(agent)
+    let mut keys: Vec<XrdsTrackScheduledKey> = track
+        .assets
+        .iter()
+        .zip(resolved)
+        .flat_map(|(asset, entity)| {
+            asset
+                .keys
+                .iter()
+                .map(move |k| XrdsTrackScheduledKey {
+                    at_secs: k.at_secs,
+                    action: k.action.clone(),
+                    entity,
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    keys.sort_by(|a, b| a.at_secs.total_cmp(&b.at_secs));
+    keys
 }
 
-/// Same as [`spawn_sequence_agent_with_depth`] but for an `XrdsTimeline` —
-/// absolute-time, concurrent choreography rather than a queue. See
-/// [`XrdsTimelineAgent`]. Returns `None` for a timeline with no keys.
-pub fn spawn_timeline_agent_with_depth(
-    commands: &mut Commands,
+/// The distinct entities a schedule drives, sorted — the identity a re-sync
+/// compares to decide whether an edit was structural.
+fn scheduled_entities(keys: &[XrdsTrackScheduledKey]) -> Vec<Entity> {
+    let mut out: Vec<Entity> = keys.iter().filter_map(|k| k.entity).collect();
+    out.sort();
+    out.dedup();
+    out
+}
+
+pub fn spawn_track_agent_in_world(
+    world: &mut World,
     target: Entity,
     source: Option<Entity>,
-    timeline: &XrdsTimeline,
+    name: &str,
+    track: &XrdsTrack,
     chain_depth: u32,
     is_recovery: bool,
 ) -> Option<Entity> {
-    if timeline.keys.is_empty() {
+    if track.key_count() == 0 {
         return None;
     }
 
-    let mut keys = timeline.keys.clone();
-    keys.sort_by(|a, b| a.at_secs.total_cmp(&b.at_secs));
-    let duration_secs = timeline
-        .duration_secs
-        .unwrap_or_else(|| keys.last().map(|k| k.at_secs).unwrap_or(0.0));
+    // Flatten rows into one time-sorted schedule, resolving each row's target
+    // now so the locks below are taken on real entities.
+    let keys = {
+        let id_index = world.get_resource::<XrdsIdIndex>();
+        schedule_track_keys(track, target, source, id_index)
+    };
 
-    let agent = commands
-        .spawn(XrdsTimelineAgent {
-            target,
-            source,
-            chain_depth,
-            is_recovery,
-            keys,
-            next_key_index: 0,
-            elapsed_secs: 0.0,
-            duration_secs,
-            looping: timeline.looping,
-        })
-        .id();
+    let mut wanted: Vec<Entity> = keys.iter().filter_map(|k| k.entity).collect();
+    wanted.sort();
+    wanted.dedup();
+
+    // Same-Track re-fire replaces the running instance instead of colliding
+    // with it. Collected first so its locks are released before the check.
+    let running_same: Vec<Entity> = world
+        .query::<(Entity, &XrdsTrackAgent)>()
+        .iter(world)
+        .filter(|(_, agent)| agent.name == name)
+        .map(|(entity, _)| entity)
+        .collect();
+    for old in &running_same {
+        if let Some(mut locks) = world.get_resource_mut::<XrdsTrackAssetLocks>() {
+            locks.release_agent(*old);
+        }
+        world.despawn(*old);
+    }
+
+    world.init_resource::<XrdsTrackAssetLocks>();
+    let agent = world.spawn_empty().id();
+
+    {
+        let mut locks = world.resource_mut::<XrdsTrackAssetLocks>();
+        let contended = locks.conflicts(&wanted, agent);
+        if !contended.is_empty() {
+            locks.last_conflict = Some(XrdsTrackConflict {
+                blocked_track: name.to_string(),
+                contended: contended.clone(),
+            });
+            log::warn!(
+                "Track {name:?} was not started: {} of its assets are already held by another                  running Track ({contended:?}). A Track runs whole or not at all — see the                  reject-the-newcomer policy.",
+                contended.len()
+            );
+            drop(locks);
+            world.despawn(agent);
+            return None;
+        }
+        locks.acquire(&wanted, agent);
+    }
+
+    // Only looping Tracks need this, and only they pay for it: a one-shot
+    // Track never laps, so there is nothing to put back.
+    let initial = if track.looping {
+        wanted.iter().map(|e| capture_asset_state(world, *e)).collect()
+    } else {
+        Vec::new()
+    };
+
+    let duration_secs = track.effective_duration_secs();
+    world.entity_mut(agent).insert(XrdsTrackAgent {
+        target,
+        source,
+        chain_depth,
+        is_recovery,
+        name: name.to_string(),
+        keys,
+        next_key_index: 0,
+        elapsed_secs: 0.0,
+        duration_secs,
+        looping: track.looping,
+        paused: false,
+        initial,
+    });
     Some(agent)
+}
+
+/// What one asset looked like when its Track started, so a looping Track can
+/// put it back at the top of each lap.
+///
+/// Captured at *spawn*, not read from the authored document, and that is the
+/// meaningful choice: a Track may be fired when its assets are somewhere the
+/// document never said (another Track moved them, gameplay moved them, an
+/// earlier lap of this same Track moved them). "Repeat this choreography from
+/// where it began" is what an author means by loop; snapping to authored
+/// values instead would teleport assets on the first lap boundary.
+///
+/// **Health is deliberately absent.** `ModifyHealth` accumulates gameplay
+/// state, and restoring it every lap would make a looping health drain a
+/// permanent no-op — the loop would undo exactly what it just did. Only
+/// presentation state (where it is, whether you can see it, what it looks
+/// like) is restored.
+#[derive(Debug, Clone)]
+pub struct XrdsTrackAssetInitial {
+    entity: Entity,
+    transform: Option<Transform>,
+    visibility: Option<Visibility>,
+    material: Option<XrdsMaterialParams>,
+}
+
+fn capture_asset_state(world: &mut World, entity: Entity) -> XrdsTrackAssetInitial {
+    XrdsTrackAssetInitial {
+        entity,
+        transform: world.get::<Transform>(entity).copied(),
+        visibility: world.get::<Visibility>(entity).copied(),
+        material: material_params_for_entity_in_world(world, entity),
+    }
+}
+
+/// Puts every captured asset back, and — the part that is easy to miss —
+/// strips any in-flight [`XrdsTransformTween`] first.
+///
+/// Without that strip, a `SetTransform` still mid-glide when the lap wraps
+/// keeps interpolating toward last lap's destination and overwrites the
+/// restore a frame later, so the loop visibly drifts. Exactly the bug the
+/// preview's stop path already had to solve.
+fn restore_asset_states(world: &mut World, states: &[XrdsTrackAssetInitial]) {
+    for state in states {
+        if world.get_entity(state.entity).is_err() {
+            continue; // despawned mid-Track; nothing to restore onto
+        }
+        world.entity_mut(state.entity).remove::<XrdsTransformTween>();
+        if let Some(transform) = state.transform {
+            if let Some(mut t) = world.get_mut::<Transform>(state.entity) {
+                *t = transform;
+            }
+        }
+        if let Some(visibility) = state.visibility {
+            if let Some(mut v) = world.get_mut::<Visibility>(state.entity) {
+                *v = visibility;
+            }
+        }
+        if let Some(material) = state.material.clone() {
+            set_material_params_for_entity_in_world(world, state.entity, material);
+        }
+    }
+}
+
+/// `Commands`-side wrapper around [`spawn_track_agent_in_world`], for use
+/// from systems. The spawn is deferred to the command queue, so the returned
+/// entity is not available to the caller.
+pub fn spawn_track_agent_deferred(
+    commands: &mut Commands,
+    target: Entity,
+    source: Option<Entity>,
+    name: &str,
+    track: &XrdsTrack,
+    chain_depth: u32,
+    is_recovery: bool,
+) {
+    let name = name.to_string();
+    let track = track.clone();
+    commands.queue(move |world: &mut World| {
+        spawn_track_agent_in_world(
+            world, target, source, &name, &track, chain_depth, is_recovery,
+        );
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Editor preview transport
+// ---------------------------------------------------------------------------
+
+/// Marks the one [`XrdsTrackAgent`] started by the editor's preview transport.
+///
+/// Lets the editor pause/stop exactly its own preview without reaching into
+/// Tracks that gameplay triggers started. Preview is deliberately single: two
+/// simultaneous previews would fight over the same assets and the conflict
+/// guard would just refuse the second, which would read as a bug.
+#[derive(Component, Debug)]
+pub struct XrdsTrackPreview;
+
+/// Starts `name` as an editor preview, replacing any current preview.
+///
+/// Returns `None` when the Track is unknown, has no events, or has no asset row
+/// that resolves to a real node — a Track made only of `SelfNode`/
+/// `TriggerSource` rows has no meaningful preview, because those only become
+/// concrete when a trigger actually fires and supplies them.
+///
+/// Note this still goes through the ordinary conflict guard: previewing a Track
+/// whose assets a running Track already holds is refused, exactly as a trigger
+/// firing would be. That is intentional — the preview should show you what
+/// would really happen, including the refusal.
+pub fn preview_play_track_in_world(world: &mut World, name: &str) -> Option<Entity> {
+    let track = world.get_resource::<XrdsTrackRegistry>()?.0.get(name)?.clone();
+
+    // Stop whatever was previewing first, so its locks are freed before the new
+    // Track tries to claim them. Without this a preview could refuse itself.
+    preview_stop_track_in_world(world);
+
+    // A stand-in for `SelfNode` rows. There is no firing node during a preview,
+    // so the first resolvable concrete row is the closest honest answer.
+    let target = {
+        let index = world.get_resource::<XrdsIdIndex>()?;
+        track.assets.iter().find_map(|asset| match asset.target {
+            XrdsActionTarget::Node(id) => index.entity_of(id.into()),
+            _ => None,
+        })
+    };
+    let Some(target) = target else {
+        log::warn!(
+            "Track {name:?} has no asset row resolving to a live node, so there is nothing to \
+             preview. Rows targeting Self or the trigger source only become concrete when a \
+             trigger fires."
+        );
+        return None;
+    };
+
+    let agent = spawn_track_agent_in_world(world, target, None, name, &track, 0, false)?;
+    world.entity_mut(agent).insert(XrdsTrackPreview);
+    Some(agent)
+}
+
+/// Pauses or resumes the preview. Returns whether a preview was found.
+///
+/// Pausing does **not** release the preview's asset locks — a paused Track
+/// still owns its assets, so nothing else can start driving them mid-preview.
+pub fn preview_pause_track_in_world(world: &mut World, paused: bool) -> bool {
+    let Some(agent) = preview_agent(world) else { return false };
+    if let Some(mut track_agent) = world.get_mut::<XrdsTrackAgent>(agent) {
+        track_agent.paused = paused;
+        return true;
+    }
+    false
+}
+
+/// Stops the preview and reports every node it was driving, so the caller can
+/// put those nodes back where the document says they belong.
+///
+/// Restoring is the caller's job, not the runtime's: only the editor has the
+/// authored document to restore *from*. This returns the ids and guarantees the
+/// runtime-side cleanup — locks released, in-flight tweens stripped, agent gone.
+///
+/// Stripping the tweens matters: an `SetTransform` mid-flight leaves an
+/// `XrdsTransformTween` on its target, and `advance_transform_tweens` would
+/// happily keep driving it after the agent is gone, undoing the restore a frame
+/// later.
+pub fn preview_stop_track_in_world(world: &mut World) -> Vec<XrdsId> {
+    let Some(agent) = preview_agent(world) else { return Vec::new() };
+
+    // Collect the held entities *before* releasing, since the lock table is
+    // where "what did this preview touch" is recorded.
+    let entities: Vec<Entity> = world
+        .get_resource::<XrdsTrackAssetLocks>()
+        .map(|locks| locks.entities_held_by(agent))
+        .unwrap_or_default();
+
+    let ids: Vec<XrdsId> = {
+        let index = world.get_resource::<XrdsIdIndex>();
+        entities
+            .iter()
+            .filter_map(|e| index.and_then(|i| i.id_of(*e)))
+            .collect()
+    };
+
+    for entity in &entities {
+        if let Ok(mut e) = world.get_entity_mut(*entity) {
+            e.remove::<XrdsTransformTween>();
+        }
+    }
+
+    // Routed through the lock-releasing path rather than a bare despawn, so the
+    // preview cannot leak locks the way any other despawn path must not.
+    despawn_agents_releasing_locks(world, &[agent]);
+    ids
+}
+
+/// The preview's `(name, elapsed, duration, playing)`, for the editor's
+/// transport readout and playhead. `None` when nothing is previewing.
+pub fn track_preview_state_in_world(world: &mut World) -> Option<(String, f32, f32, bool)> {
+    let agent = preview_agent(world)?;
+    let track_agent = world.get::<XrdsTrackAgent>(agent)?;
+    Some((
+        track_agent.name.clone(),
+        track_agent.elapsed_secs(),
+        track_agent.duration_secs(),
+        !track_agent.paused,
+    ))
+}
+
+fn preview_agent(world: &mut World) -> Option<Entity> {
+    world
+        .query_filtered::<Entity, (With<XrdsTrackAgent>, With<XrdsTrackPreview>)>()
+        .iter(world)
+        .next()
 }
 
 /// Fires a trigger on a node directly, without waiting for the real event
@@ -537,12 +897,12 @@ pub fn fire_trigger_in_world(
         .collect();
 
     let count = matching.len();
-    let registry = world.resource::<XrdsRunnableRegistry>().clone();
+    let registry = world.resource::<XrdsTrackRegistry>().clone();
     for binding in &matching {
         // Same shape as consume_triggers: target is its own source, since
         // nothing external caused this.
         let mut commands = world.commands();
-        spawn_binding_runnable(&mut commands, target, Some(target), binding, &registry, false);
+        spawn_binding_track(&mut commands, target, Some(target), binding, &registry, false);
     }
     world.flush();
     count
@@ -570,10 +930,10 @@ fn fire_runaway_detected_in_world(world: &mut World, node: XrdsId) -> usize {
         .collect();
 
     let count = matching.len();
-    let registry = world.resource::<XrdsRunnableRegistry>().clone();
+    let registry = world.resource::<XrdsTrackRegistry>().clone();
     for binding in &matching {
         let mut commands = world.commands();
-        spawn_binding_runnable(&mut commands, target, Some(target), binding, &registry, true);
+        spawn_binding_track(&mut commands, target, Some(target), binding, &registry, true);
     }
     world.flush();
     count
@@ -596,42 +956,57 @@ pub fn stop_sequences_on_in_world(world: &mut World, node: XrdsId) -> usize {
         .filter(|(_, agent)| agent.target == target)
         .map(|(entity, _)| entity)
         .collect();
+
+    // A Track counts as "on this node" if it was fired at it *or* if one of
+    // its asset rows drives it. The second case is new with the Track model:
+    // a Track fired at one node routinely drives several others, and stopping
+    // "sequences on X" ought to stop whatever is currently animating X.
+    let holder = world
+        .get_resource::<XrdsTrackAssetLocks>()
+        .and_then(|locks| locks.holder_of(target));
     doomed.extend(
         world
-            .query::<(Entity, &XrdsTimelineAgent)>()
+            .query::<(Entity, &XrdsTrackAgent)>()
             .iter(world)
-            .filter(|(_, agent)| agent.target == target)
+            .filter(|(entity, agent)| agent.target == target || Some(*entity) == holder)
             .map(|(entity, _)| entity),
     );
+    doomed.sort();
+    doomed.dedup();
 
-    let count = doomed.len();
-    for agent in doomed {
-        // Despawning the agent drops its queue; bevy-sequential-actions
-        // reports StopReason to each action's on_stop as it goes.
-        if let Ok(entity) = world.get_entity_mut(agent) {
-            entity.despawn();
-        }
-    }
-    count
+    despawn_agents_releasing_locks(world, &doomed)
 }
 
-/// Cancels every in-flight sequence and timeline in the world. Returns how
-/// many were stopped.
+/// Cancels every in-flight sequence and Track in the world. Returns how many
+/// were stopped.
 pub fn stop_all_sequences_in_world(world: &mut World) -> usize {
     let mut doomed: Vec<Entity> = world
         .query_filtered::<Entity, With<XrdsSequenceAgent>>()
         .iter(world)
         .collect();
-    doomed.extend(
-        world
-            .query_filtered::<Entity, With<XrdsTimelineAgent>>()
-            .iter(world),
-    );
+    doomed.extend(world.query_filtered::<Entity, With<XrdsTrackAgent>>().iter(world));
+    despawn_agents_releasing_locks(world, &doomed)
+}
 
-    let count = doomed.len();
-    for agent in doomed {
-        if let Ok(entity) = world.get_entity_mut(agent) {
+/// Despawns agents and drops any asset locks they held.
+///
+/// Every despawn path must go through here. A despawn that skips the release
+/// leaks the lock, and every Track sharing that asset is then blocked
+/// forever — the failure mode is permanent and looks like "the trigger just
+/// stopped working", so it is worth the single choke point.
+fn despawn_agents_releasing_locks(world: &mut World, agents: &[Entity]) -> usize {
+    if let Some(mut locks) = world.get_resource_mut::<XrdsTrackAssetLocks>() {
+        for agent in agents {
+            locks.release_agent(*agent);
+        }
+    }
+    let mut count = 0;
+    for agent in agents {
+        if let Ok(entity) = world.get_entity_mut(*agent) {
+            // Despawning drops the queue; bevy-sequential-actions reports
+            // StopReason to each action's on_stop as it goes.
             entity.despawn();
+            count += 1;
         }
     }
     count
@@ -656,40 +1031,105 @@ pub fn despawn_finished_sequence_agents(
 /// one-step sequence agent (see [`advance_timelines`]) rather than
 /// duplicating action-execution here.
 #[derive(Component, Debug, Clone)]
-pub struct XrdsTimelineAgent {
+pub struct XrdsTrackAgent {
+    /// The entity this firing was aimed at — what a `SelfNode` row resolved
+    /// against. Kept for diagnostics; rows already carry resolved entities.
     pub target: Entity,
     pub source: Option<Entity>,
     pub chain_depth: u32,
     pub is_recovery: bool,
-    /// Sorted ascending by `at_secs` once, at spawn time — authoring does
-    /// not need to pre-sort.
-    keys: Vec<XrdsTimelineKey>,
+    /// Which registry Track this is running, so a re-fire can find and
+    /// replace its own running instance.
+    pub name: String,
+    /// Flattened across every asset row and sorted ascending by `at_secs`
+    /// once, at spawn time — authoring does not need to pre-sort.
+    keys: Vec<XrdsTrackScheduledKey>,
     next_key_index: usize,
     elapsed_secs: f32,
     duration_secs: f32,
     looping: bool,
+    /// Editor preview pause. A paused agent keeps its asset locks — pausing
+    /// is not releasing.
+    pub paused: bool,
+    /// What each asset looked like when this Track started, for looping
+    /// restore. Empty for a non-looping Track, which never laps.
+    initial: Vec<XrdsTrackAssetInitial>,
 }
 
-/// Advances every in-flight [`XrdsTimelineAgent`], firing every key crossed
-/// this frame. Uses a `while` loop rather than a single `if`, so a long
-/// frame (or a `duration_secs` shorter than one frame) never silently drops
-/// a key. `duration_secs <= 0.0` fires every key immediately instead of
-/// hot-spinning at one key per frame forever.
-pub fn advance_timelines(
+impl XrdsTrackAgent {
+    /// How far into the Track this agent has played.
+    ///
+    /// Public so the editor can draw a live playhead during preview. There is
+    /// deliberately no setter: seeking would need every crossed key
+    /// re-evaluated, which is a different feature (see plan doc §5).
+    pub fn elapsed_secs(&self) -> f32 {
+        self.elapsed_secs
+    }
+
+    pub fn duration_secs(&self) -> f32 {
+        self.duration_secs
+    }
+
+    pub fn looping(&self) -> bool {
+        self.looping
+    }
+
+    /// Whether this agent captured anything to restore at a lap boundary.
+    /// Only looping Tracks do — see [`XrdsTrackAssetInitial`].
+    pub fn has_initial_state(&self) -> bool {
+        !self.initial.is_empty()
+    }
+}
+
+/// One key with its row's target already resolved to an entity.
+///
+/// `entity` is `None` when the row's target could not be resolved — a
+/// `Node(id)` naming a deleted node, or `TriggerSource` on a firing with no
+/// source. Such keys are kept in the schedule (so timing is unaffected) and
+/// skipped when fired.
+#[derive(Debug, Clone)]
+struct XrdsTrackScheduledKey {
+    at_secs: f32,
+    action: XrdsAction,
+    entity: Option<Entity>,
+}
+
+/// Advances every in-flight [`XrdsTrackAgent`], firing every key crossed this
+/// frame. Uses a `while` loop rather than a single `if`, so a long frame (or a
+/// `duration_secs` shorter than one frame) never silently drops a key.
+/// `duration_secs <= 0.0` fires every key immediately instead of hot-spinning
+/// at one key per frame forever.
+///
+/// Despawning is done here rather than in a separate reaper so the asset locks
+/// are released in the same step the agent goes away — a release that lags the
+/// despawn would block every Track sharing those assets.
+pub fn advance_tracks(
     time: Res<Time>,
-    mut agents: Query<(Entity, &mut XrdsTimelineAgent)>,
+    mut agents: Query<(Entity, &mut XrdsTrackAgent)>,
+    mut locks: ResMut<XrdsTrackAssetLocks>,
     mut commands: Commands,
 ) {
     let dt = time.delta_secs();
     for (entity, mut agent) in &mut agents {
+        if agent.paused {
+            continue;
+        }
+
         if agent.duration_secs <= 0.0 {
             while agent.next_key_index < agent.keys.len() {
-                fire_timeline_key(&mut commands, &agent);
+                fire_track_key(&mut commands, &agent);
                 agent.next_key_index += 1;
             }
             if agent.looping {
                 agent.next_key_index = 0;
+                // Deliberately no initial-state restore here. With no
+                // duration every key fires every frame, so a "lap" is one
+                // frame and the restore would be overwritten by the very
+                // keys it preceded — there is no interval during which the
+                // restored state would be visible. This configuration is
+                // already reported by `track_diagnostics`.
             } else {
+                locks.release_agent(entity);
                 commands.entity(entity).despawn();
             }
             continue;
@@ -699,7 +1139,7 @@ pub fn advance_timelines(
         while agent.next_key_index < agent.keys.len()
             && agent.keys[agent.next_key_index].at_secs <= agent.elapsed_secs
         {
-            fire_timeline_key(&mut commands, &agent);
+            fire_track_key(&mut commands, &agent);
             agent.next_key_index += 1;
         }
 
@@ -707,45 +1147,145 @@ pub fn advance_timelines(
             if agent.looping {
                 agent.elapsed_secs %= agent.duration_secs;
                 agent.next_key_index = 0;
-                // Fire any keys at/before the wrapped elapsed time right
-                // away, same while-loop, so a key at 0.0 doesn't wait a
-                // full lap before it fires again.
+
+                // A lap starts from where the Track started, not from wherever
+                // the previous lap left things. Queued *before* this lap's keys
+                // below so the restore lands first at the command flush, and
+                // the new lap's events then apply on top of a clean slate —
+                // otherwise the restore would undo the lap it just began.
+                //
+                // The Track does not rewind the *world*: only the assets this
+                // Track owns are touched, and only their presentation state.
+                if !agent.initial.is_empty() {
+                    let states = agent.initial.clone();
+                    commands.queue(move |world: &mut World| {
+                        restore_asset_states(world, &states);
+                    });
+                }
+
+                // Fire any keys at/before the wrapped time right away, same
+                // while-loop, so a key at 0.0 doesn't wait a full lap.
                 while agent.next_key_index < agent.keys.len()
                     && agent.keys[agent.next_key_index].at_secs <= agent.elapsed_secs
                 {
-                    fire_timeline_key(&mut commands, &agent);
+                    fire_track_key(&mut commands, &agent);
                     agent.next_key_index += 1;
                 }
             } else {
+                locks.release_agent(entity);
                 commands.entity(entity).despawn();
             }
         }
     }
 }
 
-/// Fires one timeline key by spawning it as its own one-step sequence
-/// agent, at the timeline's chain depth. `Wait` inside a timeline key is
-/// meaningless — the key already carries its own `at_secs` — so it is
-/// skipped with a warning rather than silently stalling that one step.
-fn fire_timeline_key(commands: &mut Commands, agent: &XrdsTimelineAgent) {
+/// Re-reads the authored Track for every live agent, so edits made while a
+/// Track is running actually take effect.
+///
+/// [`XrdsTrackAgent`] is a *snapshot* taken at spawn — that is what makes the
+/// hot path cheap (no registry lookup per frame per agent) but it also meant a
+/// running Track ignored every authored change. The reported symptom was
+/// editing a looping Track's duration and watching it keep lapping at the old
+/// one; the same staleness applied to `looping` itself and to key timings.
+///
+/// **Structural edits are deliberately not adopted.** If the set of resolved
+/// asset entities changed (a row added, removed, or re-pointed), this leaves
+/// the agent alone: adopting it would require rewriting
+/// [`XrdsTrackAssetLocks`] mid-flight, and a mistake there leaks a lock and
+/// blocks that asset for the rest of the session — the single worst failure
+/// mode in this system. It would also invalidate the loop-restore baseline in
+/// `initial`, which was captured for the old set. Re-fire the Track (the
+/// editor's ⏮ restart) to pick a structural change up.
+pub fn sync_live_track_agents(
+    registry: Option<Res<XrdsTrackRegistry>>,
+    id_index: Option<Res<XrdsIdIndex>>,
+    mut agents: Query<&mut XrdsTrackAgent>,
+) {
+    let Some(registry) = registry else { return };
+
+    for mut agent in &mut agents {
+        let Some(track) = registry.0.get(&agent.name) else { continue };
+
+        let rebuilt = schedule_track_keys(
+            track,
+            agent.target,
+            agent.source,
+            id_index.as_ref().map(|r| r.as_ref()),
+        );
+
+        // Structural change → skip entirely (see the doc comment above).
+        if scheduled_entities(&rebuilt) != scheduled_entities(&agent.keys) {
+            continue;
+        }
+
+        let new_duration = track.effective_duration_secs();
+        let unchanged = agent.looping == track.looping
+            && agent.duration_secs == new_duration
+            && agent.keys.len() == rebuilt.len()
+            && agent
+                .keys
+                .iter()
+                .zip(&rebuilt)
+                .all(|(a, b)| a.at_secs == b.at_secs && a.action == b.action);
+        if unchanged {
+            continue;
+        }
+
+        agent.looping = track.looping;
+        agent.duration_secs = new_duration;
+        agent.keys = rebuilt;
+
+        // A shortened duration can leave the clock past the end; wrap it so the
+        // new duration takes effect on this lap rather than after one more lap
+        // at the old length.
+        if agent.duration_secs > 0.0 && agent.elapsed_secs >= agent.duration_secs {
+            agent.elapsed_secs %= agent.duration_secs;
+        }
+
+        // Re-derive the cursor from the clock: keys already in the past must not
+        // re-fire, and keys newly moved into the future must still be able to.
+        agent.next_key_index = agent
+            .keys
+            .iter()
+            .take_while(|k| k.at_secs <= agent.elapsed_secs)
+            .count();
+    }
+}
+
+/// Fires one Track key by spawning it as its own one-step agent, against the
+/// entity its **asset row** resolved to — not the Track-wide target. That
+/// per-row targeting is the whole point of the Track model: one Track drives
+/// several assets.
+fn fire_track_key(commands: &mut Commands, agent: &XrdsTrackAgent) {
     let key = &agent.keys[agent.next_key_index];
-    if matches!(key.action, XrdsAction::Wait { .. }) {
+    let Some(entity) = key.entity else {
         log::warn!(
-            "XrdsAction::Wait inside a timeline key on {:?} is meaningless — a timeline key \
-             already carries its own at_secs. Skipping.",
-            agent.target
+            "Track {:?} has an event at {:.2}s whose asset could not be resolved to an entity              — skipping it. Most likely the node was deleted, or a TriggerSource row fired from              a trigger with no source.",
+            agent.name,
+            key.at_secs
         );
         return;
-    }
-    let sequence = XrdsSequence { steps: vec![key.action.clone()] };
-    spawn_sequence_agent_with_depth(
-        commands,
-        agent.target,
+    };
+
+    let runner = XrdsActionRunner::new(
+        key.action.clone(),
+        entity,
         agent.source,
-        &sequence,
         agent.chain_depth,
         agent.is_recovery,
     );
+    let one_step = commands
+        .spawn((
+            SequentialActions,
+            XrdsSequenceAgent {
+                target: entity,
+                source: agent.source,
+                chain_depth: agent.chain_depth,
+                is_recovery: agent.is_recovery,
+            },
+        ))
+        .id();
+    commands.actions(one_step).add(Box::new(runner) as BoxedAction);
 }
 
 /// Bridges one authored [`XrdsAction`] into `bevy-sequential-actions`'
@@ -765,14 +1305,6 @@ pub struct XrdsActionRunner {
     /// dropped with a hard error instead of firing `RunawayDetected` again,
     /// guaranteeing the recovery path can never loop through itself.
     is_recovery: bool,
-    /// Only used by `Wait` — `is_finished` gets `&self`, so it can't tick
-    /// a `Timer`; storing an absolute deadline is the workaround (same
-    /// pattern as `examples/expert/sequential_actions_spike.rs`).
-    deadline_secs: Option<f32>,
-    /// Only used by `Run { wait: true }` targeting a sequence — the child
-    /// agent this action is blocking on. `is_finished` reports done once
-    /// this entity no longer exists.
-    waiting_on: Option<Entity>,
 }
 
 impl XrdsActionRunner {
@@ -789,19 +1321,6 @@ impl XrdsActionRunner {
             source,
             chain_depth,
             is_recovery,
-            deadline_secs: None,
-            waiting_on: None,
-        }
-    }
-
-    /// Resolves an authored target selector to a live entity.
-    fn resolve_target(&self, selector: &XrdsActionTarget, world: &World) -> Option<Entity> {
-        match selector {
-            XrdsActionTarget::SelfNode => Some(self.target),
-            XrdsActionTarget::TriggerSource => self.source,
-            XrdsActionTarget::Node(node_id) => world
-                .get_resource::<XrdsIdIndex>()
-                .and_then(|index| index.entity_of((*node_id).into())),
         }
     }
 
@@ -854,39 +1373,103 @@ fn runtime_playback_options(playback: &XrdsSceneGltfPlayback) -> XrdsGltfAnimati
     }
 }
 
+/// Runtime-only state for an in-flight [`XrdsAction::SetTransform`],
+/// inserted on the *target* entity (not the agent) so overlapping/back-
+/// to-back tweens on different targets never collide. Removed by
+/// [`advance_transform_tweens`] once `elapsed >= duration` — its absence
+/// is exactly what `XrdsActionRunner::is_finished` polls for, same pattern
+/// as `Run { wait: true }` polling for its child agent's despawn.
+#[derive(Component, Debug, Clone)]
+pub(crate) struct XrdsTransformTween {
+    start: Transform,
+    target: Transform,
+    elapsed: f32,
+    duration: f32,
+    ease: XrdsEaseCurve,
+}
+
+/// Maps `t` in `0.0..=1.0` through the given ease-out curve.
+fn ease_out(curve: XrdsEaseCurve, t: f32) -> f32 {
+    match curve {
+        XrdsEaseCurve::Linear => t,
+        XrdsEaseCurve::Quad => 1.0 - (1.0 - t) * (1.0 - t),
+        XrdsEaseCurve::Cubic => 1.0 - (1.0 - t).powi(3),
+    }
+}
+
+/// Advances every in-flight [`XrdsTransformTween`] by this frame's delta
+/// time, applying the eased position/rotation/scale to `Transform`, and
+/// removes the component once it reaches its duration — the runtime
+/// counterpart to `XrdsAction::SetTransform`'s authored data. Runs in
+/// `Update`, ahead of `SequentialActionsPlugin`'s own advancement later in
+/// the frame, so `XrdsActionRunner::is_finished` sees this frame's result
+/// immediately rather than one frame late.
+///
+/// **Pause-aware.** `advance_tracks` skipping a paused agent only stops it
+/// from firing *new* keys — a `SetTransform` already mid-flight lives here,
+/// as a tween on the *target* entity with no link back to the agent that
+/// started it. Without checking that agent's `paused` flag, pausing a Track
+/// looked like it did nothing whenever the pause landed mid-tween: the tween
+/// kept gliding to completion regardless. So every frame, this collects the
+/// entities held by any currently-paused agent (via `XrdsTrackAssetLocks`,
+/// the same map `advance_tracks` uses to know what a Track owns) and skips
+/// them — frozen only for the Track that is actually paused, not for any
+/// other Track that happens to be running concurrently.
+pub fn advance_transform_tweens(
+    time: Res<Time>,
+    agents: Query<(Entity, &XrdsTrackAgent)>,
+    locks: Res<XrdsTrackAssetLocks>,
+    mut query: Query<(Entity, &mut Transform, &mut XrdsTransformTween)>,
+    mut commands: Commands,
+) {
+    let frozen: std::collections::HashSet<Entity> = agents
+        .iter()
+        .filter(|(_, agent)| agent.paused)
+        .flat_map(|(agent_entity, _)| locks.entities_held_by(agent_entity))
+        .collect();
+
+    let dt = time.delta_secs();
+    for (entity, mut transform, mut tween) in &mut query {
+        if frozen.contains(&entity) {
+            continue;
+        }
+        tween.elapsed += dt;
+        let t = (tween.elapsed / tween.duration).clamp(0.0, 1.0);
+        let eased = ease_out(tween.ease, t);
+        transform.translation = tween.start.translation.lerp(tween.target.translation, eased);
+        transform.rotation = tween.start.rotation.slerp(tween.target.rotation, eased);
+        transform.scale = tween.start.scale.lerp(tween.target.scale, eased);
+        if t >= 1.0 {
+            commands.entity(entity).remove::<XrdsTransformTween>();
+        }
+    }
+}
+
 impl Action for XrdsActionRunner {
     fn is_finished(&self, _agent: Entity, world: &World) -> bool {
         match &self.action {
-            XrdsAction::Wait { .. } => match self.deadline_secs {
-                Some(deadline) => world.resource::<Time>().elapsed_secs() >= deadline,
-                None => true,
-            },
-            // `Run { wait: true }` targeting a sequence: done once the
-            // child agent it spawned has despawned. `waiting_on` is `None`
-            // for `wait: false`, an unresolved runnable, or a timeline
-            // target — all of which finish immediately in `on_start`.
-            XrdsAction::Run { .. } => match self.waiting_on {
-                Some(child) => world.get_entity(child).is_err(),
-                None => true,
-            },
-            // Everything else applies instantly in `on_start`. glTF
-            // playback is fire-and-forget for v1 — the sequence advances
-            // as soon as playback is requested rather than waiting for the
-            // clip to finish. Waiting on clip completion needs a
-            // `Wait`-style poll against gltf_animation_state and is
-            // tracked as a follow-up, not silently assumed here.
+            // The only action with a duration of its own. Blocks until
+            // `advance_transform_tweens` removes the tween component from the
+            // target, keyed on component absence rather than a stored
+            // deadline.
+            //
+            // Each Track key runs as its own one-step agent, so blocking here
+            // never delays the Track's advancement — it only keeps this one
+            // ephemeral agent alive for the length of the tween.
+            XrdsAction::SetTransform { .. } => {
+                world.get::<XrdsTransformTween>(self.target).is_none()
+            }
+            // Everything else applies instantly in `on_start`. glTF playback
+            // is fire-and-forget: the agent finishes as soon as playback is
+            // requested rather than waiting for the clip to end. Waiting on
+            // clip completion wants a `TrackComplete`-style trigger, not a
+            // blocking action, and is not assumed here.
             _ => true,
         }
     }
 
     fn on_start(&mut self, _agent: Entity, world: &mut World) -> bool {
         match self.action.clone() {
-            XrdsAction::Wait { seconds } => {
-                let now = world.resource::<Time>().elapsed_secs();
-                self.deadline_secs = Some(now + seconds);
-                seconds <= 0.0
-            }
-
             XrdsAction::SetVisible(visible) => {
                 if let Some(mut visibility) = world.get_mut::<Visibility>(self.target) {
                     *visibility = if visible {
@@ -898,24 +1481,100 @@ impl Action for XrdsActionRunner {
                 true
             }
 
-            XrdsAction::Teleport { destination } => {
-                if let Some(mut transform) = world.get_mut::<Transform>(self.target) {
-                    transform.translation = Vec3::from_array(destination);
+            XrdsAction::SetTransform { position, rotation, scale, duration_secs, ease } => {
+                let Some(start) = world.get::<Transform>(self.target).copied() else {
+                    log::warn!(
+                        "XrdsAction::SetTransform on {:?}, which has no Transform — ignoring.",
+                        self.target
+                    );
+                    return true;
+                };
+                let target = Transform {
+                    translation: position.map(Vec3::from_array).unwrap_or(start.translation),
+                    rotation: rotation
+                        .map(|r| {
+                            Quat::from_euler(
+                                EulerRot::XYZ,
+                                r[0].to_radians(),
+                                r[1].to_radians(),
+                                r[2].to_radians(),
+                            )
+                        })
+                        .unwrap_or(start.rotation),
+                    scale: scale.map(Vec3::from_array).unwrap_or(start.scale),
+                };
+                // duration_secs <= 0.0 applies instantly rather than
+                // inserting a tween that would need a whole extra frame
+                // (and a divide-by-zero-shaped clamp) to resolve — same
+                // "instant when zero" treatment `Wait`/`advance_timelines`
+                // already give a non-positive duration.
+                if duration_secs <= 0.0 {
+                    if let Some(mut transform) = world.get_mut::<Transform>(self.target) {
+                        *transform = target;
+                    }
+                    true
+                } else {
+                    world.entity_mut(self.target).insert(XrdsTransformTween {
+                        start,
+                        target,
+                        elapsed: 0.0,
+                        duration: duration_secs,
+                        ease,
+                    });
+                    false
+                }
+            }
+
+            XrdsAction::SetMaterial { base_color, metallic, roughness, texture } => {
+                // No own target any more — always applies to `self.target`,
+                // the entity this key's *row* resolved to, same as every
+                // other action. See the variant's doc comment.
+                let entity = self.target;
+                if let Some(mut params) = material_params_for_entity_in_world(world, entity) {
+                    if let Some(rgba) = base_color {
+                        params.base_color = XrdsColor { rgba };
+                    }
+                    if let Some(m) = metallic {
+                        params.pbr.metallic = m;
+                    }
+                    if let Some(r) = roughness {
+                        params.pbr.roughness = r;
+                    }
+                    // Only the named slot is touched, so assigning a base
+                    // colour map cannot silently drop an authored normal map.
+                    // `None` clears that slot. The id → uri → `Handle<Image>`
+                    // resolution happens inside the apply below, off the
+                    // imported asset catalog — nothing extra is needed here.
+                    if let Some(t) = texture {
+                        params.textures.set(
+                            t.slot.into(),
+                            t.texture_asset_id.as_ref().map(|id| XrdsMaterialTextureRef {
+                                texture_asset_id: id.clone(),
+                                uv: Default::default(),
+                                sampler: Default::default(),
+                            }),
+                        );
+                    }
+                    set_material_params_for_entity_in_world(world, entity, params);
+                } else {
+                    log::warn!(
+                        "XrdsAction::SetMaterial targeted entity {entity:?}, which has no \
+                         material — ignoring."
+                    );
                 }
                 true
             }
 
-            XrdsAction::ModifyHealth { target, delta } => {
+            XrdsAction::ModifyHealth { delta } => {
                 let amount = self.resolve_value(&delta, world);
-                if let Some(entity) = self.resolve_target(&target, world) {
-                    if let Some(mut health) = world.get_mut::<XrdsHealth>(entity) {
-                        health.0 += amount;
-                    } else {
-                        log::warn!(
-                            "XrdsAction::ModifyHealth targeted entity {entity:?}, which has no \
-                             XrdsHealth component — ignoring."
-                        );
-                    }
+                let entity = self.target;
+                if let Some(mut health) = world.get_mut::<XrdsHealth>(entity) {
+                    health.0 += amount;
+                } else {
+                    log::warn!(
+                        "XrdsAction::ModifyHealth targeted entity {entity:?}, which has no \
+                         XrdsHealth component — ignoring."
+                    );
                 }
                 true
             }
@@ -959,101 +1618,6 @@ impl Action for XrdsActionRunner {
                     }
                 }
                 true
-            }
-
-            XrdsAction::FireCustomEvent { name } => {
-                world.write_message(XrdsCustomTriggerEvent {
-                    name,
-                    target: self.target,
-                    source: self.source,
-                });
-                true
-            }
-
-            XrdsAction::Run { runnable, wait } => {
-                if self.chain_depth >= MAX_RUN_CHAIN_DEPTH {
-                    if self.is_recovery {
-                        // The recovery path itself looped. Drop it here,
-                        // hard, and do NOT fire RunawayDetected again — the
-                        // one guarantee this escape hatch makes is that the
-                        // breaker can never recurse through its own
-                        // recovery, per the design doc's "guaranteed
-                        // escape" section.
-                        log::error!(
-                            "Run chain depth cap ({MAX_RUN_CHAIN_DEPTH}) reached again inside a \
-                             RunawayDetected recovery chain on {:?} (Run({runnable:?})) — \
-                             dropping this chain without re-firing RunawayDetected.",
-                            self.target
-                        );
-                    } else {
-                        log::warn!(
-                            "Run chain depth cap ({MAX_RUN_CHAIN_DEPTH}) reached resolving \
-                             Run({runnable:?}) on {:?} — stopping this chain and firing \
-                             RunawayDetected instead of recursing further.",
-                            self.target
-                        );
-                        if let Some(node_id) = world.resource::<XrdsIdIndex>().id_of(self.target) {
-                            fire_runaway_detected_in_world(world, node_id);
-                        }
-                    }
-                    return true;
-                }
-
-                let Some(entry) = world
-                    .resource::<XrdsRunnableRegistry>()
-                    .0
-                    .get(&runnable)
-                    .cloned()
-                else {
-                    log::warn!(
-                        "XrdsAction::Run referenced unknown runnable {runnable:?} on {:?} — no \
-                         such entry in XrdsSceneDocument::runnables. Skipping.",
-                        self.target
-                    );
-                    return true;
-                };
-
-                match entry {
-                    XrdsRunnable::Sequence(sequence) => {
-                        let mut commands = world.commands();
-                        let child = spawn_sequence_agent_with_depth(
-                            &mut commands,
-                            self.target,
-                            self.source,
-                            &sequence,
-                            self.chain_depth + 1,
-                            self.is_recovery,
-                        );
-                        world.flush();
-                        if wait {
-                            self.waiting_on = child;
-                            child.is_none()
-                        } else {
-                            true
-                        }
-                    }
-                    XrdsRunnable::Timeline(timeline) => {
-                        if wait {
-                            log::warn!(
-                                "Run {{ wait: true }} targeting timeline runnable {runnable:?} \
-                                 on {:?} — timelines are concurrent choreography, not a queue \
-                                 step, so `wait` is ignored and it runs fire-and-forget.",
-                                self.target
-                            );
-                        }
-                        let mut commands = world.commands();
-                        spawn_timeline_agent_with_depth(
-                            &mut commands,
-                            self.target,
-                            self.source,
-                            &timeline,
-                            self.chain_depth + 1,
-                            self.is_recovery,
-                        );
-                        world.flush();
-                        true
-                    }
-                }
             }
 
             // An action this build doesn't recognize — almost certainly a

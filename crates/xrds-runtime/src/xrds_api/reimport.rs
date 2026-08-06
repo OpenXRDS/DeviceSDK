@@ -112,7 +112,7 @@ pub(super) fn reimport_scene_in_world(
     tag_threshold_watcher_entities(world, document);
 
     // ── 4g. Sync the runnable registry ────────────────────────────────────────
-    sync_runnable_registry(world, document);
+    sync_track_registry(world, document);
 
     // ── 5. Apply materials ────────────────────────────────────────────────────
     for (entity, mat) in material_updates {
@@ -572,17 +572,17 @@ pub(super) fn tag_threshold_watcher_entities(world: &mut World, document: &XrdsS
     }
 }
 
-/// Replaces [`crate::xrds_api::trigger_action::XrdsRunnableRegistry`]
-/// wholesale from `document.runnables` — matching every other tag_* helper
-/// here in treating the document as complete, authoritative state rather
-/// than something to merge into.
-pub(super) fn sync_runnable_registry(world: &mut World, document: &XrdsSceneDocument) {
+/// Replaces [`crate::xrds_api::trigger_action::XrdsTrackRegistry`] wholesale
+/// from `document.tracks` — matching every other tag_* helper here in
+/// treating the document as complete, authoritative state rather than
+/// something to merge into.
+pub(super) fn sync_track_registry(world: &mut World, document: &XrdsSceneDocument) {
     let map = document
-        .runnables
+        .tracks
         .iter()
-        .map(|entry| (entry.name.clone(), entry.runnable.clone()))
+        .map(|entry| (entry.name.clone(), entry.track.clone()))
         .collect();
-    world.insert_resource(crate::xrds_api::trigger_action::XrdsRunnableRegistry(map));
+    world.insert_resource(crate::xrds_api::trigger_action::XrdsTrackRegistry(map));
 }
 
 /// Insert [`XrdsPlayerSpawnZone`] on every entity whose scene document node is a

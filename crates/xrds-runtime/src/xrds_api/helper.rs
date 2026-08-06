@@ -428,12 +428,34 @@ pub(super) fn export_scene_document_in_world(
         .map(|r| r.templates.clone())
         .unwrap_or_default();
 
+    // The Track registry has to come back out too. Without it, export
+    // produced bindings that named Tracks the exported document didn't
+    // contain — so a save/load round trip silently left every trigger wired
+    // to nothing. (Pre-existing: the registry was never exported under its
+    // old `runnables` name either; nothing asserted it until now.)
+    let mut tracks: Vec<xrds_scene_graph::XrdsNamedTrack> = world
+        .get_resource::<crate::xrds_api::trigger_action::XrdsTrackRegistry>()
+        .map(|r| {
+            r.0.iter()
+                .map(|(name, track)| xrds_scene_graph::XrdsNamedTrack {
+                    name: name.clone(),
+                    track: track.clone(),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    // The registry is a HashMap, so sort for a deterministic document —
+    // otherwise two exports of the same scene differ, which breaks diffing
+    // and any round-trip equality check.
+    tracks.sort_by(|a, b| a.name.cmp(&b.name));
+
     let document = XrdsSceneDocument {
         metadata,
         assets,
         nodes,
         gltf_node_authoring,
         hud_library,
+        tracks,
         ..Default::default()
     };
     document.validate()?;
