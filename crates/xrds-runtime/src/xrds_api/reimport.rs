@@ -99,6 +99,12 @@ pub(super) fn reimport_scene_in_world(
     // ── 4b. Tag Player / PlayerAnchor entities ────────────────────────────────
     tag_player_anchor_entities(world, document);
 
+    // ── 4b2. Spawn panel-template instances ──────────────────────────────────
+    // After the id index is populated (it resolves each Panel node to its
+    // entity) and before trigger tagging, so element bindings and node bindings
+    // land in the same pass order.
+    spawn_panel_instances(world, document);
+
     // ── 4c. Tag grabbable entities ────────────────────────────────────────────
     tag_grabbable_entities(world, document);
 
@@ -587,6 +593,50 @@ pub(super) fn sync_track_registry(world: &mut World, document: &XrdsSceneDocumen
 
 /// Insert [`XrdsPlayerSpawnZone`] on every entity whose scene document node is a
 /// `PlayerSpawnZone` payload.  Called after reimport so the API can query zone positions.
+/// Spawns each `Panel` node's visuals and elements from its referenced template.
+///
+/// Runs as a pass over the document rather than inside `to_runtime_node`,
+/// because a `Panel` node carries only a `template_id` and resolving it needs
+/// the document — which that per-node conversion deliberately does not have.
+/// Same shape as [`tag_spawn_zone_entities`] below.
+///
+/// Each element goes through
+/// [`crate::xrds_api::trigger_action::spawn_panel_element_in_world`], which is
+/// what attaches the element's authored triggers to the entity its widget events
+/// will target. That is the step that makes element triggers fire at all.
+///
+/// A template instanced N times produces N independent sets of element entities,
+/// which is the point of the template/instance split — and is why the elements
+/// are spawned per instance here rather than once per template.
+pub(super) fn spawn_panel_instances(world: &mut World, document: &XrdsSceneDocument) {
+    for node in &document.nodes {
+        let XrdsSceneNodePayload::Panel(ref instance) = node.payload else { continue };
+        let Some(panel_entity) = world.resource::<XrdsIdIndex>().entity_of(node.id.into()) else {
+            continue;
+        };
+        let Some(template) = document.panel_template(instance.template_id) else {
+            // Dangling reference. Diagnosed at author time by
+            // `panel_diagnostics`; here it just means an empty node, which is
+            // better than refusing to load the scene.
+            log::warn!(
+                "Panel node {:?} references template {:?}, which is not in this document — \
+                 nothing to spawn.",
+                node.id,
+                instance.template_id
+            );
+            continue;
+        };
+
+        for element in &template.elements {
+            crate::xrds_api::trigger_action::spawn_panel_element_in_world(
+                world,
+                panel_entity,
+                element,
+            );
+        }
+    }
+}
+
 pub(super) fn tag_spawn_zone_entities(world: &mut World, document: &XrdsSceneDocument) {
     for node in &document.nodes {
         let XrdsSceneNodePayload::PlayerSpawnZone(ref z) = node.payload else { continue; };

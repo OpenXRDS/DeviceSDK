@@ -180,6 +180,7 @@ fn payload_kind_name(p: &XrdsSceneNodePayload) -> &'static str {
         XrdsSceneNodePayload::Player(_)          => "Player",
         XrdsSceneNodePayload::PlayerAnchor(_)    => "PlayerAnchor",
         XrdsSceneNodePayload::WorldPanel(_)      => "WorldPanel",
+        XrdsSceneNodePayload::Panel(_)           => "Panel",
     }
 }
 

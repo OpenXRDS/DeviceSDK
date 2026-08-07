@@ -6,6 +6,7 @@ mod environment;
 mod gltf;
 mod material;
 mod metadata;
+mod panel_diagnostics; // inherent impl only — nothing to re-export
 mod persistence;
 
 pub use assets::*;

@@ -116,6 +116,66 @@ Reordering elements in the editor's canvas must not silently re-point a
 binding or an action target. Names also preserve the contract `set_hud_item`
 already has. Uniqueness is enforced per template and diagnosed, not assumed.
 
+## 3b. Naming policy — required, because names are the keys
+
+If a name is the identity, loose naming is a correctness problem, not a style
+one. **This is already a live gap for Tracks**, not just a future concern for
+elements:
+
+- `CreateTrack` checks uniqueness but never trims or rejects empty, so `""` and
+  `"Door "` are both authorable today. `"Door "` and `"Door"` are different keys
+  that render identically — an author cannot see why the binding "does nothing".
+- `RenameTrack` is sound (it checks uniqueness *and* re-points every binding),
+  so the fix is at creation, not rename.
+- **Six frontend sentinels would collide**: `__none__`, `__any__`, `__add__`,
+  `__clear__`, `__add_asset__`, `__no_texture__`. A Track literally named
+  `__none__` reads as "nothing selected" in the Fires picker — it would appear
+  to unwire itself.
+
+### The rules
+
+One shared validator, applied to Track names, template names and element names
+— not three near-copies that drift.
+
+1. **Trim** leading/trailing whitespace on input. Prevents invisible duplicates.
+2. **Reject empty** after trimming (error).
+3. **Restrict the character set**, and compose Hangul. Allowed: printable
+   ASCII, precomposed Hangul syllables (가–힣), and the standalone
+   compatibility jamo on a Korean keyboard (ㄱ–ㆎ). Everything else — accented
+   Latin, Han, emoji, control characters — is refused.
+
+   **Korean is why this needs care.** Hangul has two encodings that render
+   identically: precomposed syllables (한) and conjoining jamo (ᄒ + ᅡ + ᆫ).
+   Restricting characters does *not* remove that — plain English has no
+   decomposed forms, so admitting Korean is what introduces it. Handled by
+   composing jamo before the character check.
+
+   Done with `unicode-normalization` (NFC), not hand-rolled Hangul arithmetic.
+   A hand-written composer was tried first and had a real hole: UAX #15 also
+   composes a *precomposed* LV syllable followed by a conjoining trailing
+   consonant (하 U+D558 + ᆫ U+11AB → 한), not only sequences starting from
+   conjoining jamo. Missing that left such input as two code points, rendering
+   as 한 but then refused for containing a conjoining jamo. Cost: **one** new
+   lockfile entry — `tinyvec` was already present via Bevy — and names are
+   validated when a human types one, so this is not a hot path.
+4. **Uniqueness by exact match** after 1–3, within scope: Track and template
+   names document-wide, element names within their template.
+5. **Warn** on names differing only by case within a scope. Deliberately *not*
+   case-insensitive uniqueness: case-folding drags in locale edge cases (Turkish
+   dotless i) for a trap a diagnostic catches just as well.
+6. **Reserve the `__` prefix**, refused *with a visible notification that says
+   why and suggests a replacement* — not a silent rejection. The whole point of
+   this policy is that a name which "does nothing" is undebuggable, so failing
+   invisibly here would reproduce the very bug being fixed. Cheaper than making
+   six pickers collision-proof, and no author wants that prefix anyway.
+7. **Do not otherwise restrict characters.** Names are display strings, never
+   paths or identifiers, so an identifier-only rule would only annoy authors.
+8. **Rename re-points references.** Tracks already do this; elements must too,
+   for both bindings and (Phase B) action targets.
+
+Applying this to Tracks is a small independent fix and can land first, the same
+way §5b did.
+
 ## 4. Element triggers — nearly free, and why
 
 `consume_triggers` needs **no changes at all**. The chain, verified:
@@ -146,22 +206,56 @@ Elements do **not** appear in the scene hierarchy. They are addressed as
 
 A template instanced three times shares one authored set of element triggers.
 A Track fired from such a trigger, with a row hard-targeting `Node(7)`, drives
-**the same asset regardless of which instance was pressed**. Only
-`TriggerSource`-relative rows behave per-instance.
+**the same asset regardless of which instance was pressed**.
 
 This is the bug class that works perfectly while there is one instance and
 breaks silently on the second. It needs an author-time diagnostic:
 
 > *This Track is fired from template "MainMenu", which has 3 instances, but
-> targets fixed node "door_left". Every instance will drive that same node —
-> use a Trigger-source row for per-instance behaviour.*
+> targets fixed node "door_left". Every instance will drive that same node.*
 
 Severity: warning, not error. It is legitimate when the target really is
 global (one shared door, many call buttons).
 
 Note this hazard is about **targeting, not timing**. One press is enough to
 show it: press the third-floor button and the ground-floor door opens. The
-timing problem is separate, and worse — next section.
+timing problem is separate, and worse — §5b.
+
+### There is no per-instance mitigation today
+
+An earlier draft of this section said `TriggerSource` rows solve it. **That was
+wrong**, and it matters because it made the hazard look handled.
+
+The widget events do not override `XrdsTriggerEvent::source()`, and the trait
+defaults it to `target()`:
+
+```rust
+fn source(&self) -> XrdsTriggerRef { self.target() }   // trait default
+```
+
+For a button press, `target` is `Entity(self.button_entity)` — so `source` *is
+the button*. A `TriggerSource` row therefore drives **the button itself**, never
+"the door next to the button".
+
+So the model has **no relative addressing**: no way to express "the asset
+belonging to my instance". The two things an author can say are "this exact
+node" (shared by every instance) or "the element that fired" (the button). The
+useful middle — my instance's door — is inexpressible.
+
+This is a real gap, not a diagnostic-able mistake, and it is the thing that
+would make templates genuinely reusable for anything that drives scene
+geometry. Candidate shapes, none chosen:
+
+- **Per-instance override table** on the panel node: `{ "door": Node(7) }`, with
+  rows targeting a named slot the instance fills in. Most explicit; the instance
+  says what it is wired to.
+- **Relative-to-panel addressing**: `XrdsActionTarget::SiblingOf { … }` or a
+  parent-scoped lookup. Cheaper to author, but depends on scene layout matching
+  the intent, which is fragile.
+
+Out of scope for this plan; recorded because §5's diagnostic is now honest about
+having no fix to suggest, and that is a worse place to leave an author than a
+warning with a remedy.
 
 ## 5b. The concurrency gap: one Track cannot run per-instance
 
@@ -258,6 +352,84 @@ locks key on resolved `Entity`. That is correct and wanted: two Tracks writing
 the same element should conflict exactly as two Tracks writing the same node
 do.
 
+## 6b. Authorable stop — in scope
+
+Motivating case: a start button and a stop button, both in the content. First-run
+priority (§5b) makes this necessary rather than nice — without a stop, a running
+Track cannot be interrupted from authored content at all, only from Rust
+(`stop_sequences_on` / `stop_all_sequences`).
+
+**Recommended shape: a mode on the binding, not a new action.**
+
+```rust
+pub enum XrdsTriggerEffect { Fire, Stop }   // on XrdsTriggerBinding
+```
+
+A stop button then binds directly to "stop Track X". The alternative — an
+`XrdsAction::StopTrack { name }` on a Track row — would force a dummy Track
+whose only purpose is to stop another, for the plainest case there is.
+
+**This does not reintroduce what killed `Run`.** `Run` was deleted because
+starting chains: depth limits, runaway detection, a Track able to launch a Track
+launching a Track. Stopping is monotonic — it only removes running work, so it
+cannot recurse or fan out. A Track stopping itself is odd but bounded.
+
+An action-level `StopTrack` may still be wanted later, for stopping something
+partway through a choreography. Not needed for the button case, so not now.
+
+### State as visibility, not as conditionals
+
+A single button that toggles start/stop needs to know whether the Track is
+running — which means a condition, which is the first step toward the
+Blueprint-style branching this whole design exists to avoid.
+
+**Two buttons, and the state is which one is visible.** Start visible / Stop
+hidden means "not running"; the reverse means "running". Nothing evaluates a
+condition; the scene *is* the state. This is the same discipline as the rest of
+the model: closed vocabulary, no branching.
+
+The Track flips them as part of its own choreography — which is Phase B
+(`SetElementVisible`), and is the strongest argument for B not being optional.
+
+**The hole, and why it already closes.** On natural completion the Track's last
+key flips the buttons back. On an *early* stop the remaining keys never fire, so
+the flip-back would be skipped and the UI would sit showing "Stop" for a Track
+that is not running.
+
+No new machinery needed: `XrdsSceneNode::triggers` is a `Vec`, and
+`consume_triggers` iterates **every** matching binding, not the first. So the
+stop button carries two bindings on one `ButtonPress`:
+
+1. `Stop` Track "PlayVideo"
+2. `Fire` Track "ResetButtons"  *(flips visibility back)*
+
+They run in authored order, deterministically. "Stop this and start that"
+without a conditional, out of parts that already exist.
+
+### What "stop Track X" stops: by resolved assets, not by name
+
+An earlier draft posed this as an open question between "stop every agent of X"
+and "stop only my panel instance's agent", and invented a panel-instance scope
+to make the second work. Both were wrong turns.
+
+**Stop resolves its assets exactly the way start does.** Start computes the
+Track's resolved asset set and refuses if any are held; stop computes the *same*
+set and despawns whoever holds them. Same `schedule_track_keys` call, same
+resolved-entity set, one code path.
+
+That is right for the same reason §5b was: **name-keyed operations are the wrong
+granularity, entity-keyed ones are correct.** Reaching for a name-keyed stop
+would have repeated the exact mistake this plan already corrected once.
+
+It also makes the supposed ambiguity vanish rather than needing a new scope:
+
+- Rows target fixed nodes → all instances contend for one asset, so only ever
+  one agent exists (§5b case 3). Nothing to disambiguate.
+- Rows target `TriggerSource` → each instance drives its own element, genuinely
+  disjoint, and asset-keyed stop reaches only the right one.
+
+No panel-instance concept is needed in either case. Not blocking anything.
+
 ## 7. Editor — a third workspace, same language as the Sequencer
 
 The Sequencer's shell is: named registry on the left, the thing being edited
@@ -289,20 +461,266 @@ name-addressed, and unification preserves name-addressing — a HUD text item
 becomes a `Label` element with the same name. Keeping a public SDK API stable
 through this is cheap, and worth it.
 
-## 9. Phasing
+## 9. Phasing and checklist
 
-Each phase ends with the tree building and tests passing.
+Every phase ends green: `cargo check --workspace --all-targets`, the crate's
+own tests, and for A3 also `tsc` + vitest + `vite build`. Phases are
+dependency-ordered; within a phase, order is a suggestion.
 
-- **A1 — schema.** `XrdsPanelTemplate`/`XrdsPanelElement`, the registry, both
-  attachment points, `depth` moved. Diagnostics: duplicate element name,
-  dangling template reference, element trigger on a non-interactive kind.
-- **A2 — runtime.** Spawn elements from templates for both attachments; tag
-  element entities with `XrdsTriggerBindings`. Keep `set_hud_item` working.
-- **A3 — bridge + editor.** Generalize the library panel and the two canvases
-  into one workspace; element inspector with triggers. Bump `BRIDGE_VERSION`.
-- **A4 — the instance-hazard diagnostic** (§5), once instance counts are
-  known to the diagnostic pass.
-- **B — elements as action targets** (§6). Separately stoppable.
+### A0 — prerequisite (landed)
+
+- [x] **First-run priority** — delete the name-keyed same-Track restart so the
+      entity-keyed guard decides. Landed as `41402dd`, ahead of this plan and
+      independent of it. See §5b for why templates make it matter.
+
+### A0b — naming policy (§3b) — landed
+
+- [x] One shared validator — `crates/xrds-scene-graph/src/naming.rs`:
+      `normalize_authored_name`, `XrdsNameError` (typed, carries `message()`
+      *and* `suggestion()`), `RESERVED_NAME_PREFIX`, `name_case_fold`,
+      `names_differing_only_by_case`.
+- [x] Applied at `CreateTrack` and `RenameTrack` via `reject_bad_name`, which
+      refuses **visibly** — `pending_status` gets the reason and a concrete
+      alternative, because a silent refusal reproduces the bug being fixed.
+- [x] Diagnostics in `track_diagnostics()`, so a document built in Rust or
+      hand-edited is reported rather than trusted: surrounding whitespace
+      (error), unusable name (error), two Tracks differing only by case
+      (warning — legal, just invisible in review).
+- [x] Tests: 14 in `tests/naming.rs`, 3 in the editor. Mutation-verified —
+      removing the trim fails 6 scene-graph tests and 3 editor tests.
+- [x] **Character allowlist + NFC.** `is_allowed_char` (printable ASCII +
+      가–힣 + ㄱ–ㆎ) and `compose_hangul` over `unicode-normalization`.
+      Restricting the set is what keeps the normalization surface to Hangul —
+      but Korean is exactly why NFC is still needed, since plain English has no
+      decomposed forms. Tested: decomposed and precomposed Korean canonicalize
+      to one key; **precomposed-LV + trailing jamo composes too** (the case a
+      hand-rolled composer got wrong); an unpaired conjoining jamo is refused
+      with a message pointing at the keyboard forms.
+
+Fixed a live bug: `CreateTrack` accepted `""` and `"Door "`, and `"Door "`
+renders identically to `"Door"` while hashing differently.
+
+### A1 — the panel vocabulary, additively — landed
+
+**Sequencing corrected while doing this.** A1 as first written deleted
+`XrdsHudTemplate` and retired `XrdsSceneWorldPanel::widgets`, which breaks 8
+files across runtime and editor — so it could not end with the workspace green,
+contradicting this section's own rule. Since risk #1 is *breaking a working
+system*, A1 is now purely **additive**: the new vocabulary lands and is
+validated before anything migrates onto it. Deletion moves to A4b, after the
+runtime and editor are on the new types. The whole workspace stays green
+throughout.
+
+- [x] `src/scene/panel.rs`: `XrdsPanelTemplate`, `XrdsPanelElement`,
+      `XrdsPanelTemplateId`, `XrdsPanelBackground`.
+- [x] **`kind` reuses `XrdsSceneWorldWidget`** rather than declaring a parallel
+      five-variant `XrdsPanelElementKind` as originally planned. The widget
+      structs already carry `local_position`, per-kind sizing and colours, so a
+      second enum would be a duplicate that drifts — and it makes migration a
+      matter of giving each existing widget a name. An element is exactly *a
+      named widget with triggers*, which is the honest description.
+- [x] Element carries `name` and `triggers` (`#[serde(default)]`, skipped when
+      empty) — precisely the two things the world side lacked.
+- [x] `XrdsSceneDocument::panels` + `panel_template(id)`,
+      `panel_template_mut(id)`, `panel_template_by_name(name)`,
+      `next_available_panel_template_id()`. Both lookups exist because the two
+      halves address differently: instances store an id (stable across renames),
+      authors pick by name.
+- [x] `XrdsPanelElement::can_emit` / `is_interactive` / `kind_name`. `Custom`
+      and `RunawayDetected` are **not** emittable by an element: both dispatch
+      to a node's `XrdsId`, and an element has no id.
+- [x] Template carries **no placement**, asserted by a test that fails if
+      `depth`/`translation`/`anchor` ever appear in its serialized form. That is
+      the `XrdsHudTemplate::depth` bug prevented structurally rather than by
+      comment.
+- [x] `panel_diagnostics()` in `src/document/panel_diagnostics.rs`, kept
+      separate from `track_diagnostics()` so the editor can show panel problems
+      in the panel workspace: duplicate element name (**error** — breaks
+      addressing), element cannot emit its trigger (**warning** — inert, most
+      likely a leftover after changing kind), binding naming a missing Track
+      (**error**), binding running nothing (**warning**), plus the §3b naming
+      policy applied to panel *and* element names.
+- [x] 20 tests in `src/tests/panel.rs`. Mutation-verified: breaking duplicate
+      detection fails 2, breaking `can_emit` fails 3.
+
+Deferred out of A1 (was in scope, now sequenced later):
+
+- [ ] Attachment points — camera `panel_template_id`/`panel_depth`, scene
+      `XrdsSceneNodePayload::Panel { template_id }`. Moved to **A2**, where the
+      runtime that spawns them lands, so the schema and its consumer arrive
+      together.
+
+### A4b — retire the old vocabulary (after A2 and A3)
+
+- [ ] Delete `XrdsHudTemplate`, `XrdsHudItemDef`, `HudItemDefId`; a HUD text
+      item becomes a `Label` element.
+- [ ] Retire `XrdsSceneWorldPanel::widgets` in favour of `template_id`.
+- [ ] Delete `hud_library.rs` and the 12 HUD commands.
+- [ ] Only once the runtime and editor are proven on the new types — this is
+      the step risk #1 is about.
+
+### A2a — the trigger mechanism — landed
+
+Split from A2 so the *mechanism* is proven by test before any attachment wiring
+depends on it. A2b below does the wiring.
+
+- [x] **`spawn_world_widget_from_scene` returns the spawned `Entity`.** It
+      discarded it before, which is the single reason authored widget triggers
+      could never fire. Correction to this checklist as first written: the five
+      `spawn_world_*_entity` helpers *already* returned theirs — only the
+      wrapper threw it away.
+- [x] `spawn_panel_element_in_world(world, panel_entity, element)` — spawns an
+      element and tags it with its own authored triggers, returning its entity.
+- [x] `set_element_trigger_bindings` split out so re-authoring uses the same
+      **remove-when-empty** rule as spawn. Two paths disagreeing about that is
+      how an "unbound" element keeps firing.
+- [x] Confirmed: **`consume_triggers` needed no change at all**, as §4 predicted.
+- [x] 5 tests. The load-bearing one — `pressing_a_panel_element_fires_the_track_its_binding_names`
+      — is the plan's premise made executable. Mutation-verified: skipping the
+      tagging fails 3, always-insert-never-remove fails 2.
+
+### A2b — scene attachment — landed
+
+- [x] `XrdsSceneNodePayload::Panel(XrdsScenePanelInstance { template_id })`. A
+      struct rather than a bare id so per-instance data has somewhere to go
+      later — the obvious candidate being §5's relative-addressing override
+      table, letting an instance say *which* door its button opens.
+- [x] **Resolved by a document pass, not by `to_runtime_node`.** A Panel node
+      carries only a `template_id`, and resolving it needs the document — which
+      that per-node conversion deliberately does not have. So `Panel` emits a
+      bare node and `spawn_panel_instances` fills it in, exactly the shape
+      `PlayerSpawnZone`/`tag_spawn_zone_entities` already established. Threading
+      a template through the conversion would have pushed document lookup into a
+      method built without one.
+- [x] Wired into **both** import paths (`reimport_scene_in_world` and
+      `XrdsAPI::import_scene_document`) — mutation-verified, since only one is
+      exercised by tests and a single-path wiring would have looked fine.
+- [x] Elements spawn **per instance**, so a template instanced twice yields two
+      independent element sets. Asserted, because sharing entities would make
+      two panels unable to behave independently.
+- [x] A dangling `template_id` logs and yields an empty node rather than failing
+      the scene load. The reference is diagnosed at author time by
+      `panel_diagnostics`; refusing to load over it would be worse.
+- [x] 4 tests, including `an_element_on_an_instance_fires_its_track_end_to_end`
+      — the full authored path with no hand-spawned entities: document →
+      template → instance → element → binding → Track.
+
+### A2c — camera attachment and HUD migration (next)
+
+The half where risk #1 actually bites — everything above is additive and the
+working HUD is untouched.
+
+- [ ] Camera: `XrdsScenePlayerAnchor { panel_template_id, panel_depth }`, with
+      `depth` on the *attachment* (§3), alongside `hud_template_id` at first.
+- [ ] Spawn the camera path from a template (`reimport.rs:472` currently reads
+      `hud_template`), reusing `spawn_panel_element_in_world`.
+- [ ] Keep `set_hud_item(name, …)` working (`src/xrds_api/context.rs`) by
+      resolving to a `Label` element of that name. Its contract is
+      name-addressed and unification preserves name-addressing.
+- [ ] Tests: `set_hud_item` still updates a migrated Label; an element's Track
+      participates in the conflict guard.
+
+### A2 — original scope, for reference
+- [ ] Spawn elements from a template for **both** attachments: the world path
+      in `import_runtime_nodes`, and the camera path in `reimport.rs:472`
+      (which currently reads `hud_template`).
+- [ ] Tag element entities with `XrdsTriggerBindings` from the element's own
+      authored `triggers`, mirroring `tag_trigger_binding_entities`
+      (`reimport.rs:536`) — **including its remove-when-empty behaviour**, so
+      unchecking the last binding actually detaches the component.
+- [ ] Confirm no change is needed in `consume_triggers` (§4). If one turns out
+      to be needed, stop and re-read §4 — the analysis says otherwise.
+- [ ] Keep `set_hud_item(name, …)` working (`src/xrds_api/context.rs`) by
+      resolving to a `Label` element of that name. Its contract is
+      name-addressed and unification preserves name-addressing.
+- [ ] Tests:
+  - [ ] pressing a button element fires the Track its binding names
+  - [ ] an element with no triggers gets no `XrdsTriggerBindings`
+  - [ ] removing the last binding detaches the component
+  - [ ] `set_hud_item` still updates a migrated Label
+  - [ ] a Track fired by an element participates in the conflict guard
+
+### A3 — bridge + editor
+
+- [ ] DTOs in `src-tauri/src/bridge.rs`: template, element, element kind;
+      snapshot `panel_library` (generalizing `hud_library`).
+- [ ] Replace the two command surfaces with one element-addressed set. Today:
+      12 HUD commands (`CreateHudTemplate` … `LinkHudTemplate`) and 7 world
+      commands (`SetWorldPanelParams`, `AddWorldPanelWidget`,
+      `RemoveWorldPanelWidget`, `MoveWorldPanelWidget`, `SetWorldPanelWidget`,
+      `SetWorldPanelWidgets`, `SetWorldPanelLayout`).
+- [ ] Address elements by **name**, not index — `MoveWorldPanelWidget` reorders
+      today, and an index-addressed command would silently re-point bindings.
+- [ ] **Bump `BRIDGE_VERSION`** on both sides. It is 5 now.
+- [ ] Generalize `HudLibraryPanel.tsx` into the template library.
+- [ ] Converge `HudCanvasOverlay.tsx` and `WorldPanelCanvasOverlay.tsx` into
+      one canvas; attachment differs, canvas editing does not.
+- [ ] Element inspector reusing `TriggersSection` from `Inspector.tsx` — a
+      binding is a binding.
+- [ ] `validKindsFor` in `src/lib/sequencer.ts`: `ButtonPress` /
+      `ButtonRelease` / `SliderChange` / `ToggleChange` become **available** on
+      elements. They are hard-coded `false` today with a comment explaining
+      they are unreachable — that comment is what this plan retires.
+- [ ] Delete `src-tauri/src/hud_library.rs` once its commands are folded in.
+- [ ] Tests: vitest for element-row labelling and kind availability.
+
+### A4 — the instance hazard (§5)
+
+- [ ] Diagnostic pass can see, per template, how many nodes instance it.
+- [ ] Warn when a Track fired from a template-authored element trigger has a
+      row targeting a fixed `Node(id)` while the template has >1 instance.
+- [ ] Wording must **not** suggest `TriggerSource` as the fix — it resolves to
+      the element, not its neighbours (§5). State the consequence only.
+- [ ] Test: 1 instance → quiet; 2 instances + fixed row → warns; 2 instances +
+      `TriggerSource` row → quiet (each drives its own element).
+
+### A5 — authorable stop (§6b)
+
+Unblocked: §6b settles stop as asset-keyed, reusing start's resolution.
+
+- [ ] `XrdsTriggerEffect { Fire, Stop }` on `XrdsTriggerBinding`
+      (`#[serde(default)]` = `Fire`, so existing documents are unchanged).
+- [ ] Runtime: `consume_triggers` branches on the effect. Stop routes through
+      `despawn_agents_releasing_locks` — the one choke point, or it leaks locks.
+- [ ] Stop resolves its asset set via the **same** `schedule_track_keys` call
+      start uses, then despawns the holders — never a name-keyed sweep. A
+      name-keyed stop repeats the §5b mistake.
+- [ ] Two bindings on one element (Stop X, then Fire Y) fire in authored order,
+      which is what gives start/stop buttons their reset without a conditional.
+- [ ] Diagnostic: a `Stop` binding naming a Track nothing ever fires.
+- [ ] Editor: the Fires picker gains a Fire/Stop mode.
+- [ ] Tests: stop releases locks so the Track can be re-fired; stop on a
+      not-running Track is a harmless no-op; **stopping one instance's run
+      leaves another instance's disjoint run alive**; two bindings on one
+      element both fire, in order.
+- [ ] `BRIDGE_VERSION` bump.
+
+### B — elements as action targets (§6, separately stoppable)
+
+- [ ] `XrdsActionTarget::Element { panel: XrdsSceneNodeId, name: String }`.
+- [ ] **New index resource** mapping `(panel entity, element name) → element
+      entity`. Nothing tracks widget entities today, so there is no lookup to
+      reuse — closest precedent is `XrdsIdIndex`.
+- [ ] Actions: `SetElementText`, `SetElementValue`, `SetElementEnabled`. All
+      instant, so no scheduler change.
+- [ ] Element entities participate in `XrdsTrackAssetLocks` — wanted, not
+      incidental: two Tracks writing one element should conflict exactly as two
+      Tracks writing one node do.
+- [ ] Sequencer: element rows selectable as Track assets.
+- [ ] Tests: targeting resolves to the right instance's element; two Tracks on
+      one element conflict; a deleted element's target is diagnosed.
+
+### Deliberately not in this plan
+
+- [ ] ~~Live data binding~~ — see §1. Do not reach for a looping Track with
+      `SetElementText` as a substitute; that is the pathological zero-duration
+      loop.
+- [ ] ~~Media surfaces / streaming~~ — see §1.
+- [ ] ~~Action-level `XrdsAction::StopTrack`~~ — for stopping something partway
+      through a choreography. The button case is covered by A5's binding-level
+      effect without it, so not now.
+
+*(Authorable stop is no longer deferred — it moved to A5.)*
 
 ## 10. Risks
 

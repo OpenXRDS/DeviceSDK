@@ -538,6 +538,29 @@ impl XrdsSceneNode {
                 editor,
                 gltf_node_authoring: None,
             },
+            // A panel instance is a bare node here, and its visuals plus its
+            // elements are spawned as children by
+            // `spawn_panel_instances_in_world` — the same shape as
+            // PlayerSpawnZone above.
+            //
+            // It has to work that way: the node carries only a `template_id`,
+            // and resolving it needs the *document*, which this conversion has
+            // no access to. Threading a template through `to_runtime_node`
+            // instead would push document lookup into a per-node method that
+            // deliberately does not have one.
+            XrdsSceneNodePayload::Panel(_) => XrdsSceneRuntimeNode {
+                id: self.id.into(),
+                parent_id: self.parent_id.map(Into::into),
+                component: XrdsSceneRuntimeComponent::Node(XrdsNode {
+                    name: self.name.clone(),
+                    enabled: self.enabled,
+                    visible: self.visible,
+                    transform,
+                }),
+                material: None,
+                editor,
+                gltf_node_authoring: None,
+            },
         }
     }
 

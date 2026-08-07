@@ -33,6 +33,9 @@ use xrds_components::{
 };
 pub use xrds_components::XrdsPhysicsBody;
 
+mod naming;
+pub use naming::*;
+
 mod scene;
 pub use scene::*;
 

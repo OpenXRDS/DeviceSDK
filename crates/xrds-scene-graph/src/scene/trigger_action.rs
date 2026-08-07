@@ -528,6 +528,50 @@ impl XrdsSceneDocument {
             .map(|n| n.id)
             .collect();
 
+        // -- Track names ------------------------------------------------------
+        // Names are keys, so a bad one silently breaks wiring rather than
+        // looking wrong. The editor refuses these at input
+        // (`normalize_authored_name`), but a document can also be built in Rust
+        // or hand-edited, so the same rules are reported here rather than
+        // trusted to have been enforced upstream.
+        for entry in &self.tracks {
+            match crate::normalize_authored_name(&entry.name) {
+                Ok(canonical) if canonical != entry.name => {
+                    out.push(XrdsSceneTriggerDiagnostic {
+                        node_id: None,
+                        severity: Severity::Error,
+                        title: "Track name has surrounding whitespace".to_string(),
+                        detail: format!(
+                            "Track {:?} is not the same key as {canonical:?}, but renders \
+                             identically. A binding naming one will silently miss the other.",
+                            entry.name
+                        ),
+                    });
+                }
+                Err(e) => out.push(XrdsSceneTriggerDiagnostic {
+                    node_id: None,
+                    severity: Severity::Error,
+                    title: "Track name is not usable".to_string(),
+                    detail: format!("Track {:?}: {}", entry.name, e.message()),
+                }),
+                Ok(_) => {}
+            }
+        }
+
+        for (first, second) in
+            crate::names_differing_only_by_case(self.tracks.iter().map(|t| t.name.as_str()))
+        {
+            out.push(XrdsSceneTriggerDiagnostic {
+                node_id: None,
+                severity: Severity::Warning,
+                title: "Two Tracks differ only by case".to_string(),
+                detail: format!(
+                    "{first:?} and {second:?} are separate Tracks. That is legal, but a binding \
+                     naming one when the other was meant is invisible in review."
+                ),
+            });
+        }
+
         // -- Per-node bindings ------------------------------------------------
         for node in &self.nodes {
             for (i, binding) in node.triggers.iter().enumerate() {

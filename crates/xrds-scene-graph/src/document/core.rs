@@ -83,6 +83,18 @@ pub struct XrdsSceneDocument {
     /// bindings, edited in one place.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tracks: Vec<XrdsNamedTrack>,
+    /// Reusable [`XrdsPanelTemplate`]s — the unified model behind HUD panels and
+    /// world-space panels, where the only difference is attachment.
+    ///
+    /// Mirrors `tracks`: a registry of named, reusable definitions referenced by
+    /// whatever instances them, so one panel authored once can appear in several
+    /// places and be edited in one.
+    ///
+    /// Additive for now — `hud_library` above still drives the working HUD, and
+    /// nothing migrates onto this until the runtime does. See
+    /// `docs/xrds-widget-template-plan.md`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub panels: Vec<XrdsPanelTemplate>,
 }
 
 impl Default for XrdsSceneDocument {
@@ -95,6 +107,7 @@ impl Default for XrdsSceneDocument {
             gltf_node_authoring: BTreeMap::new(),
             hud_library: Vec::new(),
             tracks: Vec::new(),
+            panels: Vec::new(),
         }
     }
 }
@@ -200,6 +213,31 @@ impl XrdsSceneDocument {
         )
     }
 
+    pub fn panel_template(&self, id: XrdsPanelTemplateId) -> Option<&XrdsPanelTemplate> {
+        self.panels.iter().find(|t| t.id == id)
+    }
+
+    pub fn panel_template_mut(
+        &mut self,
+        id: XrdsPanelTemplateId,
+    ) -> Option<&mut XrdsPanelTemplate> {
+        self.panels.iter_mut().find(|t| t.id == id)
+    }
+
+    /// Look a template up by its authored name.
+    ///
+    /// Both lookups exist because the two halves address differently: an
+    /// *instance* stores an id (stable across renames), while an *author* picks
+    /// by name.
+    pub fn panel_template_by_name(&self, name: &str) -> Option<&XrdsPanelTemplate> {
+        self.panels.iter().find(|t| t.name == name)
+    }
+
+    /// Lowest id not already used by a panel template.
+    pub fn next_available_panel_template_id(&self) -> XrdsPanelTemplateId {
+        XrdsPanelTemplateId(self.panels.iter().map(|t| t.id.0).max().unwrap_or(0) + 1)
+    }
+
     pub fn hud_template(&self, id: HudTemplateId) -> Option<&XrdsHudTemplate> {
         self.hud_library.iter().find(|t| t.id == id)
     }
@@ -282,6 +320,7 @@ impl XrdsSceneDocument {
             // unreferenced registry entry in the subset is harmless, just
             // unused, same as any other unreferenced asset.
             tracks: self.tracks.clone(),
+            panels: self.panels.clone(),
         })
     }
 }

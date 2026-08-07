@@ -2308,6 +2308,373 @@ fn a_paused_track_does_not_advance_but_keeps_its_assets() {
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
+// Panel element triggers
+//
+// The premise of the whole panel-template plan: an element carries its own
+// triggers, they land on the entity the widget event targets, and
+// `consume_triggers` fires the named Track — with no change to dispatch.
+//
+// Before this, `spawn_world_widget_from_scene` discarded the entity it created,
+// so there was nothing to attach `XrdsTriggerBindings` to and every
+// ButtonPress/SliderChange/ToggleChange on an authored widget was dropped.
+// ---------------------------------------------------------------------------
+
+/// Imports Tracks only, then hands back a bare entity to hang elements off —
+/// standing in for the panel a real attachment would spawn.
+fn import_tracks_and_a_panel(app: &mut App, tracks: Vec<XrdsNamedTrack>) -> Entity {
+    let document = XrdsSceneDocument { tracks, ..Default::default() };
+    {
+        let mut xrds = XrdsAPI::attach(app);
+        xrds.import_scene_document(&document).expect("import should succeed");
+    }
+    app.world_mut().spawn(Transform::default()).id()
+}
+
+fn button_element(name: &str, triggers: Vec<XrdsTriggerBinding>) -> xrds_scene_graph::XrdsPanelElement {
+    xrds_scene_graph::XrdsPanelElement {
+        name: name.to_string(),
+        kind: xrds_scene_graph::XrdsSceneWorldWidget::Button(
+            xrds_scene_graph::XrdsSceneWorldButton::default(),
+        ),
+        triggers,
+    }
+}
+
+fn element_binding(kind: XrdsTriggerKind, track: &str) -> XrdsTriggerBinding {
+    XrdsTriggerBinding {
+        trigger: kind,
+        track: Some(track.to_string()),
+        disabled: false,
+        hand: None,
+    }
+}
+
+/// A Track that parks a marker node somewhere observable, so "did it run" is a
+/// transform read rather than a log scrape.
+fn move_track(name: &str, target: u64) -> XrdsNamedTrack {
+    XrdsNamedTrack {
+        name: name.to_string(),
+        track: XrdsTrack {
+            assets: vec![node_row(
+                target,
+                vec![(0.0, XrdsAction::SetTransform {
+                    position: Some([42.0, 0.0, 0.0]),
+                    rotation: None,
+                    scale: None,
+                    duration_secs: 0.0,
+                    ease: XrdsEaseCurve::Linear,
+                })],
+            )],
+            ..XrdsTrack::default()
+        },
+    }
+}
+
+#[test]
+fn pressing_a_panel_element_fires_the_track_its_binding_names() {
+    let mut app = xrds_test_app();
+    // The Track drives node 810, which must exist for its row to resolve.
+    let entities = import_bare_nodes_and_tracks(&mut app, &[810], vec![move_track("Open", 810)]);
+    let panel = app.world_mut().spawn(Transform::default()).id();
+
+    let element = button_element("start", vec![element_binding(XrdsTriggerKind::ButtonPress, "Open")]);
+    let element_entity = crate::xrds_api::trigger_action::spawn_panel_element_in_world(
+        app.world_mut(),
+        panel,
+        &element,
+    );
+
+    // The bindings must be on the element itself — that is the entity the event
+    // targets, and the reason this could never work before.
+    assert!(
+        app.world()
+            .get::<crate::xrds_api::trigger_action::XrdsTriggerBindings>(element_entity)
+            .is_some(),
+        "the element entity must carry its authored bindings"
+    );
+
+    app.world_mut().write_message(xrds_components::XrWorldButtonPressEvent {
+        button_entity: element_entity,
+        hand: XrGrabHand::Right,
+    });
+
+    assert!(
+        spin_until(&mut app, 20, 5, |app| {
+            app.world().get::<Transform>(entities[0]).map(|t| t.translation.x) == Some(42.0)
+        }),
+        "pressing the element should have fired its Track"
+    );
+}
+
+#[test]
+fn an_element_with_no_triggers_carries_no_bindings_component() {
+    // Not just an empty list: an empty component would still match the query
+    // `consume_triggers` runs, so remove-when-empty keeps "unbound" meaning
+    // unbound.
+    let mut app = xrds_test_app();
+    let panel = import_tracks_and_a_panel(&mut app, vec![]);
+    let entity = crate::xrds_api::trigger_action::spawn_panel_element_in_world(
+        app.world_mut(),
+        panel,
+        &button_element("quiet", vec![]),
+    );
+    assert!(
+        app.world()
+            .get::<crate::xrds_api::trigger_action::XrdsTriggerBindings>(entity)
+            .is_none(),
+        "no triggers should mean no component at all"
+    );
+}
+
+#[test]
+fn clearing_an_elements_triggers_detaches_the_component() {
+    // The remove-when-empty half, on the re-authoring path rather than spawn.
+    let mut app = xrds_test_app();
+    let panel = import_tracks_and_a_panel(&mut app, vec![]);
+    let element = button_element("start", vec![element_binding(XrdsTriggerKind::ButtonPress, "Open")]);
+    let entity = crate::xrds_api::trigger_action::spawn_panel_element_in_world(
+        app.world_mut(),
+        panel,
+        &element,
+    );
+    assert!(app
+        .world()
+        .get::<crate::xrds_api::trigger_action::XrdsTriggerBindings>(entity)
+        .is_some());
+
+    crate::xrds_api::trigger_action::set_element_trigger_bindings(app.world_mut(), entity, &[]);
+    assert!(
+        app.world()
+            .get::<crate::xrds_api::trigger_action::XrdsTriggerBindings>(entity)
+            .is_none(),
+        "clearing the last binding must detach, not leave an empty list"
+    );
+}
+
+#[test]
+fn a_disabled_element_binding_does_not_fire() {
+    let mut app = xrds_test_app();
+    let entities = import_bare_nodes_and_tracks(&mut app, &[811], vec![move_track("Open", 811)]);
+    let panel = app.world_mut().spawn(Transform::default()).id();
+
+    let mut binding = element_binding(XrdsTriggerKind::ButtonPress, "Open");
+    binding.disabled = true;
+    let entity = crate::xrds_api::trigger_action::spawn_panel_element_in_world(
+        app.world_mut(),
+        panel,
+        &button_element("start", vec![binding]),
+    );
+
+    app.world_mut().write_message(xrds_components::XrWorldButtonPressEvent {
+        button_entity: entity,
+        hand: XrGrabHand::Right,
+    });
+    for _ in 0..8 {
+        app.update();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(
+        app.world().get::<Transform>(entities[0]).map(|t| t.translation.x),
+        Some(0.0),
+        "a disabled binding must stay inert"
+    );
+}
+
+#[test]
+fn a_press_on_one_element_does_not_fire_another_elements_binding() {
+    // Bindings are per-entity, so two elements on one panel stay independent —
+    // which is what makes several buttons on a template usable at all.
+    let mut app = xrds_test_app();
+    let entities = import_bare_nodes_and_tracks(
+        &mut app,
+        &[812, 813],
+        vec![move_track("A", 812), move_track("B", 813)],
+    );
+    let panel = app.world_mut().spawn(Transform::default()).id();
+
+    let a = crate::xrds_api::trigger_action::spawn_panel_element_in_world(
+        app.world_mut(),
+        panel,
+        &button_element("a", vec![element_binding(XrdsTriggerKind::ButtonPress, "A")]),
+    );
+    let _b = crate::xrds_api::trigger_action::spawn_panel_element_in_world(
+        app.world_mut(),
+        panel,
+        &button_element("b", vec![element_binding(XrdsTriggerKind::ButtonPress, "B")]),
+    );
+
+    app.world_mut()
+        .write_message(xrds_components::XrWorldButtonPressEvent { button_entity: a, hand: XrGrabHand::Right });
+
+    assert!(
+        spin_until(&mut app, 20, 5, |app| {
+            app.world().get::<Transform>(entities[0]).map(|t| t.translation.x) == Some(42.0)
+        }),
+        "element A should have fired Track A"
+    );
+    assert_eq!(
+        app.world().get::<Transform>(entities[1]).map(|t| t.translation.x),
+        Some(0.0),
+        "element B must not have fired"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Panel instances — the scene attachment
+// ---------------------------------------------------------------------------
+
+/// A document with one panel template and `count` nodes instancing it.
+fn import_panel_instances(
+    app: &mut App,
+    count: usize,
+    elements: Vec<xrds_scene_graph::XrdsPanelElement>,
+    extra_nodes: &[u64],
+    tracks: Vec<XrdsNamedTrack>,
+) -> Vec<Entity> {
+    use xrds_scene_graph::{XrdsPanelTemplate, XrdsPanelTemplateId, XrdsScenePanelInstance};
+
+    let template = XrdsPanelTemplate {
+        id: XrdsPanelTemplateId(1),
+        name: "Menu".to_string(),
+        elements,
+        ..XrdsPanelTemplate::default()
+    };
+
+    let mut nodes: Vec<XrdsSceneNode> = (0..count)
+        .map(|i| XrdsSceneNode {
+            payload: XrdsSceneNodePayload::Panel(XrdsScenePanelInstance {
+                template_id: XrdsPanelTemplateId(1),
+            }),
+            ..scene_node(900 + i as u64, "PanelInstance")
+        })
+        .collect();
+    nodes.extend(extra_nodes.iter().map(|id| scene_node(*id, "Asset")));
+
+    let document = XrdsSceneDocument {
+        nodes,
+        panels: vec![template],
+        tracks,
+        ..Default::default()
+    };
+    {
+        let mut xrds = XrdsAPI::attach(app);
+        xrds.import_scene_document(&document).expect("import should succeed");
+    }
+    let index = app.world().resource::<XrdsIdIndex>();
+    (0..count)
+        .map(|i| index.entity_of(XrdsId(900 + i as u64)).expect("panel indexed"))
+        .collect()
+}
+
+/// Every entity carrying trigger bindings, i.e. every tagged element.
+fn tagged_element_count(app: &mut App) -> usize {
+    app.world_mut()
+        .query_filtered::<Entity, bevy::prelude::With<crate::xrds_api::trigger_action::XrdsTriggerBindings>>()
+        .iter(app.world())
+        .count()
+}
+
+#[test]
+fn a_panel_instance_spawns_its_templates_elements_with_bindings() {
+    let mut app = xrds_test_app();
+    import_panel_instances(
+        &mut app,
+        1,
+        vec![button_element("start", vec![element_binding(XrdsTriggerKind::ButtonPress, "Open")])],
+        &[820],
+        vec![move_track("Open", 820)],
+    );
+    assert_eq!(
+        tagged_element_count(&mut app),
+        1,
+        "the instance should have spawned one tagged element from its template"
+    );
+}
+
+#[test]
+fn a_template_instanced_twice_yields_two_independent_element_sets() {
+    // The point of the template/instance split, and why elements are spawned per
+    // instance rather than once per template. If these shared entities, two
+    // panels could never behave independently.
+    let mut app = xrds_test_app();
+    let panels = import_panel_instances(
+        &mut app,
+        2,
+        vec![button_element("start", vec![element_binding(XrdsTriggerKind::ButtonPress, "Open")])],
+        &[821],
+        vec![move_track("Open", 821)],
+    );
+    assert_eq!(panels.len(), 2);
+    assert_ne!(panels[0], panels[1], "two instances are two entities");
+    assert_eq!(
+        tagged_element_count(&mut app),
+        2,
+        "each instance needs its own element entity, not a shared one"
+    );
+}
+
+#[test]
+fn an_element_on_an_instance_fires_its_track_end_to_end() {
+    // The full authored path: document -> template -> instance -> element ->
+    // binding -> Track. No hand-spawned entities anywhere.
+    let mut app = xrds_test_app();
+    import_panel_instances(
+        &mut app,
+        1,
+        vec![button_element("start", vec![element_binding(XrdsTriggerKind::ButtonPress, "Open")])],
+        &[822],
+        vec![move_track("Open", 822)],
+    );
+    let target = app.world().resource::<XrdsIdIndex>().entity_of(XrdsId(822)).expect("indexed");
+
+    // Find the element the import spawned, rather than assuming an entity id.
+    let element = app
+        .world_mut()
+        .query_filtered::<Entity, bevy::prelude::With<crate::xrds_api::trigger_action::XrdsTriggerBindings>>()
+        .iter(app.world())
+        .next()
+        .expect("the import should have tagged an element");
+
+    app.world_mut().write_message(xrds_components::XrWorldButtonPressEvent {
+        button_entity: element,
+        hand: XrGrabHand::Right,
+    });
+
+    assert!(
+        spin_until(&mut app, 20, 5, |app| {
+            app.world().get::<Transform>(target).map(|t| t.translation.x) == Some(42.0)
+        }),
+        "an authored element on an authored instance should fire its Track"
+    );
+}
+
+#[test]
+fn a_panel_instance_naming_a_missing_template_loads_as_an_empty_node() {
+    // Refusing to load the whole scene over one dangling reference would be
+    // worse than an empty panel; the reference is diagnosed at author time.
+    use xrds_scene_graph::{XrdsPanelTemplateId, XrdsScenePanelInstance};
+    let mut app = xrds_test_app();
+    let document = XrdsSceneDocument {
+        nodes: vec![XrdsSceneNode {
+            payload: XrdsSceneNodePayload::Panel(XrdsScenePanelInstance {
+                template_id: XrdsPanelTemplateId(404),
+            }),
+            ..scene_node(830, "Dangling")
+        }],
+        ..Default::default()
+    };
+    {
+        let mut xrds = XrdsAPI::attach(&mut app);
+        xrds.import_scene_document(&document).expect("import must still succeed");
+    }
+    assert!(
+        app.world().resource::<XrdsIdIndex>().entity_of(XrdsId(830)).is_some(),
+        "the node itself should still exist"
+    );
+    assert_eq!(tagged_element_count(&mut app), 0, "but it has no elements");
+}
+
+// ---------------------------------------------------------------------------
 // Live edits reach already-running agents
 //
 // `XrdsTrackAgent` is a snapshot taken at spawn, so without an explicit

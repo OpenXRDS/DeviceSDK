@@ -622,6 +622,7 @@ impl XrdsAPI<'_> {
         // original document nodes here.
         crate::xrds_api::reimport::tag_player_anchor_entities(self.app.world_mut(), document);
         crate::xrds_api::reimport::tag_grabbable_entities(self.app.world_mut(), document);
+        crate::xrds_api::reimport::spawn_panel_instances(self.app.world_mut(), document);
         crate::xrds_api::reimport::tag_spawn_zone_entities(self.app.world_mut(), document);
         crate::xrds_api::reimport::tag_trigger_binding_entities(self.app.world_mut(), document);
         crate::xrds_api::reimport::tag_threshold_watcher_entities(self.app.world_mut(), document);

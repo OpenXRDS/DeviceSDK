@@ -6,6 +6,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 mod assets;
 mod core;
 mod editing;
+mod naming;
+mod panel;
 mod session;
 mod trigger_action;
 mod world_ui;

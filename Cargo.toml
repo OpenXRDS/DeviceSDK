@@ -72,6 +72,7 @@ tokio = { version = "1.43.0", features = ["rt-multi-thread", "sync", "macros"] }
 anyhow = "1.0.95"
 env_logger = "0.11.6"
 log = "0.4.25"
+unicode-normalization = "0.1"
 bevy = { version = "0.17.2", default-features = false, features = [
   # All of bevy's defaults except "android-game-activity" — replaced with
   # "android-native-activity" so the build works without bundling a Java DEX.

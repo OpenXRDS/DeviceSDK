@@ -1228,11 +1228,20 @@ pub(super) fn spawn_world_toggle_entity(
 ///
 /// Called by `import_runtime_nodes` when a `WorldPanel` scene node is imported.
 /// The widget becomes a direct child of `panel_entity`.
+/// Spawn a single world-UI widget from a serialised
+/// [`xrds_scene_graph::XrdsSceneWorldWidget`] definition, returning its entity.
+///
+/// **The return value is load-bearing.** This used to discard it, which is why
+/// authored widget triggers could never fire: the four widget trigger kinds
+/// target the widget's own entity, `consume_triggers` requires an
+/// `XrdsTriggerBindings` component *on that entity*, and with the entity thrown
+/// away there was nothing to attach it to. See
+/// `crate::xrds_api::trigger_action::spawn_panel_element_in_world`.
 pub(super) fn spawn_world_widget_from_scene(
     world: &mut World,
     panel_entity: Entity,
     widget: &xrds_scene_graph::XrdsSceneWorldWidget,
-) {
+) -> Entity {
     use xrds_components::{
         XrdsWorldButtonParams, XrdsWorldImageParams, XrdsWorldLabelParams,
         XrdsWorldSliderParams, XrdsWorldToggleParams,
@@ -1247,7 +1256,7 @@ pub(super) fn spawn_world_widget_from_scene(
                 color:          l.color,
                 local_position: l.local_position,
                 layout_size:    l.layout_size,
-            });
+            })
         }
         XrdsSceneWorldWidget::Button(b) => {
             spawn_world_button_entity(world, panel_entity, &XrdsWorldButtonParams {
@@ -1259,7 +1268,7 @@ pub(super) fn spawn_world_widget_from_scene(
                 normal_color:   b.normal_color,
                 hover_color:    b.hover_color,
                 pressed_color:  b.pressed_color,
-            });
+            })
         }
         XrdsSceneWorldWidget::Image(i) => {
             spawn_world_image_entity(world, panel_entity, &XrdsWorldImageParams {
@@ -1267,7 +1276,7 @@ pub(super) fn spawn_world_widget_from_scene(
                 size:           i.size,
                 local_position: i.local_position,
                 tint:           i.tint,
-            });
+            })
         }
         XrdsSceneWorldWidget::Slider(s) => {
             spawn_world_slider_entity(world, panel_entity, &XrdsWorldSliderParams {
@@ -1280,7 +1289,7 @@ pub(super) fn spawn_world_widget_from_scene(
                 fill_color:     s.fill_color,
                 thumb_color:    s.thumb_color,
                 thumb_size:     s.thumb_size,
-            });
+            })
         }
         XrdsSceneWorldWidget::Toggle(t) => {
             spawn_world_toggle_entity(world, panel_entity, &XrdsWorldToggleParams {
@@ -1290,7 +1299,7 @@ pub(super) fn spawn_world_widget_from_scene(
                 track_off_color: t.track_off_color,
                 track_on_color:  t.track_on_color,
                 thumb_color:     t.thumb_color,
-            });
+            })
         }
     }
 }

@@ -130,6 +130,32 @@ pub fn build_node_trigger_diagnostics_dto(
 // Command handlers
 // ---------------------------------------------------------------------------
 
+/// Canonicalizes an authored name, or refuses it **visibly**.
+///
+/// Returns `None` when the name is unusable, having first put a message on
+/// `pending_status` naming the reason *and* a concrete alternative. That
+/// visibility is the point: a rename that silently does nothing is exactly the
+/// undebuggable failure this policy exists to remove, so failing quietly here
+/// would reproduce the bug being fixed.
+///
+/// `Some(canonical)` may differ from the input — surrounding whitespace is
+/// trimmed, so `"Door "` becomes `"Door"` and then collides loudly with an
+/// existing `"Door"` instead of shadowing it invisibly.
+fn reject_bad_name(state: &mut EditorState, raw: &str, kind: &str) -> Option<String> {
+    match xrds_scene_graph::normalize_authored_name(raw) {
+        Ok(canonical) => Some(canonical),
+        Err(e) => {
+            let suggestion = e.suggestion(raw);
+            state.pending_status = Some(format!(
+                "{kind} name {raw:?} was not accepted. {} Try {suggestion:?}.",
+                e.message()
+            ));
+            error!("[naming] rejected {kind} name {raw:?}: {}", e.message());
+            None
+        }
+    }
+}
+
 /// Returns true if a full scene reimport is needed after the command.
 pub fn apply_trigger_action_command(
     cmd: &EditorCommand,
@@ -139,7 +165,12 @@ pub fn apply_trigger_action_command(
     match cmd {
         // --- Track registry ---
         EditorCommand::CreateTrack { name } => {
-            let name = name.clone();
+            // Canonicalize before it becomes a key. `"Door "` must collide
+            // loudly with `"Door"`, not silently shadow it.
+            let name = match reject_bad_name(state, name, "Track") {
+                Some(n) => n,
+                None => return false,
+            };
             match session.0.edit(|doc| {
                 if doc.track(&name).is_some() {
                     error!("[track] CreateTrack: {name:?} already exists");
@@ -176,7 +207,10 @@ pub fn apply_trigger_action_command(
 
         EditorCommand::RenameTrack { old_name, new_name } => {
             let old_name = old_name.clone();
-            let new_name = new_name.clone();
+            let new_name = match reject_bad_name(state, new_name, "Track") {
+                Some(n) => n,
+                None => return false,
+            };
             match session.0.edit(|doc| {
                 if doc.track(&new_name).is_some() {
                     error!("[track] RenameTrack: {new_name:?} already exists");
@@ -896,5 +930,58 @@ fn diagnostic_to_dto(d: &XrdsSceneTriggerDiagnostic) -> TriggerDiagnosticDto {
         },
         title: d.title.clone(),
         detail: d.detail.clone(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `reject_bad_name` is the guard every name-taking command routes through.
+    /// These assert the two things that make it worth having: it canonicalizes
+    /// (so `"Door "` cannot shadow `"Door"`), and it refuses *visibly*.
+    #[test]
+    fn a_good_name_passes_through_canonicalized() {
+        let mut state = EditorState::default();
+        assert_eq!(reject_bad_name(&mut state, "Door", "Track"), Some("Door".to_string()));
+        assert_eq!(
+            reject_bad_name(&mut state, "  Door  ", "Track"),
+            Some("Door".to_string()),
+            "surrounding whitespace must be trimmed, or it becomes a second invisible key"
+        );
+        assert!(state.pending_status.is_none(), "a good name must not raise a message");
+    }
+
+    #[test]
+    fn a_refused_name_reports_the_reason_and_a_suggestion() {
+        // A silent refusal would reproduce the very bug this policy removes, so
+        // the message is part of the contract, not a nicety.
+        for bad in ["", "   ", "__none__"] {
+            let mut state = EditorState::default();
+            assert_eq!(reject_bad_name(&mut state, bad, "Track"), None, "{bad:?}");
+            let msg = state.pending_status.expect("must surface a status message");
+            assert!(msg.contains("Track"), "should name what was rejected: {msg}");
+            assert!(msg.contains("Try "), "should offer an alternative: {msg}");
+        }
+    }
+
+    #[test]
+    fn the_suggested_alternative_would_itself_be_accepted() {
+        // Otherwise the author is bounced twice.
+        let mut state = EditorState::default();
+        assert!(reject_bad_name(&mut state, "__none__", "Track").is_none());
+        let msg = state.pending_status.clone().expect("status");
+        // The message ends with `Try "<suggestion>".`
+        let suggestion = msg
+            .rsplit_once("Try \"")
+            .and_then(|(_, tail)| tail.split_once('"'))
+            .map(|(s, _)| s.to_string())
+            .expect("message should quote a suggestion");
+        let mut state2 = EditorState::default();
+        assert_eq!(
+            reject_bad_name(&mut state2, &suggestion, "Track"),
+            Some(suggestion.clone()),
+            "the suggested name {suggestion:?} must be accepted"
+        );
     }
 }

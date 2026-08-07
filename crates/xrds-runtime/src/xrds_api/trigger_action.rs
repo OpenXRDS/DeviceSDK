@@ -745,6 +745,63 @@ pub fn spawn_track_agent_deferred(
 }
 
 // ---------------------------------------------------------------------------
+// Panel elements
+// ---------------------------------------------------------------------------
+
+/// Spawns one [`XrdsPanelElement`] onto `panel_entity` and tags it with the
+/// element's authored triggers, returning the element's entity.
+///
+/// **This is the whole reason authored widget triggers can fire.** The chain
+/// was already almost complete:
+///
+/// - The four widget events target the widget's own entity
+///   (`XrdsTriggerRef::Entity(self.button_entity)`), not a document node.
+/// - `XrdsTriggerRef::Entity(e).resolve()` returns `Some(e)` — a pass-through,
+///   no id lookup, so nothing needed changing in [`consume_triggers`].
+/// - But `consume_triggers` then requires [`XrdsTriggerBindings`] *on that
+///   entity*, and the only thing that ever inserted it was
+///   `tag_trigger_binding_entities`, which walks `document.nodes`. Widgets are
+///   not nodes, so their entities never got one and every event was dropped.
+///
+/// So the missing piece was exactly this: an element carries its own triggers,
+/// and they land on the entity the event will target. Nothing else.
+///
+/// Mirrors `tag_trigger_binding_entities`' **remove-when-empty** behaviour, so
+/// clearing the last binding actually detaches the component rather than
+/// leaving an empty list that still matches a query.
+pub fn spawn_panel_element_in_world(
+    world: &mut World,
+    panel_entity: Entity,
+    element: &xrds_scene_graph::XrdsPanelElement,
+) -> Entity {
+    let entity = crate::xrds_api::spawn::spawn_world_widget_from_scene(
+        world,
+        panel_entity,
+        &element.kind,
+    );
+    set_element_trigger_bindings(world, entity, &element.triggers);
+    entity
+}
+
+/// Attaches (or detaches) an element entity's trigger bindings.
+///
+/// Split out so re-authoring an element's triggers without respawning it uses
+/// the same remove-when-empty rule as the initial spawn — two code paths
+/// disagreeing about that is how an "unbound" element keeps firing.
+pub fn set_element_trigger_bindings(
+    world: &mut World,
+    entity: Entity,
+    triggers: &[XrdsTriggerBinding],
+) {
+    let Ok(mut e) = world.get_entity_mut(entity) else { return };
+    if triggers.is_empty() {
+        e.remove::<XrdsTriggerBindings>();
+    } else {
+        e.insert(XrdsTriggerBindings(triggers.to_vec()));
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Editor preview transport
 // ---------------------------------------------------------------------------
 

@@ -24,6 +24,31 @@ pub enum XrdsSceneNodePayload {
     ExtrudedText(XrdsSceneExtrudedText),
     PlayerSpawnZone(XrdsScenePlayerSpawnZone),
     WorldPanel(XrdsSceneWorldPanel),
+    /// An instance of a reusable [`XrdsPanelTemplate`], placed in the scene by
+    /// this node's own transform.
+    ///
+    /// The scene half of "attachment is the only difference" — the camera half
+    /// is `XrdsScenePlayerAnchor`. Carries no content of its own: everything
+    /// authored lives on the template, which is what lets one panel appear in
+    /// several places and be edited in one.
+    Panel(XrdsScenePanelInstance),
+}
+
+/// A placed instance of a panel template.
+///
+/// A struct rather than a bare id so per-instance data has somewhere to go
+/// later without another schema change — the obvious candidate being the
+/// relative-addressing override table discussed in the plan's §5 (letting an
+/// instance say *which* door its button opens).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct XrdsScenePanelInstance {
+    pub template_id: XrdsPanelTemplateId,
+}
+
+impl Default for XrdsPanelTemplateId {
+    fn default() -> Self {
+        Self(0)
+    }
 }
 
 impl XrdsSceneNodePayload {
@@ -51,6 +76,7 @@ impl XrdsSceneNodePayload {
             Self::ExtrudedText(_)    => XrdsGltfExportClass::NodeOnly,
             Self::PlayerSpawnZone(_) => XrdsGltfExportClass::NodeOnly,
             Self::WorldPanel(_)      => XrdsGltfExportClass::NodeOnly,
+            Self::Panel(_)           => XrdsGltfExportClass::NodeOnly,
         }
     }
 }
