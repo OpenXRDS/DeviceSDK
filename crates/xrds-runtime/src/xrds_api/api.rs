@@ -523,38 +523,6 @@ impl XrdsAPI<'_> {
                     reserve_runtime_id_in_world(self.app.world_mut(), id)?;
                     spawn_interaction_zone_entity(self.app.world_mut(), id, &node, &zone)
                 }
-                XrdsSceneRuntimeComponent::WorldPanel(panel_desc, widgets, scene_layout) => {
-                    // spawn_with_id applies the command queue immediately, so the panel entity
-                    // is fully initialised (mesh, XrdsWorldSurface, etc.) on return.
-                    let panel_entity = self.spawn_with_id(id, &panel_desc)?.entity();
-
-                    // Spawn every widget as a direct child of the panel.
-                    for widget in &widgets {
-                        spawn_world_widget_from_scene(self.app.world_mut(), panel_entity, widget);
-                    }
-
-                    // Apply optional layout policy.
-                    use xrds_scene_graph::XrdsSceneWorldLayout;
-                    let xrds_layout = match &scene_layout {
-                        XrdsSceneWorldLayout::None => None,
-                        XrdsSceneWorldLayout::VStack { gap } => {
-                            Some(xrds_components::XrdsWorldLayout::VStack { gap: *gap })
-                        }
-                        XrdsSceneWorldLayout::HStack { gap } => {
-                            Some(xrds_components::XrdsWorldLayout::HStack { gap: *gap })
-                        }
-                        XrdsSceneWorldLayout::Grid { cols, gap } => {
-                            Some(xrds_components::XrdsWorldLayout::Grid { cols: *cols, gap: *gap })
-                        }
-                    };
-                    if let Some(layout) = xrds_layout {
-                        if let Ok(mut e) = self.app.world_mut().get_entity_mut(panel_entity) {
-                            e.insert(layout);
-                        }
-                    }
-
-                    panel_entity
-                }
             };
 
             self.app

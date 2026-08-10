@@ -174,10 +174,6 @@ fn is_structural_command(cmd: &EditorCommand) -> bool {
         SetActivePlayerAnchor{..} |
         // Text structural (requires reimport)
         SetTextContent{..} | SetExtrudedText{..} |
-        // World Panel
-        SetWorldPanelParams{..} | AddWorldPanelWidget{..} | RemoveWorldPanelWidget{..} |
-        MoveWorldPanelWidget{..} | SetWorldPanelWidget{..} | SetWorldPanelWidgets{..} |
-        SetWorldPanelLayout{..} |
         // Panel template library — replaces the 12 HUD-library commands. These
         // were missing from this list, so panel authoring logged at `trace!`
         // while every comparable edit logged at `info!`.

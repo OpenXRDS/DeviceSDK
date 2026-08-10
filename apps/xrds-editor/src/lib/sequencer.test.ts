@@ -403,27 +403,26 @@ function nodeWith(overrides: Partial<NodeInspector>): NodeInspector {
 }
 
 describe("validKindsFor", () => {
-  it("never offers ButtonPress/ButtonRelease/SliderChange/ToggleChange, on any node", () => {
-    // Confirmed against xrds-runtime's dispatch code: these target a
-    // widget's own ephemeral Entity, which no document-authored binding
-    // can ever be attached to — not a gap this filter should paper over.
-    const worldPanel = nodeWith({
-      payload: { type: "WorldPanel", size: [1, 1], color: [1, 1, 1, 1], corner_radius: 0, opacity: 1, layout: { type: "None" }, widgets: [] },
-    });
-    const kinds = validKindsFor(worldPanel);
+  it("never offers ButtonPress/ButtonRelease/SliderChange/ToggleChange on a NODE", () => {
+    // These target an element's own runtime entity, and a node is not an
+    // element — even a Panel node itself. `elementUnavailableReasonFor` covers
+    // the element-side rule; this is only the node-side "wrong place" message.
+    const panel = nodeWith({ payload: { type: "Panel", template_id: 1, elements: [] } });
+    const kinds = validKindsFor(panel);
     expect(kinds).not.toContain("ButtonPress");
     expect(kinds).not.toContain("ButtonRelease");
     expect(kinds).not.toContain("SliderChange");
     expect(kinds).not.toContain("ToggleChange");
   });
 
-  it("offers HoverEnter/HoverExit only on a WorldPanel node", () => {
-    const worldPanel = nodeWith({
-      payload: { type: "WorldPanel", size: [1, 1], color: [1, 1, 1, 1], corner_radius: 0, opacity: 1, layout: { type: "None" }, widgets: [] },
-    });
+  it("offers HoverEnter/HoverExit only on a Panel node", () => {
+    // `Panel` is the one payload that gets a pointer surface at runtime
+    // (`apply_panel_backdrop_in_world`), so it is the one whose HoverEnter/
+    // HoverExit can ever fire.
+    const panel = nodeWith({ payload: { type: "Panel", template_id: 1, elements: [] } });
     const cube = nodeWith({ payload: { type: "Cube", material: { base_color: [1, 1, 1, 1], metallic: 0, roughness: 0.5, emissive: [0, 0, 0], textures: NO_TEXTURES }, physics_body: "None", gravity_scale: 1, mass: 1 } });
 
-    expect(validKindsFor(worldPanel)).toContain("HoverEnter");
+    expect(validKindsFor(panel)).toContain("HoverEnter");
     expect(validKindsFor(cube)).not.toContain("HoverEnter");
   });
 

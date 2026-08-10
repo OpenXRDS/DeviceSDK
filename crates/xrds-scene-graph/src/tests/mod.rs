@@ -10,7 +10,6 @@ mod naming;
 mod panel;
 mod session;
 mod trigger_action;
-mod world_ui;
 
 pub(super) fn asset_fixture_path(relative_path: &str) -> String {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))

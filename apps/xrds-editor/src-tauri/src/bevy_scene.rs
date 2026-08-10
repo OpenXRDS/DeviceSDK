@@ -28,7 +28,7 @@ use crate::wry_overlay::pump_gtk_events;
 use crate::viewport_gizmo::{
     floor_grid_system, fov_overlay_system, interaction_zone_gizmo_system, light_rays_system,
     physics_collider_gizmo_system, player_spawn_gizmo_system, spawn_zone_gizmo_system,
-    transform_gizmo_system, world_panel_gizmo_system,
+    transform_gizmo_system,
     update_selection_outline, GridGizmoGroup,
 };
 use crate::viewport_gizmo_interaction::gizmo_interaction_system;
@@ -149,7 +149,6 @@ impl XrdsApp for XrdsEditorTauriApp {
                 interaction_zone_gizmo_system,
                 player_spawn_gizmo_system,
                 spawn_zone_gizmo_system,
-                world_panel_gizmo_system,
                 physics_collider_gizmo_system,
                 fov_overlay_system,
                 update_selection_outline,

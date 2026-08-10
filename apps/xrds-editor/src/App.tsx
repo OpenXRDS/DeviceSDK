@@ -10,7 +10,6 @@ import { Inspector } from "./components/Inspector";
 import { PlayerPanel } from "./components/PlayerPanel";
 import { ViewportCanvas } from "./components/ViewportCanvas";
 import { KeyboardShortcutsModal } from "./components/KeyboardShortcutsModal";
-import { WorldPanelCanvasOverlay } from "./components/WorldPanelCanvasOverlay";
 import { ApkExportDialog } from "./components/ApkExportDialog";
 import { SequencerWorkspace } from "./components/SequencerWorkspace";
 import type { SelectedEvent } from "./components/SequencerInspector";
@@ -45,7 +44,6 @@ export default function App() {
   const send            = useSendCommand();
   const centerRef       = useRef<HTMLDivElement>(null);
   const [showShortcuts,  setShowShortcuts]  = useState(false);
-  const [worldPanelId,   setWorldPanelId]   = useState<number | null>(null);
   const [showApkExport,  setShowApkExport]  = useState(false);
   // Which Track the Sequencer has open, by name. There is no longer an
   // inline-sequence alternative to address, so a name is the whole target.
@@ -259,7 +257,7 @@ export default function App() {
             </button>
             <div className={`panel-resize-handle--v${inspector.dragging ? " dragging" : ""}${inspector.locked ? " locked" : ""}`}
               style={{ left: -4 }} onPointerDown={inspector.onPointerDown} title={inspector.locked ? "Inspector width is locked" : "Drag to resize"} />
-            <Inspector snapshot={snapshot} send={send} onEditWorldPanel={id => setWorldPanelId(id)}
+            <Inspector snapshot={snapshot} send={send}
               onOpenTrack={openTrackByName} showEnvironment={!seqMode} />
           </div>
         </div>
@@ -275,15 +273,6 @@ export default function App() {
           send={send}
           onPickFolder={() => ipcDialog("export_app")}
           onClose={() => setShowApkExport(false)}
-        />
-      )}
-      {worldPanelId !== null && (
-        <WorldPanelCanvasOverlay
-          panelId={worldPanelId}
-          snapshot={snapshot}
-          send={send}
-          onPickAsset={() => ipcDialog("pick_texture")}
-          onClose={() => setWorldPanelId(null)}
         />
       )}
     </>

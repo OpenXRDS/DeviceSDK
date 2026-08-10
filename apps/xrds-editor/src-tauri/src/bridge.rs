@@ -143,17 +143,11 @@ pub enum EditorCommand {
     SetGravityScale { id: u64, value: f32 },
     SetMass         { id: u64, value: f32 },
 
-    // --- World Panel ---
-    SetWorldPanelParams { id: u64, size: [f32; 2], color: [f32; 4], corner_radius: f32, opacity: f32 },
-    /// kind: "Label" | "Button" | "Image" | "Slider" | "Toggle" — appends a default widget.
-    AddWorldPanelWidget    { id: u64, kind: String },
-    RemoveWorldPanelWidget { id: u64, index: usize },
-    /// Reorder a widget within the panel's list by ±1.
-    MoveWorldPanelWidget   { id: u64, index: usize, delta: i32 },
-    SetWorldPanelWidget    { id: u64, index: usize, widget: WorldWidgetDto },
-    /// Replace the whole widget list at once (used by the panel editor's Cancel/revert).
-    SetWorldPanelWidgets   { id: u64, widgets: Vec<WorldWidgetDto> },
-    SetWorldPanelLayout    { id: u64, layout: WorldLayoutDto },
+    // The 7 World Panel commands lived here (SetWorldPanelParams,
+    // Add/Remove/MoveWorldPanelWidget, SetWorldPanelWidget(s),
+    // SetWorldPanelLayout). Retired with `XrdsSceneWorldPanel`: inline widgets
+    // carried no triggers, so every button on one was permanently dead. The
+    // panel-template commands above are the live replacement.
 
     // --- Player / PlayerAnchor / SpawnZone ---
     SetPlayerAnchorFov      { id: u64, fov_deg: f32 },
@@ -316,7 +310,7 @@ pub enum EditorCommand {
 ///
 /// **If you change a DTO and do not bump this, you have removed the only thing
 /// that would have told anyone.**
-pub const BRIDGE_VERSION: u32 = 15;
+pub const BRIDGE_VERSION: u32 = 16;
 
 /// State snapshot emitted to the webview after each frame's update.
 /// Grow this incrementally — add fields as each phase is implemented.
@@ -505,10 +499,6 @@ pub enum NodePayloadDto {
     /// is what lets two anchors share one template at different distances.
     PlayerAnchor  { fov_deg: f32, is_initial: bool, panel_template_id: Option<u64>, panel_depth: f32, exposure: Option<f32> },
     PlayerSpawnZone { size: [f32; 3], player_node_id: Option<u64> },
-    WorldPanel {
-        size: [f32; 2], color: [f32; 4], corner_radius: f32, opacity: f32,
-        layout: WorldLayoutDto, widgets: Vec<WorldWidgetDto>,
-    },
     /// A scene-placed instance of a panel template — the counterpart to a
     /// PlayerAnchor's head-locked link.
     ///

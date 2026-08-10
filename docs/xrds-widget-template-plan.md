@@ -696,18 +696,44 @@ than a half-migration.
       author's node.
 - [x] `BRIDGE_VERSION` 9 → 10.
 
-#### A4b-2b — retire `XrdsSceneWorldPanel`
+#### A4b-2b — retire `XrdsSceneWorldPanel` — landed
 
-Separate because it is not a deletion but a redesign, and it reaches further than
-the checklist implied. `XrdsSceneWorldPanel` holds background + size + layout +
-inline `widgets` — which is, field for field, an `XrdsPanelTemplate` fused to its
-own attachment. The unified model already splits those into `XrdsPanelTemplate`
-plus `XrdsSceneNodePayload::Panel`, so the payload is not *missing* a
-`template_id`, it is **wholly superseded**.
+`XrdsSceneWorldPanel` held background + size + layout + inline `widgets` — field
+for field an `XrdsPanelTemplate` fused to its own attachment. The unified model
+already splits those into `XrdsPanelTemplate` + `XrdsSceneNodePayload::Panel`, so
+the payload was not *missing* a `template_id`, it was **wholly superseded**.
 
-- [ ] Convert `WorldPanel` nodes to `Panel` instances + a generated template.
-- [ ] Touches glTF export, `world_ui` tests, and `WorldPanelCanvasOverlay` —
-      the reason this is not folded into A4b-1.
+Planned as a migration ("convert WorldPanel nodes to Panel instances + a generated
+template"). **No migration was needed**: the user confirmed no scene uses it, which
+removed the only reason to keep the payload loadable. Straight deletion instead.
+
+- [x] `XrdsSceneWorldPanel`, `XrdsSceneNodePayload::WorldPanel`,
+      `XrdsSceneRuntimeComponent::WorldPanel` and both runtime spawn arms.
+- [x] The 7 editor commands, `NodePayloadDto::WorldPanel`, `WorldPanelSection`,
+      `WorldPanelCanvasOverlay`, and App/Inspector's `onEditWorldPanel` wiring.
+- [x] `world_panel_gizmo_system` — it drew a wireframe rect because that payload
+      had no mesh to select against. A `Panel` node needs no replacement: its
+      backdrop is a real mesh, so `update_selection_outline` already outlines it
+      through the same generic path every primitive uses.
+- [x] `crates/xrds-scene-graph/src/tests/world_ui.rs` deleted whole.
+- [x] `BRIDGE_VERSION` 15 → 16.
+
+**Kept, deliberately** — the naming collision makes these easy to delete by
+mistake. `xrds_components::XrdsWorldPanel` (runtime component),
+`spawn_world_panel_descriptor` and `registry.rs`'s registration back the *scripting*
+API (`XrdsAPI::spawn_world_panel`), which is a separate live feature.
+`XrdsSceneWorldLayout` and `XrdsSceneWorldWidget` are `XrdsPanelTemplate::layout`
+and `XrdsPanelElement::kind` — the replacement's own vocabulary.
+`spawn_world_widget_from_scene` looked orphaned and is not: `spawn_panel_element_in_world`
+calls it, which is the live element path.
+
+Two things this exposed, both fixed here:
+
+- **`HoverEnter`/`HoverExit` availability** pointed at `WorldPanel`, the only
+  payload that used to get a pointer surface. It now points at `Panel`, which
+  qualifies for the same reason.
+- **`Panel` had no `KIND_ICON` entry**, so a placed panel showed no icon in the
+  hierarchy tree. `WorldPanel`'s icon moved over rather than being lost.
 
 ### A2a — the trigger mechanism — landed
 

@@ -15,8 +15,8 @@
 //! instances a template, not to the template.
 //!
 //! This module started out additive, running alongside the old vocabulary until
-//! the new one was validated. `XrdsHudTemplate` is now gone and this replaces it
-//! (§A4b-1). `XrdsSceneWorldPanel::widgets` is the last holdout — see §A4b-2.
+//! the new one was validated. Both predecessors are now gone and this replaces
+//! them outright: `XrdsHudTemplate` (§A4b-1) and `XrdsSceneWorldPanel` (§A4b-2).
 
 use super::*;
 

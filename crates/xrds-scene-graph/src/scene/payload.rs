@@ -24,7 +24,6 @@ pub enum XrdsSceneNodePayload {
     Text(XrdsSceneText),
     ExtrudedText(XrdsSceneExtrudedText),
     PlayerSpawnZone(XrdsScenePlayerSpawnZone),
-    WorldPanel(XrdsSceneWorldPanel),
     /// An instance of a reusable [`XrdsPanelTemplate`], placed in the scene by
     /// this node's own transform.
     ///
@@ -132,7 +131,6 @@ impl XrdsSceneNodePayload {
             Self::Text(_)            => XrdsGltfExportClass::NodeOnly,
             Self::ExtrudedText(_)    => XrdsGltfExportClass::NodeOnly,
             Self::PlayerSpawnZone(_) => XrdsGltfExportClass::NodeOnly,
-            Self::WorldPanel(_)      => XrdsGltfExportClass::NodeOnly,
             Self::Panel(_)           => XrdsGltfExportClass::NodeOnly,
         }
     }
@@ -1329,7 +1327,7 @@ impl Default for XrdsSceneExtrudedText {
 
 // ── World-space UI (Phase 5) ──────────────────────────────────────────────────
 
-/// Serialisable layout policy for [`XrdsSceneWorldPanel`].
+/// Serialisable layout policy for an [`XrdsPanelTemplate`](crate::XrdsPanelTemplate).
 ///
 /// Mirrors [`xrds_components::XrdsWorldLayout`] but is serde-compatible for document storage.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1478,7 +1476,11 @@ impl Default for XrdsSceneWorldToggle {
     }
 }
 
-/// Child widget of a [`XrdsSceneWorldPanel`].
+/// What kind of thing an [`XrdsPanelElement`](crate::XrdsPanelElement) is.
+///
+/// Named "world widget" for historical reasons — it began as the child-widget
+/// vocabulary of the retired `XrdsSceneWorldPanel`, and is now the element
+/// vocabulary of `XrdsPanelTemplate`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum XrdsSceneWorldWidget {
     Label(XrdsSceneWorldLabel),
@@ -1488,45 +1490,19 @@ pub enum XrdsSceneWorldWidget {
     Toggle(XrdsSceneWorldToggle),
 }
 
-fn is_zero(v: &f32) -> bool { v.abs() < 1e-9 }
-
 /// Matches the depth the retired `XrdsHudTemplate` defaulted to, so a HUD that
 /// became a panel template did not silently move.
 fn default_panel_depth() -> f32 { 0.5 }
 
-/// Authored world-space UI panel with optional child widgets and layout.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct XrdsSceneWorldPanel {
-    /// Panel dimensions [width, height] in metres.
-    pub size: [f32; 2],
-    /// Background RGBA in 0–1 range.
-    pub color: [f32; 4],
-    /// Reserved for future rounded-corner shader; 0.0 = sharp corners.
-    #[serde(default, skip_serializing_if = "is_zero")]
-    pub corner_radius: f32,
-    /// Overall opacity multiplier (1.0 = fully opaque).
-    #[serde(default = "default_one", skip_serializing_if = "is_one")]
-    pub opacity: f32,
-    /// Optional auto-layout applied to child widgets.
-    #[serde(default, skip_serializing_if = "XrdsSceneWorldLayout::is_none")]
-    pub layout: XrdsSceneWorldLayout,
-    /// Ordered list of child widgets.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub widgets: Vec<XrdsSceneWorldWidget>,
-}
-
-impl Default for XrdsSceneWorldPanel {
-    fn default() -> Self {
-        Self {
-            size: [0.4, 0.3],
-            color: [0.08, 0.08, 0.08, 0.92],
-            corner_radius: 0.0,
-            opacity: 1.0,
-            layout: XrdsSceneWorldLayout::None,
-            widgets: Vec::new(),
-        }
-    }
-}
+// `XrdsSceneWorldPanel` lived here: an authored world-space panel with inline
+// widgets and layout, both fields directly on the node. Retired because inline
+// widgets carry no `triggers` — every button on one was permanently dead, unlike
+// an `XrdsPanelTemplate` element wired through a `Panel` node's own instance. No
+// tracked document ever used it. See docs/xrds-widget-template-plan.md §A4b-2.
+//
+// `XrdsSceneWorldLayout` (below) and `XrdsSceneWorldWidget` are unrelated and
+// stay: `XrdsPanelTemplate::layout` and `XrdsPanelElement::kind` are the live
+// replacement's own use of exactly these types.
 
 impl From<&XrdsAudioClip> for XrdsSceneAudioClip {
     fn from(value: &XrdsAudioClip) -> Self {

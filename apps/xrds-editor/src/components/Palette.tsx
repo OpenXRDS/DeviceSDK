@@ -39,7 +39,6 @@ const PALETTE_META: Record<string, ItemMeta> = {
   HudText:          { label: "HUD Text",       tip: "Head-locked text element. For a full head-locked layout, build a panel template in the Panels workspace and link it on a Player Anchor instead." },
   // XR
   Panel:            { label: "Panel",          tip: "Places a panel template in the scene. Its buttons, sliders and toggles can fire Tracks. Build the template in the Panels workspace; the same template can also be head-locked to a Player Anchor." },
-  WorldPanel:       { label: "World Panel",    tip: "Legacy: a panel with widgets stored inline. Its buttons CANNOT fire triggers — inline widgets carry no bindings. Use Panel instead." },
 };
 
 const PRIMITIVE_GROUPS = [
@@ -48,7 +47,11 @@ const PRIMITIVE_GROUPS = [
   { label: "Scene",    items: ["Camera","AudioClip","InteractionZone"] },
   { label: "Player",   items: ["PlayerSpawn","PlayerSpawnZone","Player","PlayerAnchor"] },
   { label: "Text",     items: ["Text","ExtrudedText","Billboard","HudText"] },
-  { label: "XR",       items: ["Panel", "WorldPanel"] },
+  // `WorldPanel` was offered here once, then removed from the palette (its
+  // inline widgets carried no triggers, so every button on one was dead), and is
+  // now retired from the schema entirely — no tracked scene ever used it.
+  // `Panel` is the working replacement.
+  { label: "XR",       items: ["Panel"] },
 ];
 
 const DEFAULT_HEIGHT = 148;

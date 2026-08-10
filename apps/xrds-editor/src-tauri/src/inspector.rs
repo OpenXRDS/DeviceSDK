@@ -143,16 +143,6 @@ fn build_payload_dto(
         XrdsSceneNodePayload::PlayerSpawnZone(z) =>
             NodePayloadDto::PlayerSpawnZone { size: z.size, player_node_id: z.player_node_id },
 
-        XrdsSceneNodePayload::WorldPanel(p) =>
-            NodePayloadDto::WorldPanel {
-                size: p.size,
-                color: p.color,
-                corner_radius: p.corner_radius,
-                opacity: p.opacity,
-                layout: world_layout_dto(&p.layout),
-                widgets: p.widgets.iter().map(world_widget_dto).collect(),
-            },
-
         // Only the id travels: the frontend already has `panel_library` in the
         // snapshot, so it resolves the name itself rather than carrying a second
         // copy that could go stale after a rename.
@@ -189,7 +179,6 @@ fn payload_kind_name(p: &XrdsSceneNodePayload) -> &'static str {
         XrdsSceneNodePayload::PlayerSpawnZone(_) => "PlayerSpawnZone",
         XrdsSceneNodePayload::Player(_)          => "Player",
         XrdsSceneNodePayload::PlayerAnchor(_)    => "PlayerAnchor",
-        XrdsSceneNodePayload::WorldPanel(_)      => "WorldPanel",
         XrdsSceneNodePayload::Panel(_)           => "Panel",
     }
 }
@@ -590,138 +579,12 @@ pub fn apply_inspector_command(
             true // ECS XrdsAnchorExposure component must be updated
         }
 
-        // ── World Panel ──────────────────────────────────────────────────────
-        EditorCommand::SetWorldPanelParams { id, size, color, corner_radius, opacity } => {
-            let id = XrdsSceneNodeId(*id);
-            let size = *size;
-            let color = *color;
-            let corner_radius = *corner_radius;
-            let opacity = *opacity;
-            match session.0.edit(|doc| {
-                if let Some(node) = doc.node_mut(id) {
-                    if let XrdsSceneNodePayload::WorldPanel(ref mut p) = node.payload {
-                        p.size = size;
-                        p.color = color;
-                        p.corner_radius = corner_radius;
-                        p.opacity = opacity;
-                    }
-                }
-            }) {
-                Ok(_) => {}
-                Err(e) => error!("[inspector] SetWorldPanelParams failed: {:?}", e),
-            }
-            true
-        }
-
-        EditorCommand::AddWorldPanelWidget { id, kind } => {
-            let id = XrdsSceneNodeId(*id);
-            let Some(widget) = default_widget_for_kind(kind) else {
-                error!("[inspector] AddWorldPanelWidget: unknown kind {kind:?}");
-                return true;
-            };
-            match session.0.edit(|doc| {
-                if let Some(node) = doc.node_mut(id) {
-                    if let XrdsSceneNodePayload::WorldPanel(ref mut p) = node.payload {
-                        p.widgets.push(widget);
-                    }
-                }
-            }) {
-                Ok(_) => {}
-                Err(e) => error!("[inspector] AddWorldPanelWidget failed: {:?}", e),
-            }
-            true
-        }
-
-        EditorCommand::RemoveWorldPanelWidget { id, index } => {
-            let id = XrdsSceneNodeId(*id);
-            let index = *index;
-            match session.0.edit(|doc| {
-                if let Some(node) = doc.node_mut(id) {
-                    if let XrdsSceneNodePayload::WorldPanel(ref mut p) = node.payload {
-                        if index < p.widgets.len() {
-                            p.widgets.remove(index);
-                        }
-                    }
-                }
-            }) {
-                Ok(_) => {}
-                Err(e) => error!("[inspector] RemoveWorldPanelWidget failed: {:?}", e),
-            }
-            true
-        }
-
-        EditorCommand::MoveWorldPanelWidget { id, index, delta } => {
-            let id = XrdsSceneNodeId(*id);
-            let index = *index;
-            let delta = *delta;
-            match session.0.edit(|doc| {
-                if let Some(node) = doc.node_mut(id) {
-                    if let XrdsSceneNodePayload::WorldPanel(ref mut p) = node.payload {
-                        let len = p.widgets.len() as i64;
-                        let target = index as i64 + delta as i64;
-                        if (index as i64) < len && target >= 0 && target < len {
-                            p.widgets.swap(index, target as usize);
-                        }
-                    }
-                }
-            }) {
-                Ok(_) => {}
-                Err(e) => error!("[inspector] MoveWorldPanelWidget failed: {:?}", e),
-            }
-            true
-        }
-
-        EditorCommand::SetWorldPanelWidget { id, index, widget } => {
-            let id = XrdsSceneNodeId(*id);
-            let index = *index;
-            let widget = world_widget_from_dto(widget);
-            match session.0.edit(|doc| {
-                if let Some(node) = doc.node_mut(id) {
-                    if let XrdsSceneNodePayload::WorldPanel(ref mut p) = node.payload {
-                        if let Some(slot) = p.widgets.get_mut(index) {
-                            *slot = widget;
-                        }
-                    }
-                }
-            }) {
-                Ok(_) => {}
-                Err(e) => error!("[inspector] SetWorldPanelWidget failed: {:?}", e),
-            }
-            true
-        }
-
-        EditorCommand::SetWorldPanelWidgets { id, widgets } => {
-            let id = XrdsSceneNodeId(*id);
-            let widgets: Vec<XrdsSceneWorldWidget> =
-                widgets.iter().map(world_widget_from_dto).collect();
-            match session.0.edit(|doc| {
-                if let Some(node) = doc.node_mut(id) {
-                    if let XrdsSceneNodePayload::WorldPanel(ref mut p) = node.payload {
-                        p.widgets = widgets;
-                    }
-                }
-            }) {
-                Ok(_) => {}
-                Err(e) => error!("[inspector] SetWorldPanelWidgets failed: {:?}", e),
-            }
-            true
-        }
-
-        EditorCommand::SetWorldPanelLayout { id, layout } => {
-            let id = XrdsSceneNodeId(*id);
-            let layout = world_layout_from_dto(layout);
-            match session.0.edit(|doc| {
-                if let Some(node) = doc.node_mut(id) {
-                    if let XrdsSceneNodePayload::WorldPanel(ref mut p) = node.payload {
-                        p.layout = layout;
-                    }
-                }
-            }) {
-                Ok(_) => {}
-                Err(e) => error!("[inspector] SetWorldPanelLayout failed: {:?}", e),
-            }
-            true
-        }
+        // The 7 World Panel commands lived here (SetWorldPanelParams,
+        // Add/Remove/MoveWorldPanelWidget, SetWorldPanelWidget(s),
+        // SetWorldPanelLayout). Retired with `XrdsSceneWorldPanel`: its widgets
+        // carried no triggers, so every button on one was permanently dead.
+        // A panel template's own commands (`SetPanelTemplateParams`,
+        // `SetPanelElementWidget`, …) cover the live replacement.
 
         // ── GLTF animation ───────────────────────────────────────────────────
         EditorCommand::PlayGltfAnimation { id, clip_index, speed, .. } => {

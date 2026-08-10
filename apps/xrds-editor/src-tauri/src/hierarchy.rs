@@ -54,7 +54,6 @@ fn payload_kind(payload: &XrdsSceneNodePayload) -> &'static str {
         XrdsSceneNodePayload::PlayerSpawnZone(_) => "PlayerSpawnZone",
         XrdsSceneNodePayload::Player(_)          => "Player",
         XrdsSceneNodePayload::PlayerAnchor(_)    => "PlayerAnchor",
-        XrdsSceneNodePayload::WorldPanel(_)      => "WorldPanel",
         XrdsSceneNodePayload::Panel(_)           => "Panel",
     }
 }

@@ -5,7 +5,7 @@ use xrds_scene_graph::{
     XrdsSceneHudText, XrdsSceneInteractionZone, XrdsSceneNode, XrdsSceneNodeId,
     XrdsSceneNodePayload, XrdsScenePlane3D, XrdsScenePlayer, XrdsScenePlayerAnchor,
     XrdsScenePlayerSpawn, XrdsScenePlayerSpawnZone, XrdsScenePointLight, XrdsSceneSpotLight,
-    XrdsSceneSphere, XrdsSceneTetrahedron, XrdsSceneText, XrdsSceneTransform, XrdsSceneWorldPanel,
+    XrdsSceneSphere, XrdsSceneTetrahedron, XrdsSceneText, XrdsSceneTransform,
 };
 use bevy::log::error;
 use crate::bridge::{AssetCatalogEntry, EditorCommand};
@@ -183,7 +183,8 @@ fn build_primitive_node(
         "PlayerSpawnZone" => XrdsSceneNodePayload::PlayerSpawnZone(XrdsScenePlayerSpawnZone::default()),
         "Player"          => XrdsSceneNodePayload::Player(XrdsScenePlayer::default()),
         "PlayerAnchor"    => XrdsSceneNodePayload::PlayerAnchor(XrdsScenePlayerAnchor::default()),
-        "WorldPanel"      => XrdsSceneNodePayload::WorldPanel(XrdsSceneWorldPanel::default()),
+        // "WorldPanel" was here. Retired: its widgets carried no triggers, so
+        // every button on one was permanently dead, and no tracked scene used it.
         // Scene-placed half of "attachment is the only difference" — the same
         // template a PlayerAnchor head-locks. Takes the first template in the
         // library; the Inspector picks which one afterwards. `?` rather than a
@@ -266,9 +267,8 @@ pub fn default_transform_for_payload(
         XrdsSceneNodePayload::Panel(_) if is_under_player_anchor(doc, parent_id) => {
             [0.0, 0.0, -0.5]
         }
-        // Otherwise panels default to eye height, slightly in front. Same
-        // placement for both kinds so migrating a WorldPanel does not move it.
-        XrdsSceneNodePayload::WorldPanel(_) | XrdsSceneNodePayload::Panel(_) => [0.0, 1.5, -1.0],
+        // Otherwise panels default to eye height, slightly in front.
+        XrdsSceneNodePayload::Panel(_) => [0.0, 1.5, -1.0],
         _ => [0.0, 0.0, 0.0],
     };
 

@@ -420,16 +420,15 @@ export function isHandFilterVisible(kind: string): boolean {
  * hand-written hint block in `Inspector.tsx`) that could drift apart.
  *
  * **`ButtonPress`/`ButtonRelease`/`SliderChange`/`ToggleChange` are never
- * available, on any node.** Confirmed against the runtime dispatch code: those
- * events target the individual widget's own ephemeral runtime `Entity`, not
- * any document node's `XrdsId`. `consume_triggers` looks for bindings on that
- * exact entity, but widgets are authored as plain data inside a `WorldPanel`'s
- * `widgets` array, never as their own importable node — so no
- * document-authored binding can ever receive them. A real, pre-existing gap;
- * this only decides what the picker offers.
+ * available on a *node*, only on a panel element** — see the `case` below and
+ * `elementUnavailableReasonFor` for the element-side rule. Those events target
+ * an element's own runtime entity, and a node is not an element.
  *
- * `HoverEnter`/`HoverExit` are different: they resolve via `self.panel_id` (a
- * real `XrdsId`), so they do work, scoped to the `WorldPanel` node itself. */
+ * `HoverEnter`/`HoverExit` resolve via `self.panel_id` (a real `XrdsId`), so they
+ * work on any node whose payload actually gets a pointer surface — currently
+ * `Panel`, whose backdrop makes it a pointer target (`apply_panel_backdrop_in_world`
+ * on the runtime side). `WorldPanel` used to be the only such payload; it is
+ * retired, and `Panel` is now the one kind that qualifies. */
 export function unavailableReasonFor(kind: string, node: NodeInspector): string | null {
   switch (kind) {
     case "ZoneEnter":
@@ -443,7 +442,7 @@ export function unavailableReasonFor(kind: string, node: NodeInspector): string 
       return node.grabbable ? null : "needs \"Grabbable\" checked";
     case "HoverEnter":
     case "HoverExit":
-      return node.payload.type === "WorldPanel" ? null : "needs a World Panel";
+      return node.payload.type === "Panel" ? null : "needs a Panel";
     case "ButtonPress":
     case "ButtonRelease":
     case "SliderChange":

@@ -57,6 +57,24 @@ export interface PanelElementDto {
   emittable_triggers: string[];
 }
 
+/** One element of a panel template, reduced to what a picker needs. */
+export interface PanelElementRefDto {
+  name: string;
+  /** "Label" | "Button" | "Image" | "Slider" | "Toggle". */
+  kind: string;
+}
+
+/** A placed Panel node with the elements its template defines.
+ *
+ *  Thinner than {@link PanelInstanceElementDto} on purpose — no wiring, no
+ *  emittable set. Those are per-selection detail; computing them for every panel
+ *  every frame would be work nothing reads. */
+export interface PanelInstanceSummaryDto {
+  node_id: number;
+  node_name: string;
+  elements: PanelElementRefDto[];
+}
+
 /** One element of a *placed* Panel node: the template's element joined with this
  *  instance's wiring.
  *
@@ -64,20 +82,6 @@ export interface PanelElementDto {
  *  and so an orphaned binding (a key whose element the template no longer has)
  *  stays visible instead of silently vanishing from the list while remaining in
  *  the saved file. */
-export interface PanelElementRefDto {
-  name: string;
-  /** "Label" | "Button" | "Image" | "Slider" | "Toggle". */
-  kind: string;
-}
-
-/** A placed Panel node reduced to what a picker needs. Thinner than
- *  { PanelInstanceElementDto} on purpose — no wiring, no emittable set. */
-export interface PanelInstanceSummaryDto {
-  node_id: number;
-  node_name: string;
-  elements: PanelElementRefDto[];
-}
-
 export interface PanelInstanceElementDto {
   name: string;
   /** "Label" | "Button" | "Image" | "Slider" | "Toggle", or "missing" when
@@ -151,7 +155,9 @@ export type NodePayload =
   // distances — the limitation that retired `XrdsHudTemplate::depth`.
   | { type: "PlayerAnchor"; fov_deg: number; is_initial: boolean; panel_template_id: number | null; panel_depth: number; exposure: number | null }
   | { type: "PlayerSpawnZone"; size: [number, number, number]; player_node_id: number | null }
-  | { type: "WorldPanel"; size: [number, number]; color: [number,number,number,number]; corner_radius: number; opacity: number; layout: WorldLayout; widgets: WorldWidget[] }
+  // `WorldPanel` lived here: a panel with widgets stored inline, and no triggers
+  // field to wire them — every button on one was permanently dead.
+  //
   // A scene-placed instance of a panel template — the counterpart to an anchor's
   // head-locked link. Only the id travels; the name is resolved from
   // `panel_library` so a rename cannot leave a stale copy behind.
@@ -410,7 +416,7 @@ export interface ApkPrerequisite {
  *  replaced wholesale by the first real snapshot.
  *
  *  Bump this together with the Rust constant whenever a DTO changes. */
-export const BRIDGE_VERSION = 15;
+export const BRIDGE_VERSION = 16;
 
 export interface EditorSnapshot {
   /** See {@link BRIDGE_VERSION}. `0` means a build predating the check. */
@@ -569,13 +575,8 @@ export type EditorCommand =
   | { type: "SetPlayerAnchorExposure"; payload: { id: number; ev100: number | null } }
   | { type: "SetSpawnZoneSize";        payload: { id: number; size: [number, number, number] } }
   | { type: "SetSpawnZonePlayer";      payload: { id: number; player_node_id: number | null } }
-  | { type: "SetWorldPanelParams";     payload: { id: number; size: [number, number]; color: [number,number,number,number]; corner_radius: number; opacity: number } }
-  | { type: "AddWorldPanelWidget";     payload: { id: number; kind: string } }
-  | { type: "RemoveWorldPanelWidget";  payload: { id: number; index: number } }
-  | { type: "MoveWorldPanelWidget";    payload: { id: number; index: number; delta: number } }
-  | { type: "SetWorldPanelWidget";     payload: { id: number; index: number; widget: WorldWidget } }
-  | { type: "SetWorldPanelWidgets";    payload: { id: number; widgets: WorldWidget[] } }
-  | { type: "SetWorldPanelLayout";     payload: { id: number; layout: WorldLayout } }
+  // The 7 WorldPanel commands lived here. Retired with the payload: inline
+  // widgets carried no triggers, so every button on one was permanently dead.
   // --- Panel template library (unified model) ---
   // Elements are addressed by **name**, never index.
   | { type: "CreatePanelTemplate";    payload: { name: string } }
@@ -704,6 +705,8 @@ export const KIND_ICON: Record<string, string> = {
   AmbientLight: "🌤", GltfAsset: "📦", Text: "T", ExtrudedText: "E³", Billboard: "📋",
   HudText: "HUD", AudioClip: "♪", InteractionZone: "⬡", PlayerSpawn: "🧍", PlayerSpawnZone: "◻",
   Player: "🎮", PlayerAnchor: "📍",
-  WorldPanel: "🪟",
+  // `Panel` had no entry at all before this — a placed panel showed no icon in
+  // the hierarchy tree. `WorldPanel`'s icon moves here rather than being lost.
+  Panel: "🪟",
   Empty: "○",
 };
