@@ -4,7 +4,7 @@ mod bridge;
 mod editor_state;
 mod environment;
 mod hierarchy;
-mod hud_library;
+mod panel_library;
 mod inspector;
 mod io;
 mod keyboard_shortcuts;

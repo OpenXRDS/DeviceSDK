@@ -8,7 +8,6 @@ use crate::environment::{apply_environment_command, build_environment_dto};
 use crate::hierarchy::{apply_hierarchy_command, build_hierarchy};
 use crate::inspector::{apply_inspector_command, build_node_inspector};
 use crate::io::apply_io_command;
-use crate::hud_library::{apply_hud_library_command, build_hud_library_dto};
 use crate::palette::{apply_palette_command, build_asset_catalog};
 use crate::toolbar::apply_toolbar_command;
 use crate::trigger_action::{
@@ -46,7 +45,7 @@ pub fn drain_editor_commands_system(
             apply_hierarchy_command(cmd, &mut session, &mut state) ||
             apply_palette_command(cmd, &mut session, &mut state) ||
             apply_inspector_command(cmd, &mut session, &mut state) ||
-            apply_hud_library_command(cmd, &mut session, &mut state) ||
+            crate::panel_library::apply_panel_library_command(cmd, &mut session, &mut state) ||
             apply_trigger_action_command(cmd, &mut session, &mut state) ||
             apply_io_command(cmd, &mut session, &mut state);
         let env_changed = apply_environment_command(cmd, &mut session, &mut state);
@@ -132,7 +131,9 @@ pub fn broadcast_editor_snapshot_system(
         active_camera_id: state.active_camera_id.map(|n| n.0),
         player_anchors: build_player_anchor_list(doc),
         active_player_anchor_id: state.active_player_anchor_id.map(|id| id.0),
-        hud_library: build_hud_library_dto(doc),
+        panel_library: crate::panel_library::build_panel_library_dto(doc),
+        panel_instances: crate::panel_library::build_panel_instances_dto(doc),
+        panel_diagnostics: crate::panel_library::build_panel_diagnostics_dto(doc),
         stereo_preview_active: stereo.enabled,
         apk_prerequisites: state.apk_prerequisites.take(),
         is_exporting_apk: state.apk_export_job.is_some(),
@@ -164,7 +165,7 @@ fn is_structural_command(cmd: &EditorCommand) -> bool {
         RenameNode{..} | CopySelection | CutSelection | PasteClipboard |
         // File I/O
         NewScene | OpenScene{..} | SaveScene | SaveSceneAs{..} |
-        ImportAsset{..} | ExportGlb{..} | ExportApplication{..} |
+        ImportAsset{..} | ExportApplication{..} |
         RemoveAsset{..} | CheckApkPrerequisites | ExportApk{..} |
         // History
         Undo | Redo |
@@ -177,15 +178,22 @@ fn is_structural_command(cmd: &EditorCommand) -> bool {
         SetWorldPanelParams{..} | AddWorldPanelWidget{..} | RemoveWorldPanelWidget{..} |
         MoveWorldPanelWidget{..} | SetWorldPanelWidget{..} | SetWorldPanelWidgets{..} |
         SetWorldPanelLayout{..} |
-        // HUD library mutations
-        CreateHudTemplate{..} | DeleteHudTemplate{..} | RenameHudTemplate{..} |
-        SetHudTemplateDepth{..} | AddHudItem{..} | RemoveHudItem{..} |
-        RenameHudItem{..} | SetHudItemPosition{..} | SetHudItemText{..} |
-        SetHudItemFontSize{..} | SetHudItemColor{..} | LinkHudTemplate{..} |
+        // Panel template library — replaces the 12 HUD-library commands. These
+        // were missing from this list, so panel authoring logged at `trace!`
+        // while every comparable edit logged at `info!`.
+        CreatePanelTemplate{..} | DeletePanelTemplate{..} | RenamePanelTemplate{..} |
+        SetPanelTemplateParams{..} | AddPanelElement{..} | RemovePanelElement{..} |
+        RenamePanelElement{..} | SetPanelElementWidget{..} |
+        AddPanelNodeTrigger{..} | RemovePanelNodeTrigger{..} |
+        SetPanelNodeTriggerKind{..} | SetPanelNodeTriggerTrack{..} |
+        SetPanelNodeTriggerHand{..} | SetPanelNodeTriggerDisabled{..} |
+        SetPanelNodeTriggerEffect{..} | SetTriggerBindingEffect{..} |
+        LinkPanelTemplate{..} | SetPanelInstanceTemplate{..} |
         // Tracks / bindings / watchers
         CreateTrack{..} | DeleteTrack{..} | RenameTrack{..} |
         SetTrackLooping{..} | SetTrackDuration{..} |
-        AddTrackAsset{..} | RemoveTrackAsset{..} | SetTrackAssetTarget{..} |
+        AddTrackAsset{..} | AddTrackElementAsset{..} |
+        RemoveTrackAsset{..} | SetTrackAssetTarget{..} |
         AddTrackKey{..} | RemoveTrackKey{..} | SetTrackKey{..} |
         PreviewPlayTrack{..} | PreviewPauseTrack{..} | PreviewStopTrack |
         AddTriggerBinding{..} | RemoveTriggerBinding{..} |

@@ -135,7 +135,8 @@ fn build_payload_dto(
             NodePayloadDto::PlayerAnchor {
                 fov_deg: a.fov_deg,
                 is_initial: a.is_initial,
-                hud_template_id: a.hud_template_id.map(|id| id.0),
+                panel_template_id: a.panel_template_id.map(|id| id.0),
+                panel_depth: a.panel_depth,
                 exposure: a.exposure,
             },
 
@@ -150,6 +151,15 @@ fn build_payload_dto(
                 opacity: p.opacity,
                 layout: world_layout_dto(&p.layout),
                 widgets: p.widgets.iter().map(world_widget_dto).collect(),
+            },
+
+        // Only the id travels: the frontend already has `panel_library` in the
+        // snapshot, so it resolves the name itself rather than carrying a second
+        // copy that could go stale after a rename.
+        XrdsSceneNodePayload::Panel(i) =>
+            NodePayloadDto::Panel {
+                template_id: i.template_id.0,
+                elements: crate::panel_library::build_panel_instance_elements_dto(doc, i),
             },
 
         _ => NodePayloadDto::Other { kind: payload_kind_name(payload).to_owned() },
@@ -951,7 +961,7 @@ fn set_node_material(node: &mut xrds_scene_graph::XrdsSceneNode, mat: XrdsSceneM
 // World Panel widget/layout DTO conversion
 // ---------------------------------------------------------------------------
 
-fn world_layout_dto(l: &XrdsSceneWorldLayout) -> WorldLayoutDto {
+pub(crate) fn world_layout_dto(l: &XrdsSceneWorldLayout) -> WorldLayoutDto {
     match l {
         XrdsSceneWorldLayout::None            => WorldLayoutDto::None,
         XrdsSceneWorldLayout::VStack { gap }  => WorldLayoutDto::VStack { gap: *gap },
@@ -969,7 +979,7 @@ fn world_layout_from_dto(l: &WorldLayoutDto) -> XrdsSceneWorldLayout {
     }
 }
 
-fn world_widget_dto(w: &XrdsSceneWorldWidget) -> WorldWidgetDto {
+pub(crate) fn world_widget_dto(w: &XrdsSceneWorldWidget) -> WorldWidgetDto {
     match w {
         XrdsSceneWorldWidget::Label(l) => WorldWidgetDto::Label {
             text: l.text.clone(), font_size: l.font_size, color: l.color,
@@ -998,7 +1008,7 @@ fn world_widget_dto(w: &XrdsSceneWorldWidget) -> WorldWidgetDto {
     }
 }
 
-fn world_widget_from_dto(w: &WorldWidgetDto) -> XrdsSceneWorldWidget {
+pub(crate) fn world_widget_from_dto(w: &WorldWidgetDto) -> XrdsSceneWorldWidget {
     match w {
         WorldWidgetDto::Label { text, font_size, color, local_position, layout_size } =>
             XrdsSceneWorldWidget::Label(XrdsSceneWorldLabel {

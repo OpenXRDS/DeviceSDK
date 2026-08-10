@@ -1,4 +1,4 @@
-//! Editor bridge for Track authoring. Mirrors `hud_library.rs`'s shape: a
+//! Editor bridge for Track authoring. Mirrors `panel_library.rs`'s shape: a
 //! snapshot serializer plus a command dispatcher, both operating on the exact
 //! same `XrdsSceneDocument` data the runtime consumes
 //! (`XrdsSceneDocument::tracks`, `XrdsSceneNode::triggers`/`.watchers`).
@@ -42,8 +42,13 @@ pub fn build_tracks_dto(doc: &XrdsSceneDocument) -> Vec<NamedTrackDto> {
                     // walking the hierarchy. `None` for a SelfNode/
                     // TriggerSource row, or a Node target that no longer
                     // exists — the latter is separately diagnosed.
-                    node_name: match asset.target {
-                        XrdsActionTarget::Node(id) => doc.node(id).map(|n| n.name.clone()),
+                    node_name: match &asset.target {
+                        XrdsActionTarget::Node(id) => doc.node(*id).map(|n| n.name.clone()),
+                        // "PanelName · elementName" so a row labels itself without
+                        // the frontend joining against `panel_library`.
+                        XrdsActionTarget::Element { panel, name } => doc
+                            .node(*panel)
+                            .map(|n| format!("{} · {name}", n.name)),
                         _ => None,
                     },
                     keys: asset.keys.iter().map(track_key_to_dto).collect(),
@@ -141,7 +146,7 @@ pub fn build_node_trigger_diagnostics_dto(
 /// `Some(canonical)` may differ from the input — surrounding whitespace is
 /// trimmed, so `"Door "` becomes `"Door"` and then collides loudly with an
 /// existing `"Door"` instead of shadowing it invisibly.
-fn reject_bad_name(state: &mut EditorState, raw: &str, kind: &str) -> Option<String> {
+pub(crate) fn reject_bad_name(state: &mut EditorState, raw: &str, kind: &str) -> Option<String> {
     match xrds_scene_graph::normalize_authored_name(raw) {
         Ok(canonical) => Some(canonical),
         Err(e) => {
@@ -307,6 +312,35 @@ pub fn apply_trigger_action_command(
             }) {
                 Ok(_) => {}
                 Err(e) => error!("[track] RemoveTrackAsset failed: {:?}", e),
+            }
+            true
+        }
+
+        EditorCommand::AddTrackElementAsset { track, panel, element } => {
+            let track = track.clone();
+            let target = XrdsActionTarget::Element {
+                panel: XrdsSceneNodeId(*panel),
+                name: element.clone(),
+            };
+            match session.0.edit(|doc| {
+                let Some(entry) = doc.track_mut(&track) else {
+                    error!("[track] AddTrackElementAsset: no Track named {track:?}");
+                    return;
+                };
+                // Same one-row-per-asset rule as node rows: two rows for one
+                // element would be two schedules fighting over it from inside the
+                // same Track.
+                if entry.track.assets.iter().any(|a| a.target == target) {
+                    error!(
+                        "[track] AddTrackElementAsset: {element:?} on {panel} already has a row \
+                         in {track:?}"
+                    );
+                    return;
+                }
+                entry.track.assets.push(XrdsTrackAsset { target, keys: Vec::new() });
+            }) {
+                Ok(_) => {}
+                Err(e) => error!("[track] AddTrackElementAsset failed: {:?}", e),
             }
             true
         }
@@ -497,6 +531,23 @@ pub fn apply_trigger_action_command(
             true
         }
 
+        EditorCommand::SetTriggerBindingEffect { node_id, index, effect } => {
+            let id = XrdsSceneNodeId(*node_id);
+            let index = *index;
+            let effect = effect_from_dto(effect);
+            match session.0.edit(|doc| {
+                if let Some(node) = doc.node_mut(id) {
+                    if let Some(b) = node.triggers.get_mut(index) {
+                        b.effect = effect;
+                    }
+                }
+            }) {
+                Ok(_) => {}
+                Err(e) => error!("[trigger_action] SetTriggerBindingEffect failed: {:?}", e),
+            }
+            true
+        }
+
         EditorCommand::SetTriggerBindingDisabled { node_id, index, disabled } => {
             let id = XrdsSceneNodeId(*node_id);
             let index = *index;
@@ -630,6 +681,12 @@ fn default_action_for_kind(kind: &str) -> Option<XrdsAction> {
         "ModifyHealth" => XrdsAction::ModifyHealth {
             delta: XrdsActionValue::Fixed(0.0),
         },
+        "SetElementText" => XrdsAction::SetElementText { text: String::new() },
+        "SetElementValue" => XrdsAction::SetElementValue { value: 0.0 },
+        // Defaults to *disabling*: adding this event is almost always to grey
+        // something out at a moment, and a default of `true` would look like a
+        // no-op the author has to notice and flip.
+        "SetElementEnabled" => XrdsAction::SetElementEnabled { enabled: false },
         _ => return None,
     })
 }
@@ -674,6 +731,15 @@ fn action_to_dto(a: &XrdsAction) -> XrdsActionDto {
         XrdsAction::ModifyHealth { delta } => XrdsActionDto::ModifyHealth {
             delta: action_value_to_dto(delta),
         },
+        XrdsAction::SetElementText { text } => {
+            XrdsActionDto::SetElementText { text: text.clone() }
+        }
+        XrdsAction::SetElementValue { value } => {
+            XrdsActionDto::SetElementValue { value: *value }
+        }
+        XrdsAction::SetElementEnabled { enabled } => {
+            XrdsActionDto::SetElementEnabled { enabled: *enabled }
+        }
         XrdsAction::Unknown => XrdsActionDto::Unknown,
     }
 }
@@ -715,6 +781,15 @@ fn action_from_dto(a: &XrdsActionDto) -> XrdsAction {
         XrdsActionDto::ModifyHealth { delta } => XrdsAction::ModifyHealth {
             delta: action_value_from_dto(delta),
         },
+        XrdsActionDto::SetElementText { text } => {
+            XrdsAction::SetElementText { text: text.clone() }
+        }
+        XrdsActionDto::SetElementValue { value } => {
+            XrdsAction::SetElementValue { value: *value }
+        }
+        XrdsActionDto::SetElementEnabled { enabled } => {
+            XrdsAction::SetElementEnabled { enabled: *enabled }
+        }
         XrdsActionDto::Unknown => XrdsAction::Unknown,
     }
 }
@@ -772,6 +847,9 @@ fn action_target_to_dto(t: &XrdsActionTarget) -> ActionTargetDto {
         XrdsActionTarget::SelfNode => ActionTargetDto::SelfNode,
         XrdsActionTarget::Node(id) => ActionTargetDto::Node { id: id.0 },
         XrdsActionTarget::TriggerSource => ActionTargetDto::TriggerSource,
+        XrdsActionTarget::Element { panel, name } => {
+            ActionTargetDto::Element { panel: panel.0, name: name.clone() }
+        }
     }
 }
 
@@ -817,7 +895,7 @@ fn trigger_kind_to_dto(k: &XrdsTriggerKind) -> XrdsTriggerKindDto {
     }
 }
 
-fn trigger_kind_from_dto(k: &XrdsTriggerKindDto) -> XrdsTriggerKind {
+pub(crate) fn trigger_kind_from_dto(k: &XrdsTriggerKindDto) -> XrdsTriggerKind {
     match k {
         XrdsTriggerKindDto::ZoneEnter => XrdsTriggerKind::ZoneEnter,
         XrdsTriggerKindDto::ZoneExit => XrdsTriggerKind::ZoneExit,
@@ -843,7 +921,7 @@ fn hand_to_dto(h: Option<XrGrabHand>) -> Option<String> {
     })
 }
 
-fn hand_from_dto(h: &Option<String>) -> Option<XrGrabHand> {
+pub(crate) fn hand_from_dto(h: &Option<String>) -> Option<XrGrabHand> {
     match h.as_deref() {
         Some("Left") => Some(XrGrabHand::Left),
         Some("Right") => Some(XrGrabHand::Right),
@@ -851,9 +929,28 @@ fn hand_from_dto(h: &Option<String>) -> Option<XrGrabHand> {
     }
 }
 
+pub fn effect_to_dto(e: xrds_scene_graph::XrdsTriggerEffect) -> String {
+    match e {
+        xrds_scene_graph::XrdsTriggerEffect::Fire => "Fire",
+        xrds_scene_graph::XrdsTriggerEffect::Stop => "Stop",
+    }
+    .to_string()
+}
+
+/// Anything but "Stop" is `Fire`, so a stale or unknown value degrades to the
+/// harmless default rather than silently stopping something.
+pub fn effect_from_dto(s: &str) -> xrds_scene_graph::XrdsTriggerEffect {
+    if s == "Stop" {
+        xrds_scene_graph::XrdsTriggerEffect::Stop
+    } else {
+        xrds_scene_graph::XrdsTriggerEffect::Fire
+    }
+}
+
 fn binding_to_dto(b: &XrdsTriggerBinding) -> TriggerBindingDto {
     TriggerBindingDto {
         trigger: trigger_kind_to_dto(&b.trigger),
+        effect: effect_to_dto(b.effect),
         disabled: b.disabled,
         hand: hand_to_dto(b.hand),
         track: b.track.clone(),
@@ -920,7 +1017,7 @@ fn watcher_from_dto(w: &ThresholdWatcherDto) -> XrdsThresholdWatcher {
     }
 }
 
-fn diagnostic_to_dto(d: &XrdsSceneTriggerDiagnostic) -> TriggerDiagnosticDto {
+pub(crate) fn diagnostic_to_dto(d: &XrdsSceneTriggerDiagnostic) -> TriggerDiagnosticDto {
     TriggerDiagnosticDto {
         node_id: d.node_id.map(|id| id.0),
         severity: match d.severity {

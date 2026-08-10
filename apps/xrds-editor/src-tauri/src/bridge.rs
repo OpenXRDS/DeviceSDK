@@ -78,19 +78,55 @@ pub enum EditorCommand {
     SetVisible   { id: u64, visible: bool },
     SetGrabbable { id: u64, grabbable: bool },
     SetHudText      { id: u64, text: String, font_size: f32, color: [f32; 4], anchor: String, offset: [f32; 2] },
-    // --- HUD library ---
-    CreateHudTemplate   { name: String },
-    DeleteHudTemplate   { id: u64 },
-    RenameHudTemplate   { id: u64, name: String },
-    SetHudTemplateDepth { id: u64, depth: f32 },
-    AddHudItem          { template_id: u64 },
-    RemoveHudItem       { template_id: u64, item_id: u64 },
-    RenameHudItem       { template_id: u64, item_id: u64, name: String },
-    SetHudItemPosition  { template_id: u64, item_id: u64, position: [f32; 2] },
-    SetHudItemText      { template_id: u64, item_id: u64, text: String },
-    SetHudItemFontSize  { template_id: u64, item_id: u64, font_size: f32 },
-    SetHudItemColor     { template_id: u64, item_id: u64, color: [f32; 4] },
-    LinkHudTemplate     { anchor_id: u64, template_id: Option<u64> },
+    // The 12 HUD-library commands lived here. They are gone with
+    // `XrdsHudTemplate`: a HUD is an `XrdsPanelTemplate` head-locked to an
+    // anchor, so the panel commands below cover every one of them, and
+    // `LinkHudTemplate` became `LinkPanelTemplate`.
+    // --- Panel template library (unified model) ---
+    // Elements are addressed by **name**, never index: reordering must not
+    // silently re-point a trigger binding.
+    CreatePanelTemplate    { name: String },
+    DeletePanelTemplate    { id: u64 },
+    RenamePanelTemplate    { id: u64, name: String },
+    SetPanelTemplateParams { id: u64, size: [f32; 2], color: [f32; 4], corner_radius: f32, opacity: f32 },
+    /// kind: "Label" | "Button" | "Image" | "Slider" | "Toggle".
+    AddPanelElement        { template_id: u64, kind: String, name: String },
+    RemovePanelElement     { template_id: u64, name: String },
+    RenamePanelElement     { template_id: u64, name: String, new_name: String },
+    SetPanelElementWidget  { template_id: u64, name: String, widget: WorldWidgetDto },
+    /// Element trigger bindings, addressed by `(Panel **node** id, element name,
+    /// index)`.
+    ///
+    /// Node-scoped, not template-scoped: bindings live on the placed instance so
+    /// two instances of one template can drive two different targets. The
+    /// template-scoped versions of these six are gone — with them, an elevator
+    /// panel on three floors fired all three doors from any one button.
+    ///
+    /// The element by *name* because reordering must not re-point a binding; the
+    /// binding within one element by index, matching the node commands above,
+    /// since nothing references a binding by position.
+    AddPanelNodeTrigger    { id: u64, element: String },
+    RemovePanelNodeTrigger { id: u64, element: String, index: usize },
+    SetPanelNodeTriggerKind     { id: u64, element: String, index: usize, trigger: XrdsTriggerKindDto },
+    SetPanelNodeTriggerTrack    { id: u64, element: String, index: usize, track: Option<String> },
+    SetPanelNodeTriggerHand     { id: u64, element: String, index: usize, hand: Option<String> },
+    SetPanelNodeTriggerDisabled { id: u64, element: String, index: usize, disabled: bool },
+    /// effect: "Fire" | "Stop" — a panel button that stops a Track rather than
+    /// starting one.
+    SetPanelNodeTriggerEffect { id: u64, element: String, index: usize, effect: String },
+    /// Head-lock a panel template to a `PlayerAnchor`, or clear the link with
+    /// `template_id: None`. Successor to `LinkHudTemplate`.
+    ///
+    /// `depth` is per-link, not per-template, which is exactly what the old
+    /// `XrdsHudTemplate::depth` prevented: two anchors can now head-lock the same
+    /// template at different distances.
+    LinkPanelTemplate { anchor_id: u64, template_id: Option<u64>, depth: f32 },
+    /// Repoint a scene-placed `Panel` node at a different template.
+    ///
+    /// Not `Option<u64>` unlike `LinkPanelTemplate`: an anchor can have no panel,
+    /// but a Panel node *is* its template reference — clearing it would leave a
+    /// node that can never render. Delete the node instead.
+    SetPanelInstanceTemplate { id: u64, template_id: u64 },
     SetTextContent { id: u64, text: String, font_size: f32, color: [f32; 4], alignment: String, anchor: String, anchor_param: f32 },
     SetExtrudedText { id: u64, text: String, font_size: f32, depth: f32, color: [f32; 4], alignment: String },
     /// Color-only update for ExtrudedText — in-place via StandardMaterial, no reimport.
@@ -168,7 +204,9 @@ pub enum EditorCommand {
     SaveScene,
     SaveSceneAs { path: String },
     ImportAsset { path: String },
-    ExportGlb { path: String },
+    // `ExportGlb` removed: glTF cannot represent an XRDS scene (panels, triggers,
+    // Tracks, anchors are dropped silently). glTF *import* is unaffected, and
+    // `ExportApplication`/`ExportApk` below never depended on it.
     ExportApplication { output_dir: String },
 
     // --- Android / Quest export ---
@@ -191,6 +229,13 @@ pub enum EditorCommand {
     /// invariant `track_diagnostics` enforces, so the command layer should
     /// not be able to create the violation in the first place.
     AddTrackAsset    { track: String, node_id: u64 },
+    /// Adds a row driving one element of one placed Panel node.
+    ///
+    /// Separate from `AddTrackAsset` rather than an optional field on it: an
+    /// element target needs two values and a node target needs one, and a command
+    /// where "the second field is only meaningful sometimes" is the shape that
+    /// invites a half-filled payload.
+    AddTrackElementAsset { track: String, panel: u64, element: String },
     RemoveTrackAsset { track: String, asset_index: usize },
     /// Repoints an existing row at a different node, keeping its events.
     SetTrackAssetTarget { track: String, asset_index: usize, node_id: u64 },
@@ -227,6 +272,8 @@ pub enum EditorCommand {
     /// hand: "Left" | "Right" | null.
     SetTriggerBindingHand     { node_id: u64, index: usize, hand: Option<String> },
     SetTriggerBindingDisabled { node_id: u64, index: usize, disabled: bool },
+    /// effect: "Fire" | "Stop".
+    SetTriggerBindingEffect { node_id: u64, index: usize, effect: String },
     SetTriggerBindingTrack    { node_id: u64, index: usize, track: Option<String> },
 
     // --- Trigger-action: per-node threshold watchers ---
@@ -269,7 +316,7 @@ pub enum EditorCommand {
 ///
 /// **If you change a DTO and do not bump this, you have removed the only thing
 /// that would have told anyone.**
-pub const BRIDGE_VERSION: u32 = 5;
+pub const BRIDGE_VERSION: u32 = 15;
 
 /// State snapshot emitted to the webview after each frame's update.
 /// Grow this incrementally — add fields as each phase is implemented.
@@ -315,9 +362,18 @@ pub struct EditorSnapshot {
     pub player_anchors: Vec<PlayerAnchorNodeDto>,
     /// None = all anchors active; Some(id) = only that anchor processes anchor systems.
     pub active_player_anchor_id: Option<u64>,
-    /// HUD template library — all authored HUD layouts in this document.
+    /// Panel template library — the unified model, instanced either head-locked
+    /// by a PlayerAnchor or placed in the scene by a Panel node.
     #[serde(default)]
-    pub hud_library: Vec<HudTemplateDto>,
+    pub panel_library: Vec<PanelTemplateDto>,
+    /// Every placed Panel node and its elements -- what the Sequencer needs to
+    /// offer element rows. See [`PanelInstanceSummaryDto`].
+    #[serde(default)]
+    pub panel_instances: Vec<PanelInstanceSummaryDto>,
+    /// Authoring problems with panel templates, kept separate from
+    /// `track_diagnostics` so the panel workspace shows its own.
+    #[serde(default)]
+    pub panel_diagnostics: Vec<TriggerDiagnosticDto>,
     /// True when the side-by-side stereo preview is active.
     #[serde(default)]
     pub stereo_preview_active: bool,
@@ -444,12 +500,21 @@ pub enum NodePayloadDto {
     GltfAsset { clips: Vec<GltfClipDto> },
     HudText   { text: String, font_size: f32, color: [f32; 4], anchor: String, offset: [f32; 2] },
     Player,
-    PlayerAnchor  { fov_deg: f32, is_initial: bool, hud_template_id: Option<u64>, exposure: Option<f32> },
+    /// `panel_template_id` + `panel_depth` replace the old `hud_template_id`.
+    /// Depth is exposed because it lives on the anchor, not the template — that
+    /// is what lets two anchors share one template at different distances.
+    PlayerAnchor  { fov_deg: f32, is_initial: bool, panel_template_id: Option<u64>, panel_depth: f32, exposure: Option<f32> },
     PlayerSpawnZone { size: [f32; 3], player_node_id: Option<u64> },
     WorldPanel {
         size: [f32; 2], color: [f32; 4], corner_radius: f32, opacity: f32,
         layout: WorldLayoutDto, widgets: Vec<WorldWidgetDto>,
     },
+    /// A scene-placed instance of a panel template — the counterpart to a
+    /// PlayerAnchor's head-locked link.
+    ///
+    /// Carries only the id; size, background and elements all live on the
+    /// template, and the frontend resolves the name from `panel_library`.
+    Panel { template_id: u64, elements: Vec<PanelInstanceElementDto> },
     Other     { kind: String },
 }
 
@@ -536,22 +601,93 @@ pub struct GltfClipDto {
     pub name: String,
 }
 
+/// One element of a placed Panel node, reduced to what a picker needs.
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
-pub struct HudItemDefDto {
-    pub id: u64,
+pub struct PanelElementRefDto {
     pub name: String,
-    pub position: [f32; 2],
-    pub text: String,
-    pub font_size: f32,
-    pub color: [f32; 4],
+    /// "Label" | "Button" | "Image" | "Slider" | "Toggle".
+    pub kind: String,
 }
 
+/// Every placed `Panel` node with the elements its template defines.
+///
+/// A whole-document summary, same rationale as `all_node_bindings`: the Sequencer
+/// needs to offer *every* panel's elements as Track rows, and the snapshot
+/// otherwise only carries the selected node's payload. `hierarchy` cannot serve
+/// this — it has a node's name and kind but not its `template_id`, so it cannot
+/// say which elements a Panel node has.
+///
+/// Deliberately thinner than `PanelInstanceElementDto`: no wiring, no
+/// `emittable_triggers`. Those are per-selection detail, and computing them for
+/// every panel every frame would be work nothing reads.
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
-pub struct HudTemplateDto {
+pub struct PanelInstanceSummaryDto {
+    pub node_id: u64,
+    pub node_name: String,
+    pub elements: Vec<PanelElementRefDto>,
+}
+
+/// A reusable panel template — the unified model behind HUD panels and
+/// world-space panels, where the only difference is attachment.
+///
+/// Carries **no placement**: depth belongs to the anchor that head-locks it, and
+/// position to the node that places it in the scene. Mirrors
+/// `XrdsPanelTemplate`, which enforces the same thing.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct PanelTemplateDto {
     pub id: u64,
     pub name: String,
-    pub depth: f32,
-    pub items: Vec<HudItemDefDto>,
+    pub size: [f32; 2],
+    pub color: [f32; 4],
+    pub corner_radius: f32,
+    pub opacity: f32,
+    pub layout: WorldLayoutDto,
+    pub elements: Vec<PanelElementDto>,
+}
+
+/// One named element on a panel.
+///
+/// `widget` reuses [`WorldWidgetDto`] rather than declaring a parallel five-kind
+/// DTO, for the same reason the schema reuses `XrdsSceneWorldWidget`: a second
+/// copy would drift, and an element genuinely *is* a named widget with triggers.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct PanelElementDto {
+    /// Unique within its template — **the addressing key**. Commands take this,
+    /// never an index, so reordering cannot silently re-point a binding.
+    pub name: String,
+    pub widget: WorldWidgetDto,
+    /// Which trigger kinds this element can actually emit, resolved server-side
+    /// from `XrdsPanelElement::can_emit`.
+    ///
+    /// Sent rather than re-derived in TypeScript because the reachability rule
+    /// is a runtime fact (a Label emits nothing; `Custom` needs a node id an
+    /// element does not have), and a second copy of it would drift from the
+    /// diagnostics that use the Rust one.
+    ///
+    /// No `triggers` field: a template carries no bindings. The Panels workspace
+    /// designs panels; wiring happens on each placed node — see
+    /// [`PanelInstanceElementDto`].
+    pub emittable_triggers: Vec<String>,
+}
+
+/// One element of a placed Panel node: the template's element joined with *this
+/// instance's* wiring.
+///
+/// Joined server-side so the Inspector does not have to cross-reference
+/// `panel_library` itself — and so an orphaned binding (a key whose element the
+/// template no longer has) can be surfaced rather than silently vanishing from
+/// the list.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct PanelInstanceElementDto {
+    pub name: String,
+    /// "Label" | "Button" | "Image" | "Slider" | "Toggle", or "missing" when
+    /// `orphaned`.
+    pub kind: String,
+    pub emittable_triggers: Vec<String>,
+    pub triggers: Vec<TriggerBindingDto>,
+    /// True when this row exists only because the instance has wiring for a name
+    /// the template does not define — the shape a deleted element leaves behind.
+    pub orphaned: bool,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
@@ -613,6 +749,11 @@ pub enum XrdsActionDto {
         texture: Option<ActionTextureDto>,
     },
     ModifyHealth { delta: ActionValueDto },
+    /// Element-scoped actions. Only meaningful on an `Element` asset row -- a
+    /// node has no text, scalar or enabled state of this kind.
+    SetElementText { text: String },
+    SetElementValue { value: f32 },
+    SetElementEnabled { enabled: bool },
     Unknown,
 }
 
@@ -622,6 +763,9 @@ pub enum ActionTargetDto {
     SelfNode,
     Node { id: u64 },
     TriggerSource,
+    /// One named element on one placed Panel node. Two fields because an element
+    /// has no id of its own -- it is not a document node.
+    Element { panel: u64, name: String },
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
@@ -726,6 +870,11 @@ pub struct NodeBindingSummaryDto {
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub struct TriggerBindingDto {
     pub trigger: XrdsTriggerKindDto,
+    /// "Fire" or "Stop" — whether this binding starts or stops its Track.
+    ///
+    /// A stop button is the motivating case. Two bindings on one element, Stop
+    /// then Fire, restart a Track from the top with no conditional.
+    pub effect: String,
     pub disabled: bool,
     /// "Left" | "Right" | null.
     pub hand: Option<String>,

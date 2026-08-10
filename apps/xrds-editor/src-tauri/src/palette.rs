@@ -28,6 +28,19 @@ pub fn apply_palette_command(
                 next_id(doc)
             };
             match session.0.edit(|doc| {
+                // A `Panel` node is *nothing but* a template reference, so
+                // placing one needs a template to point at. Create a starter
+                // template when the library is empty rather than refusing the
+                // spawn: the palette entry would otherwise look broken to anyone
+                // who has not visited the Panels workspace yet.
+                if kind == "Panel" && doc.panels.is_empty() {
+                    let id = doc.next_available_panel_template_id();
+                    doc.panels.push(xrds_scene_graph::XrdsPanelTemplate {
+                        id,
+                        name: "Panel".to_string(),
+                        ..Default::default()
+                    });
+                }
                 if let Some(node) = build_primitive_node(doc, kind, parent) {
                     doc.nodes.push(node);
                 }
@@ -171,6 +184,15 @@ fn build_primitive_node(
         "Player"          => XrdsSceneNodePayload::Player(XrdsScenePlayer::default()),
         "PlayerAnchor"    => XrdsSceneNodePayload::PlayerAnchor(XrdsScenePlayerAnchor::default()),
         "WorldPanel"      => XrdsSceneNodePayload::WorldPanel(XrdsSceneWorldPanel::default()),
+        // Scene-placed half of "attachment is the only difference" — the same
+        // template a PlayerAnchor head-locks. Takes the first template in the
+        // library; the Inspector picks which one afterwards. `?` rather than a
+        // fallback id: a Panel pointing at a template that does not exist spawns
+        // nothing at all, so no node is better than an invisible one.
+        "Panel"           => XrdsSceneNodePayload::Panel(xrds_scene_graph::XrdsScenePanelInstance {
+            template_id: doc.panels.first().map(|t| t.id)?,
+            ..Default::default()
+        }),
         _ => return None,
     };
 
@@ -187,6 +209,24 @@ fn build_primitive_node(
         triggers: Vec::new(),
         watchers: Vec::new(),
     })
+}
+
+/// Whether `parent_id`'s ancestor chain reaches a `PlayerAnchor` — i.e. whether a
+/// node placed here will be head-locked.
+///
+/// Mirrors the runtime's `head_locked_anchor_of`, and is bounded the same way so a
+/// `parent_id` cycle in a hand-edited document cannot hang the editor.
+fn is_under_player_anchor(doc: &XrdsSceneDocument, parent_id: Option<XrdsSceneNodeId>) -> bool {
+    let mut current = parent_id;
+    for _ in 0..doc.nodes.len() {
+        let Some(id) = current else { return false };
+        let Some(node) = doc.nodes.iter().find(|n| n.id == id) else { return false };
+        if matches!(node.payload, XrdsSceneNodePayload::PlayerAnchor(_)) {
+            return true;
+        }
+        current = node.parent_id;
+    }
+    false
 }
 
 pub fn default_transform_for_payload(
@@ -219,8 +259,16 @@ pub fn default_transform_for_payload(
         // PlayerAnchor defaults to eye height (1.6 m) — correct whether it is a child
         // of a ground-level Player node or placed standalone in world space.
         XrdsSceneNodePayload::PlayerAnchor(_) => [0.0, 1.6, 0.0],
-        // World panels default to eye height, slightly in front of the user.
-        XrdsSceneNodePayload::WorldPanel(_) => [0.0, 1.5, -1.0],
+        // A Panel node under a PlayerAnchor is head-locked, and its transform is
+        // read as **camera-local** — so the world-space default below would put it
+        // 1.5 m above the viewer's eye. Half a metre straight ahead is the
+        // head-locked default, matching the depth the retired `panel_depth` used.
+        XrdsSceneNodePayload::Panel(_) if is_under_player_anchor(doc, parent_id) => {
+            [0.0, 0.0, -0.5]
+        }
+        // Otherwise panels default to eye height, slightly in front. Same
+        // placement for both kinds so migrating a WorldPanel does not move it.
+        XrdsSceneNodePayload::WorldPanel(_) | XrdsSceneNodePayload::Panel(_) => [0.0, 1.5, -1.0],
         _ => [0.0, 0.0, 0.0],
     };
 
