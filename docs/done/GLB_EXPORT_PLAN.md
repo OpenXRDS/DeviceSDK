@@ -1,4 +1,24 @@
-# GLB Export Plan (Done)
+# GLB Export Plan (Done — then Retired)
+
+> **This feature has since been retired.** It was built and it worked; what
+> changed is the scene. A scene's meaning now lives largely in concepts glTF has
+> no vocabulary for — `XrdsPanelTemplate`s and their elements, trigger bindings,
+> the `XrdsTrack` registry, `PlayerAnchor`s, spawn and interaction zones,
+> threshold watchers, physics bodies. Export therefore produced a file that
+> *looked* complete and was a mesh dump, with every behaviour silently dropped
+> and no way to read the scene back. A lossy export is fine when the loss is
+> visible; this loss was invisible, which made it a trap.
+>
+> The editor command, menu item, shortcut and dialog are gone. `crates/xrds-gltf`
+> is kept compiling and tested but `#[deprecated]`, so the tessellators and GLB
+> container writing survive if a deliberately-labelled mesh-only export is ever
+> wanted.
+>
+> **glTF/GLB import is unaffected and fully supported** — it never went through
+> this crate. Neither did APK or desktop-app export, which only copy existing
+> `.glb` assets and rewrite `asset_uri`.
+>
+> Kept for the design record. Do not treat the checked boxes below as current.
 
 Export the live XRDS scene to a self-contained `.glb` (binary glTF 2.0) file.
 

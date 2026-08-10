@@ -1,7 +1,6 @@
 use bevy::log::{error, info};
 use std::io::{BufRead, BufReader};
 use std::path::Path;
-use xrds_gltf;
 use crate::editor_state::{ApkExportJob, ExportJob};
 use xrds_scene_graph::{
     XrdsSceneDocument, XrdsSceneNode, XrdsSceneNodeId, XrdsSceneDocumentSession,
@@ -209,32 +208,14 @@ pub fn apply_io_command(
             false
         }
 
-        EditorCommand::ExportGlb { path } => {
-            let doc = session.0.document().clone();
-            match xrds_gltf::export_glb(&doc) {
-                Ok(bytes) => {
-                    let size_kb = bytes.len() / 1024;
-                    match std::fs::write(path, &bytes) {
-                        Ok(_) => {
-                            let name = std::path::Path::new(path)
-                                .file_name().and_then(|s| s.to_str()).unwrap_or(path);
-                            info!("[io] exported GLB: {} ({} KB)", path, size_kb);
-                            state.pending_status = Some(format!("Exported: {name} ({size_kb} KB)"));
-                        }
-                        Err(e) => {
-                            error!("[io] GLB write failed: {}", e);
-                            state.pending_status = Some(format!("Export failed: {e}"));
-                        }
-                    }
-                }
-                Err(e) => {
-                    error!("[io] export_glb failed: {:?}", e);
-                    state.pending_status = Some(format!("Export failed: {e:?}"));
-                }
-            }
-            false
-        }
-
+        // `ExportGlb` was handled here. Scene export to glTF is retired: glTF has
+        // no vocabulary for panels, triggers, Tracks, anchors or zones, so it
+        // wrote a file that looked complete and was a mesh dump. See the
+        // `xrds-gltf` crate docs.
+        //
+        // Note this is unrelated to `ExportApplication`/`ExportApk` below, which
+        // only *copy* existing `.glb` assets and rewrite `asset_uri`. Importing
+        // and using glTF assets is unaffected.
         EditorCommand::ExportApplication { output_dir } => {
             if state.export_job.is_some() {
                 state.pending_status = Some("Export already in progress…".into());

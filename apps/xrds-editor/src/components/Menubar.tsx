@@ -8,13 +8,12 @@ interface Props {
   onSave: () => void;
   onSaveAs: () => void;
   onImportAsset: () => void;
-  onExportGlb: () => void;
   onExportApp: () => void;
   onExportApk: () => void;
   onShowShortcuts: () => void;
 }
 
-export function Menubar({ snapshot, send, onOpen, onSave, onSaveAs, onImportAsset, onExportGlb, onExportApp, onExportApk, onShowShortcuts }: Props) {
+export function Menubar({ snapshot, send, onOpen, onSave, onSaveAs, onImportAsset, onExportApp, onExportApk, onShowShortcuts }: Props) {
   const openMenu = useRef<string | null>(null);
   const rootRef  = useRef<HTMLDivElement>(null);
 
@@ -67,9 +66,9 @@ export function Menubar({ snapshot, send, onOpen, onSave, onSaveAs, onImportAsse
             Save As… <span className="mb-shortcut">Ctrl+Shift+S</span>
           </div>
           <div className="mb-sep" />
-          <div className="mb-action" onClick={action(onExportGlb)}>
-            Export Scene GLB… <span className="mb-shortcut">Ctrl+Shift+E</span>
-          </div>
+          {/* "Export Scene GLB… Ctrl+Shift+E" was here. glTF cannot represent an
+            * XRDS scene, so it wrote a mesh dump that looked like a scene save.
+            * Importing .glb assets is unaffected — see File ▸ Import Asset. */}
           <div className={`mb-action${snapshot.is_exporting ? " disabled" : ""}`}
                onClick={snapshot.is_exporting ? undefined : action(onExportApp)}>
             {snapshot.is_exporting ? "⏳ Exporting…" : "Export Application…"}

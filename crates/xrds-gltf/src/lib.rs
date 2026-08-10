@@ -1,3 +1,33 @@
+//! **Deprecated: scene export to glTF/GLB is retired.** Nothing in the workspace
+//! calls this crate any more, and the editor no longer offers the command.
+//!
+//! The reason is not that the exporter is broken — it does what it always did.
+//! It is that glTF can no longer *represent an XRDS scene*. What a scene means
+//! now lives largely in concepts glTF has no vocabulary for:
+//!
+//! - `XrdsPanelTemplate`s and their named elements
+//! - element and node trigger bindings (`XrdsTriggerBinding`)
+//! - the `XrdsTrack` registry — every piece of authored choreography
+//! - `PlayerAnchor`s, spawn zones, interaction zones, locomotion modes
+//! - threshold watchers, grabbables, physics bodies
+//!
+//! An export therefore produced a file that *looked* complete and was a mesh
+//! dump: geometry, materials, cameras and lights, with every behaviour silently
+//! dropped. A lossy export is defensible when the loss is visible; this one was
+//! invisible, and reading it back could not reconstruct the scene. That makes it
+//! a trap rather than a feature, which is why the entry point is gone rather
+//! than merely labelled.
+//!
+//! **glTF/GLB *import* is unaffected and fully supported.** Loading `.glb`
+//! assets never went through this crate — it runs through Bevy's glTF loader and
+//! `XrdsSceneNode::from_xrds_gltf_asset`. Likewise the application and APK export
+//! pipelines, which *copy* existing `.glb` assets and rewrite `asset_uri`; they
+//! never generated glTF and do not depend on this crate.
+//!
+//! Kept compiling, with its tests, so the tessellators and GLB container writing
+//! are not lost if a deliberately-labelled mesh-only export is ever wanted. Do
+//! not wire it back into a "save"/"export scene" path.
+
 mod buffers;
 mod glb;
 pub mod tessellation;
@@ -25,13 +55,23 @@ impl std::error::Error for GlbExportError {}
 
 /// Export an `XrdsSceneDocument` to GLB bytes (binary glTF 2.0).
 ///
-/// Produces a self-contained `.glb` file containing:
+/// Produces a self-contained `.glb` file containing **only**:
 /// - Scene hierarchy with transforms
 /// - PBR materials
 /// - Tessellated primitive meshes (Sphere, Cube, Cylinder, Plane, Tetrahedron)
 /// - Cameras (perspective + orthographic)
 /// - Lights via `KHR_lights_punctual`
 /// - GltfAsset source URI + AudioClip asset_id in node `extras`
+///
+/// Everything else in the document — panels, triggers, Tracks, anchors, zones,
+/// watchers, physics — is **silently dropped**. See the crate docs: that is why
+/// this is deprecated rather than merely documented as lossy.
+#[deprecated(
+    since = "0.1.0",
+    note = "glTF cannot represent an XRDS scene (panels, triggers, Tracks, anchors are all \
+            dropped silently), so scene export is retired. glTF *import* is unaffected. Do not \
+            wire this into a save or export-scene path; see the crate docs."
+)]
 pub fn export_glb(doc: &XrdsSceneDocument) -> Result<Vec<u8>, GlbExportError> {
     let mut buf = BufferBuilder::default();
 

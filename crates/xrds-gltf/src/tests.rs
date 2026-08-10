@@ -1,3 +1,9 @@
+//! These tests keep the retired exporter honest so the tessellators and GLB
+//! container writing stay verified rather than rotting silently. They call a
+//! `#[deprecated]` function on purpose — the deprecation is a signal to *callers*
+//! not to wire it into a save path, not a claim that the code is wrong.
+#![allow(deprecated)]
+
 use xrds_scene_graph::{
     XrdsEditorMetadata, XrdsSceneDocument, XrdsSceneMetadata, XrdsSceneNode, XrdsSceneNodeId,
     XrdsSceneNodePayload, XrdsSceneSphere, XrdsSceneMaterial, XrdsSceneMaterialPbrParams,

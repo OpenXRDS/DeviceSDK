@@ -155,8 +155,12 @@ apps/xrds-editor/
 | `Ctrl+S`                   | Save scene                |
 | `Ctrl+Shift+S`             | Save scene as             |
 | `Ctrl+I`                   | Import asset (GLB / GLTF) |
-| `Ctrl+Shift+E`             | Export GLB                |
 | `Ctrl+Shift+A`             | Export application        |
+
+`Ctrl+Shift+E` (Export GLB) was removed: glTF cannot represent an XRDS scene —
+panels, triggers, Tracks, anchors and zones were all dropped silently — so it
+wrote a mesh dump that looked like a scene save. Importing GLB/GLTF assets is
+unaffected (`Ctrl+I`), as is Export Application.
 
 ### Viewport mouse
 

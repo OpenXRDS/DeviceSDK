@@ -718,12 +718,8 @@ fn run_file_dialog(kind: &str) -> Option<String> {
             .add_filter("All Files", &["*"])
             .pick_file()
             .map(|p| p.to_string_lossy().into_owned()),
-        "export_glb" => rfd::FileDialog::new()
-            .set_title("Export GLB")
-            .set_file_name("scene.glb")
-            .add_filter("GLB", &["glb"])
-            .save_file()
-            .map(|p| p.to_string_lossy().into_owned()),
+        // The "export_glb" save dialog is gone with scene glTF export. "Import
+        // Asset" still offers .glb — import is fully supported.
         "export_app" => rfd::FileDialog::new()
             .set_title("Export Application — choose output folder")
             .pick_folder()
