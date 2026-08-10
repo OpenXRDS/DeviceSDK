@@ -1,3 +1,4 @@
+import { acquireViewportHoleSuppression, releaseViewportHoleSuppression } from "../lib/viewportHole";
 import { useEffect, useRef, useState } from "react";
 import type { EditorCommand, EditorSnapshot, PanelElementDto, PanelTemplateDto } from "../types/bridge";
 import { elementKindName, elementRowLabel, validKindsForElement } from "../lib/sequencer";
@@ -44,11 +45,8 @@ export function PanelWorkspace({ snapshot, send }: {
   // meant for the canvas land on the 3D scene instead — the same class of bug as
   // an absolutely-positioned overlay swallowing input.
   useEffect(() => {
-    const ipc = (window as any).ipc;
-    ipc?.postMessage(JSON.stringify({ type: "set_viewport_hole", enabled: false }));
-    return () => {
-      ipc?.postMessage(JSON.stringify({ type: "set_viewport_hole", enabled: true }));
-    };
+    acquireViewportHoleSuppression();
+    return releaseViewportHoleSuppression;
   }, []);
 
   const open = snapshot.panel_library.find(t => t.id === openId) ?? null;

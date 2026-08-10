@@ -1,3 +1,4 @@
+import { acquireViewportHoleSuppression, releaseViewportHoleSuppression } from "../lib/viewportHole";
 import { useEffect } from "react";
 
 interface Props {
@@ -65,9 +66,9 @@ export function KeyboardShortcutsModal({ onClose }: Props) {
   useEffect(() => {
     // Remove the SetWindowRgn hole so the WebView paints over the Bevy viewport,
     // making the modal visible in the centre of the screen.
-    (window as any).ipc?.postMessage(JSON.stringify({ type: "set_viewport_hole", enabled: false }));
+    acquireViewportHoleSuppression();
     return () => {
-      (window as any).ipc?.postMessage(JSON.stringify({ type: "set_viewport_hole", enabled: true }));
+      releaseViewportHoleSuppression();
     };
   }, []);
 

@@ -476,6 +476,23 @@ pub fn drain_responses_and_viewport(
     let pw = win.physical_width();
     let ph = win.physical_height();
 
+    // Second guard against the minimise case, and the subtler half of it.
+    //
+    // React's bounds and the window's physical size are read at *different*
+    // moments: the bounds arrive over IPC (already rejected when zero-sized) and
+    // are consumed here, where the window is measured fresh. Across a minimise or
+    // restore those two can disagree — a plausible rect paired with a 0×0 window —
+    // and this path then caches `pw/ph = 0` in `last_region_params` and applies a
+    // degenerate region. The hole comes back wrong, and stays wrong every time a
+    // modal or dropdown restores it from that cache.
+    //
+    // The bounds are deliberately left consumed rather than put back: React
+    // re-reports on the next layout pass, so dropping one stale sample costs a
+    // frame, while re-queueing it would just retry the same mismatched pair.
+    if pw == 0 || ph == 0 {
+        return;
+    }
+
     let phys_x = (bx * sf) as u32;
     let phys_y = (by * sf) as u32;
     let phys_w = (bw * sf) as u32;
@@ -531,6 +548,21 @@ pub fn handle_editor_resize(
     let sf = win.scale_factor();
     let pw = win.physical_width();
     let ph = win.physical_height();
+
+    // **Minimising sends a resize to 0×0, and acting on it corrupts the layout.**
+    //
+    // `approx_vp_phys` would saturate to a zero-sized viewport, and — the part that
+    // actually bites — that degenerate rect gets cached in `last_region_params`.
+    // Every later restore of the hole reads from there: closing a modal or a
+    // dropdown reapplies the poisoned region, so the hole comes back misaligned
+    // long after the minimise, with nothing on screen to connect the two.
+    //
+    // A window with no area has no meaningful layout, so the only correct response
+    // is to do nothing at all: no WebView resize, no camera viewport, and above all
+    // no cache write. The real size arrives as its own event on restore.
+    if pw == 0 || ph == 0 || lw == 0 || lh == 0 {
+        return;
+    }
 
     // Resize WebView to cover the full window
     EDITOR_WV.with_borrow(|opt| {

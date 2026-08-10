@@ -571,6 +571,30 @@ button, input, select, textarea { font-family: inherit; }
   color: var(--overlay0); text-transform: uppercase;
 }
 .seq-field-hint { color: var(--surface1); }
+
+/* ── Panel element heading ─────────────────────────────────────────────────────
+ * An element *name* is authored text, so it gets none of `.seq-field-label`'s
+ * treatment: no uppercasing (which destroys the author's casing and does nothing
+ * at all for Korean), no letter-spacing, and full-contrast text at a readable
+ * size. That style is for fixed field captions like "POSITION (M)", where
+ * shouting is a deliberate de-emphasis; a name has to be scannable. */
+.panel-el-heading {
+  display: flex; align-items: baseline; gap: 6px;
+  padding-bottom: 2px; border-bottom: 1px solid var(--surface0);
+}
+.panel-el-heading-name {
+  font-size: 12.5px; font-weight: 600; color: var(--bright);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* The kind as a chip rather than parenthetical prose: it is a fixed vocabulary of
+   five, so it reads faster as a tag and cannot be mistaken for part of the name. */
+.panel-el-heading-kind {
+  flex-shrink: 0; font-family: var(--font-mono); font-size: 9.5px;
+  letter-spacing: .06em; text-transform: uppercase;
+  color: var(--subtext0); background: var(--surface0);
+  padding: 1px 5px; border-radius: 3px;
+}
+.panel-el-heading-note { flex-shrink: 0; font-size: 10.5px; color: var(--overlay0); }
 .seq-fires-when {
   display: flex; align-items: center; gap: 8px; padding: 6px 9px;
   font-size: 12.5px; color: var(--yellow);

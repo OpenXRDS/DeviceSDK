@@ -1,3 +1,4 @@
+import { acquireViewportHoleSuppression, releaseViewportHoleSuppression } from "../lib/viewportHole";
 import { useEffect, useRef, useState } from "react";
 import type { ApkPrerequisite, EditorCommand, EditorSnapshot } from "../types/bridge";
 
@@ -19,10 +20,10 @@ export function ApkExportDialog({ snapshot, send, onPickFolder, onClose }: Props
 
   // Disable viewport hole and kick off prereq check.
   useEffect(() => {
-    (window as any).ipc?.postMessage(JSON.stringify({ type: "set_viewport_hole", enabled: false }));
+    acquireViewportHoleSuppression();
     send({ type: "CheckApkPrerequisites" });
     return () => {
-      (window as any).ipc?.postMessage(JSON.stringify({ type: "set_viewport_hole", enabled: true }));
+      releaseViewportHoleSuppression();
     };
   }, []);
 

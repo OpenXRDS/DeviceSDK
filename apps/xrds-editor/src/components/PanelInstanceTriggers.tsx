@@ -58,11 +58,19 @@ function ElementWiring({ nodeId, el, snapshot, send }: {
 
   return (
     <div className="flex flex-col gap-1.5">
-      <div className="seq-field-label">
-        {el.name.toUpperCase()}
-        <span className="text-[10px] text-overlay0 font-normal"> — {el.kind}</span>
+      {/* The name is shown verbatim — not upper-cased, not letter-spaced. It is
+        * authored text that may be any case and any script, so mangling it makes
+        * the row harder to match against the element list, which shows the real
+        * name. The kind is a chip because it is a fixed vocabulary of five and
+        * reads faster as a tag than as parenthetical prose. */}
+      <div className="panel-el-heading">
+        <span className="panel-el-heading-name" title={el.name}>{el.name}</span>
+        <span className="panel-el-heading-kind">{el.kind}</span>
         {!canEmit && !el.orphaned && (
-          <span className="seq-field-hint"> (emits nothing)</span>
+          <span className="panel-el-heading-note">emits nothing</span>
+        )}
+        {el.orphaned && (
+          <span className="panel-el-heading-note" style={{ color: "var(--red)" }}>missing</span>
         )}
       </div>
 
