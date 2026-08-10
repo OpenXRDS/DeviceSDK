@@ -2,11 +2,12 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import type {
   EditorSnapshot, EditorCommand, NodeInspector, MaterialParams, MaterialTextures,
   AssetCatalogEntry, EnvironmentDto,
-  ObservableDto, ThresholdWatcherDto, XrdsTriggerKind,
+  ObservableDto, ThresholdWatcherDto, XrdsTriggerKind, NodePayload, TriggerEffect,
 } from "../types/bridge";
-import { rgbaToHex, hexToRgba, MATERIAL_TEXTURE_SLOTS } from "../types/bridge";
+import { rgbaToHex, hexToRgba, MATERIAL_TEXTURE_SLOTS, TRIGGER_EFFECTS } from "../types/bridge";
 import { Select } from "./ui/Select";
 import { Checkbox } from "./ui/Checkbox";
+import { PanelInstanceTriggers } from "./PanelInstanceTriggers";
 import { ALL_TRIGGER_KINDS, isHandFilterVisible, unavailableReasonFor } from "../lib/sequencer";
 
 interface Props {
@@ -415,8 +416,21 @@ function TriggersSection({ node, snapshot, send, onOpenTrack }: {
             {/* A binding names a Track. There is no inline alternative, so
               * this is a plain picker rather than an inline-vs-named choice. */}
             <div className="grid grid-cols-[42px_1fr] items-center gap-x-2">
-              <label className="text-[11px] text-overlay0">Fires</label>
+              {/* Label follows the effect so the row reads as one sentence —
+                * "Stops → Open" — rather than a fixed "Fires" beside a picker
+                * that says Stop. */}
+              <label className="text-[11px] text-overlay0">
+                {b.effect === "Stop" ? "Stops" : "Fires"}
+              </label>
               <div className="flex items-center gap-1.5 flex-wrap">
+                <Select
+                  value={b.effect}
+                  onValueChange={v => send({
+                    type: "SetTriggerBindingEffect",
+                    payload: { node_id: id, index: i, effect: v as TriggerEffect },
+                  })}
+                  options={TRIGGER_EFFECTS.map(e => ({ value: e, label: e }))}
+                />
                 <Select
                   value={b.track ?? TRACK_NONE_SENTINEL}
                   onValueChange={v => send({
@@ -721,7 +735,73 @@ function PayloadSection({ node, send, isPlaying, snapshot, onEditWorldPanel }: {
   if (payload.type === "WorldPanel") {
     return <WorldPanelSection id={id} p={payload} send={send} onEditWidgets={onEditWorldPanel} />;
   }
+  if (payload.type === "Panel") {
+    return <PanelInstanceSection id={id} p={payload} send={send} snapshot={snapshot} />;
+  }
   return null;
+}
+
+/** A scene-placed panel instance: which template, and nothing else.
+ *
+ * Deliberately thin. Size, background and elements all belong to the template —
+ * putting any of them here would be the mistake `XrdsHudTemplate::depth` made in
+ * reverse, with per-instance overrides quietly diverging from the shared
+ * definition. Content is edited once, in the Panels workspace. */
+function PanelInstanceSection({ id, p, send, snapshot }: {
+  id: number;
+  p: Extract<NodePayload, { type: "Panel" }>;
+  send: (c: EditorCommand) => void;
+  snapshot: EditorSnapshot;
+}) {
+  const templates = snapshot.panel_library;
+  const current = templates.find(t => t.id === p.template_id);
+  return (
+    <div className="insp-section">
+      <h4>Panel</h4>
+      <div className="insp-row">
+        <label>Template</label>
+        <select value={current ? String(p.template_id) : ""}
+          style={{ flex: 1, fontSize: 11 }}
+          onChange={e => {
+            if (e.target.value === "") return;
+            send({ type: "SetPanelInstanceTemplate", payload: { id, template_id: Number(e.target.value) } });
+          }}>
+          {/* Shown only when the current id resolves to nothing, so the select has
+            * something to display instead of silently snapping to another
+            * template and hiding the problem. */}
+          {!current && <option value="">— missing template {p.template_id} —</option>}
+          {templates.map(t => (
+            <option key={t.id} value={t.id}>{t.name}</option>
+          ))}
+        </select>
+      </div>
+      {!current ? (
+        <div className="insp-note" style={{ color: "var(--red)" }}>
+          ⚠ Template {p.template_id} is not in this document — nothing will spawn.
+        </div>
+      ) : (
+        <div className="insp-note">
+          {current.elements.length === 0
+            ? "This template has no elements yet. Add some in the Panels workspace."
+            : `${current.elements.length} element${current.elements.length === 1 ? "" : "s"}, ` +
+              `${current.size[0]}×${current.size[1]}m. Appearance is edited in the Panels ` +
+              `workspace and shared by every node using this template; the wiring below is ` +
+              `this node's alone.`}
+        </div>
+      )}
+
+      {/* Wiring is per-node, which is what lets floor 1's button open floor 1's
+        * door while floor 3's opens its own. Authoring it beside the template
+        * would make all instances share one target. */}
+      <h4 style={{ marginTop: 10 }}>Wiring</h4>
+      <PanelInstanceTriggers
+        nodeId={id}
+        elements={p.elements}
+        snapshot={snapshot}
+        send={send}
+      />
+    </div>
+  );
 }
 
 const PHYSICS_BODY_OPTIONS = ["None", "Static", "Dynamic"] as const;
@@ -1094,8 +1174,9 @@ function PlayerAnchorSection({ id, p, send, isPlaying, snapshot }: { id: number;
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [p.exposure]);
 
-  const hudTemplateId: number | null = p.hud_template_id ?? null;
-  const templates = snapshot.hud_library;
+  const panelTemplateId: number | null = p.panel_template_id ?? null;
+  const templates = snapshot.panel_library;
+  const panelDepth = p.panel_depth ?? 0.5;
 
   return (
     <div className="insp-section">
@@ -1129,25 +1210,38 @@ function PlayerAnchorSection({ id, p, send, isPlaying, snapshot }: { id: number;
         )}
       </div>
 
+      {/* Head-locked panels are **parented**, not linked. A child Panel node
+        * carries its own element wiring and a full transform; the old
+        * `panel_template_id` link could carry neither, so a panel attached that
+        * way rendered with dead buttons. The link still loads for existing
+        * documents — flagged below — but nothing here authors it. */}
       <div className="insp-row" style={{ marginTop: 8 }}>
-        <label>HUD Template</label>
-        <select
-          value={hudTemplateId ?? ""}
-          style={{ flex: 1, fontSize: 11 }}
-          onChange={e => {
-            const val = e.target.value;
-            send({ type: "LinkHudTemplate", payload: { anchor_id: id, template_id: val === "" ? null : Number(val) } });
-          }}
-        >
-          <option value="">— none —</option>
-          {templates.map(t => (
-            <option key={t.id} value={t.id}>{t.name}</option>
-          ))}
-        </select>
+        <label>Head-locked Panel</label>
+        <button className="tb-btn" style={{ flex: 1, fontSize: 11 }}
+          disabled={templates.length === 0}
+          title={templates.length === 0
+            ? "Create a panel template in the Panels workspace first"
+            : "Adds a Panel node under this anchor — head-locked, and wirable in its own Inspector"}
+          onClick={() => send({
+            type: "SpawnPrimitive",
+            payload: { kind: "Panel", parent_id: id },
+          })}>
+          + Add panel child
+        </button>
       </div>
-      {hudTemplateId !== null && templates.find(t => t.id === hudTemplateId) == null && (
-        <div className="insp-note" style={{ color: "var(--red)" }}>
-          ⚠ Linked template was deleted
+      <div className="insp-note">
+        A Panel node under this anchor is head-locked. Its own transform sets where
+        it sits in front of the lens, and its Inspector is where its buttons are
+        wired.
+      </div>
+      {panelTemplateId !== null && (
+        <div className="insp-note" style={{ color: "var(--yellow)" }}>
+          ⚠ This anchor uses the old <code>panel_template_id</code> link
+          {templates.find(t => t.id === panelTemplateId) == null
+            ? " and the template it names was deleted."
+            : ` (${templates.find(t => t.id === panelTemplateId)!.name}, depth ${panelDepth}m).`}
+          {" "}That path cannot carry trigger bindings, so its buttons will never
+          fire. Add a panel child instead.
         </div>
       )}
     </div>

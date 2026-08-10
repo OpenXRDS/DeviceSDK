@@ -36,9 +36,10 @@ const PALETTE_META: Record<string, ItemMeta> = {
   Text:             { label: "Text",           tip: "Flat billboard text rendered in the scene." },
   ExtrudedText:     { label: "Extruded Text",  tip: "3-D extruded text mesh." },
   Billboard:        { label: "Billboard",      tip: "Sprite-like quad that always faces the camera." },
-  HudText:          { label: "HUD Text",       tip: "Head-locked text element. Use the HUD Library panel to manage HUD layouts instead of placing these individually." },
+  HudText:          { label: "HUD Text",       tip: "Head-locked text element. For a full head-locked layout, build a panel template in the Panels workspace and link it on a Player Anchor instead." },
   // XR
-  WorldPanel:       { label: "World Panel",    tip: "Flat interactive UI panel anchored at a world-space position. Add buttons, labels, sliders, and toggles as child widgets." },
+  Panel:            { label: "Panel",          tip: "Places a panel template in the scene. Its buttons, sliders and toggles can fire Tracks. Build the template in the Panels workspace; the same template can also be head-locked to a Player Anchor." },
+  WorldPanel:       { label: "World Panel",    tip: "Legacy: a panel with widgets stored inline. Its buttons CANNOT fire triggers — inline widgets carry no bindings. Use Panel instead." },
 };
 
 const PRIMITIVE_GROUPS = [
@@ -47,7 +48,7 @@ const PRIMITIVE_GROUPS = [
   { label: "Scene",    items: ["Camera","AudioClip","InteractionZone"] },
   { label: "Player",   items: ["PlayerSpawn","PlayerSpawnZone","Player","PlayerAnchor"] },
   { label: "Text",     items: ["Text","ExtrudedText","Billboard","HudText"] },
-  { label: "XR",       items: ["WorldPanel"] },
+  { label: "XR",       items: ["Panel", "WorldPanel"] },
 ];
 
 const DEFAULT_HEIGHT = 148;

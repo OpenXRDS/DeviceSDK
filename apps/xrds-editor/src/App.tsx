@@ -10,15 +10,14 @@ import { Inspector } from "./components/Inspector";
 import { PlayerPanel } from "./components/PlayerPanel";
 import { ViewportCanvas } from "./components/ViewportCanvas";
 import { KeyboardShortcutsModal } from "./components/KeyboardShortcutsModal";
-import { HudCanvasOverlay } from "./components/HudCanvasOverlay";
 import { WorldPanelCanvasOverlay } from "./components/WorldPanelCanvasOverlay";
-import { HudLibraryPanel } from "./components/HudLibraryPanel";
 import { ApkExportDialog } from "./components/ApkExportDialog";
 import { SequencerWorkspace } from "./components/SequencerWorkspace";
 import type { SelectedEvent } from "./components/SequencerInspector";
+import { PanelWorkspace } from "./components/PanelWorkspace";
 import { SequencerListPanel } from "./components/SequencerListPanel";
 import { BridgeMismatchBanner } from "./components/BridgeMismatchBanner";
-import type { EditorCommand } from "./types/bridge";
+import type { EditorCommand, Workspace } from "./types/bridge";
 
 // ---------------------------------------------------------------------------
 // IPC helpers
@@ -46,7 +45,6 @@ export default function App() {
   const send            = useSendCommand();
   const centerRef       = useRef<HTMLDivElement>(null);
   const [showShortcuts,  setShowShortcuts]  = useState(false);
-  const [hudTemplateId,  setHudTemplateId]  = useState<number | null>(null);
   const [worldPanelId,   setWorldPanelId]   = useState<number | null>(null);
   const [showApkExport,  setShowApkExport]  = useState(false);
   // Which Track the Sequencer has open, by name. There is no longer an
@@ -58,8 +56,11 @@ export default function App() {
   // the base — rather than squeezing a sequencer strip under the normal
   // scene layout. The Bevy viewport stays live in both (its hole just
   // moves; the ResizeObserver below re-reports the new bounds).
-  const [workspace, setWorkspace] = useState<"scene" | "sequencer">("scene");
+  const [workspace, setWorkspace] = useState<Workspace>("scene");
   const seqMode = workspace === "sequencer";
+  // Panels replaces the whole editor body rather than resharing it: panel design
+  // is 2D, so the viewport, hierarchy and inspector are all irrelevant there.
+  const panelMode = workspace === "panels";
   // Which event the Sequencer's inspector is editing — a row plus a key
   // within it, since events belong to asset rows rather than a flat list.
   // Lives here (not local to the Sequencer) only so it can be reset whenever
@@ -111,7 +112,6 @@ export default function App() {
         if (e.key === "x" && snapshot.selection.length) { e.preventDefault(); send({ type: "CutSelection" }); return; }
         if (e.key === "v" && snapshot.has_clipboard)    { e.preventDefault(); send({ type: "PasteClipboard" }); return; }
         if (e.key === "a" && e.shiftKey) { e.preventDefault(); handleExportApp(); return; }
-        if (e.key === "e" && e.shiftKey) { e.preventDefault(); handleExportGlb(); return; }
         if (e.key === "s" && e.shiftKey) { e.preventDefault(); handleSaveAs(); return; }
         if (e.key === "s") { e.preventDefault(); handleSave(); return; }
         if (e.key === "i") { e.preventDefault(); handleImportAsset(); return; }
@@ -145,10 +145,6 @@ export default function App() {
     if (dir) send({ type: "ExportApplication", payload: { output_dir: dir } });
   }
   function handleExportApk() { setShowApkExport(true); }
-  async function handleExportGlb() {
-    const path = await ipcDialog("export_glb");
-    if (path) send({ type: "ExportGlb", payload: { path } });
-  }
   async function handleOpen() {
     const path = await ipcDialog("open_scene");
     if (path) send({ type: "OpenScene", payload: { path } });
@@ -181,7 +177,6 @@ export default function App() {
           send={send}
           onOpen={handleOpen}
           onImportAsset={handleImportAsset}
-          onExportGlb={handleExportGlb}
           onExportApp={handleExportApp}
           onExportApk={handleExportApk}
           onSave={handleSave}
@@ -202,6 +197,13 @@ export default function App() {
           <div className="status-toast">{snapshot.status_message}</div>
         )}
 
+        {panelMode ? (
+          /* A focused, full-width 2D workspace. Deliberately *not* sharing the
+           * scene chrome: none of the viewport, hierarchy or node inspector
+           * applies to designing a panel template, and leaving the viewport
+           * mounted would keep its click-through hole open under this UI. */
+          <PanelWorkspace snapshot={snapshot} send={send} />
+        ) : (
         <div className="editor-panels">
           {/* Left column. Scene mode: the scene tree + player/HUD libraries.
             * Sequencer mode: the Sequencers list, since a sequencer isn't a
@@ -214,7 +216,6 @@ export default function App() {
               <>
                 <Hierarchy snapshot={snapshot} send={send} onOpenTrack={openTrackByName} />
                 <PlayerPanel snapshot={snapshot} send={send} />
-                <HudLibraryPanel snapshot={snapshot} send={send} onEditTemplate={id => setHudTemplateId(id)} />
               </>
             )}
             <button className={`panel-lock-btn${sidebar.locked ? " locked" : ""}`}
@@ -262,8 +263,9 @@ export default function App() {
               onOpenTrack={openTrackByName} showEnvironment={!seqMode} />
           </div>
         </div>
+        )}
 
-        {!seqMode && <Palette snapshot={snapshot} send={send} />}
+        {!seqMode && !panelMode && <Palette snapshot={snapshot} send={send} />}
       </div>
 
       {showShortcuts && <KeyboardShortcutsModal onClose={() => setShowShortcuts(false)} />}
@@ -273,14 +275,6 @@ export default function App() {
           send={send}
           onPickFolder={() => ipcDialog("export_app")}
           onClose={() => setShowApkExport(false)}
-        />
-      )}
-      {hudTemplateId !== null && (
-        <HudCanvasOverlay
-          templateId={hudTemplateId}
-          snapshot={snapshot}
-          send={send}
-          onClose={() => setHudTemplateId(null)}
         />
       )}
       {worldPanelId !== null && (

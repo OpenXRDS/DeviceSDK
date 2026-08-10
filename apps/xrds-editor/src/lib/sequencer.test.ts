@@ -3,11 +3,14 @@ import {
   ALL_TRIGGER_KINDS, actionDuration, addableAssets, assetRowAspects, assetRowLabel,
   ROW_H, SUBLANE_STEP, buildTriggerReverseIndex, conflictingTracks, dotFootprintSecs, fmtTime,
   isHandFilterVisible, keyTopPx, layoutAssetRow, niceStep, rulerTicks, stackKeys, validKindsFor,
+  elementUnavailableReasonFor, validKindsForElement, elementRowLabel, unavailableReasonFor,
+  targetLabel, actionUnavailableReasonFor, ELEMENT_ONLY_ACTION_KINDS, TRACK_ACTION_KINDS,
+  decodeAddableAsset, encodeAddableAsset,
 } from "./sequencer";
 import { defaultSnapshot } from "../types/bridge";
 import type {
   EditorSnapshot, NamedTrackDto, NodeBindingSummary, NodeInspector, TriggerBindingDto,
-  XrdsAction, XrdsTrackAssetDto, XrdsTrackKeyDto,
+  XrdsAction, XrdsTrackAssetDto, XrdsTrackKeyDto, PanelElementDto,
 } from "../types/bridge";
 
 // ---------------------------------------------------------------------------
@@ -266,8 +269,11 @@ describe("addableAssets", () => {
     ],
   } as EditorSnapshot;
 
+  const nodeIds = (rows: ReturnType<typeof addableAssets>) =>
+    rows.filter(r => r.kind === "node").map(r => (r as { id: number }).id);
+
   it("walks the whole hierarchy, not just the roots", () => {
-    expect(addableAssets(null, snapshot).map(n => n.id)).toEqual([1, 2, 3]);
+    expect(nodeIds(addableAssets(null, snapshot))).toEqual([1, 2, 3]);
   });
 
   it("excludes nodes that already have a row in THIS Track", () => {
@@ -278,7 +284,7 @@ describe("addableAssets", () => {
       effective_duration_secs: 0,
       looping: false,
     };
-    expect(addableAssets(track, snapshot).map(n => n.id)).toEqual([1, 3]);
+    expect(nodeIds(addableAssets(track, snapshot))).toEqual([1, 3]);
   });
 
   it("still offers a node used by a DIFFERENT Track", () => {
@@ -293,7 +299,7 @@ describe("addableAssets", () => {
       looping: false,
     };
     const snap = { ...snapshot, tracks: [other] } as EditorSnapshot;
-    expect(addableAssets(null, snap).map(n => n.id)).toContain(1);
+    expect(nodeIds(addableAssets(null, snap))).toContain(1);
   });
 });
 
@@ -334,6 +340,7 @@ describe("conflictingTracks", () => {
 function binding(overrides: Partial<TriggerBindingDto> = {}): TriggerBindingDto {
   return {
     trigger: { kind: "ZoneEnter" },
+    effect: "Fire",
     disabled: false,
     hand: null,
     track: null,
@@ -542,5 +549,290 @@ describe("fmtTime", () => {
   it("keeps two decimals only when the value actually has a fraction", () => {
     expect(fmtTime(2.4)).toBe("0:02.40");
     expect(fmtTime(0.2)).toBe("0:00.20");
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// Panel elements
+//
+// The measurable finish line of the panel-template plan: the four widget
+// trigger kinds used to be reported as "not reachable — authored widgets have
+// no bindable node". That is no longer true, because an element carries its own
+// triggers and they attach to the entity the widget event targets.
+// ---------------------------------------------------------------------------
+
+/** No `triggers` parameter: a template element carries no bindings. Those live on
+ *  each placed Panel node, so nothing here can have a binding count. */
+function element(type: string, emittable: string[]): PanelElementDto {
+  return {
+    name: "el",
+    // Only `type` is read by these helpers; the rest of the widget shape is
+    // irrelevant here, so it is cast rather than fully spelled out.
+    widget: { type } as PanelElementDto["widget"],
+    emittable_triggers: emittable,
+  };
+}
+
+describe("elementUnavailableReasonFor", () => {
+  it("allows the kinds Rust says the element emits", () => {
+    const button = element("Button", ["ButtonPress", "ButtonRelease"]);
+    expect(elementUnavailableReasonFor("ButtonPress", button)).toBeNull();
+    expect(elementUnavailableReasonFor("ButtonRelease", button)).toBeNull();
+  });
+
+  it("explains which kinds an element does emit when the asked-for one is wrong", () => {
+    const slider = element("Slider", ["SliderChange"]);
+    const reason = elementUnavailableReasonFor("ButtonPress", slider);
+    expect(reason).toContain("Slider");
+    expect(reason).toContain("SliderChange");
+  });
+
+  it("says a non-emitting element emits nothing rather than listing an empty set", () => {
+    const label = element("Label", []);
+    expect(elementUnavailableReasonFor("ButtonPress", label)).toBe("a Label emits nothing");
+  });
+
+  it("takes the emittable list from the snapshot rather than re-deriving it", () => {
+    // If this helper reimplemented the rule, it would disagree with a snapshot
+    // whose Rust side had changed — the drift the server-side field prevents.
+    // A deliberately odd list proves the list is what is consulted.
+    const odd = element("Button", ["ToggleChange"]);
+    expect(elementUnavailableReasonFor("ToggleChange", odd)).toBeNull();
+    expect(elementUnavailableReasonFor("ButtonPress", odd)).not.toBeNull();
+  });
+});
+
+describe("validKindsForElement", () => {
+  it("offers exactly what the element emits", () => {
+    expect(validKindsForElement(element("Toggle", ["ToggleChange"]))).toEqual(["ToggleChange"]);
+    expect(validKindsForElement(element("Label", []))).toEqual([]);
+  });
+});
+
+describe("widget kinds on a node versus on an element", () => {
+  it("no longer claims widget triggers are unreachable anywhere", () => {
+    // The string this replaced was the plan's definition of done.
+    const cube = nodeWith({
+      payload: { type: "Cube", material: { base_color: [1,1,1,1], metallic: 0, roughness: 0.5, emissive: [0,0,0], textures: NO_TEXTURES }, physics_body: "None", gravity_scale: 1, mass: 1 },
+    });
+    for (const kind of ["ButtonPress", "ButtonRelease", "SliderChange", "ToggleChange"]) {
+      const reason = unavailableReasonFor(kind, cube);
+      expect(reason).not.toBeNull();
+      expect(reason).not.toContain("not reachable");
+      expect(reason).toContain("panel element");
+    }
+  });
+
+  it("keeps node kinds off elements and element kinds off nodes", () => {
+    // The two rules are disjoint on purpose.
+    const button = element("Button", ["ButtonPress", "ButtonRelease"]);
+    expect(elementUnavailableReasonFor("ZoneEnter", button)).not.toBeNull();
+    expect(elementUnavailableReasonFor("Grabbed", button)).not.toBeNull();
+  });
+});
+
+describe("elementRowLabel", () => {
+  it("shows the element's kind", () => {
+    expect(elementRowLabel(element("Button", ["ButtonPress"]))).toEqual({
+      title: "el",
+      sub: "Button",
+    });
+  });
+
+  it("never shows a binding count, because a template has no bindings", () => {
+    // Replaces a test that asserted the count and its pluralisation. Bindings
+    // moved to each placed Panel node, so a number shown against the template
+    // would be right for one instance and wrong for the next.
+    for (const kind of ["Button", "Slider", "Toggle", "Label", "Image"]) {
+      const { sub } = elementRowLabel(element(kind, []));
+      expect(sub).toBe(kind);
+      expect(sub).not.toMatch(/trigger/);
+    }
+  });
+});
+
+describe("assetRowLabel for element rows", () => {
+  const el = (node_name: string | null) => ({
+    target: { type: "Element" as const, panel: 10, name: "go" },
+    node_name,
+    keys: [],
+  });
+
+  it("uses the server-side panel · element join when it resolves", () => {
+    // Joined in Rust so the UI never has to cross-reference panel_library, which
+    // would go stale on a rename.
+    expect(assetRowLabel(el("Console · go"))).toEqual({
+      title: "Console · go",
+      sub: "element on panel #10",
+    });
+  });
+
+  it("is visibly wrong rather than blank when the panel is gone", () => {
+    const { title, sub } = assetRowLabel(el(null));
+    expect(title).toContain("go");
+    expect(title).toContain("10");
+    expect(sub).toMatch(/missing/);
+  });
+});
+
+describe("targetLabel for elements", () => {
+  it("names both halves, since an element has no id of its own", () => {
+    expect(targetLabel({ type: "Element", panel: 7, name: "start" }))
+      .toBe("start on panel #7");
+  });
+});
+
+describe("actionUnavailableReasonFor", () => {
+  const node = { type: "Node" as const, id: 1 };
+  const element = { type: "Element" as const, panel: 10, name: "go" };
+
+  it("allows every non-element action on any row", () => {
+    for (const kind of ["SetTransform", "SetVisible", "SetMaterial", "ModifyHealth"]) {
+      expect(actionUnavailableReasonFor(kind, node)).toBeNull();
+      expect(actionUnavailableReasonFor(kind, element)).toBeNull();
+    }
+  });
+
+  it("blocks element actions on a node row, with a reason rather than by hiding", () => {
+    // Same principle as the trigger-kind pickers: show the whole menu and say
+    // what a greyed entry needs, so a short list is never a mystery.
+    for (const kind of ["SetElementText", "SetElementValue", "SetElementEnabled"]) {
+      expect(actionUnavailableReasonFor(kind, node)).toMatch(/panel element/);
+    }
+  });
+
+  it("allows element actions on an element row", () => {
+    for (const kind of ["SetElementText", "SetElementValue", "SetElementEnabled"]) {
+      expect(actionUnavailableReasonFor(kind, element)).toBeNull();
+    }
+  });
+
+  it("covers every element action the kind list offers", () => {
+    // Guards drift between the offered list and the set that gates it: an
+    // element action missing from ELEMENT_ONLY_ACTION_KINDS would be offered on
+    // a node row and silently do nothing.
+    const offered = TRACK_ACTION_KINDS.filter(k => k.startsWith("SetElement"));
+    expect(offered.length).toBeGreaterThan(0);
+    for (const kind of offered) {
+      expect(ELEMENT_ONLY_ACTION_KINDS.has(kind)).toBe(true);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Element rows in the asset picker (Phase B3)
+// ---------------------------------------------------------------------------
+
+describe("addableAssets with panel elements", () => {
+  const withPanels = {
+    ...defaultSnapshot,
+    hierarchy: [{ id: 1, name: "Cube", kind: "Cube", visible: true, children: [] }],
+    panel_instances: [
+      {
+        node_id: 10,
+        node_name: "Floor1",
+        elements: [
+          { name: "go", kind: "Button" },
+          { name: "readout", kind: "Label" },
+        ],
+      },
+      {
+        node_id: 11,
+        node_name: "Floor3",
+        elements: [{ name: "go", kind: "Button" }],
+      },
+    ],
+  } as EditorSnapshot;
+
+  const elementRow = (panel: number, name: string): XrdsTrackAssetDto => ({
+    target: { type: "Element", panel, name },
+    node_name: null,
+    keys: [],
+  });
+
+  const track = (assets: XrdsTrackAssetDto[]): NamedTrackDto => ({
+    name: "T",
+    assets,
+    duration_secs: null,
+    effective_duration_secs: 0,
+    looping: false,
+  });
+
+  it("offers every element of every placed panel, after the nodes", () => {
+    const rows = addableAssets(null, withPanels);
+    const elements = rows.filter(r => r.kind === "element");
+    expect(elements).toHaveLength(3);
+    // Nodes first so the common case stays at the top of the list.
+    expect(rows[0].kind).toBe("node");
+  });
+
+  it("labels an element with its panel, name and kind", () => {
+    const row = addableAssets(null, withPanels).find(
+      r => r.kind === "element" && r.name === "readout",
+    );
+    expect(row?.label).toBe("Floor1 · readout (Label)");
+  });
+
+  it("excludes an element that already has a row in THIS Track", () => {
+    const rows = addableAssets(track([elementRow(10, "go")]), withPanels);
+    const keys = rows.filter(r => r.kind === "element").map(r => `${(r as any).panel}:${(r as any).name}`);
+    expect(keys).not.toContain("10:go");
+  });
+
+  it("still offers the SAME element name on a DIFFERENT panel", () => {
+    // The point of (panel, name) addressing: floor 1's button and floor 3's
+    // button are separate assets, so taking one must not hide the other.
+    const rows = addableAssets(track([elementRow(10, "go")]), withPanels);
+    const keys = rows.filter(r => r.kind === "element").map(r => `${(r as any).panel}:${(r as any).name}`);
+    expect(keys).toContain("11:go");
+  });
+
+  it("taking an element row does not hide any node", () => {
+    const rows = addableAssets(track([elementRow(10, "go")]), withPanels);
+    expect(rows.filter(r => r.kind === "node")).toHaveLength(1);
+  });
+
+  it("offers nothing for a panel whose template is missing", () => {
+    // The Rust builder sends such a panel with an empty element list rather than
+    // omitting it, so the picker shows the panel with nothing to add.
+    const snap = {
+      ...withPanels,
+      panel_instances: [{ node_id: 12, node_name: "Dangling", elements: [] }],
+    } as EditorSnapshot;
+    expect(addableAssets(null, snap).filter(r => r.kind === "element")).toHaveLength(0);
+  });
+});
+
+describe("addable asset encoding", () => {
+  it("round-trips a node", () => {
+    const back = decodeAddableAsset(encodeAddableAsset({ kind: "node", id: 7, label: "x" }));
+    expect(back).toMatchObject({ kind: "node", id: 7 });
+  });
+
+  it("round-trips an element", () => {
+    const back = decodeAddableAsset(
+      encodeAddableAsset({ kind: "element", panel: 10, name: "go", label: "x" }),
+    );
+    expect(back).toMatchObject({ kind: "element", panel: 10, name: "go" });
+  });
+
+  it("preserves an element name containing a colon", () => {
+    // The naming policy allows printable ASCII, so a colon is legal in a name.
+    // Splitting on every colon instead of the first two would truncate it, and
+    // the resulting command would silently address a different element.
+    const back = decodeAddableAsset(
+      encodeAddableAsset({ kind: "element", panel: 3, name: "a:b:c", label: "" }),
+    );
+    expect(back).toMatchObject({ kind: "element", panel: 3, name: "a:b:c" });
+  });
+
+  it("rejects a malformed value rather than inventing a target", () => {
+    // A stale frontend or a hand-crafted value must not resolve to node 0 or to
+    // an empty element name — either would send a command addressing something
+    // real by accident.
+    for (const bad of ["", "nonsense", "el:", "el:3", "el:3:", "node:", "node:abc"]) {
+      expect(decodeAddableAsset(bad)).toBeNull();
+    }
   });
 });

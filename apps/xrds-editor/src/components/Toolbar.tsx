@@ -1,14 +1,21 @@
 import { useState } from "react";
-import type { EditorSnapshot, EditorCommand } from "../types/bridge";
+import type { EditorSnapshot, EditorCommand, Workspace } from "../types/bridge";
 
 interface Props {
   snapshot: EditorSnapshot;
   send: (cmd: EditorCommand) => void;
   onSaveAs: () => void;
   /** Which layout is active — see App.tsx's `workspace` state. */
-  workspace: "scene" | "sequencer";
-  onWorkspaceChange: (w: "scene" | "sequencer") => void;
+  workspace: Workspace;
+  onWorkspaceChange: (w: Workspace) => void;
 }
+
+/** The workspace layouts, in switcher order. */
+const WORKSPACES = [
+  { id: "scene", label: "Scene", hint: "3D scene authoring" },
+  { id: "sequencer", label: "Sequencer", hint: "Track choreography — the viewport stays live" },
+  { id: "panels", label: "Panels", hint: "Panel template design — a focused 2D view, no viewport" },
+] as const satisfies readonly { id: Workspace; label: string; hint: string }[];
 
 function sendStereoIpc(enabled: boolean, ipd_mm: number) {
   (window as any).ipc?.postMessage(JSON.stringify({
@@ -35,13 +42,18 @@ export function Toolbar({ snapshot, send, onSaveAs, workspace, onWorkspaceChange
       <span className="meta">undo: {undo_count} / redo: {redo_count}</span>
       <span className="meta">{selection.length === 0 ? "nothing selected" : `${selection.length} selected`}</span>
 
-      {/* Workspace switch — reflows the window between the scene layout and
-        * the Sequencer layout (docs/Sequencer_Editor.dc.html). */}
+      {/* Workspace switch — reflows the window between the scene layout, the
+        * Sequencer layout (docs/Sequencer_Editor.dc.html), and Panels.
+        *
+        * Panels differs from the other two in kind: it hides the 3D viewport
+        * entirely rather than resizing it, because panel design is a 2D task and
+        * a live viewport would only be something to click through by accident. */}
       <div className="tb-group" title="Switch workspace layout">
-        {(["scene", "sequencer"] as const).map(w => (
-          <button key={w} className={`tb-btn${workspace === w ? " active" : ""}`}
-            onClick={() => onWorkspaceChange(w)}>
-            {w === "scene" ? "Scene" : "Sequencer"}
+        {WORKSPACES.map(w => (
+          <button key={w.id} className={`tb-btn${workspace === w.id ? " active" : ""}`}
+            title={w.hint}
+            onClick={() => onWorkspaceChange(w.id)}>
+            {w.label}
           </button>
         ))}
       </div>

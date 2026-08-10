@@ -55,6 +55,11 @@ export function summarizeAction(a: XrdsAction): string {
     case "ModifyHealth": return "ModifyHealth";
     case "PlayGltfAnimation": return `PlayGltfAnimation(clip ${a.data.clip_index})`;
     case "StopGltfAnimation": return "StopGltfAnimation";
+    // Element actions show their value: on a panel row the value *is* the point,
+    // unlike SetMaterial where the detail lives in the editor below.
+    case "SetElementText": return `Text "${a.data.text}"`;
+    case "SetElementValue": return `Value ${a.data.value}`;
+    case "SetElementEnabled": return a.data.enabled ? "Enable" : "Disable";
     case "Unknown": return "Unrecognized (newer editor)";
   }
 }

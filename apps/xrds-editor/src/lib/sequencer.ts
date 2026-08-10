@@ -9,7 +9,7 @@
 // lane, since no key carried any node identity to group by.
 import type {
   ActionTarget, EditorSnapshot, NamedTrackDto, NodeBindingSummary, NodeInspector,
-  XrdsAction, XrdsTrackAssetDto, XrdsTrackKeyDto,
+  XrdsAction, XrdsTrackAssetDto, XrdsTrackKeyDto, PanelElementDto,
 } from "../types/bridge";
 
 // ---------------------------------------------------------------------------
@@ -196,6 +196,17 @@ export function assetRowLabel(asset: XrdsTrackAssetDto): { title: string; sub: s
       return { title: "Self", sub: "whichever node fires this" };
     case "TriggerSource":
       return { title: "Trigger source", sub: "whatever caused the trigger" };
+    case "Element":
+      // `node_name` carries the server-side "PanelName · elementName" join. Null
+      // means the panel node is gone; the element could instead have been
+      // renamed, which the Rust diagnostics distinguish — this label only has to
+      // be visibly wrong rather than blank.
+      return asset.node_name === null
+        ? {
+            title: `${asset.target.name} on panel #${asset.target.panel}`,
+            sub: "missing panel — deleted?",
+          }
+        : { title: asset.node_name, sub: `element on panel #${asset.target.panel}` };
   }
 }
 
@@ -237,23 +248,88 @@ export function assetRowAspects(asset: XrdsTrackAssetDto): string[] {
  * *other* Tracks are deliberately still offered: sharing is allowed at author
  * time, and merely means the two Tracks cannot run at the same time. The
  * warning for that comes from `track_diagnostics`, not from hiding options. */
+export type AddableAsset =
+  | { kind: "node"; id: number; label: string }
+  | { kind: "element"; panel: number; name: string; label: string };
+
+/** Wire value for a picker entry.
+ *
+ *  One `<Select>` offers both nodes and elements, so its value has to encode
+ *  which. `el:<panel>:<name>` splits on the **first two** colons only, because an
+ *  element name may legally contain one — the naming policy allows printable
+ *  ASCII. Splitting naively would corrupt any such name. */
+export function encodeAddableAsset(a: AddableAsset): string {
+  return a.kind === "node" ? `node:${a.id}` : `el:${a.panel}:${a.name}`;
+}
+
+/** Strict non-negative integer parse.
+ *
+ *  `Number("")` is **0**, not NaN, so a bare `"node:"` would otherwise decode to
+ *  node 0 — a real id — and the picker would send a command addressing whatever
+ *  node that is. Anything not made purely of digits is rejected instead. */
+function parseId(s: string): number | null {
+  return /^\d+$/.test(s) ? Number(s) : null;
+}
+
+export function decodeAddableAsset(value: string): AddableAsset | null {
+  if (value.startsWith("node:")) {
+    const id = parseId(value.slice(5));
+    return id === null ? null : { kind: "node", id, label: "" };
+  }
+  if (value.startsWith("el:")) {
+    const rest = value.slice(3);
+    const split = rest.indexOf(":");
+    if (split < 0) return null;
+    const panel = parseId(rest.slice(0, split));
+    // Everything after the second colon is the name, colons included.
+    const name = rest.slice(split + 1);
+    return panel !== null && name.length > 0
+      ? { kind: "element", panel, name, label: "" }
+      : null;
+  }
+  return null;
+}
+
 export function addableAssets(
   track: NamedTrackDto | null,
   snapshot: EditorSnapshot,
-): { id: number; name: string }[] {
-  const taken = new Set(
-    (track?.assets ?? [])
+): AddableAsset[] {
+  const rows = track?.assets ?? [];
+  const takenNodes = new Set(
+    rows
       .map(a => (a.target.type === "Node" ? a.target.id : null))
       .filter((id): id is number => id !== null),
   );
-  const out: { id: number; name: string }[] = [];
+  // Elements are taken per (panel, name) — the same element name on a *different*
+  // panel is a different asset, which is the whole point of the addressing.
+  const takenElements = new Set(
+    rows
+      .map(a => (a.target.type === "Element" ? `${a.target.panel}:${a.target.name}` : null))
+      .filter((k): k is string => k !== null),
+  );
+
+  const out: AddableAsset[] = [];
   const walk = (nodes: EditorSnapshot["hierarchy"]) => {
     for (const n of nodes) {
-      if (!taken.has(n.id)) out.push({ id: n.id, name: n.name });
+      if (!takenNodes.has(n.id)) out.push({ kind: "node", id: n.id, label: n.name });
       walk(n.children);
     }
   };
   walk(snapshot.hierarchy);
+
+  // Elements after nodes, each labelled "Panel · element (Kind)" so one flat list
+  // stays readable without the picker needing option groups.
+  for (const panel of snapshot.panel_instances) {
+    for (const el of panel.elements) {
+      if (takenElements.has(`${panel.node_id}:${el.name}`)) continue;
+      out.push({
+        kind: "element",
+        panel: panel.node_id,
+        name: el.name,
+        label: `${panel.node_name} · ${el.name} (${el.kind})`,
+      });
+    }
+  }
   return out;
 }
 
@@ -372,7 +448,16 @@ export function unavailableReasonFor(kind: string, node: NodeInspector): string 
     case "ButtonRelease":
     case "SliderChange":
     case "ToggleChange":
-      return "not reachable — authored widgets have no bindable node";
+      // These used to read "not reachable — authored widgets have no bindable
+      // node", which was true and is not any more. Panel *elements* now carry
+      // their own triggers, and those bindings are attached to the very entity
+      // the widget event targets, so they fire.
+      //
+      // They remain unavailable on a **node**, though: the event targets the
+      // element's entity, and a node is not an element. So this is now a
+      // "wrong place" message rather than a "nowhere" one — see
+      // `elementUnavailableReasonFor` for the element-side rule.
+      return "set this on a panel element, not on a node";
     case "AnimationComplete":
       return node.payload.type === "GltfAsset" ? null : "needs a glTF asset";
     case "Custom":
@@ -389,6 +474,47 @@ export function validKindsFor(node: NodeInspector): string[] {
   return ALL_TRIGGER_KINDS.filter(kind => unavailableReasonFor(kind, node) === null);
 }
 
+/** Why `kind` cannot fire for a panel **element** — `null` means available.
+ *
+ * Reads `element.emittable_triggers`, which the Rust side computes from
+ * `XrdsPanelElement::can_emit`. Deliberately *not* re-derived here: which kinds
+ * an element emits is a runtime fact, and a second copy of the rule would drift
+ * from the diagnostics that use the original. This function only turns that list
+ * into a message.
+ *
+ * The counterpart to `unavailableReasonFor`, which answers the same question for
+ * a node. The two are disjoint on purpose: widget kinds work on elements and not
+ * on nodes; zone/grab/glTF kinds work on nodes and not on elements. */
+export function elementUnavailableReasonFor(
+  kind: string,
+  element: PanelElementDto,
+): string | null {
+  if (element.emittable_triggers.includes(kind)) return null;
+  if (element.emittable_triggers.length === 0) {
+    return `a ${elementKindName(element)} emits nothing`;
+  }
+  return `a ${elementKindName(element)} only emits ${element.emittable_triggers.join(" / ")}`;
+}
+
+/** Kinds an element can actually fire, for its trigger picker. */
+export function validKindsForElement(element: PanelElementDto): string[] {
+  return element.emittable_triggers;
+}
+
+/** Display name of an element's widget kind. */
+export function elementKindName(element: PanelElementDto): string {
+  return element.widget.type;
+}
+
+/** The mockup-style two-line row label for a panel element.
+ *
+ *  Shows the kind only. It used to append a binding count, which is no longer
+ *  knowable here: a template carries no bindings — each placed node has its own —
+ *  so any count shown against the template would be wrong for some instance. */
+export function elementRowLabel(element: PanelElementDto): { title: string; sub: string } {
+  return { title: element.name, sub: elementKindName(element) };
+}
+
 /** Action kinds an author may place on a Track row, in picker order.
  *
  * `Wait`, `Run` and `FireCustomEvent` are absent because they no longer exist:
@@ -398,7 +524,30 @@ export function validKindsFor(node: NodeInspector): string[] {
 export const TRACK_ACTION_KINDS = [
   "SetTransform", "SetVisible", "SetMaterial",
   "PlayGltfAnimation", "StopGltfAnimation", "ModifyHealth",
+  "SetElementText", "SetElementValue", "SetElementEnabled",
 ] as const;
+
+/** Action kinds that only do anything on an `Element` row.
+ *
+ *  Offered on a node row they would be menu entries that silently no-op: a node
+ *  has no element text, no element scalar and nothing to disable. Kept as a set
+ *  so the filter and the reason text cannot disagree. */
+export const ELEMENT_ONLY_ACTION_KINDS: ReadonlySet<string> = new Set([
+  "SetElementText", "SetElementValue", "SetElementEnabled",
+]);
+
+/** Why `kind` cannot be added to a row with this target, or null when it can.
+ *
+ *  Mirrors what `unavailableReasonFor` does for *trigger* kinds: show the whole
+ *  menu and say what each greyed entry needs, rather than hiding entries and
+ *  leaving an author to guess why the list is short. */
+export function actionUnavailableReasonFor(
+  kind: string,
+  target: ActionTarget,
+): string | null {
+  if (!ELEMENT_ONLY_ACTION_KINDS.has(kind)) return null;
+  return target.type === "Element" ? null : "only applies to a panel element row";
+}
 
 /** Coarse family for a row's target, used only for display grouping. */
 export function targetLabel(target: ActionTarget): string {
@@ -406,5 +555,6 @@ export function targetLabel(target: ActionTarget): string {
     case "SelfNode": return "Self";
     case "Node": return `Node #${target.id}`;
     case "TriggerSource": return "Trigger source";
+    case "Element": return `${target.name} on panel #${target.panel}`;
   }
 }

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { EditorCommand, EditorSnapshot, XrdsTrackKeyDto } from "../types/bridge";
 import {
   ROW_H, actionDuration, addableAssets, assetRowAspects, assetRowLabel,
+  decodeAddableAsset, encodeAddableAsset,
   buildTriggerReverseIndex, conflictingTracks, fmtTime, keyTopPx, layoutAssetRow,
   niceStep, rulerTicks,
 } from "../lib/sequencer";
@@ -250,13 +251,24 @@ export function SequencerWorkspace({
                 value={ADD_ASSET_SENTINEL}
                 onValueChange={v => {
                   if (v === ADD_ASSET_SENTINEL) return;
-                  send({ type: "AddTrackAsset", payload: { track: track.name, node_id: +v } });
+                  // One picker, two row kinds. The value is decoded rather than
+                  // parsed inline so the encoding lives in one tested place —
+                  // element names may contain a colon, which naive splitting
+                  // would corrupt.
+                  const pick = decodeAddableAsset(v);
+                  if (pick === null) return;
+                  send(pick.kind === "node"
+                    ? { type: "AddTrackAsset", payload: { track: track.name, node_id: pick.id } }
+                    : {
+                        type: "AddTrackElementAsset",
+                        payload: { track: track.name, panel: pick.panel, element: pick.name },
+                      });
                 }}
                 options={[
                   { value: ADD_ASSET_SENTINEL, label: "+ Asset…" },
-                  ...addableAssets(track, snapshot).map(n => ({
-                    value: String(n.id),
-                    label: n.name,
+                  ...addableAssets(track, snapshot).map(a => ({
+                    value: encodeAddableAsset(a),
+                    label: a.label,
                   })),
                 ]}
               />

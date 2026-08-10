@@ -18,20 +18,76 @@ export interface AssetCatalogEntry {
   kind: string;
 }
 
-export interface HudItemDefDto {
+/** A reusable panel template — the unified model behind HUD panels and
+ *  world-space panels, where the only difference is attachment.
+ *
+ *  Carries **no placement**: depth belongs to the anchor that head-locks it,
+ *  position to the node that places it in the scene. */
+export interface PanelTemplateDto {
   id: number;
   name: string;
-  position: [number, number];
-  text: string;
-  font_size: number;
+  size: [number, number];
   color: [number, number, number, number];
+  corner_radius: number;
+  opacity: number;
+  layout: WorldLayout;
+  elements: PanelElementDto[];
 }
 
-export interface HudTemplateDto {
-  id: number;
+/** One named element on a panel.
+ *
+ *  `widget` reuses {@link WorldWidget} rather than a parallel five-kind type,
+ *  for the same reason the schema reuses `XrdsSceneWorldWidget`: a second copy
+ *  would drift, and an element genuinely *is* a named widget with triggers. */
+export interface PanelElementDto {
+  /** Unique within its template — **the addressing key**. Commands take this,
+   *  never an index, so reordering cannot silently re-point a binding. */
   name: string;
-  depth: number;
-  items: HudItemDefDto[];
+  widget: WorldWidget;
+  /** Which trigger kinds this element can actually emit.
+   *
+   *  Resolved server-side from `XrdsPanelElement::can_emit` rather than
+   *  re-derived here: reachability is a runtime fact (a Label emits nothing;
+   *  `Custom` needs a node id an element does not have), and a second copy
+   *  would drift from the Rust diagnostics that use the original.
+   *
+   *  There is no `triggers` field: a template carries no bindings. The Panels
+   *  workspace designs panels; wiring happens per placed node — see
+   *  {@link PanelInstanceElementDto}. */
+  emittable_triggers: string[];
+}
+
+/** One element of a *placed* Panel node: the template's element joined with this
+ *  instance's wiring.
+ *
+ *  Joined server-side so the Inspector need not cross-reference `panel_library`,
+ *  and so an orphaned binding (a key whose element the template no longer has)
+ *  stays visible instead of silently vanishing from the list while remaining in
+ *  the saved file. */
+export interface PanelElementRefDto {
+  name: string;
+  /** "Label" | "Button" | "Image" | "Slider" | "Toggle". */
+  kind: string;
+}
+
+/** A placed Panel node reduced to what a picker needs. Thinner than
+ *  { PanelInstanceElementDto} on purpose — no wiring, no emittable set. */
+export interface PanelInstanceSummaryDto {
+  node_id: number;
+  node_name: string;
+  elements: PanelElementRefDto[];
+}
+
+export interface PanelInstanceElementDto {
+  name: string;
+  /** "Label" | "Button" | "Image" | "Slider" | "Toggle", or "missing" when
+   *  `orphaned`. */
+  kind: string;
+  emittable_triggers: string[];
+  triggers: TriggerBindingDto[];
+  /** True when this row exists only because the instance has wiring for a name
+   *  the template does not define — what a deleted element leaves behind. */
+  orphaned: boolean;
 }
 
 export interface MaterialParams {
@@ -55,6 +111,13 @@ export interface MaterialTextures {
   occlusion: string | null;
   emissive: string | null;
 }
+
+/** Radix `Select.Item` forbids `value=""`, so "no selection" needs a stand-in.
+ *  Exported rather than declared per-component: two copies of a sentinel that
+ *  drift apart would silently stop matching, and the wire convention stays `null`
+ *  either way — these never leave the UI. */
+export const TRACK_NONE_SENTINEL = "__none__";
+export const HAND_ANY_SENTINEL = "__any__";
 
 /** Slot keys of {@link MaterialTextures}, paired with the wire name
  *  `SetNodeMaterialTexture` expects and a human label. One list so the UI
@@ -83,10 +146,24 @@ export type NodePayload =
   | { type: "GltfAsset";    clips: { index: number; name: string }[] }
   | { type: "HudText";   text: string; font_size: number; color: [number,number,number,number]; anchor: string; offset: [number,number] }
   | { type: "Player" }
-  | { type: "PlayerAnchor"; fov_deg: number; is_initial: boolean; hud_template_id: number | null; exposure: number | null }
+  // `panel_template_id` + `panel_depth` replace `hud_template_id`. Depth is here
+  // rather than on the template so two anchors can share one at different
+  // distances — the limitation that retired `XrdsHudTemplate::depth`.
+  | { type: "PlayerAnchor"; fov_deg: number; is_initial: boolean; panel_template_id: number | null; panel_depth: number; exposure: number | null }
   | { type: "PlayerSpawnZone"; size: [number, number, number]; player_node_id: number | null }
   | { type: "WorldPanel"; size: [number, number]; color: [number,number,number,number]; corner_radius: number; opacity: number; layout: WorldLayout; widgets: WorldWidget[] }
+  // A scene-placed instance of a panel template — the counterpart to an anchor's
+  // head-locked link. Only the id travels; the name is resolved from
+  // `panel_library` so a rename cannot leave a stale copy behind.
+  | { type: "Panel"; template_id: number; elements: PanelInstanceElementDto[] }
   | { type: "Other";        kind: string };
+
+/** Which editor layout is active.
+ *
+ *  `scene` and `sequencer` both keep the Bevy viewport live — the Sequencer just
+ *  gives it less room. `panels` hides it outright: panel design is 2D, so a live
+ *  viewport would only be a hole to click through by accident. */
+export type Workspace = "scene" | "sequencer" | "panels";
 
 export type RGBA = [number, number, number, number];
 
@@ -169,6 +246,11 @@ export type XrdsAction =
       };
     }
   | { kind: "ModifyHealth"; data: { delta: ActionValue } }
+  // Element-scoped. Only meaningful on an `Element` asset row — a node has no
+  // text, scalar or enabled state of this kind.
+  | { kind: "SetElementText"; data: { text: string } }
+  | { kind: "SetElementValue"; data: { value: number } }
+  | { kind: "SetElementEnabled"; data: { enabled: boolean } }
   /** An action this build does not recognize — from a newer editor. Skipped
    *  at runtime and reported by `track_diagnostics`. */
   | { kind: "Unknown" };
@@ -176,7 +258,11 @@ export type XrdsAction =
 export type ActionTarget =
   | { type: "SelfNode" }
   | { type: "Node"; id: number }
-  | { type: "TriggerSource" };
+  | { type: "TriggerSource" }
+  // One named element on one placed Panel node. Two fields because an element has
+  // no id of its own — it is not a document node — and going through the panel is
+  // what makes two instances of one template two different targets.
+  | { type: "Element"; panel: number; name: string };
 
 export type ActionValue =
   | { type: "Fixed"; value: number }
@@ -242,8 +328,19 @@ export interface TrackConflictDto {
   contended: string[];
 }
 
+/** Whether a binding starts or stops its Track.
+ *
+ *  A stop button is the motivating case: without it, first-run priority means a
+ *  running Track cannot be interrupted from authored content at all. Two bindings
+ *  on one element — Stop then Fire — restart a Track from the top, which is how a
+ *  restart button avoids needing an "is it running?" condition. */
+export type TriggerEffect = "Fire" | "Stop";
+
+export const TRIGGER_EFFECTS: TriggerEffect[] = ["Fire", "Stop"];
+
 export interface TriggerBindingDto {
   trigger: XrdsTriggerKind;
+  effect: TriggerEffect;
   disabled: boolean;
   /** "Left" | "Right" | null. */
   hand: string | null;
@@ -313,7 +410,7 @@ export interface ApkPrerequisite {
  *  replaced wholesale by the first real snapshot.
  *
  *  Bump this together with the Rust constant whenever a DTO changes. */
-export const BRIDGE_VERSION = 5;
+export const BRIDGE_VERSION = 15;
 
 export interface EditorSnapshot {
   /** See {@link BRIDGE_VERSION}. `0` means a build predating the check. */
@@ -340,7 +437,15 @@ export interface EditorSnapshot {
   active_camera_id: number | null;
   player_anchors: PlayerAnchorEntry[];
   active_player_anchor_id: number | null;
-  hud_library: HudTemplateDto[];
+  /** Panel template library — the unified model. */
+  panel_library: PanelTemplateDto[];
+  /** Every placed Panel node and its elements — what the Sequencer needs to offer
+   *  element rows. `hierarchy` cannot serve this: it carries a node's name and
+   *  kind but not its `template_id`, so it cannot say which elements a Panel has. */
+  panel_instances: PanelInstanceSummaryDto[];
+  /** Panel authoring problems, separate from `track_diagnostics` so the panel
+   *  workspace shows its own. */
+  panel_diagnostics: TriggerDiagnosticDto[];
   stereo_preview_active: boolean;
   /** Populated for one frame after CheckApkPrerequisites; null otherwise. */
   apk_prerequisites: ApkPrerequisite[] | null;
@@ -401,7 +506,9 @@ export const defaultSnapshot: EditorSnapshot = {
   active_camera_id: null,
   player_anchors: [],
   active_player_anchor_id: null,
-  hud_library: [],
+  panel_library: [],
+  panel_instances: [],
+  panel_diagnostics: [],
   stereo_preview_active: false,
   apk_prerequisites: null,
   is_exporting_apk: false,
@@ -452,19 +559,9 @@ export type EditorCommand =
   | { type: "SetSkybox";    payload: { texture_asset_id: string; brightness: number } }
   | { type: "ClearSkybox" }
   | { type: "SetHudText";         payload: { id: number; text: string; font_size: number; color: [number,number,number,number]; anchor: string; offset: [number,number] } }
-  // HUD library commands
-  | { type: "CreateHudTemplate";    payload: { name: string } }
-  | { type: "DeleteHudTemplate";    payload: { id: number } }
-  | { type: "RenameHudTemplate";    payload: { id: number; name: string } }
-  | { type: "SetHudTemplateDepth";  payload: { id: number; depth: number } }
-  | { type: "AddHudItem";           payload: { template_id: number } }
-  | { type: "RemoveHudItem";        payload: { template_id: number; item_id: number } }
-  | { type: "RenameHudItem";        payload: { template_id: number; item_id: number; name: string } }
-  | { type: "SetHudItemPosition";   payload: { template_id: number; item_id: number; position: [number,number] } }
-  | { type: "SetHudItemText";       payload: { template_id: number; item_id: number; text: string } }
-  | { type: "SetHudItemFontSize";   payload: { template_id: number; item_id: number; font_size: number } }
-  | { type: "SetHudItemColor";      payload: { template_id: number; item_id: number; color: [number,number,number,number] } }
-  | { type: "LinkHudTemplate";      payload: { anchor_id: number; template_id: number | null } }
+  // The 12 HudTemplate/HudItem commands are gone with `XrdsHudTemplate`: a HUD is
+  // a panel template head-locked to an anchor, so the panel commands below cover
+  // every one of them, and `LinkHudTemplate` became `LinkPanelTemplate`.
   | { type: "SetCameraParams";    payload: { id: number; fov: number; near: number; far: number } }
   | { type: "CommitCameraParams"; payload: { id: number; fov: number; near: number; far: number } }
   | { type: "SetPlayerAnchorFov";      payload: { id: number; fov_deg: number } }
@@ -479,6 +576,30 @@ export type EditorCommand =
   | { type: "SetWorldPanelWidget";     payload: { id: number; index: number; widget: WorldWidget } }
   | { type: "SetWorldPanelWidgets";    payload: { id: number; widgets: WorldWidget[] } }
   | { type: "SetWorldPanelLayout";     payload: { id: number; layout: WorldLayout } }
+  // --- Panel template library (unified model) ---
+  // Elements are addressed by **name**, never index.
+  | { type: "CreatePanelTemplate";    payload: { name: string } }
+  | { type: "DeletePanelTemplate";    payload: { id: number } }
+  | { type: "RenamePanelTemplate";    payload: { id: number; name: string } }
+  | { type: "SetPanelTemplateParams"; payload: { id: number; size: [number, number]; color: [number,number,number,number]; corner_radius: number; opacity: number } }
+  | { type: "AddPanelElement";        payload: { template_id: number; kind: string; name: string } }
+  | { type: "RemovePanelElement";     payload: { template_id: number; name: string } }
+  | { type: "RenamePanelElement";     payload: { template_id: number; name: string; new_name: string } }
+  | { type: "SetPanelElementWidget";  payload: { template_id: number; name: string; widget: WorldWidget } }
+  // Element trigger bindings. The *element* by name (reordering must not
+  // re-point a binding); the binding within it by index, like node bindings.
+  // Node-scoped, not template-scoped: bindings live on the placed instance so two
+  // instances of one template can drive two different targets.
+  | { type: "AddPanelNodeTrigger";    payload: { id: number; element: string } }
+  | { type: "RemovePanelNodeTrigger"; payload: { id: number; element: string; index: number } }
+  | { type: "SetPanelNodeTriggerKind";     payload: { id: number; element: string; index: number; trigger: XrdsTriggerKind } }
+  | { type: "SetPanelNodeTriggerTrack";    payload: { id: number; element: string; index: number; track: string | null } }
+  | { type: "SetPanelNodeTriggerHand";     payload: { id: number; element: string; index: number; hand: string | null } }
+  | { type: "SetPanelNodeTriggerDisabled"; payload: { id: number; element: string; index: number; disabled: boolean } }
+  | { type: "LinkPanelTemplate"; payload: { anchor_id: number; template_id: number | null; depth: number } }
+  // Not nullable, unlike LinkPanelTemplate: a Panel node *is* its template
+  // reference, so clearing it would leave a node that can never render.
+  | { type: "SetPanelInstanceTemplate"; payload: { id: number; template_id: number } }
   | { type: "SetPhysicsBody";          payload: { id: number; physics_body: string } }
   | { type: "SetGravityScale";         payload: { id: number; value: number } }
   | { type: "SetMass";                 payload: { id: number; value: number } }
@@ -505,7 +626,10 @@ export type EditorCommand =
   | { type: "OpenScene";     payload: { path: string } }
   | { type: "ImportAsset";   payload: { path: string } }
   | { type: "RemoveAsset";   payload: { asset_id: string } }
-  | { type: "ExportGlb";            payload: { path: string } }
+  // `ExportGlb` removed: glTF has no vocabulary for panels, triggers, Tracks,
+  // anchors or zones, so a scene export wrote a mesh dump that looked complete.
+  // glTF *import* is unaffected, and `ExportApplication`/`ExportApk` never
+  // depended on it — they only copy existing .glb assets.
   | { type: "ExportApplication";    payload: { output_dir: string } }
   | { type: "CheckApkPrerequisites" }
   | { type: "ExportApk";            payload: { output_dir: string } }
@@ -526,6 +650,7 @@ export type EditorCommand =
   // --- Tracks: asset rows. Refused server-side if the asset already has a
   //     row, so the UI cannot create a duplicate the diagnostics would flag. ---
   | { type: "AddTrackAsset";       payload: { track: string; node_id: number } }
+  | { type: "AddTrackElementAsset"; payload: { track: string; panel: number; element: string } }
   | { type: "RemoveTrackAsset";    payload: { track: string; asset_index: number } }
   | { type: "SetTrackAssetTarget"; payload: { track: string; asset_index: number; node_id: number } }
   // --- Tracks: events on a row. Row-addressed, because an event belongs to an
@@ -545,6 +670,8 @@ export type EditorCommand =
   | { type: "SetTriggerBindingTrigger";  payload: { node_id: number; index: number; trigger: XrdsTriggerKind } }
   | { type: "SetTriggerBindingHand";     payload: { node_id: number; index: number; hand: string | null } }
   | { type: "SetTriggerBindingDisabled"; payload: { node_id: number; index: number; disabled: boolean } }
+  | { type: "SetTriggerBindingEffect"; payload: { node_id: number; index: number; effect: TriggerEffect } }
+  | { type: "SetPanelNodeTriggerEffect"; payload: { id: number; element: string; index: number; effect: TriggerEffect } }
   | { type: "SetTriggerBindingTrack";    payload: { node_id: number; index: number; track: string | null } }
   // --- Trigger-action: per-node threshold watchers ---
   | { type: "AddWatcher";    payload: { node_id: number } }
