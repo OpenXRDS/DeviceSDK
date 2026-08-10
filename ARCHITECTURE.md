@@ -16,7 +16,7 @@ flowchart TB
     subgraph sdk["SDK crates"]
         runtime["xrds-runtime<br/>XrdsApp / XrdsAPI / XrdsUpdateContext<br/>runtime projection layer"]
         scenegraph["xrds-scene-graph<br/>XrdsSceneDocument (JSON persistence,<br/>validation, undo/redo sessions)"]
-        gltf["xrds-gltf<br/>GLTF export from documents"]
+        gltf["xrds-gltf<br/>(deprecated: scene glTF export retired)"]
         components["xrds-components<br/>shared XRDS descriptors<br/>(primitives, world-UI widgets, …)"]
         openxr["xrds-openxr<br/>OpenXR backend, XrInput"]
         net["xrds-net<br/>networking integrations"]
@@ -29,7 +29,8 @@ flowchart TB
     %% blue: app → SDK dependencies
     editor --> runtime
     editor --> scenegraph
-    editor --> gltf
+    %% `editor --> gltf` was here. The editor's dependency on xrds-gltf was
+    %% dropped with the Export Scene GLB command; the crate now has no consumers.
     xrdsapp --> runtime
     xrdsapp --> scenegraph
     xrdsapp --> openxr
@@ -126,7 +127,10 @@ flowchart TB
     world -- "XrdsIdIndex resolves<br/>handles ↔ entities" --> api
 
     %% orange: export outputs
-    export["xrds-gltf export /<br/>APK · desktop app export"]
+    %% Deliberately no longer mentions xrds-gltf. The two were drawn in one box,
+    %% which implied a dependency that never existed: APK/app export only copies
+    %% existing .glb assets and rewrites asset_uri. Scene glTF export is retired.
+    export["APK · desktop app export"]
     doc --> export
 
     linkStyle 0 stroke:#b083f0,stroke-width:2px

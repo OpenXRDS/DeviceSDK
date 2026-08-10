@@ -48,7 +48,7 @@ What still keeps the editor from being fully polished:
 | Physics | avian3d v0.4; Static/Dynamic/None bodies; per-primitive colliders; grab/throw; raycasting; interaction zone sensors; scene-doc serialized | **90%** |
 | Asset workflow | Gltf, Texture, EnvironmentMap, Audio — catalog, validation, diagnostics, runtime | **92%** |
 | GUI editor | Functional editor with all core panels; text3d and texture-slot UI gaps remain | **88%** |
-| Export pipeline | Export as Application (Windows/Linux/macOS validated); GLB export | **95%** |
+| Export pipeline | Export as Application (Windows/Linux/macOS validated). Scene GLB export **retired** — glTF cannot represent panels/triggers/Tracks/anchors, so it wrote a mesh dump that looked like a scene save. glTF *import* unaffected. | **95%** |
 | Docs/examples/test coverage | Round-trip tests for all node types; 3-platform QA passed; regression suite complete | **88%** |
 
 ## Completed Highlights

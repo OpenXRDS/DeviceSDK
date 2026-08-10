@@ -430,6 +430,33 @@ It also makes the supposed ambiguity vanish rather than needing a new scope:
 
 No panel-instance concept is needed in either case. Not blocking anything.
 
+## 6c. Continuous controls are read, not bound
+
+Found while sanity-checking what element triggers make possible. Two shipped
+features interact in a way neither shows on its own:
+
+- `world_ui_slider_system` fires `XrWorldSliderChangeEvent` **every frame the
+  value changes during a drag** (its own doc comment says so).
+- First-run priority (§5b) refuses a re-fire while a Track still runs.
+
+So a slider bound to a Track yields roughly **one run per drag**, with every
+later frame refused and logged as a conflict. Arguably useful debouncing, but
+surprising, and the conflict log gets noisy.
+
+**And the Track never receives the slider's value.** `XrdsActionValue::
+FromTriggerSource` reads an `XrdsTriggerValue` component off the source entity,
+and the slider system never populates one.
+
+So the division is: **discrete controls bind to Tracks; continuous controls get
+read.** A throttle or trim wheel belongs to gameplay code via the expert path.
+That is not a gap to close so much as the right boundary — a Track is authored
+choreography, not a control loop. Making continuous controls *authorable* is the
+deferred data-binding subsystem (§1), and it would need the read direction too
+(element → value), not only value → element.
+
+Worth a diagnostic eventually: a `SliderChange` binding on an element is almost
+always a mistake unless the Track is short and idempotent.
+
 ## 7. Editor — a third workspace, same language as the Sequencer
 
 The Sequencer's shell is: named registry on the left, the thing being edited
@@ -552,12 +579,135 @@ Deferred out of A1 (was in scope, now sequenced later):
 
 ### A4b — retire the old vocabulary (after A2 and A3)
 
-- [ ] Delete `XrdsHudTemplate`, `XrdsHudItemDef`, `HudItemDefId`; a HUD text
-      item becomes a `Label` element.
-- [ ] Retire `XrdsSceneWorldPanel::widgets` in favour of `template_id`.
-- [ ] Delete `hud_library.rs` and the 12 HUD commands.
-- [ ] Only once the runtime and editor are proven on the new types — this is
-      the step risk #1 is about.
+Split into three, because the original single step could not end green: it mixed
+a latent data-loss bug, a vocabulary deletion, and a payload redesign that
+reaches into glTF export.
+
+#### A4b-0 — the panels export round-trip — landed
+
+Found while surveying A4b, **not** by a test: `hud_library` and `tracks` both
+round-trip through export, and `panels` did not. Since a `Panel` node carries
+only a `template_id`, the registry *is* the content — so `export_scene_document`
+produced documents whose panels were empty shells, and any save/load cycle
+silently deleted every panel template an author had made. A latent bug in A2,
+and A4b would have replaced the registry that *does* survive with the one that
+doesn't.
+
+- [x] `XrdsImportedPanelLibrary` resource + `sync_panel_registry`, mirroring
+      `XrdsTrackRegistry`/`sync_track_registry`.
+- [x] Wired into **both** import paths. `reimport_scene_in_world` and
+      `XrdsAPI::import_scene_document` share no body, and `hud_library` was in
+      fact only ever stored by the first — the same asymmetry that once left
+      `tag_player_anchor_entities` off the import path.
+- [x] Exported alongside `hud_library`/`tracks` in `export_scene_document`.
+- [x] Replaced wholesale rather than merged, so deleting a template in the editor
+      does not resurrect it on the next import. Tested.
+- [x] 3 tests, one per path plus the clearing rule. Written failing first
+      (`left: []`). Mutation-verified: removing either call fails exactly the
+      test for that path, so neither is coasting on the other.
+
+#### A4b-1 — retire the HUD template vocabulary — landed
+
+- [x] Deleted `XrdsHudTemplate`, `XrdsHudItemDef`, `HudItemDefId`,
+      `XrdsSceneDocument::hud_library`, `hud_template()`/`hud_template_mut()`,
+      `next_available_template_id()`; a HUD text item is now a `Label` element.
+      Unblocked by A3b-3 — before that this step *removed* authoring ability.
+- [x] Deleted a **second, entirely dead copy** of `XrdsHudTemplate` /
+      `XrdsHudItemDef` in `xrds-components/src/primitives/hud_panel.rs`. Nothing
+      referenced it; it had been shadowed by the scene-graph pair the whole time.
+- [x] Deleted `XrdsScenePlayerAnchor::hud_template_id`, and with it the "anchor
+      links both template kinds" diagnostic and its two tests — with one kind of
+      template left, the ambiguity cannot be expressed. Replaced by one test that
+      the common no-panel case stays quiet.
+- [x] `XrdsImportedHudLibrary` and `spawn_hud_instance_for_anchor` gone; the
+      anchor path keeps only `panel_template_id`, with no precedence rule.
+- [x] `link_hud` → `link_panel(anchor, Option<&XrdsPanelTemplate>, depth)`. It
+      could not survive its own parameter type.
+- [x] **`set_hud_item` keeps its name and contract** (§8), and its doc comment
+      now says why: it resolves against `XrdsStoredHudInstance`, which was always
+      name-keyed and is exactly what the panel path populates.
+- [x] Deleted `hud_library.rs` and its 12 commands, `HudTemplateDto` /
+      `HudItemDefDto`, the `hud_library` snapshot field, `HudLibraryPanel` and
+      `HudCanvasOverlay`. Plus 8 of 10 now-dead `.hud-library-*` CSS rules; the
+      2 survivors keep their names, since renaming a shared class is a silent
+      unstyling if a call site is missed.
+- [x] **`LinkPanelTemplate` added, not just renamed.** The anchor DTO exposed
+      `hud_template_id` and never `panel_template_id`, so head-locked panels were
+      not authorable from the editor at all — deleting the old command without
+      this would have been a straight regression. Carries `depth`, so the
+      Inspector gained a depth slider that `XrdsHudTemplate::depth` made
+      impossible. 6 tests; mutation-verified on the dangling-link guard.
+- [x] Panel commands added to `is_structural_command`, where they had been
+      missing — panel authoring logged at `trace!` while comparable edits logged
+      at `info!`. (Investigated as a possible missed-reimport bug first; it is
+      log-level only. `apply_panel_library_command` returns its own reimport
+      flag.)
+- [x] Corrected an inaccurate comment on `DeletePanelTemplate`: it clears
+      *anchor* links but leaves `Panel` **nodes** dangling, because a Panel node's
+      whole payload is the reference and there is no empty state to fall back to.
+      Diagnosed rather than silently deleting the author's node.
+- [x] `BRIDGE_VERSION` 7 → 8, both sides.
+- [x] Not in scope, as planned: `XrdsSceneHudText`/`XrdsStoredHudText`/
+      `SetHudText`. A *node payload*, unrelated to templates despite the name.
+
+#### A4b-2a — make scene-placed panels authorable — landed
+
+Reordered ahead of the deletion after scoping turned up two compounding gaps.
+These are the reason A4b-2 is a **bug fix**, not a cleanup:
+
+1. **`XrdsSceneWorldWidget` has no `triggers` field.** Only `XrdsPanelElement`
+   adds one, and the WorldPanel spawn path (`api.rs`, `reimport.rs`) discards the
+   entity `spawn_world_widget_from_scene` returns. So **every button, slider and
+   toggle on a WorldPanel node is dead** — it renders, it highlights on hover, and
+   it can never run anything.
+2. **Nothing in the editor could create a `Panel` node.** The palette offered only
+   `WorldPanel`; `XrdsSceneNodePayload::Panel` appeared solely in tests. So a
+   template with working triggers could be head-locked (A4b-1) but never placed on
+   a wall — the missing half of "attachment is the only difference".
+
+Doing this before the deletion also means a stall leaves a working feature rather
+than a half-migration.
+
+- [x] Palette `Panel` entry. Bootstraps a starter template when the library is
+      empty rather than refusing the spawn, which would make the entry look broken
+      to anyone who has not opened the Panels workspace; reuses the first existing
+      template otherwise, so placing four panels does not leave four near-identical
+      library entries. Both branches mutation-verified.
+- [x] Same default placement as `WorldPanel` (eye height, 1 m forward), so
+      migrating one in A4b-2b does not move it.
+- [x] `NodePayloadDto::Panel { template_id }` — id only. The frontend resolves the
+      name from `panel_library`, which is already in the snapshot, so a rename
+      cannot leave a stale copy behind.
+- [x] `SetPanelInstanceTemplate`. **Not** `Option<u64>` unlike
+      `LinkPanelTemplate`: an anchor can have no panel, but a Panel node *is* its
+      template reference, so clearing it would leave a node that can never render.
+- [x] Inspector section, deliberately thin — template picker plus element count
+      and size. No per-instance size/background overrides: that would be
+      `XrdsHudTemplate::depth`'s mistake in reverse, with instances quietly
+      diverging from the shared definition.
+- [x] A missing template shows as a red note *and* keeps a placeholder option, so
+      the select cannot silently snap to another template and hide the problem.
+- [x] Corrected the `HudText` palette tip, which still pointed at the deleted HUD
+      Library panel, and made the `WorldPanel` tip state that its buttons cannot
+      fire triggers.
+- [x] 6 tests, including that a bootstrapped panel is diagnostic-clean (the
+      starter name has to pass the naming policy) and that deleting a template
+      leaves Panel nodes dangling-and-diagnosed rather than silently removing the
+      author's node.
+- [x] `BRIDGE_VERSION` 9 → 10.
+
+#### A4b-2b — retire `XrdsSceneWorldPanel`
+
+Separate because it is not a deletion but a redesign, and it reaches further than
+the checklist implied. `XrdsSceneWorldPanel` holds background + size + layout +
+inline `widgets` — which is, field for field, an `XrdsPanelTemplate` fused to its
+own attachment. The unified model already splits those into `XrdsPanelTemplate`
+plus `XrdsSceneNodePayload::Panel`, so the payload is not *missing* a
+`template_id`, it is **wholly superseded**.
+
+- [ ] Convert `WorldPanel` nodes to `Panel` instances + a generated template.
+- [ ] Touches glTF export, `world_ui` tests, and `WorldPanelCanvasOverlay` —
+      the reason this is not folded into A4b-1.
 
 ### A2a — the trigger mechanism — landed
 
@@ -605,20 +755,43 @@ depends on it. A2b below does the wiring.
       — the full authored path with no hand-spawned entities: document →
       template → instance → element → binding → Track.
 
-### A2c — camera attachment and HUD migration (next)
+### A2c — camera attachment — landed
 
-The half where risk #1 actually bites — everything above is additive and the
-working HUD is untouched.
+**"Attachment is the only difference" now holds literally.** One template, two
+attachment points, and the only thing that differs is placement: a scene `Panel`
+node parents elements to itself, the camera path parents them to the anchor with
+`XrdsHeadLocked` at `-depth` in camera-local space. The elements themselves spawn
+through the same `spawn_panel_element_in_world` either way.
 
-- [ ] Camera: `XrdsScenePlayerAnchor { panel_template_id, panel_depth }`, with
-      `depth` on the *attachment* (§3), alongside `hud_template_id` at first.
-- [ ] Spawn the camera path from a template (`reimport.rs:472` currently reads
-      `hud_template`), reusing `spawn_panel_element_in_world`.
-- [ ] Keep `set_hud_item(name, …)` working (`src/xrds_api/context.rs`) by
-      resolving to a `Label` element of that name. Its contract is
-      name-addressed and unification preserves name-addressing.
-- [ ] Tests: `set_hud_item` still updates a migrated Label; an element's Track
-      participates in the conflict guard.
+- [x] `XrdsScenePlayerAnchor { panel_template_id, panel_depth }`, alongside
+      `hud_template_id` — additive, so the working HUD is untouched.
+- [x] **`depth` on the attachment, not the template.** Tested by instancing one
+      template at two depths, which `XrdsHudTemplate::depth` made impossible.
+      `panel_depth` defaults to `0.5` to match the old HUD default, so migrating
+      a template does not silently move it.
+- [x] `spawn_panel_template_head_locked` returns
+      **`XrdsStoredHudInstance`** — the very component `set_hud_item` already
+      resolves by name. So a public API predating all of this keeps working
+      against a migrated template with **zero changes**. That was the cheapest
+      part of the migration precisely because both models address by name, which
+      is the payoff of §2's "identity" column.
+- [x] `panel_template_id` wins when both are linked, because honouring both
+      would stack two overlapping panels on one anchor — a rendering bug rather
+      than a legible authoring mistake. Warned about at author time instead.
+- [x] Closed a gap left in A1: `panel_diagnostics` now also checks that a
+      `Panel` instance's and an anchor's `template_id` **resolve**. A1 listed
+      that and only did it for element→Track.
+- [x] `XrdsPanelElement::local_position()` reaches across the five widget
+      variants, so an attachment can place an element without matching on kind.
+- [x] 12 tests (8 schema, 4 runtime). Mutation-verified: hardcoding depth fails
+      1, dropping the name map fails 3 — including `set_hud_item`.
+- [x] A head-locked panel can carry a **button**, tested. That is what
+      unification buys the HUD side, which had one element kind and no triggers.
+
+Not done, deliberately: `XrdsAPI::set_hud_template_for_anchor` (`api.rs:212`) is
+the expert-path API taking an explicit `XrdsHudTemplate`. It is not
+document-driven, so it needs no panel branch; a panel equivalent can be added
+when something asks for one.
 
 ### A2 — original scope, for reference
 - [ ] Spawn elements from a template for **both** attachments: the world path
@@ -640,7 +813,116 @@ working HUD is untouched.
   - [ ] `set_hud_item` still updates a migrated Label
   - [ ] a Track fired by an element participates in the conflict guard
 
-### A3 — bridge + editor
+### A3a — panel bridge (Rust) — landed
+
+Additive, like everything before it: `hud_library.rs` and its 12 commands are
+untouched, so the working HUD keeps running while the frontend has not moved yet.
+
+- [x] `PanelTemplateDto` / `PanelElementDto` in `bridge.rs`, plus snapshot
+      `panel_library` and `panel_diagnostics` (separate from
+      `track_diagnostics`, so the panel workspace shows its own).
+- [x] `PanelElementDto.widget` **reuses `WorldWidgetDto`**, same reasoning as the
+      schema reusing `XrdsSceneWorldWidget` — a parallel five-kind DTO would
+      drift, and an element genuinely is a named widget with triggers.
+- [x] `emittable_triggers` is resolved **server-side** from
+      `XrdsPanelElement::can_emit`, not re-derived in TypeScript. Reachability is
+      a runtime fact, and a second copy of the rule would drift from the Rust
+      diagnostics that use the original. A `Label` reports `[]`, so the picker
+      offers nothing.
+- [x] `panel_library.rs`: template CRUD + element CRUD, every name routed
+      through §3b's validator so panels and elements get the same policy as
+      Tracks.
+- [x] **Elements addressed by name, never index** — tested by removing a middle
+      element and then renaming a later one, which an index-addressed command
+      would get wrong.
+- [x] Renaming a template needs **no** reference fixups, because instances store
+      an *id*. That is the deliberate difference from Track bindings, which store
+      a name and therefore must be re-pointed on rename.
+- [x] Deleting a template clears anchors that linked it, rather than leaving a
+      dangling reference — same choice as `DeleteTrack`.
+- [x] Template edits request a reimport (instances spawn elements at import
+      time), but creating an empty template does not.
+- [x] `BRIDGE_VERSION` 5 → 6, both sides.
+- [x] 10 tests. Mutation-verified: dropping the duplicate-name guard fails 1,
+      always-reporting-all-triggers fails 1.
+
+### A3b-1 — element trigger editing + the finish line — landed
+
+**The plan's measurable definition of done is met.** `lib/sequencer.ts` no longer
+claims the four widget kinds are `"not reachable — authored widgets have no
+bindable node"`. That was true when written and is not any more, and a test now
+fails if it comes back.
+
+- [x] Six element-binding commands: add / remove / set kind / track / hand /
+      disabled. Addressed by `(template, element **name**, binding index)` — the
+      element by name so reordering cannot re-point a binding, the binding by
+      index because nothing references one positionally.
+- [x] All of them funnel through one `with_element` helper, so
+      address-by-name-and-tolerate-a-miss is written once. A miss is a stale
+      frontend, not a panic — the next snapshot corrects it.
+- [x] A new binding **defaults to a kind the element can actually emit**
+      (`SliderChange` on a slider, not `ButtonPress`). Seeding everything with
+      `ButtonPress` would make a slider's first binding silently inert, which is
+      exactly the confusion `emittable_triggers` exists to prevent.
+- [x] Frontend rule split in two, disjoint on purpose:
+      `unavailableReasonFor` (nodes) now says *"set this on a panel element, not
+      on a node"* — a "wrong place" message rather than a "nowhere" one — and
+      `elementUnavailableReasonFor` (elements) reads `emittable_triggers` from
+      the snapshot rather than re-deriving the rule.
+- [x] `validKindsForElement`, `elementRowLabel`, `elementKindName` for the
+      workspace to come.
+- [x] `BRIDGE_VERSION` 6 → 7.
+- [x] 5 Rust tests, 9 vitest. Mutation-verified both ways: restoring the old
+      "not reachable" string fails a test; dropping the duplicate/emittable
+      guards fails others.
+
+### A3b-2 — Panels workspace — landed
+
+A third workspace next to Scene and Sequencer, in the Sequencer's language (§7):
+**library | elements | canvas | inspector**.
+
+- [x] `Panels` entry in the toolbar switcher. `Workspace` moved to
+      `types/bridge.ts` as a shared union so Toolbar and App cannot drift.
+- [x] **It hides the 3D viewport rather than resizing it**, which is what makes
+      it focused and is the real difference from the Sequencer (which keeps the
+      viewport live on purpose). Panel design is 2D, so the viewport contributes
+      nothing.
+- [x] **Closes the Bevy viewport hole while mounted**, via the same
+      `set_viewport_hole` IPC the modal overlays use. Not cosmetic: the editor
+      punches a real hole in its own window for Bevy, so a full-screen React
+      layout that left it open would have clicks land on the 3D scene instead of
+      the canvas — the same class of bug as an absolutely-positioned overlay
+      swallowing input.
+- [x] Library: create / rename (double-click) / delete, with a confirm that
+      names the consequence (anchors linking it get cleared).
+- [x] Elements: add by kind with an auto-generated non-colliding name, select,
+      remove.
+- [x] Canvas: elements drawn **to scale** on the template's authored dimensions,
+      with a centre crosshair — `local_position` is measured from the centre, so
+      without a visible origin the inspector's numbers have no anchor.
+- [x] Element inspector: rename, plus trigger bindings with kind / Fires /
+      hand / disabled.
+- [x] **The kind picker is driven by `validKindsForElement`**, i.e. by the
+      `emittable_triggers` Rust computed. A Label therefore offers nothing and
+      its "+ Add binding" is disabled with a reason, rather than offering
+      `ButtonPress` and silently never firing. A binding whose kind the element
+      cannot emit is kept in the list and flagged, so an existing document is
+      never silently rewritten.
+
+Deliberately not done in this pass, with reasons:
+
+- [ ] **Drag-to-move on the canvas.** Position lives *inside* the widget variant,
+      so moving one element means rebuilding its whole DTO — per pointer-move
+      that needs the live-preview/commit split the node Inspector's transform
+      fields already use. Worth doing properly rather than as a first pass; the
+      canvas is read-plus-select until then.
+- [ ] **Per-widget property editing** (label text, colours, sizes). The
+      `SetPanelElementWidget` command exists and is wired; only the form is
+      missing.
+- [ ] Retiring `HudCanvasOverlay`/`WorldPanelCanvasOverlay` — that is A4b, after
+      this workspace has been used enough to trust.
+
+### A3 — original scope, for reference
 
 - [ ] DTOs in `src-tauri/src/bridge.rs`: template, element, element kind;
       snapshot `panel_library` (generalizing `hud_library`).
@@ -666,49 +948,326 @@ working HUD is untouched.
 
 ### A4 — the instance hazard (§5)
 
-- [ ] Diagnostic pass can see, per template, how many nodes instance it.
-- [ ] Warn when a Track fired from a template-authored element trigger has a
+**Done.**
+
+- [x] Diagnostic pass can see, per template, how many nodes instance it —
+      `XrdsSceneDocument::panel_instance_count`. Counts Panel nodes *and*
+      head-locking anchors: the hazard is about how many live copies of an
+      element exist, not how each one got there.
+- [x] Warn when a Track fired from a template-authored element trigger has a
       row targeting a fixed `Node(id)` while the template has >1 instance.
-- [ ] Wording must **not** suggest `TriggerSource` as the fix — it resolves to
-      the element, not its neighbours (§5). State the consequence only.
-- [ ] Test: 1 instance → quiet; 2 instances + fixed row → warns; 2 instances +
-      `TriggerSource` row → quiet (each drives its own element).
+- [x] Wording must **not** suggest `TriggerSource` as the fix — it resolves to
+      the element, not its neighbours (§5). State the consequence only. A test
+      asserts the detail never mentions it, so the corrected advice cannot
+      quietly come back.
+- [x] The detail names the instance count, the element, the Track, and the
+      **node names** (not ids) it will drive — a warning that only says "this
+      might be wrong" sends the author hunting.
+- [x] A dangling Track reports only the dangling reference, not both: two
+      diagnostics for one mistake reads as two mistakes.
+- [x] Test: 1 instance → quiet; 2 instances + fixed row → warns; 2 instances +
+      `TriggerSource` row → quiet (each drives its own element). Plus:
+      no-Track binding, dangling Track, anchor-as-second-instance. Mutating the
+      `< 2` guard and the target filter each fail tests.
+- [x] Editor: surfaced with no bridge change — `build_panel_diagnostics_dto`
+      already carries it. Fixed the inspector's filter along the way: it matched
+      on element name alone, so two panels each with a "Go" button showed each
+      other's warnings, and the duplicate-name error ("element named X") matched
+      nothing at all and was invisible.
 
-### A5 — authorable stop (§6b)
+Not covered, deliberately: `SelfNode` rows. For an element-fired Track "the node
+the sequence is authored on" has no meaning — there is no node. That is a gap in
+the *model*, not a wording problem a warning can fix, and it belongs with Phase
+B's `XrdsActionTarget::Element` rather than here.
 
-Unblocked: §6b settles stop as asset-keyed, reusing start's resolution.
+### A3b-3 — element properties and canvas drag — landed
 
-- [ ] `XrdsTriggerEffect { Fire, Stop }` on `XrdsTriggerBinding`
-      (`#[serde(default)]` = `Fire`, so existing documents are unchanged).
-- [ ] Runtime: `consume_triggers` branches on the effect. Stop routes through
-      `despawn_agents_releasing_locks` — the one choke point, or it leaks locks.
-- [ ] Stop resolves its asset set via the **same** `schedule_track_keys` call
-      start uses, then despawns the holders — never a name-keyed sweep. A
-      name-keyed stop repeats the §5b mistake.
-- [ ] Two bindings on one element (Stop X, then Fire Y) fire in authored order,
-      which is what gives start/stop buttons their reset without a conditional.
-- [ ] Diagnostic: a `Stop` binding naming a Track nothing ever fires.
-- [ ] Editor: the Fires picker gains a Fire/Stop mode.
-- [ ] Tests: stop releases locks so the Track can be re-fired; stop on a
-      not-running Track is a harmless no-op; **stopping one instance's run
-      leaves another instance's disjoint run alive**; two bindings on one
-      element both fire, in order.
-- [ ] `BRIDGE_VERSION` bump.
+Promoted from "deferred polish" once it became clear these are **A4b's gate**,
+not niceties: A4b turns a HUD text item into a `Label` element, and a `Label`
+whose `text` cannot be set is not a replacement for `XrdsHudItemDef`. The old
+vocabulary could not be retired while the new one was unauthorable.
 
-### B — elements as action targets (§6, separately stoppable)
+- [x] `src/lib/panelWidget.ts` — a field table per `WorldWidget` kind, plus
+      `withField`/`withVec2Component`/`movedTo`/`alphaOf`. Data-driven rather
+      than five hand-written forms: the five variants overlap almost entirely,
+      so bespoke forms are four chances to omit a field, and an omitted field is
+      an unauthorable property with no error anywhere.
+- [x] 19 tests, in a pure module for the same reason `sequencer.ts` is one. Two
+      run **both directions**: every DTO key is offered by the form, and every
+      offered key exists on the DTO (a stale key writes something Rust ignores,
+      so the edit looks like it worked and did nothing). Mutation-verified by
+      dropping `Label.text` from the table.
+- [x] `alphaOf` exists because `<input type="color">` is RGB-only — rebuilding
+      a colour without it forces every translucent element opaque on first touch.
+      A test pins the fallback direction, since defaulting to 0 hides things.
+- [x] `NaN` guard on every number input: a half-typed box serialises as `null`
+      and is rejected by the Rust side.
+- [x] An unknown widget kind yields position-only rather than throwing, so a
+      document from a newer build does not blank the inspector.
+- [x] Canvas drag-to-move, following `WorldPanelCanvasOverlay`: local state
+      while moving, exactly **one** `SetPanelElementWidget` on pointer-up. Not
+      merely about traffic — the editor has an undo stack, and per-move commands
+      would bury the author's previous action under a hundred one-pixel nudges.
+      Same 4px click/drag threshold, so selection feels identical in both
+      canvases. `touch-action: none; user-select: none` per the existing
+      draggable precedent.
+- [x] Fixed the inspector's diagnostic filter (see A4) — found while wiring the
+      properties form next to it.
+- [x] No bridge change: `SetPanelElementWidget` was already wired, which is why
+      this was a UI-only pass. `BRIDGE_VERSION` stays at 7.
 
-- [ ] `XrdsActionTarget::Element { panel: XrdsSceneNodeId, name: String }`.
-- [ ] **New index resource** mapping `(panel entity, element name) → element
-      entity`. Nothing tracks widget entities today, so there is no lookup to
-      reuse — closest precedent is `XrdsIdIndex`.
-- [ ] Actions: `SetElementText`, `SetElementValue`, `SetElementEnabled`. All
-      instant, so no scheduler change.
-- [ ] Element entities participate in `XrdsTrackAssetLocks` — wanted, not
-      incidental: two Tracks writing one element should conflict exactly as two
-      Tracks writing one node do.
-- [ ] Sequencer: element rows selectable as Track assets.
-- [ ] Tests: targeting resolves to the right instance's element; two Tracks on
-      one element conflict; a deleted element's target is diagnosed.
+Correction to a claim made while doing this: I reported the canvas was drawing
+elements half-a-size off-target because it positioned by top-left. It was not —
+`.panel-ws-el` already carried `translate(-50%, -50%)`. No bug, and nothing to
+fix.
+
+### A6 — bindings move to the instance — landed
+
+**Supersedes §5 and deletes §A4.** The user's proposal: a template designs a panel
+and carries no triggers; the placed *instance* carries the wiring.
+
+This is strictly better than what §A1–A4 built, for one reason. §5's hazard —
+one elevator template on three floors, every floor's button firing the same Track
+at the same fixed door — could only ever be *warned* about, because
+`XrdsActionTarget::TriggerSource` resolves to the button that fired, not to
+anything near it, so there was no fix to suggest. With bindings on the instance
+each floor wires its own door: the hazard is **unrepresentable**, not diagnosed.
+§A4's warning is therefore deleted rather than disabled, along with its 8 tests —
+a warning for a condition that cannot occur is noise.
+
+The cost, accepted: twenty instances wired alike is twenty sets of bindings, where
+a shared template needed one edit. That is the price of per-instance targets.
+
+- [x] `XrdsPanelElement` loses `triggers`. A serialisation test asserts no
+      `trigger` key can reappear on a template — the load-bearing property.
+- [x] `XrdsScenePanelInstance` gains
+      `element_triggers: BTreeMap<String, Vec<XrdsTriggerBinding>>`. A map, not a
+      `Vec` of pairs: duplicate keys become structurally impossible and the order
+      is deterministic, so two saves produce identical JSON. The struct's original
+      doc comment predicted exactly this use ("letting an instance say *which*
+      door its button opens").
+- [x] `set_triggers` removes the key when the list is empty; `rename_element`
+      moves it. Renames propagate, deletes are diagnosed — per the user's call.
+- [x] **Attachment is parenting.** A Panel node under a `PlayerAnchor` is
+      head-locked, resolved by walking the document's `parent_id` chain (Bevy's
+      hierarchy is still queued at that point in import), depth-bounded so a
+      hand-authored cycle cannot hang the load.
+- [x] `panel_depth` is superseded by the node's own `transform`, composed with the
+      element's canvas position — an author gets offset *and rotation*, not one
+      scalar. Care taken: this is the node's **local** transform. Using a world
+      position as a camera-local offset is the recorded anchor-offset mistake.
+- [x] **`set_hud_item` keeps its exact signature.** It takes an anchor id and
+      resolves `XrdsStoredHudInstance` on the anchor, so a Panel node under an
+      anchor *contributes* to that component — extending, not replacing, so two
+      panels under one anchor both stay addressable. Mutating that away fails 3
+      tests, so the public API is genuinely covered, not just claimed.
+- [x] Diagnostics rewritten as a per-instance pass, attributed to `node_id` so the
+      scene Inspector shows each Panel node its own problems — template-owned
+      bindings had nowhere to point. New error: **"Binding names an element the
+      template does not have"**, the hazard that replaces the one this removed. It
+      keeps the bindings rather than dropping them, so authored wiring stays
+      recoverable, and it suppresses the redundant Track check on the same row
+      (two diagnostics for one mistake reads as two mistakes).
+- [x] The 6 element-trigger commands became node-scoped
+      (`AddPanelNodeTrigger`, …). Wiring a name the template lacks is **stored,
+      not refused** — that is the shape a deleted element leaves behind, and
+      refusing it would make recovered wiring impossible to repoint.
+- [x] Editor: trigger authoring moved out of the Panels workspace into the scene
+      Inspector (`PanelInstanceTriggers.tsx`), driven by a server-side join of
+      template element + instance wiring so the UI never cross-references
+      `panel_library` itself. Orphaned rows are shown, not hidden — hiding them
+      would make the UI disagree with the saved file.
+- [x] `elementRowLabel` no longer shows a binding count; a count against a
+      template would be right for one instance and wrong for the next. Its test
+      was replaced rather than deleted.
+- [x] `TRACK_NONE_SENTINEL`/`HAND_ANY_SENTINEL` exported from `bridge.ts` instead
+      of being redeclared per component — two copies that drift silently stop
+      matching.
+- [x] `BRIDGE_VERSION` 10 → 11.
+- [x] Mutation-verified: skipping the head-lock insertion fails the depth test;
+      skipping the `XrdsStoredHudInstance` contribution fails all three
+      `set_hud_item` tests; the rename propagation and its refusal path are both
+      covered.
+
+Still open from this change: `XrdsScenePlayerAnchor::panel_template_id` /
+`panel_depth` and `link_panel` remain as a second, wiring-less attachment path.
+They work but cannot carry bindings, and both call sites pass an empty map with a
+comment saying so. Retiring them is A6b.
+
+### A6b-lite — stop *using* the anchor-link path — landed
+
+Per the user: leave `panel_template_id`/`panel_depth`/`link_panel` working as
+reference, clean the deprecates out later. But "don't use them" had a live
+consequence — the PlayerAnchor Inspector still *drove* that path, so an author
+picking "Head-locked Panel" there got a panel with dead buttons, which is exactly
+the trap A6 removed everywhere else.
+
+- [x] `#[deprecated]` on `link_panel`; doc notes on both anchor fields saying why
+      (they cannot carry `element_triggers`) and what to do instead.
+- [x] The Inspector's picker + depth slider became **"+ Add panel child"**, which
+      sends `SpawnPrimitive { kind: "Panel", parent_id: anchor }` — the working
+      path, reusing a command that already existed.
+- [x] An anchor still holding the old link shows a warning naming the template and
+      depth, so an existing document explains itself rather than silently
+      under-performing.
+- [x] **A Panel node under an anchor now defaults to `[0, 0, -0.5]`, not
+      `[0, 1.5, -1]`.** Its transform is read as *camera-local*, so the world-space
+      default would have put a HUD a metre and a half above the viewer's own eye.
+      Matches the depth the retired `panel_depth` used, so migrating moves nothing.
+- [x] The ancestor walk mirrors the runtime's, checking the **whole chain** — a
+      panel grouped under an Empty beneath an anchor is still head-locked.
+      Mutation-verified (immediate-parent-only fails the test).
+- [x] 3 tests.
+
+### A5 — authorable stop (§6b) — landed
+
+- [x] `XrdsTriggerEffect { Fire, Stop }` on `XrdsTriggerBinding`, defaulting to
+      `Fire` **and skipped when serialising** — so documents predating stop keep
+      their exact meaning *and* adding the field churns no saved file. Both halves
+      asserted.
+- [x] Runtime: `consume_triggers` branches on the effect. Stop routes through
+      `despawn_agents_releasing_locks`, the single choke point — mutating the
+      release away fails 5 tests, two of them new.
+- [x] Stop resolves its asset set via the **same** `schedule_track_keys` call
+      start uses, then despawns the holders. Mutating it into a name-keyed sweep
+      fails exactly the disjoint-runs test, which is the §5b mistake it avoids.
+- [x] Bindings are processed in authored order, so `Stop X` then `Fire X` on one
+      element restarts a Track from the top with no conditional.
+- [x] Diagnostic: "Stop binding for a Track nothing fires". Warning, not error,
+      and only when *nothing anywhere* fires it — `XrdsAPI` can start a Track from
+      Rust, so a Stop-only binding is legitimate in a partly code-driven scene.
+      Suppressed when the Track is missing entirely, which is already an error.
+- [x] `XrdsSceneDocument::all_trigger_bindings` — one iterator over **both**
+      binding sources (node triggers *and* panel element wiring). A caller walking
+      only `node.triggers` would warn that nothing fires a Track a panel button
+      starts perfectly well; mutation-verified against exactly that.
+- [x] Editor: the Fires picker gained a Fire/Stop mode on both node and panel
+      element bindings, and the row label follows the effect ("Stops → Open")
+      so it reads as one sentence.
+- [x] 6 runtime tests, 6 scene-graph tests.
+- [x] `BRIDGE_VERSION` 11 → 12.
+
+Correction worth recording: the first two runtime tests were written against
+`XrdsCustomTriggerEvent`, which has **no `consume_triggers` registration** — Custom
+is only reachable via threshold crossings. They passed nothing until switched to
+`ButtonPress`, which is both wired and the actual motivating case. A test that
+fires an unconsumed event asserts nothing.
+
+### B1 — elements as action targets: addressing — landed
+
+- [x] `XrdsActionTarget::Element { panel: XrdsSceneNodeId, name: String }`. The
+      *panel node* is named explicitly rather than taken from `self`, so a wall
+      switch can drive a display panel across the room. Two instances of one
+      template are two different targets, which falls out of the addressing
+      instead of needing a rule.
+- [x] **`XrdsActionTarget` gave up `Copy`** — a `String` forbids it. Every call
+      site takes it by reference, which is what it wanted anyway.
+- [x] `XrdsPanelElementIndex` — `(panel entity, element name) → element entity`.
+      Needed because nothing else tracks widget entities: elements are not
+      document nodes, so `XrdsIdIndex` cannot hold them, and
+      `XrdsStoredHudInstance` is per-anchor and head-locked-only.
+- [x] Rebuilt, not merged, on every import: element entities are respawned
+      wholesale, so a surviving entry would point at a dead — or recycled —
+      entity. Tested.
+- [x] Element entities participate in `XrdsTrackAssetLocks` for free, because
+      resolution returns an ordinary entity. Two Tracks on one element conflict;
+      two Tracks on the *same element of two instances* do not. Both tested, and
+      mutating the index to key on name alone fails exactly those two.
+- [x] Diagnostics distinguish **three** dangling cases, because the fix differs:
+      the panel node is missing, the panel exists but has no such element (a
+      rename), or the addressed node is not a Panel at all (a wrong reference).
+- [x] Editor: `AddTrackElementAsset` (separate from `AddTrackAsset` — an element
+      target needs two values, and one command where "the second field only
+      sometimes matters" invites a half-filled payload). Rows label themselves
+      "PanelName · elementName", joined server-side so the UI never
+      cross-references `panel_library`.
+- [x] `BRIDGE_VERSION` 12 → 13.
+- [x] 6 runtime tests, 6 scene-graph tests, 3 frontend tests.
+
+**Known gap, pinned by a test rather than hidden.** The start guard counts
+*authored* keys, not resolved ones, so a Track whose only row cannot resolve still
+starts an agent — one holding no locks and driving nothing. This is pre-existing
+and shared with `Node(missing)` rows; refusing to start here would change node-row
+behaviour as a side effect, so it was left alone and asserted instead. What the
+test does pin is that an unresolved row locks *nothing* — not a neighbouring
+element, not the panel — since one typo would otherwise block every Track sharing
+that panel.
+
+### B2 — element-specific actions — landed
+
+- [x] `SetElementText`, `SetElementValue`, `SetElementEnabled`. All instant, so no
+      scheduler change, and all added to `KNOWN_ACTION_KINDS` so an older build
+      degrades them to `Unknown` rather than failing the document.
+- [x] `SetElementText` finds `Text3d` **wherever it is** — self first, then one
+      level of children — because a Label carries it directly while a Button keeps
+      its caption on a child. Branching on widget kind would need editing for
+      every future text-bearing widget. One level only, deliberately: a recursive
+      descent could reach into a nested widget the author never addressed.
+- [x] `SetElementValue` covers Slider *and* Toggle, with a Toggle as the
+      degenerate scalar (non-zero is checked). One action means an author cannot
+      pick the wrong one for the element they have. Clamped to the slider's
+      authored range — mutating the clamp away fails a test.
+- [x] `SetElementEnabled` is **present-but-dead, not hidden**, via a
+      `XrdsWorldElementDisabled` marker. A marker rather than a field on each
+      widget: the three interaction systems exclude it with one `Without<…>`
+      filter, and the widget `*Params` structs describe *appearance* while this is
+      runtime state. A test asserts visibility is untouched.
+- [x] Editor: DTO both directions, `summarizeAction` shows the value (on a panel
+      row the value *is* the point), and `actionUnavailableReasonFor` greys
+      element actions on a node row **with a reason** rather than hiding them —
+      the same principle the trigger pickers use. A test guards drift between the
+      offered list and the set that gates it.
+- [x] `BRIDGE_VERSION` 13 → 14.
+- [x] 6 runtime tests, 4 frontend tests.
+
+**Correction worth recording.** The disabled filter first went *only* where the
+button system emits press events — so a directly-written event still woke a
+disabled button, and the test that was supposed to prove otherwise passed for the
+wrong reason. Fixed properly: `consume_triggers` now skips a disabled target too,
+so "disabled" means the element does not act **whatever the event source**, not
+merely that one emitter skips it.
+
+Two tests also initially asserted only that a text component *existed* — true
+before the Track ran, so removing the child search left them green. Both now
+assert the content changed (via `Text3d`'s `Debug`, the only handle available),
+and the mutation fails them.
+
+### B3 — element rows in the Sequencer picker — landed
+
+Closes the loop: a panel element is now addable as a Track row by clicking, so the
+whole panel/trigger/Track story is authorable without touching the bridge.
+
+- [x] `panel_instances` snapshot field — every placed Panel node with its
+      template's element names and kinds. A whole-document summary for the same
+      reason `all_node_bindings` is one: the picker needs *every* panel's elements,
+      and the snapshot otherwise carries only the selected node's payload.
+      `hierarchy` cannot serve it — a node's kind is there but not its
+      `template_id`, so it cannot say which elements a Panel has.
+- [x] Deliberately thinner than `PanelInstanceElementDto`: no wiring, no
+      `emittable_triggers`. Those are per-selection detail, and computing them for
+      every panel every frame would be work nothing reads.
+- [x] A panel whose template is missing contributes an **empty element list rather
+      than being omitted**, so a dangling reference shows as a panel with nothing
+      to offer instead of looking like no panel at all.
+- [x] One picker offers both kinds. `addableAssets` returns a tagged union and
+      `encodeAddableAsset`/`decodeAddableAsset` carry it through the `<Select>`
+      value, so the encoding lives in one tested place rather than being parsed
+      inline at the call site.
+- [x] Elements are excluded per `(panel, name)`, not by name — the same element
+      name on a different panel is a different asset, which is the whole point of
+      the addressing. Mutation-verified: name-only scoping fails exactly the
+      "same name, different panel" test.
+- [x] 10 frontend tests.
+
+Two real bugs the tests caught, both in code I had just written:
+
+- **`"node:"` decoded to node 0.** `Number("")` is `0`, not `NaN`, so a bare
+  prefix resolved to a real id and the picker would have sent a command addressing
+  whatever node that is. Now a strict digits-only parse.
+- **Splitting the encoded value on the last colon** truncated element names
+  containing one — which the naming policy permits — so the command would silently
+  address a different element. Fixed to split on the first two only, with a test
+  using `a:b:c`.
 
 ### Deliberately not in this plan
 
