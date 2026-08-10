@@ -94,6 +94,41 @@ pub enum XrdsAction {
     ModifyHealth {
         delta: XrdsActionValue,
     },
+    /// Replaces the text of a `Label` or `Button` element.
+    ///
+    /// Element-specific rather than reusing a node action because there is no
+    /// node action for text at all — and because a panel element's text lives on
+    /// its own runtime component, not on the document node the panel came from.
+    ///
+    /// Instant. **Not a data binding**: this writes once, when the key fires. A
+    /// looping zero-duration Track driving this is the pathological substitute the
+    /// plan's §1 warns against, not the supported way to show a changing value.
+    SetElementText {
+        text: String,
+    },
+    /// Sets a `Slider`'s value or a `Toggle`'s checked state.
+    ///
+    /// One action for both because both are "the element's one scalar", and a
+    /// Toggle is the degenerate case: anything non-zero is checked. Two actions
+    /// would mean an author picking the wrong one for the element they have, which
+    /// `can_emit`-style validation would then have to police.
+    ///
+    /// Clamped to the slider's authored `min`/`max` at apply time — an out-of-range
+    /// value is an authoring slip, and clamping keeps the handle on its track
+    /// rather than rendering it outside the widget.
+    SetElementValue {
+        value: f32,
+    },
+    /// Turns an element's interactivity on or off, leaving it visible.
+    ///
+    /// Distinct from [`SetVisible`](XrdsAction::SetVisible) on purpose. This is
+    /// the "greyed out but present" state, and it is the plan's answer (§5) to
+    /// wanting conditional behaviour: an author shows a *different* element, or
+    /// disables one, rather than writing an if-else. A hidden button and a dead
+    /// button read very differently to a player.
+    SetElementEnabled {
+        enabled: bool,
+    },
     /// Any action variant this build does not recognize.
     ///
     /// **Why this exists:** without it, a document written by a newer
@@ -166,6 +201,15 @@ enum XrdsActionKnown {
     ModifyHealth {
         delta: XrdsActionValue,
     },
+    SetElementText {
+        text: String,
+    },
+    SetElementValue {
+        value: f32,
+    },
+    SetElementEnabled {
+        enabled: bool,
+    },
 }
 
 impl From<XrdsActionKnown> for XrdsAction {
@@ -185,6 +229,11 @@ impl From<XrdsActionKnown> for XrdsAction {
             XrdsActionKnown::ModifyHealth { delta } => {
                 XrdsAction::ModifyHealth { delta }
             }
+            XrdsActionKnown::SetElementText { text } => XrdsAction::SetElementText { text },
+            XrdsActionKnown::SetElementValue { value } => XrdsAction::SetElementValue { value },
+            XrdsActionKnown::SetElementEnabled { enabled } => {
+                XrdsAction::SetElementEnabled { enabled }
+            }
         }
     }
 }
@@ -199,6 +248,9 @@ const KNOWN_ACTION_KINDS: &[&str] = &[
     "SetTransform",
     "SetMaterial",
     "ModifyHealth",
+    "SetElementText",
+    "SetElementValue",
+    "SetElementEnabled",
 ];
 
 impl<'de> Deserialize<'de> for XrdsAction {
@@ -290,7 +342,11 @@ impl XrdsTriggerKind {
 }
 
 /// Which entity an `XrdsAction` applies to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+///
+/// **Not `Copy`** since `Element` carries a name. Every call site takes it by
+/// reference, which is what it wanted anyway — the type is matched on, not
+/// arithmetic.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum XrdsActionTarget {
     /// The node the sequence is authored on.
     #[default]
@@ -300,6 +356,21 @@ pub enum XrdsActionTarget {
     /// Whichever entity fired the trigger (e.g. the bullet, not the
     /// player it hit).
     TriggerSource,
+    /// One named element on one placed `Panel` node.
+    ///
+    /// Addressed as `(panel node, element name)` because an element has no
+    /// `XrdsSceneNodeId` of its own — it is not a document node. The *panel node*
+    /// is named explicitly rather than resolved from `self`, so a Track can drive
+    /// a panel it was not fired from: a wall switch lighting up a display panel
+    /// across the room.
+    ///
+    /// Two instances of one template are two different targets, since each names
+    /// its own panel node. That falls out of the addressing rather than needing a
+    /// rule.
+    Element {
+        panel: XrdsSceneNodeId,
+        name: String,
+    },
 }
 
 /// A value baked in at author time, or pulled from whatever fired the
@@ -414,6 +485,34 @@ pub enum XrdsTriggerKind {
     Unknown,
 }
 
+fn is_fire(e: &XrdsTriggerEffect) -> bool {
+    matches!(e, XrdsTriggerEffect::Fire)
+}
+
+/// What a binding does to the Track it names.
+///
+/// A mode on the binding rather than an `XrdsAction::StopTrack` on a Track row:
+/// the plainest case there is — a stop button — would otherwise need a dummy
+/// Track whose only purpose is to stop another.
+///
+/// **This does not reintroduce what killed `Run`.** `Run` was deleted because
+/// *starting* chains: a Track able to launch a Track launching a Track, needing
+/// depth limits and runaway detection. Stopping is monotonic — it only removes
+/// running work — so it cannot recurse or fan out. A Track stopping itself is
+/// odd but bounded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum XrdsTriggerEffect {
+    /// Start the Track. The default, so existing documents are unchanged.
+    #[default]
+    Fire,
+    /// Stop the Track's running work, releasing its asset locks.
+    ///
+    /// A no-op when nothing is running, which is what lets a stop button be
+    /// pressed at any time without an "is it running?" condition — the kind of
+    /// branching this design exists to avoid.
+    Stop,
+}
+
 /// "When trigger kind K fires for this node, run sequence S." A node can
 /// have several bindings (e.g. one for `ZoneEnter`, a different one for
 /// `ZoneExit`).
@@ -421,6 +520,14 @@ pub enum XrdsTriggerKind {
 pub struct XrdsTriggerBinding {
     #[serde(default)]
     pub trigger: XrdsTriggerKind,
+    /// Whether this binding starts or stops [`XrdsTriggerBinding::track`].
+    ///
+    /// Defaults to `Fire`, so every document authored before stop existed keeps
+    /// its exact meaning. Two bindings on one element — `Stop X` then `Fire X` —
+    /// fire in authored order, which is how a single button restarts a Track from
+    /// the top without any conditional.
+    #[serde(default, skip_serializing_if = "is_fire")]
+    pub effect: XrdsTriggerEffect,
     /// Names an entry in `XrdsSceneDocument::tracks`.
     ///
     /// `None` is authored-but-unwired: the binding exists and its trigger
@@ -619,6 +726,48 @@ impl XrdsSceneDocument {
             }
         }
 
+        // -- Stop bindings with nothing to stop -------------------------------
+        //
+        // A `Stop` on a Track no binding ever fires is inert: the stop is a no-op
+        // by design, so it never errors at runtime and never shows up as a
+        // failure. That silence is why it is worth saying at author time — the
+        // usual cause is a stop button pointed at the wrong Track, or a start
+        // button that was deleted.
+        //
+        // Warning rather than error, and only when *nothing anywhere* fires it:
+        // `XrdsAPI` can start a Track from Rust, so a Stop-only binding is
+        // legitimate in a scene driven partly by code.
+        {
+            let fired: std::collections::HashSet<&str> = self
+                .all_trigger_bindings()
+                .filter(|(_, b)| b.effect == XrdsTriggerEffect::Fire && !b.disabled)
+                .filter_map(|(_, b)| b.track.as_deref())
+                .collect();
+
+            for (node_id, binding) in self.all_trigger_bindings() {
+                if binding.effect != XrdsTriggerEffect::Stop || binding.disabled {
+                    continue;
+                }
+                let Some(name) = binding.track.as_deref() else { continue };
+                // A missing Track is already reported as an error above; adding
+                // this on top would be two diagnostics for one mistake.
+                if self.track(name).is_none() || fired.contains(name) {
+                    continue;
+                }
+                out.push(XrdsSceneTriggerDiagnostic {
+                    node_id,
+                    severity: Severity::Warning,
+                    title: "Stop binding for a Track nothing fires".to_string(),
+                    detail: format!(
+                        "A Stop binding targets Track {name:?}, but no enabled binding in this \
+                         document ever starts it, so there will be nothing to stop. Fine if code \
+                         starts it via XrdsAPI; otherwise this is probably pointed at the wrong \
+                         Track."
+                    ),
+                });
+            }
+        }
+
         // -- Track registry ---------------------------------------------------
         for entry in &self.tracks {
             let where_ = format!("Track {:?}", entry.name);
@@ -678,6 +827,60 @@ impl XrdsSceneDocument {
                                  document. It was probably deleted; the row will do nothing."
                             ),
                         });
+                    }
+                }
+
+                // An `Element` target has two ways to dangle, and they want
+                // different messages: the *panel node* can be gone, or the panel
+                // can be fine and the *element* renamed out from under the row.
+                // Both resolve to nothing at runtime and are silent there.
+                if let XrdsActionTarget::Element { panel, name } = &asset.target {
+                    match self.node(*panel) {
+                        None => out.push(XrdsSceneTriggerDiagnostic {
+                            node_id: None,
+                            severity: Severity::Error,
+                            title: "Asset row targets an element of a missing panel".to_string(),
+                            detail: format!(
+                                "{where_} has a row for element {name:?} on node {panel:?}, which \
+                                 is not in the document."
+                            ),
+                        }),
+                        Some(node) => match &node.payload {
+                            XrdsSceneNodePayload::Panel(instance) => {
+                                let known = self
+                                    .panel_template(instance.template_id)
+                                    .is_some_and(|t| t.element(name).is_some());
+                                if !known {
+                                    out.push(XrdsSceneTriggerDiagnostic {
+                                        node_id: Some(node.id),
+                                        severity: Severity::Error,
+                                        title: "Asset row targets an element the panel does not \
+                                                have"
+                                            .to_string(),
+                                        detail: format!(
+                                            "{where_} has a row for element {name:?} on panel \
+                                             {:?}, whose template has no such element. It was \
+                                             probably renamed or deleted; the row will do nothing.",
+                                            node.name
+                                        ),
+                                    });
+                                }
+                            }
+                            // Addressed as a panel but is not one — the row can
+                            // never resolve, and unlike the two cases above this
+                            // one is not a rename, it is a wrong reference.
+                            _ => out.push(XrdsSceneTriggerDiagnostic {
+                                node_id: Some(node.id),
+                                severity: Severity::Error,
+                                title: "Asset row targets an element of a non-panel node"
+                                    .to_string(),
+                                detail: format!(
+                                    "{where_} addresses element {name:?} on node {:?}, which is \
+                                     not a Panel node.",
+                                    node.name
+                                ),
+                            }),
+                        },
                     }
                 }
 

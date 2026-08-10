@@ -31,6 +31,7 @@ fn binding(kind: XrdsTriggerKind, track: Option<&str>) -> XrdsTriggerBinding {
     XrdsTriggerBinding {
         trigger: kind,
         track: track.map(str::to_string),
+        effect: Default::default(),
         disabled: false,
         hand: None,
     }
@@ -51,6 +52,27 @@ fn doc(panels: Vec<XrdsPanelTemplate>, tracks: Vec<&str>) -> XrdsSceneDocument {
     }
 }
 
+/// A document with one template (id 1) plus one Panel node instancing it, whose
+/// `element_triggers` are `wiring`. This is the shape every element-trigger
+/// diagnostic now works on: bindings live on the instance, never the template.
+fn doc_with_instance(
+    elements: Vec<XrdsPanelElement>,
+    tracks: Vec<&str>,
+    wiring: Vec<(&str, Vec<XrdsTriggerBinding>)>,
+) -> XrdsSceneDocument {
+    let t = XrdsPanelTemplate { id: XrdsPanelTemplateId(1), ..template("P", elements) };
+    let mut instance = XrdsScenePanelInstance { template_id: XrdsPanelTemplateId(1), ..Default::default() };
+    for (name, bindings) in wiring {
+        instance.set_triggers(name, bindings);
+    }
+    let mut d = doc(vec![t], tracks);
+    d.nodes.push(XrdsSceneNode {
+        payload: XrdsSceneNodePayload::Panel(instance),
+        ..panel_node(10, 1)
+    });
+    d
+}
+
 fn titles(d: &XrdsSceneDocument) -> Vec<String> {
     d.panel_diagnostics().into_iter().map(|x| x.title).collect()
 }
@@ -68,11 +90,7 @@ fn a_panel_template_round_trips() {
     let t = template(
         "MainMenu",
         vec![
-            XrdsPanelElement {
-                name: "start".to_string(),
-                kind: button([0.0, 0.1]),
-                triggers: vec![binding(XrdsTriggerKind::ButtonPress, Some("Play"))],
-            },
+            XrdsPanelElement::new("start", button([0.0, 0.1])),
             XrdsPanelElement::new("title", label()),
         ],
     );
@@ -82,14 +100,65 @@ fn a_panel_template_round_trips() {
 }
 
 #[test]
-fn an_element_defaults_to_firing_nothing() {
-    // `triggers` is `#[serde(default)]`, so a hand-authored element without it
-    // still loads — the additive-schema guarantee.
-    let json = r#"{"name":"title","kind":{"Label":{"text":"Hi","font_size":0.05,
-        "color":[1,1,1,1],"local_position":[0,0],"layout_size":[0.2,0.06]}}}"#;
-    let e: XrdsPanelElement = serde_json::from_str(json).expect("deserialise");
-    assert!(e.triggers.is_empty());
-    assert_eq!(e.name, "title");
+fn a_template_carries_no_trigger_bindings_at_all() {
+    // The load-bearing property of the instance-owned model: if a `triggers` key
+    // ever reappears on a serialised template, one template instanced on three
+    // floors is back to firing all three doors from any one button.
+    let t = template("P", vec![XrdsPanelElement::new("go", button([0.0, 0.0]))]);
+    let json = serde_json::to_string(&t).expect("serialise");
+    assert!(!json.contains("trigger"), "template must hold no bindings: {json}");
+}
+
+#[test]
+fn an_instance_round_trips_its_element_wiring() {
+    let mut i = XrdsScenePanelInstance {
+        template_id: XrdsPanelTemplateId(3),
+        ..Default::default()
+    };
+    i.set_triggers("go", vec![binding(XrdsTriggerKind::ButtonPress, Some("Play"))]);
+    let json = serde_json::to_string(&i).expect("serialise");
+    let back: XrdsScenePanelInstance = serde_json::from_str(&json).expect("deserialise");
+    assert_eq!(i, back);
+}
+
+#[test]
+fn an_instance_without_wiring_still_deserializes() {
+    // Additive-schema guarantee: Panel nodes authored before bindings moved here.
+    let json = r#"{"template_id":2}"#;
+    let i: XrdsScenePanelInstance = serde_json::from_str(json).expect("deserialise");
+    assert_eq!(i.template_id, XrdsPanelTemplateId(2));
+    assert!(i.element_triggers.is_empty());
+    assert!(i.triggers_for("anything").is_empty());
+}
+
+#[test]
+fn setting_empty_bindings_removes_the_key_rather_than_storing_an_empty_list() {
+    // An empty entry looks like wiring in the document and is not, and it would
+    // make the dangling-key diagnostic fire on something the author cleared.
+    let mut i = XrdsScenePanelInstance::default();
+    i.set_triggers("go", vec![binding(XrdsTriggerKind::ButtonPress, Some("Play"))]);
+    assert_eq!(i.element_triggers.len(), 1);
+    i.set_triggers("go", vec![]);
+    assert!(i.element_triggers.is_empty(), "{:?}", i.element_triggers);
+}
+
+#[test]
+fn renaming_an_element_moves_its_wiring() {
+    // Renames propagate because the intent is unambiguous — the element still
+    // exists and is still the thing that was wired.
+    let mut i = XrdsScenePanelInstance::default();
+    let b = vec![binding(XrdsTriggerKind::ButtonPress, Some("Play"))];
+    i.set_triggers("go", b.clone());
+    i.rename_element("go", "start");
+    assert!(i.triggers_for("go").is_empty());
+    assert_eq!(i.triggers_for("start"), b.as_slice());
+}
+
+#[test]
+fn renaming_an_unwired_element_is_a_no_op() {
+    let mut i = XrdsScenePanelInstance::default();
+    i.rename_element("go", "start");
+    assert!(i.element_triggers.is_empty(), "must not invent an empty entry");
 }
 
 #[test]
@@ -136,7 +205,7 @@ fn a_panel_template_carries_no_placement() {
     // The whole point of "attachment is the only difference": a template holds
     // content, and depth/position belong to whatever instances it. If a
     // placement field ever appears here, one template can no longer be used at
-    // two depths — which is the bug `XrdsHudTemplate::depth` has.
+    // two depths — which is the bug the retired `XrdsHudTemplate::depth` had.
     let json = serde_json::to_string(&XrdsPanelTemplate::default()).expect("serialise");
     for placement in ["depth", "translation", "anchor"] {
         assert!(!json.contains(placement), "template must not carry {placement:?}: {json}");
@@ -188,18 +257,21 @@ fn an_element_cannot_emit_node_scoped_kinds() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn a_well_formed_panel_is_quiet() {
-    let d = doc(
-        vec![template(
-            "MainMenu",
-            vec![XrdsPanelElement {
-                name: "start".to_string(),
-                kind: button([0.0, 0.0]),
-                triggers: vec![binding(XrdsTriggerKind::ButtonPress, Some("Play"))],
-            }],
-        )],
+fn a_well_formed_panel_and_instance_are_quiet() {
+    let d = doc_with_instance(
+        vec![XrdsPanelElement::new("start", button([0.0, 0.0]))],
         vec!["Play"],
+        vec![("start", vec![binding(XrdsTriggerKind::ButtonPress, Some("Play"))])],
     );
+    assert!(d.panel_diagnostics().is_empty(), "{:?}", titles(&d));
+}
+
+#[test]
+fn a_template_with_no_instances_is_quiet() {
+    // Templates are a library: authoring one and not placing it yet is normal,
+    // and now that bindings live on instances there is nothing on an unplaced
+    // template left to validate beyond names.
+    let d = doc(vec![template("Shelf", vec![XrdsPanelElement::new("go", button([0.0, 0.0]))])], vec![]);
     assert!(d.panel_diagnostics().is_empty(), "{:?}", titles(&d));
 }
 
@@ -245,59 +317,101 @@ fn a_duplicate_is_reported_once_not_once_per_extra_copy() {
 
 #[test]
 fn diagnostics_warn_when_an_element_cannot_emit_its_trigger() {
-    // The likeliest cause is changing an element's kind and leaving the binding
-    // behind — inert, not wrong, so a warning.
-    let d = doc(
-        vec![template(
-            "P",
-            vec![XrdsPanelElement {
-                name: "title".to_string(),
-                kind: label(),
-                triggers: vec![binding(XrdsTriggerKind::ButtonPress, Some("Play"))],
-            }],
-        )],
+    // The likeliest cause is changing an element's kind in the template and
+    // leaving the instance's binding behind — which the instance cannot see.
+    // Inert, not wrong, so a warning.
+    let d = doc_with_instance(
+        vec![XrdsPanelElement::new("title", label())],
         vec!["Play"],
+        vec![("title", vec![binding(XrdsTriggerKind::ButtonPress, Some("Play"))])],
     );
-    assert!(has(&d, "Element cannot emit this trigger"), "{:?}", titles(&d));
     let diag = d
         .panel_diagnostics()
         .into_iter()
         .find(|x| x.title == "Element cannot emit this trigger")
-        .expect("present");
+        .unwrap_or_else(|| panic!("{:?}", titles(&d)));
     assert_eq!(diag.severity, XrdsSceneTriggerDiagnosticSeverity::Warning);
     assert!(diag.detail.contains("Label"), "should name the kind: {}", diag.detail);
+    // Attributed to the node, so the scene Inspector can show it in place —
+    // template-owned bindings had nowhere to point.
+    assert_eq!(diag.node_id, Some(XrdsSceneNodeId(10)));
 }
 
 #[test]
 fn diagnostics_flag_an_element_binding_naming_a_missing_track() {
-    let d = doc(
-        vec![template(
-            "P",
-            vec![XrdsPanelElement {
-                name: "start".to_string(),
-                kind: button([0.0, 0.0]),
-                triggers: vec![binding(XrdsTriggerKind::ButtonPress, Some("Nope"))],
-            }],
-        )],
+    let d = doc_with_instance(
+        vec![XrdsPanelElement::new("start", button([0.0, 0.0]))],
         vec!["Play"],
+        vec![("start", vec![binding(XrdsTriggerKind::ButtonPress, Some("Nope"))])],
     );
     assert!(has(&d, "Element binding names a missing Track"), "{:?}", titles(&d));
 }
 
 #[test]
 fn diagnostics_warn_about_an_element_binding_that_runs_nothing() {
-    let d = doc(
-        vec![template(
-            "P",
-            vec![XrdsPanelElement {
-                name: "start".to_string(),
-                kind: button([0.0, 0.0]),
-                triggers: vec![binding(XrdsTriggerKind::ButtonPress, None)],
-            }],
-        )],
+    let d = doc_with_instance(
+        vec![XrdsPanelElement::new("start", button([0.0, 0.0]))],
         vec![],
+        vec![("start", vec![binding(XrdsTriggerKind::ButtonPress, None)])],
     );
     assert!(has(&d, "Element binding runs nothing"), "{:?}", titles(&d));
+}
+
+#[test]
+fn diagnostics_flag_wiring_that_names_a_deleted_element() {
+    // The new hazard, replacing the one that moving bindings removed: deleting a
+    // template element orphans every instance's binding to it. Kept rather than
+    // dropped, so the authored wiring can be repointed instead of lost.
+    let d = doc_with_instance(
+        vec![XrdsPanelElement::new("start", button([0.0, 0.0]))],
+        vec!["Play"],
+        vec![("longGone", vec![binding(XrdsTriggerKind::ButtonPress, Some("Play"))])],
+    );
+    let diag = d
+        .panel_diagnostics()
+        .into_iter()
+        .find(|x| x.title == "Binding names an element the template does not have")
+        .unwrap_or_else(|| panic!("{:?}", titles(&d)));
+    assert_eq!(diag.severity, XrdsSceneTriggerDiagnosticSeverity::Error);
+    assert!(diag.detail.contains("longGone"), "must name it: {}", diag.detail);
+}
+
+#[test]
+fn an_orphaned_binding_is_reported_once_not_also_as_a_track_problem() {
+    // Two diagnostics for one mistake reads as two mistakes: once the element is
+    // missing, its bindings' Track names are not worth separately checking.
+    let d = doc_with_instance(
+        vec![XrdsPanelElement::new("start", button([0.0, 0.0]))],
+        vec![],
+        vec![("longGone", vec![binding(XrdsTriggerKind::ButtonPress, Some("AlsoMissing"))])],
+    );
+    assert!(has(&d, "Binding names an element the template does not have"));
+    assert!(!has(&d, "Element binding names a missing Track"), "{:?}", titles(&d));
+}
+
+#[test]
+fn two_instances_of_one_template_wire_independently() {
+    // The capability the whole change is for: floor 1's button opens floor 1's
+    // door. Under template-owned bindings this was impossible to express.
+    let t = XrdsPanelTemplate {
+        id: XrdsPanelTemplateId(1),
+        ..template("Elevator", vec![XrdsPanelElement::new("go", button([0.0, 0.0]))])
+    };
+    let mut d = doc(vec![t], vec!["OpenFloor1", "OpenFloor3"]);
+    for (node_id, track) in [(10u64, "OpenFloor1"), (11, "OpenFloor3")] {
+        let mut i = XrdsScenePanelInstance {
+            template_id: XrdsPanelTemplateId(1),
+            ..Default::default()
+        };
+        i.set_triggers("go", vec![binding(XrdsTriggerKind::ButtonPress, Some(track))]);
+        d.nodes.push(XrdsSceneNode {
+            payload: XrdsSceneNodePayload::Panel(i),
+            ..panel_node(node_id, 1)
+        });
+    }
+
+    assert!(d.panel_diagnostics().is_empty(), "{:?}", titles(&d));
+    assert_eq!(d.panel_instance_count(XrdsPanelTemplateId(1)), 2);
 }
 
 #[test]
@@ -352,4 +466,276 @@ fn panel_problems_do_not_leak_into_track_diagnostics() {
         !d.track_diagnostics().iter().any(|x| x.detail.contains("element")),
         "track diagnostics should not report element problems"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Attachments
+// ---------------------------------------------------------------------------
+
+fn panel_node(id: u64, template: u64) -> XrdsSceneNode {
+    XrdsSceneNode {
+        id: XrdsSceneNodeId(id),
+        parent_id: None,
+        name: format!("Panel{id}"),
+        enabled: true,
+        visible: true,
+        grabbable: false,
+        transform: XrdsSceneTransform::default(),
+        payload: XrdsSceneNodePayload::Panel(XrdsScenePanelInstance {
+            template_id: XrdsPanelTemplateId(template),
+            ..Default::default()
+        }),
+        editor: XrdsEditorMetadata::default(),
+        triggers: Vec::new(),
+        watchers: Vec::new(),
+    }
+}
+
+fn anchor_node(id: u64, panel: Option<u64>) -> XrdsSceneNode {
+    XrdsSceneNode {
+        id: XrdsSceneNodeId(id),
+        parent_id: None,
+        name: format!("Anchor{id}"),
+        enabled: true,
+        visible: true,
+        grabbable: false,
+        transform: XrdsSceneTransform::default(),
+        payload: XrdsSceneNodePayload::PlayerAnchor(XrdsScenePlayerAnchor {
+            panel_template_id: panel.map(XrdsPanelTemplateId),
+            ..Default::default()
+        }),
+        editor: XrdsEditorMetadata::default(),
+        triggers: Vec::new(),
+        watchers: Vec::new(),
+    }
+}
+
+fn doc_with_nodes(nodes: Vec<XrdsSceneNode>, panels: Vec<XrdsPanelTemplate>) -> XrdsSceneDocument {
+    XrdsSceneDocument { nodes, panels, ..XrdsSceneDocument::default() }
+}
+
+#[test]
+fn a_panel_template_can_be_attached_to_the_scene_and_to_the_camera() {
+    // The claim being tested: attachment is the only difference. One template,
+    // two attachment points, no per-attachment content.
+    let t = XrdsPanelTemplate { id: XrdsPanelTemplateId(1), ..template("Shared", vec![]) };
+    let d = doc_with_nodes(vec![panel_node(10, 1), anchor_node(11, Some(1))], vec![t]);
+    assert!(d.panel_diagnostics().is_empty(), "{:?}", titles(&d));
+}
+
+#[test]
+fn depth_lives_on_the_anchor_so_one_template_serves_two_depths() {
+    // The concrete reason `XrdsHudTemplate::depth` had to move.
+    let t = XrdsPanelTemplate { id: XrdsPanelTemplateId(1), ..template("Shared", vec![]) };
+    let mut near = anchor_node(20, Some(1));
+    let mut far = anchor_node(21, Some(1));
+    if let XrdsSceneNodePayload::PlayerAnchor(ref mut a) = near.payload {
+        a.panel_depth = 0.3;
+    }
+    if let XrdsSceneNodePayload::PlayerAnchor(ref mut a) = far.payload {
+        a.panel_depth = 1.5;
+    }
+    let d = doc_with_nodes(vec![near, far], vec![t]);
+    assert!(d.panel_diagnostics().is_empty(), "two depths, one template: {:?}", titles(&d));
+}
+
+#[test]
+fn diagnostics_flag_a_panel_instance_naming_a_missing_template() {
+    let d = doc_with_nodes(vec![panel_node(30, 404)], vec![]);
+    assert!(has(&d, "Panel instance names a missing template"), "{:?}", titles(&d));
+}
+
+#[test]
+fn diagnostics_flag_an_anchor_naming_a_missing_panel_template() {
+    let d = doc_with_nodes(vec![anchor_node(31, Some(404))], vec![]);
+    assert!(has(&d, "Anchor names a missing panel template"), "{:?}", titles(&d));
+}
+
+// Two tests here covered the "anchor links both a HUD and a panel template"
+// warning. Both are gone with `hud_template_id`: there is only one kind of
+// template to link now, so the ambiguity they described cannot be expressed and
+// there is nothing left to assert.
+
+#[test]
+fn an_anchor_that_links_no_panel_template_is_quiet() {
+    // The common case — most anchors have no panel at all — must not warn now
+    // that `panel_template_id` is the only link.
+    let d = doc_with_nodes(vec![anchor_node(33, None)], vec![]);
+    assert!(d.panel_diagnostics().is_empty(), "{:?}", titles(&d));
+}
+
+
+#[test]
+fn panel_depth_defaults_to_the_old_hud_depth_so_migration_does_not_move_anything() {
+    let a = XrdsScenePlayerAnchor::default();
+    assert_eq!(a.panel_depth, 0.5, "must match XrdsHudTemplate's default depth");
+    assert_eq!(a.panel_template_id, None);
+}
+
+#[test]
+fn an_anchor_without_the_new_fields_still_deserializes() {
+    // Additive-schema guarantee: documents authored before this exist.
+    let json = r#"{"label":"A","locomotion_mode":"Smooth","fov_deg":60.0,"is_initial":false}"#;
+    let a: XrdsScenePlayerAnchor = serde_json::from_str(json).expect("must load");
+    assert_eq!(a.panel_template_id, None);
+    assert_eq!(a.panel_depth, 0.5);
+}
+
+// ---------------------------------------------------------------------------
+// Element action targets (Phase B)
+// ---------------------------------------------------------------------------
+
+fn element_row_track(panel: u64, element: &str) -> XrdsTrack {
+    XrdsTrack {
+        assets: vec![XrdsTrackAsset {
+            target: XrdsActionTarget::Element {
+                panel: XrdsSceneNodeId(panel),
+                name: element.to_string(),
+            },
+            keys: vec![XrdsTrackKey {
+                at_secs: 0.0,
+                action: XrdsAction::SetTransform {
+                    position: Some([1.0, 0.0, 0.0]),
+                    rotation: None,
+                    scale: None,
+                    duration_secs: 0.0,
+                    ease: XrdsEaseCurve::Linear,
+                },
+            }],
+        }],
+        ..XrdsTrack::default()
+    }
+}
+
+fn track_titles(d: &XrdsSceneDocument) -> Vec<String> {
+    d.track_diagnostics().into_iter().map(|x| x.title).collect()
+}
+
+#[test]
+fn an_element_target_is_not_copy_but_round_trips() {
+    // `XrdsActionTarget` gave up `Copy` for this variant; the schema still has to
+    // survive a save/load.
+    let t = XrdsActionTarget::Element {
+        panel: XrdsSceneNodeId(10),
+        name: "go".to_string(),
+    };
+    let back: XrdsActionTarget =
+        serde_json::from_str(&serde_json::to_string(&t).expect("serialise")).expect("deserialise");
+    assert_eq!(t, back);
+}
+
+#[test]
+fn a_valid_element_row_is_quiet() {
+    let mut d = doc_with_instance(
+        vec![XrdsPanelElement::new("go", button([0.0, 0.0]))],
+        vec![],
+        vec![],
+    );
+    d.tracks.push(XrdsNamedTrack {
+        name: "Light".to_string(),
+        track: element_row_track(10, "go"),
+    });
+    assert!(track_titles(&d).is_empty(), "{:?}", track_titles(&d));
+}
+
+#[test]
+fn diagnostics_flag_an_element_row_on_a_missing_panel() {
+    let mut d = doc_with_instance(
+        vec![XrdsPanelElement::new("go", button([0.0, 0.0]))],
+        vec![],
+        vec![],
+    );
+    d.tracks.push(XrdsNamedTrack {
+        name: "Light".to_string(),
+        track: element_row_track(404, "go"),
+    });
+    assert!(
+        track_titles(&d)
+            .iter()
+            .any(|t| t == "Asset row targets an element of a missing panel"),
+        "{:?}",
+        track_titles(&d)
+    );
+}
+
+#[test]
+fn diagnostics_flag_an_element_row_naming_an_element_the_panel_lacks() {
+    // The rename case: the panel is fine, the element moved out from under the
+    // row. Distinguished from a missing panel because the fix is different.
+    let mut d = doc_with_instance(
+        vec![XrdsPanelElement::new("go", button([0.0, 0.0]))],
+        vec![],
+        vec![],
+    );
+    d.tracks.push(XrdsNamedTrack {
+        name: "Light".to_string(),
+        track: element_row_track(10, "notAnElement"),
+    });
+    let titles = track_titles(&d);
+    assert!(
+        titles.iter().any(|t| t == "Asset row targets an element the panel does not have"),
+        "{titles:?}"
+    );
+    assert!(
+        !titles.iter().any(|t| t == "Asset row targets an element of a missing panel"),
+        "the panel exists, so only one of the two applies: {titles:?}"
+    );
+}
+
+#[test]
+fn diagnostics_flag_an_element_row_on_a_node_that_is_not_a_panel() {
+    // Not a rename — a wrong reference. Worth its own message so the author is not
+    // sent hunting for a renamed element that never existed.
+    let mut d = doc(vec![], vec![]);
+    d.nodes.push(XrdsSceneNode {
+        payload: XrdsSceneNodePayload::Empty,
+        ..panel_node(20, 1)
+    });
+    d.tracks.push(XrdsNamedTrack {
+        name: "Light".to_string(),
+        track: element_row_track(20, "go"),
+    });
+    assert!(
+        track_titles(&d)
+            .iter()
+            .any(|t| t == "Asset row targets an element of a non-panel node"),
+        "{:?}",
+        track_titles(&d)
+    );
+}
+
+#[test]
+fn two_element_rows_for_one_element_are_still_one_row_per_asset() {
+    // The one-row-per-asset rule is about the *target*, so it has to see an
+    // element target as an asset like any other.
+    let mut d = doc_with_instance(
+        vec![XrdsPanelElement::new("go", button([0.0, 0.0]))],
+        vec![],
+        vec![],
+    );
+    let mut track = element_row_track(10, "go");
+    track.assets.push(track.assets[0].clone());
+    d.tracks.push(XrdsNamedTrack { name: "Light".to_string(), track });
+    assert!(
+        track_titles(&d).iter().any(|t| t == "Asset appears twice in one Track"),
+        "{:?}",
+        track_titles(&d)
+    );
+}
+
+#[test]
+fn element_rows_on_two_instances_are_two_different_assets() {
+    // The addressing property, at the schema level: same element name, different
+    // panel node, so no duplicate-asset complaint.
+    let t = XrdsPanelTemplate {
+        id: XrdsPanelTemplateId(1),
+        ..template("P", vec![XrdsPanelElement::new("go", button([0.0, 0.0]))])
+    };
+    let mut d = doc(vec![t], vec![]);
+    d.nodes.push(panel_node(10, 1));
+    d.nodes.push(panel_node(11, 1));
+    let mut track = element_row_track(10, "go");
+    track.assets.push(element_row_track(11, "go").assets.remove(0));
+    d.tracks.push(XrdsNamedTrack { name: "Light".to_string(), track });
+    assert!(track_titles(&d).is_empty(), "{:?}", track_titles(&d));
 }

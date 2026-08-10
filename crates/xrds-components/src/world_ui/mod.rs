@@ -51,3 +51,18 @@ pub use layout::XrdsWorldLayout;
 pub use slider::{XrdsWorldSlider, XrdsWorldSliderParams, XrWorldSliderChangeEvent};
 pub use surface::XrdsWorldSurface;
 pub use toggle::{XrdsWorldToggle, XrdsWorldToggleParams, XrWorldToggleEvent};
+
+/// Marks an interactive widget as **present but not interactive** — the
+/// "greyed out" state, written by `XrdsAction::SetElementEnabled`.
+///
+/// A marker component rather than a `bool` on each widget, so the three
+/// interaction systems exclude it with one `Without<…>` filter instead of each
+/// growing its own early-return. Adding a field to `XrdsWorldButton` and friends
+/// would also change their authored `*Params`, which describe *appearance* — this
+/// is runtime state, not authored data.
+///
+/// Deliberately **not** the same as hiding: a hidden button and a dead button read
+/// very differently to a player, and the plan (§5) leans on that distinction as
+/// the alternative to conditional branching.
+#[derive(bevy::prelude::Component, Debug, Clone, Copy, Default)]
+pub struct XrdsWorldElementDisabled;

@@ -1,4 +1,5 @@
 use super::*;
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum XrdsSceneNodePayload {
@@ -34,15 +35,71 @@ pub enum XrdsSceneNodePayload {
     Panel(XrdsScenePanelInstance),
 }
 
-/// A placed instance of a panel template.
+/// A placed instance of a panel template: which template, and what its elements
+/// are wired to *here*.
 ///
-/// A struct rather than a bare id so per-instance data has somewhere to go
-/// later without another schema change — the obvious candidate being the
-/// relative-addressing override table discussed in the plan's §5 (letting an
-/// instance say *which* door its button opens).
+/// **Where attachment is decided.** A Panel node parented under the scene root is
+/// a world panel; parented under a `PlayerAnchor` it is head-locked, using its own
+/// `transform` as the camera-local offset. Nothing else distinguishes them — the
+/// hierarchy is the attachment, which is why there is no `depth` or `is_hud`
+/// field here.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct XrdsScenePanelInstance {
     pub template_id: XrdsPanelTemplateId,
+    /// Per-element trigger bindings, keyed by [`XrdsPanelElement::name`].
+    ///
+    /// **Bindings live here, not on the template**, because the template is
+    /// shared. Three floors instancing one elevator panel each need their own
+    /// door; with the bindings on the template all three fired the same Track at
+    /// the same fixed node, and nothing could express "my door" —
+    /// `XrdsActionTarget::TriggerSource` resolves to the button that fired, not
+    /// to anything near it. This is the fix for the hazard the plan's §5
+    /// documented and §A4 could only warn about.
+    ///
+    /// A `BTreeMap` rather than a `Vec` of pairs: duplicate keys become
+    /// structurally impossible, and the ordering is deterministic so two saves of
+    /// the same scene produce identical JSON.
+    ///
+    /// A key naming an element the template does not have is **not** silently
+    /// dropped — it is reported by `panel_diagnostics`. That happens when an
+    /// element is deleted after instances were wired, and dropping it would
+    /// discard authored work with no way back.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub element_triggers: BTreeMap<String, Vec<XrdsTriggerBinding>>,
+}
+
+impl XrdsScenePanelInstance {
+    /// Bindings for `element`, or an empty slice — callers overwhelmingly want to
+    /// iterate, not to distinguish "no entry" from "empty entry".
+    pub fn triggers_for(&self, element: &str) -> &[XrdsTriggerBinding] {
+        self.element_triggers.get(element).map_or(&[], Vec::as_slice)
+    }
+
+    /// Replaces `element`'s bindings, removing the key when `bindings` is empty.
+    ///
+    /// Removing rather than storing an empty vec keeps the document free of
+    /// entries that look like wiring and are not, and it is what makes
+    /// [`XrdsScenePanelInstance::element_triggers`]'s dangling-key diagnostic
+    /// mean something.
+    pub fn set_triggers(&mut self, element: impl Into<String>, bindings: Vec<XrdsTriggerBinding>) {
+        let element = element.into();
+        if bindings.is_empty() {
+            self.element_triggers.remove(&element);
+        } else {
+            self.element_triggers.insert(element, bindings);
+        }
+    }
+
+    /// Rewrites a binding key after the template renamed an element.
+    ///
+    /// Renames propagate (a delete does not) because the intent is unambiguous:
+    /// the element still exists and is still the thing that was wired. Leaving
+    /// the old key would break every instance on a rename.
+    pub fn rename_element(&mut self, from: &str, to: impl Into<String>) {
+        if let Some(bindings) = self.element_triggers.remove(from) {
+            self.element_triggers.insert(to.into(), bindings);
+        }
+    }
 }
 
 impl Default for XrdsPanelTemplateId {
@@ -1083,9 +1140,34 @@ pub struct XrdsScenePlayerAnchor {
     /// If `true`, the runtime spawns the player pawn at this anchor on play-mode start.
     /// At most one `PlayerAnchor` per scene should have `is_initial: true`.
     pub is_initial: bool,
-    /// Optional HUD template to instantiate head-locked for this anchor.
+    /// **Deprecated — kept working as reference, not to be used.** Head-lock a
+    /// panel by parenting a `Panel` **node** under this anchor instead.
+    ///
+    /// This link cannot carry `element_triggers`, so a panel attached through it
+    /// renders and can never fire anything — its buttons are dead. A Panel node
+    /// carries its own wiring and gets a full `transform` instead of the scalar
+    /// `panel_depth` below. Nothing in the editor authors this path any more.
+    ///
+    /// Optional [`XrdsPanelTemplate`] to instantiate head-locked for this anchor.
+    ///
+    /// **The camera half of "attachment is the only difference."** The same
+    /// template can also be placed in the scene via
+    /// `XrdsSceneNodePayload::Panel`; what differs is only where it ends up.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub hud_template_id: Option<HudTemplateId>,
+    pub panel_template_id: Option<XrdsPanelTemplateId>,
+    /// **Deprecated with `panel_template_id` above.** A `Panel` node's own
+    /// `transform` supersedes this: it gives position *and* rotation rather than
+    /// one distance, and it is where a head-locked panel's placement now lives.
+    ///
+    /// How far in front of the lens a `panel_template_id` instance sits, in
+    /// metres.
+    ///
+    /// **Depth lives here, not on the template**, which is the whole reason the
+    /// retired `XrdsHudTemplate::depth` had to move: with depth on the template,
+    /// one template could never be used at two depths. Ignored unless
+    /// `panel_template_id` is set.
+    #[serde(default = "default_panel_depth")]
+    pub panel_depth: f32,
     /// Per-anchor exposure override (ev100).  Overrides the scene-wide exposure while
     /// this anchor is active.  `None` = use the scene-wide exposure setting.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1099,7 +1181,8 @@ impl Default for XrdsScenePlayerAnchor {
             locomotion_mode: XrdsPlayerLocomotionMode::default(),
             fov_deg: 60.0,
             is_initial: false,
-            hud_template_id: None,
+            panel_template_id: None,
+            panel_depth: default_panel_depth(),
             exposure: None,
         }
     }
@@ -1406,6 +1489,10 @@ pub enum XrdsSceneWorldWidget {
 }
 
 fn is_zero(v: &f32) -> bool { v.abs() < 1e-9 }
+
+/// Matches the depth the retired `XrdsHudTemplate` defaulted to, so a HUD that
+/// became a panel template did not silently move.
+fn default_panel_depth() -> f32 { 0.5 }
 
 /// Authored world-space UI panel with optional child widgets and layout.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

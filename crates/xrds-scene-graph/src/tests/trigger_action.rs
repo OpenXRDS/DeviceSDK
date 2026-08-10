@@ -43,6 +43,7 @@ fn binding_for(track: &str) -> XrdsTriggerBinding {
     XrdsTriggerBinding {
         trigger: XrdsTriggerKind::ZoneEnter,
         track: Some(track.to_string()),
+        effect: Default::default(),
         disabled: false,
         hand: None,
     }
@@ -338,7 +339,7 @@ fn flattened_keys_sorts_across_rows_and_keeps_each_keys_own_target() {
 
     // The row's target has to travel with the key — that is the whole
     // mechanism by which one Track drives several nodes.
-    let owners: Vec<XrdsActionTarget> = flat.iter().map(|(t, _)| *t).collect();
+    let owners: Vec<XrdsActionTarget> = flat.iter().map(|(t, _)| (*t).clone()).collect();
     assert_eq!(owners[0], XrdsActionTarget::Node(XrdsSceneNodeId(1)));
     assert_eq!(owners[1], XrdsActionTarget::Node(XrdsSceneNodeId(2)));
     assert_eq!(owners[2], XrdsActionTarget::Node(XrdsSceneNodeId(1)));
@@ -982,4 +983,136 @@ fn diagnostics_flag_negative_hysteresis_and_an_empty_fires_name() {
     let t = titles(&d);
     assert!(t.contains(&"Watcher has negative hysteresis".to_string()), "{t:?}");
     assert!(t.contains(&"Watcher fires an empty name".to_string()), "{t:?}");
+}
+
+// ---------------------------------------------------------------------------
+// Authorable stop (§A5)
+// ---------------------------------------------------------------------------
+
+fn stop_binding(track: &str) -> XrdsTriggerBinding {
+    XrdsTriggerBinding {
+        trigger: XrdsTriggerKind::ButtonPress,
+        track: Some(track.to_string()),
+        effect: XrdsTriggerEffect::Stop,
+        disabled: false,
+        hand: None,
+    }
+}
+
+#[test]
+fn effect_defaults_to_fire_and_is_omitted_when_serialised() {
+    // Both halves of the additive-schema guarantee: a document authored before
+    // stop existed keeps its exact meaning, and adding the field does not churn
+    // every binding in every saved file.
+    let b: XrdsTriggerBinding =
+        serde_json::from_str(r#"{"trigger":{"kind":"ButtonPress"}}"#).expect("deserialise");
+    assert_eq!(b.effect, XrdsTriggerEffect::Fire);
+
+    let json = serde_json::to_string(&b).expect("serialise");
+    assert!(!json.contains("effect"), "a Fire binding must not write the field: {json}");
+}
+
+#[test]
+fn a_stop_binding_round_trips() {
+    let b = stop_binding("Open");
+    let back: XrdsTriggerBinding =
+        serde_json::from_str(&serde_json::to_string(&b).expect("serialise")).expect("deserialise");
+    assert_eq!(b, back);
+}
+
+#[test]
+fn diagnostics_warn_about_a_stop_for_a_track_nothing_fires() {
+    // A Stop is a no-op when nothing is running, so it never errors at runtime
+    // and never shows up as a failure. That silence is why it is worth saying at
+    // author time.
+    let d = doc(
+        vec![node_with_binding(700, stop_binding("Open"))],
+        vec![named("Open", XrdsTrack::default())],
+    );
+
+    let titles: Vec<String> =
+        d.track_diagnostics().into_iter().map(|x| x.title).collect();
+    assert!(
+        titles.iter().any(|t| t == "Stop binding for a Track nothing fires"),
+        "{titles:?}"
+    );
+}
+
+#[test]
+fn a_stop_is_quiet_when_something_fires_the_same_track() {
+    let d = doc(
+        vec![XrdsSceneNode {
+            triggers: vec![binding_for("Open"), stop_binding("Open")],
+            ..node(701)
+        }],
+        vec![named("Open", XrdsTrack::default())],
+    );
+    let titles: Vec<String> =
+        d.track_diagnostics().into_iter().map(|x| x.title).collect();
+    assert!(
+        !titles.iter().any(|t| t == "Stop binding for a Track nothing fires"),
+        "{titles:?}"
+    );
+}
+
+#[test]
+fn a_panel_elements_fire_binding_satisfies_a_nodes_stop_binding() {
+    // The reason `all_trigger_bindings` exists: a caller that walked only
+    // `node.triggers` would ignore every panel button, and warn that nothing
+    // fires a Track a panel starts perfectly well.
+    let mut d = doc(vec![], vec![named("Open", XrdsTrack::default())]);
+    d.panels.push(XrdsPanelTemplate {
+        id: XrdsPanelTemplateId(1),
+        name: "P".to_string(),
+        elements: vec![XrdsPanelElement::new(
+            "go",
+            XrdsSceneWorldWidget::Button(XrdsSceneWorldButton::default()),
+        )],
+        ..XrdsPanelTemplate::default()
+    });
+    let mut instance =
+        XrdsScenePanelInstance { template_id: XrdsPanelTemplateId(1), ..Default::default() };
+    instance.set_triggers("go", vec![binding_for("Open")]);
+    d.nodes.push(XrdsSceneNode {
+        payload: XrdsSceneNodePayload::Panel(instance),
+        ..node(702)
+    });
+    d.nodes.push(node_with_binding(703, stop_binding("Open")));
+
+    let titles: Vec<String> =
+        d.track_diagnostics().into_iter().map(|x| x.title).collect();
+    assert!(
+        !titles.iter().any(|t| t == "Stop binding for a Track nothing fires"),
+        "a panel element's Fire binding counts: {titles:?}"
+    );
+}
+
+#[test]
+fn a_disabled_fire_binding_does_not_satisfy_a_stop() {
+    // A parked start button means nothing starts it, so the Stop is still inert.
+    let mut parked = binding_for("Open");
+    parked.disabled = true;
+    let d = doc(
+        vec![XrdsSceneNode { triggers: vec![parked, stop_binding("Open")], ..node(704) }],
+        vec![named("Open", XrdsTrack::default())],
+    );
+    let titles: Vec<String> =
+        d.track_diagnostics().into_iter().map(|x| x.title).collect();
+    assert!(
+        titles.iter().any(|t| t == "Stop binding for a Track nothing fires"),
+        "{titles:?}"
+    );
+}
+
+#[test]
+fn a_stop_naming_a_missing_track_reports_only_the_missing_track() {
+    // Two diagnostics for one mistake reads as two mistakes.
+    let d = doc(vec![node_with_binding(705, stop_binding("Ghost"))], vec![]);
+    let titles: Vec<String> =
+        d.track_diagnostics().into_iter().map(|x| x.title).collect();
+    assert!(titles.iter().any(|t| t == "Binding names a missing Track"), "{titles:?}");
+    assert!(
+        !titles.iter().any(|t| t == "Stop binding for a Track nothing fires"),
+        "{titles:?}"
+    );
 }

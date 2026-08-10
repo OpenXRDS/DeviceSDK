@@ -29,6 +29,7 @@ pub use light_params::{
 pub use world::audio::XrdsAudioClip;
 pub use world_ui::{
     XrdsWorldButton, XrdsWorldButtonParams, XrdsWorldButtonState,
+    XrdsWorldElementDisabled,
     XrdsWorldImage, XrdsWorldImageParams,
     XrdsWorldLabel, XrdsWorldLabelParams,
     XrdsWorldLayout,

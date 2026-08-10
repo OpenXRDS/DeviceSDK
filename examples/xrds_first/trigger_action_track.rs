@@ -270,6 +270,7 @@ fn demo_document() -> XrdsSceneDocument {
                 triggers: vec![XrdsTriggerBinding {
                     trigger: XrdsTriggerKind::ZoneEnter,
                     track: Some(DANCE.to_string()),
+                    effect: Default::default(),
                     disabled: false,
                     hand: None,
                 }],
@@ -291,6 +292,7 @@ fn demo_document() -> XrdsSceneDocument {
                 triggers: vec![XrdsTriggerBinding {
                     trigger: XrdsTriggerKind::ZoneEnter,
                     track: Some(STEAL_BLUE.to_string()),
+                    effect: Default::default(),
                     disabled: false,
                     hand: None,
                 }],

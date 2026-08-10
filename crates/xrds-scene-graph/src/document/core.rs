@@ -2,66 +2,11 @@ use super::*;
 
 pub const XRDS_SCENE_DOCUMENT_VERSION: u32 = 1;
 
-// ---------------------------------------------------------------------------
-// HUD library types
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-pub struct HudTemplateId(pub u64);
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-pub struct HudItemDefId(pub u64);
-
-/// One text item inside a `XrdsHudTemplate`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct XrdsHudItemDef {
-    pub id: HudItemDefId,
-    /// Key used to address this item at runtime via `set_hud_item`.
-    pub name: String,
-    /// Canvas-local position: X right, Y up (metres).
-    pub position: [f32; 2],
-    pub text: String,
-    pub font_size: f32,
-    /// RGBA in 0-1 range.
-    pub color: [f32; 4],
-}
-
-impl Default for XrdsHudItemDef {
-    fn default() -> Self {
-        Self {
-            id: HudItemDefId(1),
-            name: "item".to_string(),
-            position: [0.0, 0.0],
-            text: String::new(),
-            font_size: 4.0,
-            color: [1.0, 1.0, 1.0, 1.0],
-        }
-    }
-}
-
-/// Authored HUD layout template stored in the document's `hud_library`.
-/// Linked to a `PlayerAnchor` via `XrdsScenePlayerAnchor::hud_template_id`.
-/// At runtime the system instantiates one copy per active anchor.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct XrdsHudTemplate {
-    pub id: HudTemplateId,
-    pub name: String,
-    /// Camera-space depth in metres (positive = in front of viewer).
-    pub depth: f32,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub items: Vec<XrdsHudItemDef>,
-}
-
-impl Default for XrdsHudTemplate {
-    fn default() -> Self {
-        Self {
-            id: HudTemplateId(1),
-            name: "HUD".to_string(),
-            depth: 0.5,
-            items: Vec::new(),
-        }
-    }
-}
+// `HudTemplateId`, `HudItemDefId`, `XrdsHudItemDef` and `XrdsHudTemplate` lived
+// here until the panel-template unification retired them. A HUD is no longer a
+// separate kind of thing: it is an `XrdsPanelTemplate` whose attachment happens
+// to be a `PlayerAnchor`, and a HUD text item is a `Label` element. See
+// `docs/xrds-widget-template-plan.md` §A4b-1.
 
 // ---------------------------------------------------------------------------
 // Scene document
@@ -75,8 +20,6 @@ pub struct XrdsSceneDocument {
     pub nodes: Vec<XrdsSceneNode>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub gltf_node_authoring: BTreeMap<u64, XrdsSceneGltfNodeAuthoring>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub hud_library: Vec<XrdsHudTemplate>,
     /// Named [`XrdsTrack`] templates, referenced by
     /// `XrdsTriggerBinding::track` by name — the *template* half of the
     /// template/instance split: one piece of choreography, fired from many
@@ -88,11 +31,9 @@ pub struct XrdsSceneDocument {
     ///
     /// Mirrors `tracks`: a registry of named, reusable definitions referenced by
     /// whatever instances them, so one panel authored once can appear in several
-    /// places and be edited in one.
-    ///
-    /// Additive for now — `hud_library` above still drives the working HUD, and
-    /// nothing migrates onto this until the runtime does. See
-    /// `docs/xrds-widget-template-plan.md`.
+    /// places and be edited in one. Because a `Panel` node stores nothing but a
+    /// `template_id`, this registry *is* the content — it has to survive export,
+    /// or the panels in a reloaded document are empty shells.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub panels: Vec<XrdsPanelTemplate>,
 }
@@ -105,7 +46,6 @@ impl Default for XrdsSceneDocument {
             assets: Vec::new(),
             nodes: Vec::new(),
             gltf_node_authoring: BTreeMap::new(),
-            hud_library: Vec::new(),
             tracks: Vec::new(),
             panels: Vec::new(),
         }
@@ -238,20 +178,6 @@ impl XrdsSceneDocument {
         XrdsPanelTemplateId(self.panels.iter().map(|t| t.id.0).max().unwrap_or(0) + 1)
     }
 
-    pub fn hud_template(&self, id: HudTemplateId) -> Option<&XrdsHudTemplate> {
-        self.hud_library.iter().find(|t| t.id == id)
-    }
-
-    pub fn hud_template_mut(&mut self, id: HudTemplateId) -> Option<&mut XrdsHudTemplate> {
-        self.hud_library.iter_mut().find(|t| t.id == id)
-    }
-
-    pub fn next_available_template_id(&self) -> HudTemplateId {
-        HudTemplateId(
-            self.hud_library.iter().map(|t| t.id.0).max().unwrap_or(0).saturating_add(1),
-        )
-    }
-
     /// Looks up a Track by name — what `XrdsTriggerBinding::track`
     /// resolves against.
     pub fn track(&self, name: &str) -> Option<&XrdsNamedTrack> {
@@ -315,10 +241,9 @@ impl XrdsSceneDocument {
             assets: self.assets.clone(),
             nodes,
             gltf_node_authoring,
-            hud_library: self.hud_library.clone(),
-            // Cloned through unfiltered, same as hud_library above — an
-            // unreferenced registry entry in the subset is harmless, just
-            // unused, same as any other unreferenced asset.
+            // Both registries clone through unfiltered — an unreferenced entry
+            // in the subset is harmless, just unused, same as any other
+            // unreferenced asset.
             tracks: self.tracks.clone(),
             panels: self.panels.clone(),
         })

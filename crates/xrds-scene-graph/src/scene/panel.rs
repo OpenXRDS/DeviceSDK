@@ -14,10 +14,9 @@
 //! nothing in this file mentions either — placement belongs to whatever
 //! instances a template, not to the template.
 //!
-//! This module is **additive**: it does not replace `XrdsHudTemplate` or
-//! `XrdsSceneWorldPanel::widgets` yet. Those are a working, wired-up system, and
-//! the plan's first risk is breaking it — so the new vocabulary lands and gets
-//! validated before anything migrates onto it.
+//! This module started out additive, running alongside the old vocabulary until
+//! the new one was validated. `XrdsHudTemplate` is now gone and this replaces it
+//! (§A4b-1). `XrdsSceneWorldPanel::widgets` is the last holdout — see §A4b-2.
 
 use super::*;
 
@@ -57,34 +56,37 @@ impl Default for XrdsPanelBackground {
 /// enum would be a duplicate that drifts, and it makes migrating existing
 /// authored panels a matter of giving each widget a name.
 ///
-/// What this adds over a bare widget is exactly the two things the world side
-/// lacked: an **identity** and its own **triggers**.
+/// What this adds over a bare widget is exactly what the world side lacked: an
+/// **identity**.
+///
+/// **Deliberately carries no triggers.** They live on the *instance* —
+/// [`XrdsScenePanelInstance::element_triggers`] — because a template is shared.
+/// With bindings here, one template instanced on three floors gave every floor's
+/// button the same Track and therefore the same door: the third-floor button
+/// opened the ground-floor one, and there was no way to say "my door" because
+/// `XrdsActionTarget::TriggerSource` resolves to the element that fired, not to
+/// anything near it. That hazard used to need a diagnostic warning it could not
+/// fix; moving bindings to the instance makes it unrepresentable instead.
+///
+/// The trade is ergonomic and accepted: twenty instances of a button wired the
+/// same way now means twenty bindings rather than one. That is the price of each
+/// instance being able to drive its own target.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct XrdsPanelElement {
-    /// Unique within its template. **The addressing key** — `set_hud_item` is
-    /// already name-addressed, and Phase B's action targets will be too.
+    /// Unique within its template. **The addressing key** — instance bindings,
+    /// `set_hud_item` and Phase B's action targets all resolve by this name.
     ///
     /// A name rather than an index on purpose: reordering elements on the canvas
     /// must not silently re-point a binding. Validated by
     /// [`crate::normalize_authored_name`].
     pub name: String,
     pub kind: XrdsSceneWorldWidget,
-    /// Triggers this element fires. Empty for kinds that emit nothing — see
-    /// [`XrdsPanelElement::can_emit`].
-    ///
-    /// This is the field that makes widget triggers reachable at all. The four
-    /// widget trigger kinds target the element's own runtime entity, and
-    /// `consume_triggers` requires an `XrdsTriggerBindings` component there;
-    /// elements never had one because bindings were only ever tagged onto
-    /// document *nodes*.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub triggers: Vec<XrdsTriggerBinding>,
 }
 
 impl XrdsPanelElement {
-    /// A new element of `kind`, named `name`, firing nothing yet.
+    /// A new element of `kind`, named `name`.
     pub fn new(name: impl Into<String>, kind: XrdsSceneWorldWidget) -> Self {
-        Self { name: name.into(), kind, triggers: Vec::new() }
+        Self { name: name.into(), kind }
     }
 
     /// Whether this element can ever emit `kind` at runtime.
@@ -106,6 +108,23 @@ impl XrdsPanelElement {
             ) | (XrdsSceneWorldWidget::Slider(_), XrdsTriggerKind::SliderChange)
                 | (XrdsSceneWorldWidget::Toggle(_), XrdsTriggerKind::ToggleChange)
         )
+    }
+
+    /// Where this element sits on its panel's canvas, in metres (X right, Y up
+    /// from centre).
+    ///
+    /// Lives on the widget rather than the element, so this reaches across the
+    /// five variants for callers that need placement without matching on kind —
+    /// notably the camera attachment, which turns a canvas position into a
+    /// head-locked offset at its own depth.
+    pub fn local_position(&self) -> [f32; 2] {
+        match &self.kind {
+            XrdsSceneWorldWidget::Label(l) => l.local_position,
+            XrdsSceneWorldWidget::Button(b) => b.local_position,
+            XrdsSceneWorldWidget::Image(i) => i.local_position,
+            XrdsSceneWorldWidget::Slider(s) => s.local_position,
+            XrdsSceneWorldWidget::Toggle(t) => t.local_position,
+        }
     }
 
     /// Human name of the element's kind, for diagnostics.
@@ -134,7 +153,8 @@ impl XrdsPanelElement {
 ///
 /// Holds **no placement**. A template instanced three times is three panels in
 /// three places sharing one authored definition, which is the point — and is
-/// why `depth` does not live here the way `XrdsHudTemplate::depth` does. Depth
+/// why `depth` does not live here the way the retired `XrdsHudTemplate::depth`
+/// did. Depth
 /// is a property of a camera attachment, and keeping it on the template would
 /// quietly prevent instancing one template at two depths.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
