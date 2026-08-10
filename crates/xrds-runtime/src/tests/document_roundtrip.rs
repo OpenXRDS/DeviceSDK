@@ -821,6 +821,7 @@ fn trigger_bindings_survive_import_export_round_trip() {
     let bindings = vec![XrdsTriggerBinding {
         trigger: XrdsTriggerKind::ZoneEnter,
         track: Some("teleport".to_string()),
+        effect: Default::default(),
         disabled: false,
         hand: None,
     }];
@@ -958,4 +959,124 @@ fn text3d_node_survives_import_export_round_trip() {
     assert_eq!(text.font_size, 32.0);
     assert_eq!(text.color, [0.2, 0.8, 1.0, 1.0]);
     assert_eq!(text.alignment, XrdsSceneTextAlignment::Left);
+}
+
+#[test]
+fn panel_templates_survive_import_export_round_trip() {
+    // The registry has to come back out for the same reason `tracks` does: a
+    // Panel node carries only a `template_id`, so an export that drops the
+    // registry produces a document whose panels resolve to nothing. Exactly the
+    // failure the `tracks` export fixed, one registry later.
+    let mut app = xrds_test_app();
+
+    let panels = vec![xrds_scene_graph::XrdsPanelTemplate {
+        id: xrds_scene_graph::XrdsPanelTemplateId(3),
+        name: "Console".to_string(),
+        elements: vec![xrds_scene_graph::XrdsPanelElement {
+            name: "Go".to_string(),
+            kind: xrds_scene_graph::XrdsSceneWorldWidget::Button(
+                xrds_scene_graph::XrdsSceneWorldButton {
+                    label: "Go".to_string(),
+                    ..Default::default()
+                },
+            ),
+        }],
+        ..Default::default()
+    }];
+
+    let document = XrdsSceneDocument {
+        nodes: vec![XrdsSceneNode {
+            id: XrdsSceneNodeId(930),
+            parent_id: None,
+            name: "WallPanel".to_string(),
+            enabled: true,
+            visible: true,
+            transform: XrdsSceneTransform::default(),
+            payload: XrdsSceneNodePayload::Panel(xrds_scene_graph::XrdsScenePanelInstance {
+                template_id: xrds_scene_graph::XrdsPanelTemplateId(3),
+                ..Default::default()
+            }),
+            grabbable: false,
+            editor: XrdsEditorMetadata::default(),
+            triggers: Vec::new(),
+            watchers: Vec::new(),
+        }],
+        panels: panels.clone(),
+        ..Default::default()
+    };
+
+    {
+        let mut xrds = XrdsAPI::attach(&mut app);
+        xrds.import_scene_document(&document).expect("panel import should succeed");
+    }
+    app.update();
+
+    let exported = {
+        let xrds = XrdsAPI::attach(&mut app);
+        xrds.export_scene_document().expect("export after panel import should succeed")
+    };
+
+    assert_eq!(exported.panels, panels, "the panel registry must survive export");
+}
+
+#[test]
+fn panel_templates_survive_the_reimport_path_too() {
+    // `reimport_scene_in_world` and `XrdsAPI::import_scene_document` do not share
+    // a body, so a registry wired into one is not wired into the other. That
+    // asymmetry is exactly how `tag_player_anchor_entities` came to be missing
+    // from the import path, and asserting only the path used above would let the
+    // same gap reopen here.
+    let mut app = xrds_test_app();
+
+    let panels = vec![xrds_scene_graph::XrdsPanelTemplate {
+        id: xrds_scene_graph::XrdsPanelTemplateId(4),
+        name: "Reimported".to_string(),
+        ..Default::default()
+    }];
+    let document = XrdsSceneDocument { panels: panels.clone(), ..Default::default() };
+
+    crate::xrds_api::reimport::reimport_scene_in_world(app.world_mut(), &document)
+        .expect("reimport should succeed");
+    app.update();
+
+    let exported = {
+        let xrds = XrdsAPI::attach(&mut app);
+        xrds.export_scene_document().expect("export after reimport should succeed")
+    };
+    assert_eq!(exported.panels, panels);
+}
+
+#[test]
+fn importing_a_document_without_panels_clears_a_previous_registry() {
+    // The registry is replaced wholesale, matching every other tag_*/sync_*
+    // helper: the document is authoritative state, not something to merge into.
+    // Merging instead would resurrect templates the author deleted.
+    let mut app = xrds_test_app();
+
+    let with_panels = XrdsSceneDocument {
+        panels: vec![xrds_scene_graph::XrdsPanelTemplate {
+            id: xrds_scene_graph::XrdsPanelTemplateId(5),
+            name: "Doomed".to_string(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    {
+        let mut xrds = XrdsAPI::attach(&mut app);
+        xrds.import_scene_document(&with_panels).expect("first import should succeed");
+    }
+    app.update();
+
+    {
+        let mut xrds = XrdsAPI::attach(&mut app);
+        xrds.import_scene_document(&XrdsSceneDocument::default())
+            .expect("second import should succeed");
+    }
+    app.update();
+
+    let exported = {
+        let xrds = XrdsAPI::attach(&mut app);
+        xrds.export_scene_document().expect("export should succeed")
+    };
+    assert!(exported.panels.is_empty(), "stale templates came back: {:?}", exported.panels);
 }

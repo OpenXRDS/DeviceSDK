@@ -23,7 +23,10 @@ pub(super) fn world_ui_slider_system(world: &mut World) {
 
     // Phase 1 — collect without keeping borrows alive.
     let sliders: Vec<(Entity, XrdsWorldSlider, Entity, Entity)> = {
-        let mut q = world.query::<(Entity, &XrdsWorldSlider, &ChildOf, &XrdsWorldSliderParts)>();
+        let mut q = world.query_filtered::<
+            (Entity, &XrdsWorldSlider, &ChildOf, &XrdsWorldSliderParts),
+            bevy::prelude::Without<xrds_components::XrdsWorldElementDisabled>,
+        >();
         q.iter(world)
             .map(|(e, s, co, parts)| (e, s.clone(), co.0, parts.thumb))
             .collect()

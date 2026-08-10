@@ -52,7 +52,8 @@ pub(super) fn install_xrds(app: &mut App) {
     app.init_resource::<XrdsHierarchyIndex>();
     app.init_resource::<XrdsImportedAssetCatalog>();
     app.init_resource::<XrdsImportedSceneEnvironment>();
-    app.init_resource::<XrdsImportedHudLibrary>();
+    app.init_resource::<XrdsImportedPanelLibrary>();
+    app.init_resource::<XrdsPanelElementIndex>();
     app.init_resource::<SurfaceInterpreterRegistry>();
     app.init_resource::<SurfaceDescriptorRegistry>();
     app.init_resource::<QueuedSurfaceComponents>();

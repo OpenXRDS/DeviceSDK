@@ -745,70 +745,61 @@ pub(super) fn spawn_interaction_zone_entity(
     entity
 }
 
-/// Spawn 3D text entities for every item in `template` and parent them to
-/// `anchor_entity`.  Returns the `XrdsStoredHudInstance` to be inserted on the
-/// anchor.  Intended to be called from `tag_player_anchor_entities` immediately
-/// after the anchor is tagged so that item entities exist before the first frame.
-pub(super) fn spawn_hud_instance_for_anchor(
+/// Instantiates a panel template head-locked to `anchor_entity` — the camera
+/// half of "attachment is the only difference".
+///
+/// Exactly the same elements a scene-placed `Panel` node would spawn; only the
+/// placement differs. Each element goes through `spawn_panel_element_in_world`,
+/// so its authored triggers land on its entity and fire like any other binding —
+/// which means a HUD can now carry buttons and sliders, not just text.
+///
+/// **Returns [`super::state::XrdsStoredHudInstance`] deliberately.** That is the
+/// same component `set_hud_item` already resolves against, keyed by element
+/// name, so a public API that predates all of this keeps working unchanged
+/// against a migrated template. Preserving it was the cheapest part of the
+/// migration precisely because both models address by name.
+///
+/// `depth` comes from the *anchor*, not the template (see
+/// `XrdsScenePlayerAnchor::panel_depth`): that is what lets one template be
+/// instanced at two different depths, which `XrdsHudTemplate::depth` could not.
+///
+/// `element_triggers` is the wiring for this attachment, keyed by element name —
+/// the same map a scene-placed `Panel` node carries. The anchor-link path has
+/// nowhere to store one and passes an empty map, which is exactly the asymmetry
+/// §A6-2 removes by making a head-locked panel a `Panel` node parented under the
+/// anchor rather than a field on it.
+pub(super) fn spawn_panel_template_head_locked(
     world: &mut World,
     anchor_entity: Entity,
-    template: &xrds_scene_graph::XrdsHudTemplate,
+    template: &xrds_scene_graph::XrdsPanelTemplate,
+    depth: f32,
+    element_triggers: &std::collections::BTreeMap<String, Vec<xrds_scene_graph::XrdsTriggerBinding>>,
 ) -> super::state::XrdsStoredHudInstance {
-    use bevy::camera::visibility::NoFrustumCulling;
-    use bevy::color::Srgba;
-    use bevy::pbr::StandardMaterial;
-    use bevy::render::alpha::AlphaMode;
-    use bevy_rich_text3d::{Text3d, Text3dStyling, TextAlign, TextAtlas};
     use crate::xrds_api::anchor::XrdsHeadLocked;
 
-    let depth = template.depth;
+    let mut items: Vec<(String, Entity)> = Vec::new();
 
-    let material_handle = {
-        let mut materials = world.resource_mut::<bevy::asset::Assets<StandardMaterial>>();
-        materials.add(StandardMaterial {
-            base_color_texture: Some(TextAtlas::DEFAULT_IMAGE.clone()),
-            alpha_mode: AlphaMode::Mask(0.5),
-            unlit: true,
-            cull_mode: None,
-            ..Default::default()
-        })
-    };
+    for element in &template.elements {
+        let entity = crate::xrds_api::trigger_action::spawn_panel_element_in_world(
+            world,
+            anchor_entity,
+            element,
+            element_triggers.get(&element.name).map_or(&[], Vec::as_slice),
+        );
 
-    let mut item_pairs: Vec<(String, Entity)> = Vec::new();
+        // The element spawned at its canvas position on a panel plane; the
+        // attachment decides where that plane sits. Camera-local space is X
+        // right, Y up, -Z forward, so the canvas lands `depth` metres ahead.
+        let [x, y] = element.local_position();
+        let local_offset = Transform::from_translation(Vec3::new(x, y, -depth));
+        if let Ok(mut e) = world.get_entity_mut(entity) {
+            e.insert((local_offset, XrdsHeadLocked { local_offset }));
+        }
 
-    for item in &template.items {
-        let [r, g, b, a] = item.color;
-        let [ix, iy]     = item.position;
-        let font_size    = item.font_size;
-
-        // The head-locked offset places the item in camera-local space:
-        // X right, Y up, -Z forward at `depth` metres in front of the lens.
-        let local_offset = Transform::from_translation(Vec3::new(ix, iy, -depth));
-
-        let item_entity = world.spawn((
-            bevy::prelude::Name::new(item.name.clone()),
-            Text3d::new(item.text.clone()),
-            Text3dStyling {
-                size: 128.0,
-                world_scale: Some(bevy::math::Vec2::splat(font_size * 0.01)),
-                color: Srgba::new(r, g, b, a),
-                align: TextAlign::Center,
-                ..Default::default()
-            },
-            bevy::prelude::Mesh3d::default(),
-            bevy::prelude::MeshMaterial3d(material_handle.clone()),
-            Transform::from_translation(Vec3::new(ix, iy, -depth)),
-            GlobalTransform::default(),
-            build_visibility_hierarchy_components(true),
-            XrdsHeadLocked { local_offset },
-            NoFrustumCulling,
-        )).id();
-
-        world.entity_mut(anchor_entity).add_child(item_entity);
-        item_pairs.push((item.name.clone(), item_entity));
+        items.push((element.name.clone(), entity));
     }
 
-    super::state::XrdsStoredHudInstance { items: item_pairs }
+    super::state::XrdsStoredHudInstance { items }
 }
 
 // ── World-space widget spawn functions ────────────────────────────────────────

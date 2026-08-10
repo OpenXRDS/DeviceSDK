@@ -175,17 +175,33 @@ impl XrdsAPI<'_> {
         first
     }
 
-    /// Link a HUD template to a `PlayerAnchor` at runtime.
+    /// Head-lock a panel template to a `PlayerAnchor` at runtime.
     ///
-    /// Despawns any existing HUD instance on the anchor, then spawns a fresh one
-    /// from `template`.  Pass `None` to remove the HUD without spawning a new one.
+    /// Despawns any existing instance on the anchor, then spawns a fresh one from
+    /// `template`. Pass `None` to remove it without spawning a new one.
     ///
     /// Call this from `XrdsApp::setup` or `XrdsApp::update` after the scene has
     /// been imported (i.e. the anchor entity must already exist in the runtime).
-    pub fn link_hud(
+    ///
+    /// Replaces `link_hud`, whose `&XrdsHudTemplate` parameter could not outlive
+    /// that type. Items remain addressable by name via
+    /// [`XrdsUpdateContext::set_hud_item`], whose contract is unchanged.
+    ///
+    /// **Deprecated — kept working as reference, not to be used.** This path
+    /// cannot carry per-element trigger bindings, so the panel it spawns renders
+    /// and can never fire anything. Author a `Panel` node parented under the
+    /// anchor instead: attachment is parenting, the node carries its own wiring,
+    /// and its `transform` replaces this `depth` with a full placement.
+    #[deprecated(
+        since = "0.1.0",
+        note = "cannot carry element trigger bindings, so the panel's buttons are inert. \
+                Parent a Panel node under the anchor instead — see the panel-template plan §A6."
+    )]
+    pub fn link_panel(
         &mut self,
         anchor_id: XrdsId,
-        template: Option<&xrds_scene_graph::XrdsHudTemplate>,
+        template: Option<&xrds_scene_graph::XrdsPanelTemplate>,
+        depth: f32,
     ) {
         let world = self.app.world_mut();
         let anchor_entity = match world.resource::<XrdsIdIndex>().entity_of(anchor_id) {
@@ -209,7 +225,16 @@ impl XrdsAPI<'_> {
 
         // Spawn new instance if a template was provided.
         if let Some(t) = template {
-            let instance = spawn_hud_instance_for_anchor(world, anchor_entity, t);
+            // No wiring: an anchor link has nowhere to store per-element
+            // bindings. A head-locked panel that needs working buttons is
+            // authored as a `Panel` node under the anchor instead (§A6-2).
+            let instance = spawn_panel_template_head_locked(
+                world,
+                anchor_entity,
+                t,
+                depth,
+                &Default::default(),
+            );
             if let Ok(mut e) = world.get_entity_mut(anchor_entity) {
                 e.insert(instance);
             }
@@ -626,6 +651,7 @@ impl XrdsAPI<'_> {
         crate::xrds_api::reimport::tag_spawn_zone_entities(self.app.world_mut(), document);
         crate::xrds_api::reimport::tag_trigger_binding_entities(self.app.world_mut(), document);
         crate::xrds_api::reimport::tag_threshold_watcher_entities(self.app.world_mut(), document);
+        crate::xrds_api::reimport::sync_panel_registry(self.app.world_mut(), document);
         crate::xrds_api::reimport::sync_track_registry(self.app.world_mut(), document);
         apply_imported_scene_environment_policy_in_world(self.app.world_mut());
         Ok(imported_ids)

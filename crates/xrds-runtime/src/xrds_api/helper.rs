@@ -423,8 +423,11 @@ pub(super) fn export_scene_document_in_world(
         reconstruct_asset_catalog(&nodes),
     );
 
-    let hud_library = world
-        .get_resource::<XrdsImportedHudLibrary>()
+    // Panel templates round-trip for the same reason `tracks` below does: a
+    // `Panel` node holds only a `template_id`, so dropping the registry exports
+    // a document whose panels are empty shells.
+    let panels = world
+        .get_resource::<XrdsImportedPanelLibrary>()
         .map(|r| r.templates.clone())
         .unwrap_or_default();
 
@@ -454,7 +457,7 @@ pub(super) fn export_scene_document_in_world(
         assets,
         nodes,
         gltf_node_authoring,
-        hud_library,
+        panels,
         tracks,
         ..Default::default()
     };

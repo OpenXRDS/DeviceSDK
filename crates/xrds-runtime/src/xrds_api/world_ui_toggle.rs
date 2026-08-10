@@ -23,7 +23,10 @@ pub(super) fn world_ui_toggle_system(world: &mut World) {
 
     // Phase 1 — collect without keeping borrows alive.
     let toggles: Vec<(Entity, XrdsWorldToggle, Entity, Entity, Entity)> = {
-        let mut q = world.query::<(Entity, &XrdsWorldToggle, &ChildOf, &XrdsWorldToggleParts)>();
+        let mut q = world.query_filtered::<
+            (Entity, &XrdsWorldToggle, &ChildOf, &XrdsWorldToggleParts),
+            bevy::prelude::Without<xrds_components::XrdsWorldElementDisabled>,
+        >();
         q.iter(world)
             .map(|(e, t, co, parts)| (e, t.clone(), co.0, parts.track, parts.thumb))
             .collect()

@@ -31,10 +31,10 @@ pub(super) fn reimport_scene_in_world(
     *world.resource_mut::<XrdsHierarchyIndex>() = XrdsHierarchyIndex::default();
     world.resource_mut::<QueuedParentChanges>().changes.clear();
 
-    // ── 3. Catalog, environment, and HUD library ──────────────────────────────
+    // ── 3. Catalog, environment, and the panel registry ───────────────────────
     merge_imported_asset_catalog(world, &document.assets);
     store_imported_scene_environment_in_world(world, document.environment().cloned());
-    world.resource_mut::<XrdsImportedHudLibrary>().templates = document.hud_library.clone();
+    sync_panel_registry(world, document);
 
     // Reset global ambient light to Bevy's default before spawning nodes.
     // Any AmbientLight node in the document will override this in step 4.
@@ -474,14 +474,32 @@ pub(super) fn tag_player_anchor_entities(
                     });
                     anchor_tagged += 1;
                 }
-                // Spawn HUD instance if this anchor has a linked template.
-                if let Some(tid) = a.hud_template_id {
-                    if let Some(template) = document.hud_template(tid) {
+                // Instantiate the head-locked panel template this anchor links.
+                // There used to be a second `hud_template_id` branch here, with a
+                // precedence rule between them; the unification left exactly one
+                // kind of template, so there is nothing to prefer.
+                if let Some(tid) = a.panel_template_id {
+                    if let Some(template) = document.panel_template(tid) {
                         let template = template.clone();
-                        let hud_instance = spawn_hud_instance_for_anchor(world, entity, &template);
+                        let instance = spawn_panel_template_head_locked(
+                            world,
+                            entity,
+                            &template,
+                            a.panel_depth,
+                            // See api.rs `link_panel`: an anchor link has no
+                            // place for per-element bindings. §A6-2 replaces this
+                            // whole branch with a `Panel` node under the anchor.
+                            &Default::default(),
+                        );
                         if let Ok(mut e) = world.get_entity_mut(entity) {
-                            e.insert(hud_instance);
+                            e.insert(instance);
                         }
+                    } else {
+                        log::warn!(
+                            "PlayerAnchor {:?} links panel template {tid:?}, which is not in this \
+                             document — nothing head-locked.",
+                            node.id
+                        );
                     }
                 }
             }
@@ -591,6 +609,21 @@ pub(super) fn sync_track_registry(world: &mut World, document: &XrdsSceneDocumen
     world.insert_resource(crate::xrds_api::trigger_action::XrdsTrackRegistry(map));
 }
 
+/// Replaces [`XrdsImportedPanelLibrary`] wholesale from `document.panels`, for
+/// the same reason [`sync_track_registry`] exists.
+///
+/// Without this the registry is import-only: a `Panel` node carries nothing but
+/// a `template_id`, so `export_scene_document` produced documents whose panels
+/// resolved to nothing, and a save/load cycle silently deleted every panel
+/// template. Identical to the bug the Track registry export fixed.
+///
+/// Called from **both** import paths. `reimport_scene_in_world` and
+/// `XrdsAPI::import_scene_document` do not share a body, and a helper wired into
+/// only one of them is the shape of the `tag_player_anchor_entities` gap.
+pub(super) fn sync_panel_registry(world: &mut World, document: &XrdsSceneDocument) {
+    world.insert_resource(XrdsImportedPanelLibrary { templates: document.panels.clone() });
+}
+
 /// Insert [`XrdsPlayerSpawnZone`] on every entity whose scene document node is a
 /// `PlayerSpawnZone` payload.  Called after reimport so the API can query zone positions.
 /// Spawns each `Panel` node's visuals and elements from its referenced template.
@@ -608,7 +641,16 @@ pub(super) fn sync_track_registry(world: &mut World, document: &XrdsSceneDocumen
 /// A template instanced N times produces N independent sets of element entities,
 /// which is the point of the template/instance split — and is why the elements
 /// are spawned per instance here rather than once per template.
+///
+/// **Attachment is decided by the hierarchy.** A Panel node whose ancestors
+/// include a `PlayerAnchor` is head-locked; anywhere else it is a world panel.
+/// Nothing on the payload says which, because parenting already does.
 pub(super) fn spawn_panel_instances(world: &mut World, document: &XrdsSceneDocument) {
+    // Cleared before repopulating, not merged into: element entities are
+    // despawned and respawned wholesale on reimport, so a surviving entry would
+    // point at a dead entity — or, once Bevy recycles the id, at an unrelated one.
+    world.insert_resource(XrdsPanelElementIndex::default());
+
     for node in &document.nodes {
         let XrdsSceneNodePayload::Panel(ref instance) = node.payload else { continue };
         let Some(panel_entity) = world.resource::<XrdsIdIndex>().entity_of(node.id.into()) else {
@@ -627,14 +669,105 @@ pub(super) fn spawn_panel_instances(world: &mut World, document: &XrdsSceneDocum
             continue;
         };
 
+        // Head-locked when an ancestor is a PlayerAnchor. Resolved from the
+        // document rather than from Bevy's hierarchy because parent links are
+        // still queued at this point in the import.
+        let anchor = head_locked_anchor_of(document, node)
+            .and_then(|id| world.resource::<XrdsIdIndex>().entity_of(id.into()));
+
+        let mut items: Vec<(String, Entity)> = Vec::new();
         for element in &template.elements {
-            crate::xrds_api::trigger_action::spawn_panel_element_in_world(
+            // Bindings come from this node, so two instances of one template can
+            // drive two different targets. A binding whose key names no element
+            // is simply never reached here — `panel_diagnostics` reports it
+            // rather than this silently dropping it.
+            let entity = crate::xrds_api::trigger_action::spawn_panel_element_in_world(
                 world,
                 panel_entity,
                 element,
+                instance.triggers_for(&element.name),
             );
+
+            if anchor.is_some() {
+                // The node's own transform places the panel plane in *camera-local*
+                // space (X right, Y up, -Z forward); the element sits on that plane
+                // at its canvas position. Composing them is what replaces the old
+                // scalar `panel_depth` — an author gets rotation and offset, not
+                // just a distance.
+                //
+                // Careful: this is the node's **local** transform, not its world
+                // position. Feeding a world position in as a camera-local offset is
+                // the documented anchor-offset mistake.
+                let [x, y] = element.local_position();
+                let t = &node.transform;
+                let [rx, ry, rz, rw] = t.rotation_quat_xyzw;
+                let base = Transform {
+                    translation: Vec3::from_array(t.translation),
+                    rotation: Quat::from_xyzw(rx, ry, rz, rw),
+                    scale: Vec3::from_array(t.scale),
+                };
+                let local_offset = base * Transform::from_translation(Vec3::new(x, y, 0.0));
+                if let Ok(mut e) = world.get_entity_mut(entity) {
+                    e.insert((
+                        local_offset,
+                        crate::xrds_api::anchor::XrdsHeadLocked { local_offset },
+                    ));
+                }
+            }
+
+            // Registered for **every** panel, head-locked or not: an `Element`
+            // action target addresses `(panel node, element name)` and does not
+            // care how the panel is attached.
+            world
+                .resource_mut::<XrdsPanelElementIndex>()
+                .insert(panel_entity, element.name.clone(), entity);
+
+            items.push((element.name.clone(), entity));
+        }
+
+        // `set_hud_item(anchor_id, name)` resolves `XrdsStoredHudInstance` on the
+        // anchor, and its signature predates all of this. Contributing to the
+        // anchor's component — extending rather than replacing, so two panels under
+        // one anchor both stay addressable — keeps that public API working
+        // unchanged now that a HUD is a node rather than a field.
+        if let Some(anchor_entity) = anchor {
+            if !items.is_empty() {
+                if let Ok(mut e) = world.get_entity_mut(anchor_entity) {
+                    let mut merged = e
+                        .get::<crate::xrds_api::state::XrdsStoredHudInstance>()
+                        .map(|h| h.items.clone())
+                        .unwrap_or_default();
+                    merged.extend(items);
+                    e.insert(crate::xrds_api::state::XrdsStoredHudInstance { items: merged });
+                }
+            }
         }
     }
+}
+
+/// The nearest `PlayerAnchor` ancestor of `node`, if any — what makes a Panel
+/// node head-locked rather than a world panel.
+///
+/// Walks the document's `parent_id` chain rather than Bevy's hierarchy: during
+/// import the parent links are still queued in `QueuedParentChanges`, so the ECS
+/// does not know about them yet.
+///
+/// Depth-bounded by the node count so a `parent_id` cycle in a hand-edited
+/// document cannot hang the import.
+pub(super) fn head_locked_anchor_of(
+    document: &XrdsSceneDocument,
+    node: &XrdsSceneNode,
+) -> Option<xrds_scene_graph::XrdsSceneNodeId> {
+    let mut current = node.parent_id;
+    for _ in 0..document.nodes.len() {
+        let id = current?;
+        let parent = document.nodes.iter().find(|n| n.id == id)?;
+        if matches!(parent.payload, XrdsSceneNodePayload::PlayerAnchor(_)) {
+            return Some(parent.id);
+        }
+        current = parent.parent_id;
+    }
+    None
 }
 
 pub(super) fn tag_spawn_zone_entities(world: &mut World, document: &XrdsSceneDocument) {

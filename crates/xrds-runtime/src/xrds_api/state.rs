@@ -61,9 +61,43 @@ pub(super) struct XrdsImportedAssetCatalog {
     pub(super) assets: Vec<XrdsSceneAsset>,
 }
 
+/// `(panel node entity, element name) → element entity`.
+///
+/// Exists because **nothing else tracks widget entities**. Elements are not
+/// document nodes, so they have no `XrdsId` and `XrdsIdIndex` cannot hold them;
+/// `XrdsStoredHudInstance` comes closest but is name-keyed *per anchor* and only
+/// populated for head-locked panels. Closest precedent in shape is `XrdsIdIndex`.
+///
+/// Rebuilt by `spawn_panel_instances` on every import, and cleared there first:
+/// element entities are despawned and respawned wholesale on reimport, so a
+/// surviving entry would point at a dead entity and an `Element` target would
+/// resolve to nothing — or worse, to a recycled id.
 #[derive(Resource, Debug, Clone, Default)]
-pub(super) struct XrdsImportedHudLibrary {
-    pub(super) templates: Vec<xrds_scene_graph::XrdsHudTemplate>,
+pub struct XrdsPanelElementIndex {
+    pub(super) map: HashMap<(Entity, String), Entity>,
+}
+
+impl XrdsPanelElementIndex {
+    pub fn element_of(&self, panel: Entity, name: &str) -> Option<Entity> {
+        // Borrowing a (Entity, String) key by (&Entity, &str) needs an owned key
+        // or a custom Borrow impl; the allocation happens once per resolution, at
+        // Track *spawn* time rather than per frame, so it is not worth the
+        // machinery to avoid.
+        self.map.get(&(panel, name.to_string())).copied()
+    }
+
+    pub(super) fn insert(&mut self, panel: Entity, name: String, element: Entity) {
+        self.map.insert((panel, name), element);
+    }
+}
+
+/// The authored [`XrdsPanelTemplate`] registry, held so
+/// `export_scene_document` can put it back. Mirrors `XrdsTrackRegistry`: a
+/// `Panel` node stores only a `template_id`, so the registry is the content and
+/// losing it on export empties every panel in the document.
+#[derive(Resource, Debug, Clone, Default)]
+pub(super) struct XrdsImportedPanelLibrary {
+    pub(super) templates: Vec<xrds_scene_graph::XrdsPanelTemplate>,
 }
 
 impl Default for XrdsIdAllocator {

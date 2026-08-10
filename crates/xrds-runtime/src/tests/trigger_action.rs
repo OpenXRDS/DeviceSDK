@@ -42,6 +42,7 @@ impl Bound {
         let binding = XrdsTriggerBinding {
             trigger: self.trigger,
             track: Some(track_name.clone()),
+            effect: Default::default(),
             disabled: self.disabled,
             hand: self.hand,
         };
@@ -148,6 +149,7 @@ fn import_timed_track(
             triggers: vec![XrdsTriggerBinding {
                 trigger,
                 track: Some(name.clone()),
+                effect: Default::default(),
                 disabled: false,
                 hand: None,
             }],
@@ -1686,6 +1688,7 @@ fn set_material_applies_only_the_provided_fields() {
             triggers: vec![XrdsTriggerBinding {
                 trigger: XrdsTriggerKind::ZoneEnter,
                 track: Some("recolour".to_string()),
+                effect: Default::default(),
                 disabled: false,
                 hand: None,
             }],
@@ -2330,13 +2333,14 @@ fn import_tracks_and_a_panel(app: &mut App, tracks: Vec<XrdsNamedTrack>) -> Enti
     app.world_mut().spawn(Transform::default()).id()
 }
 
-fn button_element(name: &str, triggers: Vec<XrdsTriggerBinding>) -> xrds_scene_graph::XrdsPanelElement {
+/// Elements carry no bindings any more -- those come from the instance, so every
+/// caller passes them alongside rather than baking them in.
+fn button_element(name: &str) -> xrds_scene_graph::XrdsPanelElement {
     xrds_scene_graph::XrdsPanelElement {
         name: name.to_string(),
         kind: xrds_scene_graph::XrdsSceneWorldWidget::Button(
             xrds_scene_graph::XrdsSceneWorldButton::default(),
         ),
-        triggers,
     }
 }
 
@@ -2344,6 +2348,7 @@ fn element_binding(kind: XrdsTriggerKind, track: &str) -> XrdsTriggerBinding {
     XrdsTriggerBinding {
         trigger: kind,
         track: Some(track.to_string()),
+        effect: Default::default(),
         disabled: false,
         hand: None,
     }
@@ -2377,11 +2382,13 @@ fn pressing_a_panel_element_fires_the_track_its_binding_names() {
     let entities = import_bare_nodes_and_tracks(&mut app, &[810], vec![move_track("Open", 810)]);
     let panel = app.world_mut().spawn(Transform::default()).id();
 
-    let element = button_element("start", vec![element_binding(XrdsTriggerKind::ButtonPress, "Open")]);
+    let element = button_element("start");
+    let wiring = [element_binding(XrdsTriggerKind::ButtonPress, "Open")];
     let element_entity = crate::xrds_api::trigger_action::spawn_panel_element_in_world(
         app.world_mut(),
         panel,
         &element,
+        &wiring,
     );
 
     // The bindings must be on the element itself — that is the entity the event
@@ -2416,7 +2423,8 @@ fn an_element_with_no_triggers_carries_no_bindings_component() {
     let entity = crate::xrds_api::trigger_action::spawn_panel_element_in_world(
         app.world_mut(),
         panel,
-        &button_element("quiet", vec![]),
+        &button_element("quiet"),
+        &[],
     );
     assert!(
         app.world()
@@ -2431,11 +2439,13 @@ fn clearing_an_elements_triggers_detaches_the_component() {
     // The remove-when-empty half, on the re-authoring path rather than spawn.
     let mut app = xrds_test_app();
     let panel = import_tracks_and_a_panel(&mut app, vec![]);
-    let element = button_element("start", vec![element_binding(XrdsTriggerKind::ButtonPress, "Open")]);
+    let element = button_element("start");
+    let wiring = [element_binding(XrdsTriggerKind::ButtonPress, "Open")];
     let entity = crate::xrds_api::trigger_action::spawn_panel_element_in_world(
         app.world_mut(),
         panel,
         &element,
+        &wiring,
     );
     assert!(app
         .world()
@@ -2462,7 +2472,8 @@ fn a_disabled_element_binding_does_not_fire() {
     let entity = crate::xrds_api::trigger_action::spawn_panel_element_in_world(
         app.world_mut(),
         panel,
-        &button_element("start", vec![binding]),
+        &button_element("start"),
+        &[binding],
     );
 
     app.world_mut().write_message(xrds_components::XrWorldButtonPressEvent {
@@ -2495,12 +2506,14 @@ fn a_press_on_one_element_does_not_fire_another_elements_binding() {
     let a = crate::xrds_api::trigger_action::spawn_panel_element_in_world(
         app.world_mut(),
         panel,
-        &button_element("a", vec![element_binding(XrdsTriggerKind::ButtonPress, "A")]),
+        &button_element("a"),
+        &[element_binding(XrdsTriggerKind::ButtonPress, "A")],
     );
     let _b = crate::xrds_api::trigger_action::spawn_panel_element_in_world(
         app.world_mut(),
         panel,
-        &button_element("b", vec![element_binding(XrdsTriggerKind::ButtonPress, "B")]),
+        &button_element("b"),
+        &[element_binding(XrdsTriggerKind::ButtonPress, "B")],
     );
 
     app.world_mut()
@@ -2528,6 +2541,7 @@ fn import_panel_instances(
     app: &mut App,
     count: usize,
     elements: Vec<xrds_scene_graph::XrdsPanelElement>,
+    wiring: Vec<(String, Vec<XrdsTriggerBinding>)>,
     extra_nodes: &[u64],
     tracks: Vec<XrdsNamedTrack>,
 ) -> Vec<Entity> {
@@ -2540,12 +2554,22 @@ fn import_panel_instances(
         ..XrdsPanelTemplate::default()
     };
 
+    // Every instance gets the same wiring here, which is what these tests need.
+    // That two instances *can* be wired differently is the point of the model and
+    // is covered separately, in the scene-graph tests.
     let mut nodes: Vec<XrdsSceneNode> = (0..count)
-        .map(|i| XrdsSceneNode {
-            payload: XrdsSceneNodePayload::Panel(XrdsScenePanelInstance {
+        .map(|i| {
+            let mut instance = XrdsScenePanelInstance {
                 template_id: XrdsPanelTemplateId(1),
-            }),
-            ..scene_node(900 + i as u64, "PanelInstance")
+                ..Default::default()
+            };
+            for (name, bindings) in &wiring {
+                instance.set_triggers(name.clone(), bindings.clone());
+            }
+            XrdsSceneNode {
+                payload: XrdsSceneNodePayload::Panel(instance),
+                ..scene_node(900 + i as u64, "PanelInstance")
+            }
         })
         .collect();
     nodes.extend(extra_nodes.iter().map(|id| scene_node(*id, "Asset")));
@@ -2580,7 +2604,8 @@ fn a_panel_instance_spawns_its_templates_elements_with_bindings() {
     import_panel_instances(
         &mut app,
         1,
-        vec![button_element("start", vec![element_binding(XrdsTriggerKind::ButtonPress, "Open")])],
+        vec![button_element("start")],
+        vec![("start".to_string(), vec![element_binding(XrdsTriggerKind::ButtonPress, "Open")])],
         &[820],
         vec![move_track("Open", 820)],
     );
@@ -2600,7 +2625,8 @@ fn a_template_instanced_twice_yields_two_independent_element_sets() {
     let panels = import_panel_instances(
         &mut app,
         2,
-        vec![button_element("start", vec![element_binding(XrdsTriggerKind::ButtonPress, "Open")])],
+        vec![button_element("start")],
+        vec![("start".to_string(), vec![element_binding(XrdsTriggerKind::ButtonPress, "Open")])],
         &[821],
         vec![move_track("Open", 821)],
     );
@@ -2621,7 +2647,8 @@ fn an_element_on_an_instance_fires_its_track_end_to_end() {
     import_panel_instances(
         &mut app,
         1,
-        vec![button_element("start", vec![element_binding(XrdsTriggerKind::ButtonPress, "Open")])],
+        vec![button_element("start")],
+        vec![("start".to_string(), vec![element_binding(XrdsTriggerKind::ButtonPress, "Open")])],
         &[822],
         vec![move_track("Open", 822)],
     );
@@ -2658,6 +2685,7 @@ fn a_panel_instance_naming_a_missing_template_loads_as_an_empty_node() {
         nodes: vec![XrdsSceneNode {
             payload: XrdsSceneNodePayload::Panel(XrdsScenePanelInstance {
                 template_id: XrdsPanelTemplateId(404),
+                ..Default::default()
             }),
             ..scene_node(830, "Dangling")
         }],
@@ -2672,6 +2700,198 @@ fn a_panel_instance_naming_a_missing_template_loads_as_an_empty_node() {
         "the node itself should still exist"
     );
     assert_eq!(tagged_element_count(&mut app), 0, "but it has no elements");
+}
+
+// ---------------------------------------------------------------------------
+// Camera attachment — the same template, head-locked
+// ---------------------------------------------------------------------------
+
+/// A document with one panel template head-locked to a PlayerAnchor.
+/// A PlayerAnchor with a `Panel` node **parented under it** — which is what makes
+/// the panel head-locked. `depth` becomes the panel node's local -Z, replacing the
+/// old scalar `XrdsScenePlayerAnchor::panel_depth`.
+///
+/// Authored this way rather than through the anchor's `panel_template_id` link
+/// because only a node can carry `element_triggers`. The link has nowhere to put
+/// them, which is exactly why attachment became parenting.
+fn import_head_locked_panel(
+    app: &mut App,
+    elements: Vec<xrds_scene_graph::XrdsPanelElement>,
+    wiring: Vec<(String, Vec<XrdsTriggerBinding>)>,
+    depth: f32,
+    extra_nodes: &[u64],
+    tracks: Vec<XrdsNamedTrack>,
+) -> Entity {
+    use xrds_scene_graph::{
+        XrdsPanelTemplate, XrdsPanelTemplateId, XrdsScenePanelInstance, XrdsScenePlayerAnchor,
+        XrdsSceneTransform,
+    };
+
+    let mut instance = XrdsScenePanelInstance {
+        template_id: XrdsPanelTemplateId(1),
+        ..Default::default()
+    };
+    for (name, bindings) in wiring {
+        instance.set_triggers(name, bindings);
+    }
+
+    let mut nodes = vec![
+        XrdsSceneNode {
+            payload: XrdsSceneNodePayload::PlayerAnchor(XrdsScenePlayerAnchor::default()),
+            ..scene_node(940, "Anchor")
+        },
+        XrdsSceneNode {
+            parent_id: Some(xrds_scene_graph::XrdsSceneNodeId(940)),
+            transform: XrdsSceneTransform {
+                translation: [0.0, 0.0, -depth],
+                ..XrdsSceneTransform::default()
+            },
+            payload: XrdsSceneNodePayload::Panel(instance),
+            ..scene_node(941, "Hud")
+        },
+    ];
+    nodes.extend(extra_nodes.iter().map(|id| scene_node(*id, "Asset")));
+
+    let document = XrdsSceneDocument {
+        nodes,
+        panels: vec![XrdsPanelTemplate {
+            id: XrdsPanelTemplateId(1),
+            name: "Hud".to_string(),
+            elements,
+            ..XrdsPanelTemplate::default()
+        }],
+        tracks,
+        ..Default::default()
+    };
+    {
+        let mut xrds = XrdsAPI::attach(app);
+        xrds.import_scene_document(&document).expect("import should succeed");
+    }
+    app.world().resource::<XrdsIdIndex>().entity_of(XrdsId(940)).expect("anchor indexed")
+}
+
+fn label_element(name: &str, text: &str) -> xrds_scene_graph::XrdsPanelElement {
+    xrds_scene_graph::XrdsPanelElement::new(
+        name,
+        xrds_scene_graph::XrdsSceneWorldWidget::Label(xrds_scene_graph::XrdsSceneWorldLabel {
+            text: text.to_string(),
+            ..Default::default()
+        }),
+    )
+}
+
+#[test]
+fn a_head_locked_panel_populates_the_same_component_set_hud_item_reads() {
+    // The migration-safety claim: `set_hud_item` predates all of this, is
+    // name-addressed, and keeps working against a panel template because the
+    // camera attachment fills the very same `XrdsStoredHudInstance`.
+    let mut app = xrds_test_app();
+    let anchor = import_head_locked_panel(
+        &mut app,
+        vec![label_element("score", "0")],
+        vec![],
+        0.5,
+        &[],
+        vec![],
+    );
+
+    let stored = app
+        .world()
+        .get::<crate::xrds_api::state::XrdsStoredHudInstance>(anchor)
+        .expect("the anchor should carry a HUD instance");
+    assert_eq!(stored.items.len(), 1);
+    assert_eq!(stored.items[0].0, "score", "keyed by the element's authored name");
+}
+
+#[test]
+fn set_hud_item_still_updates_an_element_of_a_migrated_template() {
+    let mut app = xrds_test_app();
+    let anchor = import_head_locked_panel(
+        &mut app,
+        vec![label_element("score", "0")],
+        vec![],
+        0.5,
+        &[],
+        vec![],
+    );
+
+    // The public API, unchanged, against the new model.
+    {
+        let mut ctx = XrdsUpdateContext::new(app.world_mut());
+        ctx.set_hud_item(XrdsId(940), "score", "1234", None);
+    }
+
+    let stored = app
+        .world()
+        .get::<crate::xrds_api::state::XrdsStoredHudInstance>(anchor)
+        .expect("instance");
+    let item = stored.items[0].1;
+    let text = app.world().get::<bevy_rich_text3d::Text3d>(item);
+    assert!(text.is_some(), "the element should still be a text entity");
+}
+
+#[test]
+fn a_head_locked_element_is_placed_at_the_anchors_depth_not_the_templates() {
+    // Depth comes from the attachment, which is what lets one template serve two
+    // depths — the concrete reason `XrdsHudTemplate::depth` had to move.
+    use crate::xrds_api::anchor::XrdsHeadLocked;
+
+    let mut app = xrds_test_app();
+    let anchor = import_head_locked_panel(
+        &mut app,
+        vec![label_element("score", "0")],
+        vec![],
+        1.25,
+        &[],
+        vec![],
+    );
+    let item = app
+        .world()
+        .get::<crate::xrds_api::state::XrdsStoredHudInstance>(anchor)
+        .expect("instance")
+        .items[0]
+        .1;
+
+    let head_locked = app.world().get::<XrdsHeadLocked>(item).expect("must be head-locked");
+    assert_eq!(
+        head_locked.local_offset.translation.z, -1.25,
+        "camera-local -Z at the anchor's depth"
+    );
+}
+
+#[test]
+fn a_head_locked_element_can_fire_a_track_so_a_hud_can_have_buttons() {
+    // What unification buys the HUD side: it had exactly one element kind (text)
+    // and no triggers at all. Now a head-locked panel can carry a button.
+    let mut app = xrds_test_app();
+    import_head_locked_panel(
+        &mut app,
+        vec![button_element("go")],
+        vec![("go".to_string(), vec![element_binding(XrdsTriggerKind::ButtonPress, "Open")])],
+        0.5,
+        &[850],
+        vec![move_track("Open", 850)],
+    );
+    let target = app.world().resource::<XrdsIdIndex>().entity_of(XrdsId(850)).expect("indexed");
+
+    let element = app
+        .world_mut()
+        .query_filtered::<Entity, bevy::prelude::With<crate::xrds_api::trigger_action::XrdsTriggerBindings>>()
+        .iter(app.world())
+        .next()
+        .expect("the head-locked button should be tagged");
+
+    app.world_mut().write_message(xrds_components::XrWorldButtonPressEvent {
+        button_entity: element,
+        hand: XrGrabHand::Right,
+    });
+
+    assert!(
+        spin_until(&mut app, 20, 5, |app| {
+            app.world().get::<Transform>(target).map(|t| t.translation.x) == Some(42.0)
+        }),
+        "a button on a head-locked panel should fire its Track"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -3031,5 +3251,638 @@ fn pausing_a_track_also_freezes_its_own_in_flight_interpolation() {
         app.world().get::<Transform>(entities[0]).map(|t| t.translation.x),
         Some(mid_x),
         "a paused Track's in-flight interpolation must not keep advancing"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Authorable stop (§A5)
+// ---------------------------------------------------------------------------
+
+/// A Track whose single row holds a 10-second tween, so the agent is still alive
+/// after an `app.update()`. `move_track` completes within one frame, which makes it
+/// useless for asserting anything about a *running* Track.
+fn long_track(name: &str, target: u64) -> XrdsNamedTrack {
+    XrdsNamedTrack {
+        name: name.to_string(),
+        track: XrdsTrack {
+            assets: vec![node_row(target, vec![(0.0, long_tween())])],
+            ..XrdsTrack::default()
+        },
+    }
+}
+
+fn stop_track(app: &mut App, name: &str, target: Entity, source: Option<Entity>) -> usize {
+    crate::xrds_api::trigger_action::stop_track_by_assets_in_world(
+        app.world_mut(),
+        target,
+        source,
+        name,
+    )
+}
+
+#[test]
+fn stopping_a_track_releases_its_locks_so_it_can_be_fired_again() {
+    // The load-bearing property. A stop that despawned without releasing would
+    // block the asset forever, and the symptom — "the button just stopped
+    // working" — points nowhere near the cause.
+    let mut app = xrds_test_app();
+    let entities = import_bare_nodes_and_tracks(
+        &mut app,
+        &[860],
+        vec![move_track("Open", 860)],
+    );
+
+    assert!(start(&mut app, "Open", entities[0]).is_some(), "first run");
+    assert_eq!(live_tracks(&mut app), 1);
+
+    assert_eq!(stop_track(&mut app, "Open", entities[0], None), 1, "one agent stopped");
+    assert_eq!(live_tracks(&mut app), 0);
+
+    // The real assertion: the lock is gone, so a fresh firing is accepted. Under
+    // first-run priority a leaked lock would refuse this forever.
+    assert!(
+        start(&mut app, "Open", entities[0]).is_some(),
+        "the asset must be free again after a stop"
+    );
+}
+
+#[test]
+fn stopping_a_track_that_is_not_running_is_a_harmless_no_op() {
+    // What lets a stop button be pressed at any time without the author writing
+    // an "is it running?" condition — the branching this design avoids.
+    let mut app = xrds_test_app();
+    let entities = import_bare_nodes_and_tracks(&mut app, &[861], vec![move_track("Open", 861)]);
+    assert_eq!(stop_track(&mut app, "Open", entities[0], None), 0);
+    assert_eq!(live_tracks(&mut app), 0);
+}
+
+#[test]
+fn stopping_one_instances_run_leaves_another_instances_disjoint_run_alive() {
+    // The reason stop is resolved **by asset** and never by name. Two panels
+    // firing one Track through a `TriggerSource` row are two independent runs on
+    // disjoint assets; a name-keyed stop would kill both, repeating exactly the
+    // mistake first-run priority was introduced to fix.
+    let mut app = xrds_test_app();
+    let entities = import_bare_nodes_and_tracks(
+        &mut app,
+        &[862, 863],
+        vec![XrdsNamedTrack {
+            name: "PerSource".to_string(),
+            track: XrdsTrack {
+                assets: vec![XrdsTrackAsset {
+                    target: XrdsActionTarget::TriggerSource,
+                    keys: vec![XrdsTrackKey { at_secs: 0.0, action: long_tween() }],
+                }],
+                ..XrdsTrack::default()
+            },
+        }],
+    );
+
+    for e in &entities {
+        let track = app
+            .world()
+            .resource::<crate::xrds_api::trigger_action::XrdsTrackRegistry>()
+            .0
+            .get("PerSource")
+            .cloned()
+            .expect("registered");
+        crate::xrds_api::trigger_action::spawn_track_agent_in_world(
+            app.world_mut(), *e, Some(*e), "PerSource", &track, 0, false,
+        )
+        .expect("disjoint assets must both start");
+    }
+    assert_eq!(live_tracks(&mut app), 2);
+
+    // Stop as the *first* source would: same target and source it fired with.
+    let stopped = stop_track(&mut app, "PerSource", entities[0], Some(entities[0]));
+    assert_eq!(stopped, 1, "only this source's run");
+    assert_eq!(live_tracks(&mut app), 1, "the other instance keeps running");
+}
+
+#[test]
+fn a_stop_binding_stops_and_a_following_fire_binding_restarts() {
+    // Two bindings on one node, `Stop X` then `Fire X`, are what give a single
+    // button a restart without any conditional. Authored order is the mechanism,
+    // so this also pins that bindings are not reordered.
+    use xrds_scene_graph::XrdsTriggerEffect;
+    let mut app = xrds_test_app();
+
+    let restart = |effect: XrdsTriggerEffect| XrdsTriggerBinding {
+        trigger: XrdsTriggerKind::ButtonPress,
+        track: Some("Open".to_string()),
+        effect,
+        disabled: false,
+        hand: None,
+    };
+    let document = XrdsSceneDocument {
+        nodes: vec![XrdsSceneNode {
+            triggers: vec![restart(XrdsTriggerEffect::Stop), restart(XrdsTriggerEffect::Fire)],
+            ..scene_node(864, "Button")
+        }],
+        tracks: vec![long_track("Open", 864)],
+        ..Default::default()
+    };
+    {
+        let mut xrds = XrdsAPI::attach(&mut app);
+        xrds.import_scene_document(&document).expect("import should succeed");
+    }
+    app.update();
+
+    let node = app.world().resource::<XrdsIdIndex>().entity_of(XrdsId(864)).expect("indexed");
+    assert!(
+        app.world().get::<crate::xrds_api::trigger_action::XrdsTriggerBindings>(node).is_some(),
+        "the node must carry its bindings, or nothing below tests what it claims"
+    );
+
+    // First press: nothing to stop, then it starts.
+    app.world_mut().write_message(xrds_components::XrWorldButtonPressEvent {
+        button_entity: node, hand: XrGrabHand::Right,
+    });
+    // Two frames: one to consume the message, one for the deferred spawn command
+    // to apply. Firing is deliberately deferred through `Commands`.
+    app.update();
+    app.update();
+    assert_eq!(live_tracks(&mut app), 1, "the Fire half started it");
+
+    // Second press: the Stop half releases the lock, then the Fire half is
+    // accepted again. Without the stop, first-run priority would refuse this.
+    app.world_mut().write_message(xrds_components::XrWorldButtonPressEvent {
+        button_entity: node, hand: XrGrabHand::Right,
+    });
+    app.update();
+    assert_eq!(live_tracks(&mut app), 1, "restarted, not blocked and not doubled");
+}
+
+#[test]
+fn a_disabled_stop_binding_does_not_stop() {
+    use xrds_scene_graph::XrdsTriggerEffect;
+    let mut app = xrds_test_app();
+    let document = XrdsSceneDocument {
+        nodes: vec![XrdsSceneNode {
+            triggers: vec![XrdsTriggerBinding {
+                trigger: XrdsTriggerKind::ButtonPress,
+                track: Some("Open".to_string()),
+                effect: XrdsTriggerEffect::Stop,
+                disabled: true,
+                hand: None,
+            }],
+            ..scene_node(865, "Button")
+        }],
+        tracks: vec![long_track("Open", 865)],
+        ..Default::default()
+    };
+    {
+        let mut xrds = XrdsAPI::attach(&mut app);
+        xrds.import_scene_document(&document).expect("import should succeed");
+    }
+    app.update();
+    let node = app.world().resource::<XrdsIdIndex>().entity_of(XrdsId(865)).expect("indexed");
+
+    start(&mut app, "Open", node).expect("running");
+    app.world_mut().write_message(xrds_components::XrWorldButtonPressEvent {
+        button_entity: node, hand: XrGrabHand::Right,
+    });
+    app.update();
+    assert_eq!(live_tracks(&mut app), 1, "a parked binding must stay inert");
+}
+
+// ---------------------------------------------------------------------------
+// Elements as action targets (Phase B)
+// ---------------------------------------------------------------------------
+
+/// A Track whose single row drives `element` on Panel node `panel`.
+fn element_track(name: &str, panel: u64, element: &str) -> XrdsNamedTrack {
+    XrdsNamedTrack {
+        name: name.to_string(),
+        track: XrdsTrack {
+            assets: vec![XrdsTrackAsset {
+                target: XrdsActionTarget::Element {
+                    panel: xrds_scene_graph::XrdsSceneNodeId(panel),
+                    name: element.to_string(),
+                },
+                keys: vec![XrdsTrackKey { at_secs: 0.0, action: long_tween() }],
+            }],
+            ..XrdsTrack::default()
+        },
+    }
+}
+
+fn element_entity(app: &App, panel_id: u64, name: &str) -> Option<Entity> {
+    let panel = app.world().resource::<XrdsIdIndex>().entity_of(XrdsId(panel_id))?;
+    app.world()
+        .resource::<crate::xrds_api::state::XrdsPanelElementIndex>()
+        .element_of(panel, name)
+}
+
+#[test]
+fn an_element_target_resolves_to_that_panels_own_element() {
+    // The property the whole addressing scheme exists for: two instances of one
+    // template are two different targets, because each names its own panel node.
+    let mut app = xrds_test_app();
+    let entities = import_panel_instances(
+        &mut app,
+        2,
+        vec![button_element("go")],
+        vec![],
+        &[],
+        vec![],
+    );
+
+    let first = element_entity(&app, 900, "go").expect("first panel's element indexed");
+    let second = element_entity(&app, 901, "go").expect("second panel's element indexed");
+    assert_ne!(first, second, "one template, two instances, two distinct elements");
+
+    // And each element belongs to its own panel.
+    for (panel, element) in [(entities[0], first), (entities[1], second)] {
+        assert_eq!(
+            app.world().get::<bevy::prelude::ChildOf>(element).map(|c| c.parent()),
+            Some(panel),
+        );
+    }
+}
+
+#[test]
+fn a_track_row_targeting_an_element_drives_that_element() {
+    let mut app = xrds_test_app();
+    import_panel_instances(
+        &mut app,
+        1,
+        vec![button_element("go")],
+        vec![],
+        &[],
+        vec![element_track("Light", 900, "go")],
+    );
+    let element = element_entity(&app, 900, "go").expect("indexed");
+    let panel = app.world().resource::<XrdsIdIndex>().entity_of(XrdsId(900)).expect("indexed");
+
+    // Fired at the panel; the row's own target decides what moves.
+    assert!(start(&mut app, "Light", panel).is_some(), "the row must resolve");
+    assert_eq!(
+        app.world()
+            .resource::<crate::xrds_api::trigger_action::XrdsTrackAssetLocks>()
+            .holder_of(element)
+            .is_some(),
+        true,
+        "the lock must be taken on the element, not the panel"
+    );
+}
+
+#[test]
+fn two_tracks_writing_one_element_conflict_exactly_as_two_nodes_would() {
+    // Wanted, not incidental: an element is an asset, so the reject-the-newcomer
+    // rule applies to it unchanged.
+    let mut app = xrds_test_app();
+    import_panel_instances(
+        &mut app,
+        1,
+        vec![button_element("go")],
+        vec![],
+        &[],
+        vec![element_track("A", 900, "go"), element_track("B", 900, "go")],
+    );
+    let panel = app.world().resource::<XrdsIdIndex>().entity_of(XrdsId(900)).expect("indexed");
+
+    assert!(start(&mut app, "A", panel).is_some(), "first run");
+    assert!(start(&mut app, "B", panel).is_none(), "second must be refused");
+    assert_eq!(live_tracks(&mut app), 1);
+}
+
+#[test]
+fn two_tracks_on_two_instances_of_one_element_do_not_conflict() {
+    // The flip side, and the reason the index is keyed by (panel, name) rather
+    // than by name alone: floor 1's button and floor 3's button are separate
+    // assets, so both Tracks run.
+    let mut app = xrds_test_app();
+    import_panel_instances(
+        &mut app,
+        2,
+        vec![button_element("go")],
+        vec![],
+        &[],
+        vec![element_track("A", 900, "go"), element_track("B", 901, "go")],
+    );
+    let panel = app.world().resource::<XrdsIdIndex>().entity_of(XrdsId(900)).expect("indexed");
+
+    assert!(start(&mut app, "A", panel).is_some());
+    assert!(start(&mut app, "B", panel).is_some(), "different instances, no contention");
+    assert_eq!(live_tracks(&mut app), 2);
+}
+
+#[test]
+fn a_row_targeting_an_unknown_element_starts_an_agent_that_holds_nothing() {
+    // Pins **actual** behaviour, which is not what one might assume. The start
+    // guard counts *authored* keys, not resolved ones, so a Track whose only row
+    // cannot resolve still starts an agent — one that holds no locks and drives
+    // nothing.
+    //
+    // This is pre-existing and shared with `Node(missing)` rows; it is not
+    // something element targets introduced, and refusing to start here would
+    // change node-row behaviour as a side effect. Recorded as a known gap in the
+    // plan rather than silently altered. The dangling reference is reported at
+    // author time by `track_diagnostics`.
+    let mut app = xrds_test_app();
+    import_panel_instances(
+        &mut app,
+        1,
+        vec![button_element("go")],
+        vec![],
+        &[],
+        vec![element_track("Ghost", 900, "notAnElement")],
+    );
+    let panel = app.world().resource::<XrdsIdIndex>().entity_of(XrdsId(900)).expect("indexed");
+    let good = element_entity(&app, 900, "go").expect("the real element is indexed");
+
+    assert!(start(&mut app, "Ghost", panel).is_some(), "it does start — see above");
+    // What matters is that it grabbed nothing: an unresolved row must not lock a
+    // neighbouring element, or one typo would block every Track sharing the panel.
+    let locks = app
+        .world()
+        .resource::<crate::xrds_api::trigger_action::XrdsTrackAssetLocks>();
+    assert!(locks.holder_of(good).is_none(), "must not have locked the wrong element");
+    assert!(locks.holder_of(panel).is_none(), "nor fallen back to the panel");
+}
+
+#[test]
+fn the_element_index_is_rebuilt_not_merged_across_imports() {
+    // Element entities are despawned and respawned wholesale, so a surviving
+    // entry would point at a dead entity — or, once Bevy recycles the id, at an
+    // unrelated one.
+    let mut app = xrds_test_app();
+    import_panel_instances(&mut app, 1, vec![button_element("go")], vec![], &[], vec![]);
+    let before = element_entity(&app, 900, "go").expect("indexed");
+
+    // A second import with no panels at all must leave nothing behind.
+    {
+        let mut xrds = XrdsAPI::attach(&mut app);
+        xrds.import_scene_document(&XrdsSceneDocument::default())
+            .expect("import should succeed");
+    }
+    assert!(
+        app.world()
+            .resource::<crate::xrds_api::state::XrdsPanelElementIndex>()
+            .element_of(before, "go")
+            .is_none(),
+        "the index must not carry entries from the previous document"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Element-specific actions (Phase B2)
+// ---------------------------------------------------------------------------
+
+fn element_action_track(
+    name: &str,
+    panel: u64,
+    element: &str,
+    action: XrdsAction,
+) -> XrdsNamedTrack {
+    XrdsNamedTrack {
+        name: name.to_string(),
+        track: XrdsTrack {
+            assets: vec![XrdsTrackAsset {
+                target: XrdsActionTarget::Element {
+                    panel: xrds_scene_graph::XrdsSceneNodeId(panel),
+                    name: element.to_string(),
+                },
+                keys: vec![XrdsTrackKey { at_secs: 0.0, action }],
+            }],
+            ..XrdsTrack::default()
+        },
+    }
+}
+
+fn slider_element(name: &str) -> xrds_scene_graph::XrdsPanelElement {
+    xrds_scene_graph::XrdsPanelElement::new(
+        name,
+        xrds_scene_graph::XrdsSceneWorldWidget::Slider(xrds_scene_graph::XrdsSceneWorldSlider {
+            min: 0.0,
+            max: 10.0,
+            value: 1.0,
+            ..Default::default()
+        }),
+    )
+}
+
+fn toggle_element(name: &str) -> xrds_scene_graph::XrdsPanelElement {
+    xrds_scene_graph::XrdsPanelElement::new(
+        name,
+        xrds_scene_graph::XrdsSceneWorldWidget::Toggle(Default::default()),
+    )
+}
+
+#[test]
+fn set_element_text_writes_a_labels_own_text() {
+    use bevy_rich_text3d::Text3d;
+    let mut app = xrds_test_app();
+    import_panel_instances(
+        &mut app,
+        1,
+        vec![label_element("score", "0")],
+        vec![],
+        &[],
+        vec![element_action_track(
+            "Show",
+            900,
+            "score",
+            XrdsAction::SetElementText { text: "42".to_string() },
+        )],
+    );
+    let panel = app.world().resource::<XrdsIdIndex>().entity_of(XrdsId(900)).expect("indexed");
+    let element = element_entity(&app, 900, "score").expect("indexed");
+
+    start(&mut app, "Show", panel).expect("must start");
+    pump(&mut app, 3);
+
+    // Content, not mere presence — a Label has Text3d before the Track runs too.
+    let shown = app.world().get::<Text3d>(element).map(|t| format!("{t:?}")).unwrap_or_default();
+    assert!(shown.contains("42"), "a Label carries Text3d itself and must be rewritten: {shown}");
+}
+
+#[test]
+fn set_element_text_reaches_a_buttons_caption_child() {
+    // A Button keeps its caption on a *child* entity, unlike a Label. The handler
+    // looks for Text3d wherever it is rather than branching on widget kind, so
+    // this pins that the child path is genuinely exercised.
+    use bevy_rich_text3d::Text3d;
+    let mut app = xrds_test_app();
+    import_panel_instances(
+        &mut app,
+        1,
+        vec![button_element("go")],
+        vec![],
+        &[],
+        vec![element_action_track(
+            "Relabel",
+            900,
+            "go",
+            XrdsAction::SetElementText { text: "PUSHED".to_string() },
+        )],
+    );
+    let element = element_entity(&app, 900, "go").expect("indexed");
+    assert!(
+        app.world().get::<Text3d>(element).is_none(),
+        "precondition: a Button's own entity has no Text3d, its child does"
+    );
+
+    let panel = app.world().resource::<XrdsIdIndex>().entity_of(XrdsId(900)).expect("indexed");
+    start(&mut app, "Relabel", panel).expect("must start");
+    pump(&mut app, 3);
+
+    // Asserts the caption actually *changed*, not merely that a text child
+    // exists — it exists either way, so the weaker check passed even with the
+    // child search removed. `Text3d` exposes no content accessor here, so its
+    // Debug output is the available handle on what it holds.
+    let caption = app
+        .world()
+        .get::<bevy::prelude::Children>(element)
+        .and_then(|c| c.iter().find(|e| app.world().get::<Text3d>(*e).is_some()))
+        .and_then(|e| app.world().get::<Text3d>(e))
+        .map(|t| format!("{t:?}"))
+        .unwrap_or_default();
+    assert!(caption.contains("PUSHED"), "the caption child must be rewritten: {caption}");
+}
+
+#[test]
+fn set_element_value_clamps_to_the_sliders_authored_range() {
+    // An out-of-range value is an authoring slip; clamping keeps the handle on
+    // its track rather than drawing it outside the widget.
+    let mut app = xrds_test_app();
+    import_panel_instances(
+        &mut app,
+        1,
+        vec![slider_element("vol")],
+        vec![],
+        &[],
+        vec![element_action_track(
+            "Loud",
+            900,
+            "vol",
+            XrdsAction::SetElementValue { value: 99.0 },
+        )],
+    );
+    let panel = app.world().resource::<XrdsIdIndex>().entity_of(XrdsId(900)).expect("indexed");
+    let element = element_entity(&app, 900, "vol").expect("indexed");
+
+    start(&mut app, "Loud", panel).expect("must start");
+    pump(&mut app, 3);
+
+    assert_eq!(
+        app.world().get::<xrds_components::XrdsWorldSlider>(element).map(|s| s.value),
+        Some(10.0),
+        "clamped to max, not stored raw"
+    );
+}
+
+#[test]
+fn set_element_value_treats_a_toggle_as_the_degenerate_scalar() {
+    // One action for both kinds means an author cannot pick the wrong one; a
+    // Toggle reads any non-zero as checked.
+    for (value, expected) in [(1.0_f32, true), (0.0, false)] {
+        let mut app = xrds_test_app();
+        import_panel_instances(
+            &mut app,
+            1,
+            vec![toggle_element("mute")],
+            vec![],
+            &[],
+            vec![element_action_track(
+                "Set",
+                900,
+                "mute",
+                XrdsAction::SetElementValue { value },
+            )],
+        );
+        let panel = app.world().resource::<XrdsIdIndex>().entity_of(XrdsId(900)).expect("ix");
+        let element = element_entity(&app, 900, "mute").expect("ix");
+        // Start from the opposite state so the assertion cannot pass by default.
+        if let Some(mut t) = app.world_mut().get_mut::<xrds_components::XrdsWorldToggle>(element) {
+            t.checked = !expected;
+        }
+        start(&mut app, "Set", panel).expect("must start");
+        pump(&mut app, 3);
+        assert_eq!(
+            app.world().get::<xrds_components::XrdsWorldToggle>(element).map(|t| t.checked),
+            Some(expected),
+            "value {value} should mean checked={expected}"
+        );
+    }
+}
+
+#[test]
+fn set_element_enabled_marks_and_unmarks_without_hiding() {
+    // Present-but-dead, not hidden: a hidden button and a dead button read very
+    // differently to a player, and that distinction is the plan's alternative to
+    // conditional branching.
+    use xrds_components::XrdsWorldElementDisabled;
+    let mut app = xrds_test_app();
+    import_panel_instances(
+        &mut app,
+        1,
+        vec![button_element("go")],
+        vec![],
+        &[],
+        vec![
+            element_action_track(
+                "Off",
+                900,
+                "go",
+                XrdsAction::SetElementEnabled { enabled: false },
+            ),
+            element_action_track(
+                "On",
+                900,
+                "go",
+                XrdsAction::SetElementEnabled { enabled: true },
+            ),
+        ],
+    );
+    let panel = app.world().resource::<XrdsIdIndex>().entity_of(XrdsId(900)).expect("indexed");
+    let element = element_entity(&app, 900, "go").expect("indexed");
+    let visible_before = app.world().get::<bevy::prelude::Visibility>(element).copied();
+
+    start(&mut app, "Off", panel).expect("must start");
+    pump(&mut app, 3);
+    assert!(
+        app.world().get::<XrdsWorldElementDisabled>(element).is_some(),
+        "disabling must mark the element"
+    );
+    assert_eq!(
+        app.world().get::<bevy::prelude::Visibility>(element).copied(),
+        visible_before,
+        "and must NOT hide it, that is a different action"
+    );
+
+    // Re-enabling removes the marker rather than leaving a false behind.
+    start(&mut app, "On", panel).expect("must start");
+    pump(&mut app, 3);
+    assert!(app.world().get::<XrdsWorldElementDisabled>(element).is_none());
+}
+
+#[test]
+fn a_disabled_button_stops_emitting_press_events() {
+    // The marker is only meaningful if the interaction systems honour it.
+    use xrds_components::XrdsWorldElementDisabled;
+    let mut app = xrds_test_app();
+    let entities = import_bare_nodes_and_tracks(&mut app, &[880], vec![move_track("Open", 880)]);
+    let panel = app.world_mut().spawn(Transform::default()).id();
+    let element = crate::xrds_api::trigger_action::spawn_panel_element_in_world(
+        app.world_mut(),
+        panel,
+        &button_element("go"),
+        &[element_binding(XrdsTriggerKind::ButtonPress, "Open")],
+    );
+    app.world_mut().entity_mut(element).insert(XrdsWorldElementDisabled);
+
+    app.world_mut().write_message(xrds_components::XrWorldButtonPressEvent {
+        button_entity: element,
+        hand: XrGrabHand::Right,
+    });
+    pump(&mut app, 4);
+
+    // The binding is still attached; it just never gets an event to act on.
+    assert_eq!(
+        app.world().get::<Transform>(entities[0]).map(|t| t.translation.x),
+        Some(0.0),
+        "a disabled element must not drive its Track"
     );
 }

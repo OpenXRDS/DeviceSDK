@@ -419,6 +419,7 @@ impl XrdsTriggerEvent for xrds_components::XrWorldToggleEvent {
 pub fn consume_triggers<E: XrdsTriggerEvent>(
     mut events: MessageReader<E>,
     bindings: Query<&XrdsTriggerBindings>,
+    disabled: Query<&xrds_components::XrdsWorldElementDisabled>,
     id_index: Res<XrdsIdIndex>,
     registry: Res<XrdsTrackRegistry>,
     mut commands: Commands,
@@ -430,6 +431,13 @@ pub fn consume_triggers<E: XrdsTriggerEvent>(
         let Ok(node_bindings) = bindings.get(target) else {
             continue;
         };
+        // A disabled element does not act, whatever the event source. Filtering
+        // only where the button system *emits* would leave it responsive to any
+        // programmatically-written event, so "disabled" has to mean it here too
+        // — at the point bindings are consumed.
+        if disabled.get(target).is_ok() {
+            continue;
+        }
         let source = event.source().resolve(&id_index);
         let kind = event.kind();
         let hand = event.hand();
@@ -443,9 +451,91 @@ pub fn consume_triggers<E: XrdsTriggerEvent>(
             // which is correct: it has nothing to compare against.
             !b.disabled && b.trigger == kind && (b.hand.is_none() || b.hand == hand)
         }) {
-            spawn_binding_track(&mut commands, target, source, binding, &registry, false);
+            // Bindings are processed in **authored order**, and that is what makes
+            // a restart button work without a conditional: `Stop X` then `Fire X`
+            // on one element rewinds and replays. Reordering them here would
+            // silently turn that into "fire, then immediately stop".
+            match binding.effect {
+                xrds_scene_graph::XrdsTriggerEffect::Fire => {
+                    spawn_binding_track(&mut commands, target, source, binding, &registry, false);
+                }
+                xrds_scene_graph::XrdsTriggerEffect::Stop => {
+                    stop_binding_track(&mut commands, target, source, binding);
+                }
+            }
         }
     }
+}
+
+/// Stops whatever a `Stop` binding names.
+///
+/// **Resolved by asset, never by name.** The Track is re-resolved exactly as
+/// starting it would — same `schedule_track_keys` call, same `self`/`source` —
+/// and then whoever holds locks on those entities is despawned. A name-keyed
+/// sweep ("stop everything called Open") would repeat the mistake first-run
+/// priority was introduced to fix: two panels running the same Track on disjoint
+/// assets are two independent runs, and one stop button must not kill the other's.
+///
+/// Deferred through `Commands` for the same reason firing is: this runs inside a
+/// system with the world borrowed, and the stop needs exclusive access to release
+/// locks through the single choke point.
+fn stop_binding_track(
+    commands: &mut Commands,
+    target: Entity,
+    source: Option<Entity>,
+    binding: &XrdsTriggerBinding,
+) {
+    let Some(name) = binding.track.as_deref() else {
+        // Authored but unwired — diagnosed at author time, silent here.
+        return;
+    };
+    let name = name.to_string();
+    commands.queue(move |world: &mut World| {
+        stop_track_by_assets_in_world(world, target, source, &name);
+    });
+}
+
+/// Stops the run of `name` that holds the assets *this firing* would drive.
+///
+/// Returns how many agents were stopped — 0 when nothing was running, which is a
+/// harmless no-op by design: a stop button must be pressable at any time without
+/// the author writing an "is it running?" condition.
+pub fn stop_track_by_assets_in_world(
+    world: &mut World,
+    target: Entity,
+    source: Option<Entity>,
+    name: &str,
+) -> usize {
+    let Some(track) = world
+        .get_resource::<XrdsTrackRegistry>()
+        .and_then(|r| r.0.get(name).cloned())
+    else {
+        log::warn!(
+            "A Stop binding named Track {name:?}, which has no matching entry in \
+             XrdsSceneDocument::tracks — nothing stopped."
+        );
+        return 0;
+    };
+
+    // The same resolution start performs, so the two agree on what "this Track,
+    // fired from here" means. Anything else and a stop could miss its own run.
+    let keys = {
+        let id_index = world.get_resource::<XrdsIdIndex>();
+        let elements = world.get_resource::<XrdsPanelElementIndex>();
+        schedule_track_keys(&track, target, source, id_index, elements)
+    };
+    let assets = scheduled_entities(&keys);
+
+    let doomed: Vec<Entity> = {
+        let Some(locks) = world.get_resource::<XrdsTrackAssetLocks>() else { return 0 };
+        let mut holders: Vec<Entity> =
+            assets.iter().filter_map(|a| locks.holder_of(*a)).collect();
+        holders.sort();
+        holders.dedup();
+        holders
+    };
+
+    despawn_agents_releasing_locks(world, &doomed)
 }
 
 /// Starts whatever a trigger binding names, at chain depth 0. `runnable:
@@ -486,17 +576,40 @@ fn spawn_binding_track(
 /// at spawn time — the asset locks have to be taken on real entities, and
 /// `SelfNode`/`TriggerSource` only become concrete once a firing supplies
 /// `self_entity`/`source`.
+/// The first direct child of `entity` carrying `Text3d`.
+///
+/// One level only, not a recursive descent: a Button's caption is its own direct
+/// child, and searching deeper would let `SetElementText` reach into an unrelated
+/// nested widget and rewrite text the author never addressed.
+fn text_bearing_child(world: &mut World, entity: Entity) -> Option<Entity> {
+    use bevy_rich_text3d::Text3d;
+    let children: Vec<Entity> = world
+        .get::<bevy::prelude::Children>(entity)
+        .map(|c| c.iter().collect())
+        .unwrap_or_default();
+    children.into_iter().find(|c| world.get::<Text3d>(*c).is_some())
+}
+
 pub fn resolve_action_target(
     selector: &XrdsActionTarget,
     self_entity: Entity,
     source: Option<Entity>,
     id_index: Option<&XrdsIdIndex>,
+    elements: Option<&XrdsPanelElementIndex>,
 ) -> Option<Entity> {
     match selector {
         XrdsActionTarget::SelfNode => Some(self_entity),
         XrdsActionTarget::TriggerSource => source,
         XrdsActionTarget::Node(node_id) => {
             id_index.and_then(|index| index.entity_of((*node_id).into()))
+        }
+        // Two lookups: the panel node through the id index, then the element
+        // within it. An element is not a document node, so there is no single-step
+        // path — and going through the panel entity is what makes two instances of
+        // one template resolve to two different elements.
+        XrdsActionTarget::Element { panel, name } => {
+            let panel_entity = id_index.and_then(|index| index.entity_of((*panel).into()))?;
+            elements.and_then(|index| index.element_of(panel_entity, name))
         }
     }
 }
@@ -530,11 +643,12 @@ fn schedule_track_keys(
     target: Entity,
     source: Option<Entity>,
     id_index: Option<&XrdsIdIndex>,
+    elements: Option<&XrdsPanelElementIndex>,
 ) -> Vec<XrdsTrackScheduledKey> {
     let resolved: Vec<Option<Entity>> = track
         .assets
         .iter()
-        .map(|asset| resolve_action_target(&asset.target, target, source, id_index))
+        .map(|asset| resolve_action_target(&asset.target, target, source, id_index, elements))
         .collect();
 
     let mut keys: Vec<XrdsTrackScheduledKey> = track
@@ -583,7 +697,8 @@ pub fn spawn_track_agent_in_world(
     // now so the locks below are taken on real entities.
     let keys = {
         let id_index = world.get_resource::<XrdsIdIndex>();
-        schedule_track_keys(track, target, source, id_index)
+        let elements = world.get_resource::<XrdsPanelElementIndex>();
+        schedule_track_keys(track, target, source, id_index, elements)
     };
 
     let mut wanted: Vec<Entity> = keys.iter().filter_map(|k| k.entity).collect();
@@ -769,17 +884,22 @@ pub fn spawn_track_agent_deferred(
 /// Mirrors `tag_trigger_binding_entities`' **remove-when-empty** behaviour, so
 /// clearing the last binding actually detaches the component rather than
 /// leaving an empty list that still matches a query.
+/// `bindings` comes from the **instance**, not the element: the template says
+/// what the panel looks like, and the placed node says what its buttons do here.
+/// Passing them in rather than reading `element.triggers` is what lets two
+/// instances of one template drive two different doors.
 pub fn spawn_panel_element_in_world(
     world: &mut World,
     panel_entity: Entity,
     element: &xrds_scene_graph::XrdsPanelElement,
+    bindings: &[XrdsTriggerBinding],
 ) -> Entity {
     let entity = crate::xrds_api::spawn::spawn_world_widget_from_scene(
         world,
         panel_entity,
         &element.kind,
     );
-    set_element_trigger_bindings(world, entity, &element.triggers);
+    set_element_trigger_bindings(world, entity, bindings);
     entity
 }
 
@@ -1265,6 +1385,7 @@ pub fn advance_tracks(
 pub fn sync_live_track_agents(
     registry: Option<Res<XrdsTrackRegistry>>,
     id_index: Option<Res<XrdsIdIndex>>,
+    elements: Option<Res<XrdsPanelElementIndex>>,
     mut agents: Query<&mut XrdsTrackAgent>,
 ) {
     let Some(registry) = registry else { return };
@@ -1277,6 +1398,7 @@ pub fn sync_live_track_agents(
             agent.target,
             agent.source,
             id_index.as_ref().map(|r| r.as_ref()),
+            elements.as_ref().map(|r| r.as_ref()),
         );
 
         // Structural change → skip entirely (see the doc comment above).
@@ -1627,6 +1749,69 @@ impl Action for XrdsActionRunner {
                         "XrdsAction::SetMaterial targeted entity {entity:?}, which has no \
                          material — ignoring."
                     );
+                }
+                true
+            }
+
+            XrdsAction::SetElementText { text } => {
+                use bevy_rich_text3d::Text3d;
+                // A Label carries `Text3d` itself; a Button keeps its caption on a
+                // *child* entity. Rather than branching on widget kind — which
+                // would need updating for every future text-bearing widget — this
+                // writes wherever `Text3d` actually is, self first then children.
+                let entity = self.target;
+                let sink = if world.get::<Text3d>(entity).is_some() {
+                    Some(entity)
+                } else {
+                    text_bearing_child(world, entity)
+                };
+                match sink {
+                    Some(e) => {
+                        if let Some(mut t) = world.get_mut::<Text3d>(e) {
+                            *t = Text3d::new(text.clone());
+                        }
+                    }
+                    None => log::warn!(
+                        "XrdsAction::SetElementText targeted {entity:?}, which has no text — \
+                         only Labels and Buttons carry any."
+                    ),
+                }
+                true
+            }
+
+            XrdsAction::SetElementValue { value } => {
+                let entity = self.target;
+                // Clamped to the authored range: an out-of-range value is a slip,
+                // and letting it through would draw the handle outside its track.
+                if let Some(mut slider) = world.get_mut::<xrds_components::XrdsWorldSlider>(entity)
+                {
+                    slider.value = value.clamp(slider.min, slider.max);
+                } else if let Some(mut toggle) =
+                    world.get_mut::<xrds_components::XrdsWorldToggle>(entity)
+                {
+                    // A Toggle is the degenerate scalar: non-zero is checked. One
+                    // action for both means an author cannot pick the wrong one.
+                    toggle.checked = value != 0.0;
+                } else {
+                    log::warn!(
+                        "XrdsAction::SetElementValue targeted {entity:?}, which is neither a \
+                         Slider nor a Toggle — ignoring."
+                    );
+                }
+                true
+            }
+
+            XrdsAction::SetElementEnabled { enabled } => {
+                // Present-but-dead, not hidden. Insert/remove of a marker the three
+                // interaction systems filter on, so nothing here needs to know
+                // which widget kind it is.
+                let entity = self.target;
+                if let Ok(mut e) = world.get_entity_mut(entity) {
+                    if enabled {
+                        e.remove::<xrds_components::XrdsWorldElementDisabled>();
+                    } else {
+                        e.insert(xrds_components::XrdsWorldElementDisabled);
+                    }
                 }
                 true
             }

@@ -769,11 +769,18 @@ impl XrdsUpdateContext<'_> {
     /// Update the displayed text of a named HUD item on a specific `PlayerAnchor`.
     ///
     /// `anchor_id` — the `XrdsId` of the `PlayerAnchor` node.
-    /// `item_name` — the authored name of the `XrdsHudItemDef` (e.g. `"hp"`, `"status"`).
+    /// `item_name` — the element's authored name (e.g. `"hp"`, `"status"`).
     /// `text`      — the new text content.
     /// `color`     — optional RGBA override; `None` keeps the authored color.
     ///
-    /// Does nothing if the anchor has no linked HUD instance or the item name is not found.
+    /// Does nothing if the anchor has no linked panel instance or the name is not
+    /// found.
+    ///
+    /// **Name and contract deliberately unchanged** through the panel-template
+    /// unification. It resolves against `XrdsStoredHudInstance`, which was always
+    /// keyed by name, and the panel path populates exactly the same component —
+    /// so what used to be an `XrdsHudItemDef` is now a `Label` element and this
+    /// call is unaffected. That is why unification cost the public API nothing.
     pub fn set_hud_item(
         &mut self,
         anchor_id: XrdsId,

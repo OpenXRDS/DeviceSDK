@@ -19,7 +19,12 @@ pub(super) fn world_ui_button_system(world: &mut World) {
 
     // Phase 1 — collect button data without keeping a query borrow alive.
     let buttons: Vec<(Entity, XrdsWorldButton, XrdsWorldButtonState, Entity)> = {
-        let mut q = world.query::<(Entity, &XrdsWorldButton, &XrdsWorldButtonState, &ChildOf)>();
+        // Disabled elements are skipped here, which is the whole mechanism: the
+        // widget still renders, it just stops being a pointer target.
+        let mut q = world.query_filtered::<
+            (Entity, &XrdsWorldButton, &XrdsWorldButtonState, &ChildOf),
+            bevy::prelude::Without<xrds_components::XrdsWorldElementDisabled>,
+        >();
         q.iter(world)
             .map(|(e, b, s, co)| (e, b.clone(), *s, co.0))
             .collect()
