@@ -320,6 +320,65 @@ pub(super) fn spawn_world_panel_descriptor(commands: &mut Commands, panel: &Xrds
     entity
 }
 
+/// Gives an already-spawned `Panel` node entity its backdrop and pointer surface.
+///
+/// **Without this a panel's buttons cannot be pressed at all.** `world_ui_button_system`
+/// requires two things of an element's parent: that the pointer hit *it*
+/// (`hit.entity == panel_entity`), and that it carry [`XrdsWorldSurface`], whose
+/// `size` converts the hit's UV into panel-local metres. A `Panel` node is spawned
+/// as a bare `XrdsNode` — no mesh, so `find_nearest_surface` can never hit it, and
+/// no surface, so even a hit could not be mapped. Elements rendered, hover never
+/// fired, and every authored element trigger was unreachable in a running scene.
+///
+/// It also renders the template's `size`/`background`, which nothing drew before —
+/// so a placed panel showed its elements floating with no panel behind them.
+///
+/// Applied to the *node's own* entity rather than a child, deliberately: elements
+/// are parented to that entity and the button system reads `ChildOf` to find the
+/// panel, so a separate backdrop child would put the surface one level away from
+/// where every element looks for it.
+///
+/// Mirrors `spawn_world_panel_descriptor`'s recipe (quad on XY, unlit, alpha ×
+/// opacity, `NoFrustumCulling`) rather than sharing code with it: that one builds a
+/// whole entity from a descriptor, this one adorns an existing one.
+pub(super) fn apply_panel_backdrop_in_world(
+    world: &mut World,
+    entity: Entity,
+    template: &xrds_scene_graph::XrdsPanelTemplate,
+) {
+    use bevy::camera::visibility::NoFrustumCulling;
+
+    let [w, h] = template.size;
+    // A zero-sized panel would produce a degenerate mesh and a surface no ray can
+    // hit; skip rather than spawn something invisible and unhittable.
+    if !(w > 0.0 && h > 0.0) {
+        log::warn!(
+            "Panel template {:?} has size {w}×{h}; no backdrop or pointer surface spawned.",
+            template.name
+        );
+        return;
+    }
+
+    let mesh = {
+        let mut meshes = world.resource_mut::<Assets<Mesh>>();
+        meshes.add(Mesh::from(bevy::math::primitives::Rectangle::new(w, h)))
+    };
+
+    let c = template.background.color;
+    let material = XrdsMaterialParams {
+        base_color: XrdsColor { rgba: [c[0], c[1], c[2], c[3] * template.background.opacity] },
+        unlit: true,
+        ..XrdsMaterialParams::default()
+    };
+
+    if let Ok(mut e) = world.get_entity_mut(entity) {
+        e.insert((Mesh3d(mesh), XrdsWorldSurface::new(w, h), NoFrustumCulling));
+    } else {
+        return;
+    }
+    apply_authored_material_to_entity(world, entity, material);
+}
+
 pub(super) fn spawn_plane_descriptor(commands: &mut Commands, plane: &XrdsPlane3D) -> Entity {
     let entity = commands.spawn_empty().id();
     let descriptor = plane.clone();

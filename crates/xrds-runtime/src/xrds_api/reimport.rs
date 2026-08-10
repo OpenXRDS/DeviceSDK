@@ -270,35 +270,6 @@ fn spawn_runtime_component(
         XrdsSceneRuntimeComponent::ExtrudedText(c) => {
             Some(spawn_extruded_text_descriptor(commands, c))
         }
-        XrdsSceneRuntimeComponent::WorldPanel(panel_desc, widgets, scene_layout) => {
-            let entity = spawn_world_panel_descriptor(commands, panel_desc);
-            let widgets = widgets.clone();
-            let scene_layout = scene_layout.clone();
-            commands.queue(move |world: &mut World| {
-                for widget in &widgets {
-                    spawn_world_widget_from_scene(world, entity, widget);
-                }
-                use xrds_scene_graph::XrdsSceneWorldLayout;
-                let layout_opt = match &scene_layout {
-                    XrdsSceneWorldLayout::None => None,
-                    XrdsSceneWorldLayout::VStack { gap } => {
-                        Some(xrds_components::XrdsWorldLayout::VStack { gap: *gap })
-                    }
-                    XrdsSceneWorldLayout::HStack { gap } => {
-                        Some(xrds_components::XrdsWorldLayout::HStack { gap: *gap })
-                    }
-                    XrdsSceneWorldLayout::Grid { cols, gap } => {
-                        Some(xrds_components::XrdsWorldLayout::Grid { cols: *cols, gap: *gap })
-                    }
-                };
-                if let Some(layout) = layout_opt {
-                    if let Ok(mut e) = world.get_entity_mut(entity) {
-                        e.insert(layout);
-                    }
-                }
-            });
-            Some(entity)
-        }
         XrdsSceneRuntimeComponent::InteractionZone(node, zone) => {
             use avian3d::prelude::{CollisionEventsEnabled, Sensor};
             let collider = match zone.shape {
@@ -669,11 +640,42 @@ pub(super) fn spawn_panel_instances(world: &mut World, document: &XrdsSceneDocum
             continue;
         };
 
+        // The backdrop and pointer surface, before any element is spawned. Not
+        // cosmetic: the button system requires the pointer to hit *this* entity and
+        // requires it to carry `XrdsWorldSurface`, so without this no element on
+        // the panel can ever be hovered or pressed.
+        apply_panel_backdrop_in_world(world, panel_entity, &template);
+
         // Head-locked when an ancestor is a PlayerAnchor. Resolved from the
         // document rather than from Bevy's hierarchy because parent links are
         // still queued at this point in the import.
         let anchor = head_locked_anchor_of(document, node)
             .and_then(|id| world.resource::<XrdsIdIndex>().entity_of(id.into()));
+
+        // **The panel node is the head-locked thing, not each element.**
+        //
+        // Head-locking every element individually — which this did at first — leaves
+        // the backdrop behind: it lives on the node, so it would sit at its authored
+        // local transform while the elements tracked the camera. Nesting is also
+        // wrong on its own terms, since `head_locked_system` writes each marked
+        // entity's transform from the camera and would double-apply down a chain.
+        //
+        // One marked entity per panel, everything else following by ordinary
+        // parenting, is both simpler and what "attachment is parenting" means. The
+        // offset is the node's **local** transform — feeding a *world* position in as
+        // a camera-local offset is the documented anchor-offset mistake.
+        if anchor.is_some() {
+            let t = &node.transform;
+            let [rx, ry, rz, rw] = t.rotation_quat_xyzw;
+            let local_offset = Transform {
+                translation: Vec3::from_array(t.translation),
+                rotation: Quat::from_xyzw(rx, ry, rz, rw),
+                scale: Vec3::from_array(t.scale),
+            };
+            if let Ok(mut e) = world.get_entity_mut(panel_entity) {
+                e.insert((local_offset, crate::xrds_api::anchor::XrdsHeadLocked { local_offset }));
+            }
+        }
 
         let mut items: Vec<(String, Entity)> = Vec::new();
         for element in &template.elements {
@@ -687,33 +689,6 @@ pub(super) fn spawn_panel_instances(world: &mut World, document: &XrdsSceneDocum
                 element,
                 instance.triggers_for(&element.name),
             );
-
-            if anchor.is_some() {
-                // The node's own transform places the panel plane in *camera-local*
-                // space (X right, Y up, -Z forward); the element sits on that plane
-                // at its canvas position. Composing them is what replaces the old
-                // scalar `panel_depth` — an author gets rotation and offset, not
-                // just a distance.
-                //
-                // Careful: this is the node's **local** transform, not its world
-                // position. Feeding a world position in as a camera-local offset is
-                // the documented anchor-offset mistake.
-                let [x, y] = element.local_position();
-                let t = &node.transform;
-                let [rx, ry, rz, rw] = t.rotation_quat_xyzw;
-                let base = Transform {
-                    translation: Vec3::from_array(t.translation),
-                    rotation: Quat::from_xyzw(rx, ry, rz, rw),
-                    scale: Vec3::from_array(t.scale),
-                };
-                let local_offset = base * Transform::from_translation(Vec3::new(x, y, 0.0));
-                if let Ok(mut e) = world.get_entity_mut(entity) {
-                    e.insert((
-                        local_offset,
-                        crate::xrds_api::anchor::XrdsHeadLocked { local_offset },
-                    ));
-                }
-            }
 
             // Registered for **every** panel, head-locked or not: an `Element`
             // action target addresses `(panel node, element name)` and does not

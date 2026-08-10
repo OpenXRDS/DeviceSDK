@@ -2831,9 +2831,40 @@ fn set_hud_item_still_updates_an_element_of_a_migrated_template() {
 }
 
 #[test]
-fn a_head_locked_element_is_placed_at_the_anchors_depth_not_the_templates() {
+fn a_head_locked_panel_is_placed_at_the_anchors_depth_not_the_templates() {
     // Depth comes from the attachment, which is what lets one template serve two
     // depths — the concrete reason `XrdsHudTemplate::depth` had to move.
+    //
+    // The marked entity is the **panel node**, not each element: the backdrop lives
+    // on the node, and an element head-locked individually would leave the
+    // backdrop behind while elements tracked the camera on their own. Elements
+    // follow through ordinary parenting, same as any other child.
+    use crate::xrds_api::anchor::XrdsHeadLocked;
+
+    let mut app = xrds_test_app();
+    let _anchor = import_head_locked_panel(
+        &mut app,
+        vec![label_element("score", "0")],
+        vec![],
+        1.25,
+        &[],
+        vec![],
+    );
+    // `import_head_locked_panel` always authors the Panel node as id 941.
+    let panel = app.world().resource::<XrdsIdIndex>().entity_of(XrdsId(941)).expect("indexed");
+
+    let head_locked = app.world().get::<XrdsHeadLocked>(panel).expect("must be head-locked");
+    assert_eq!(
+        head_locked.local_offset.translation.z, -1.25,
+        "camera-local -Z at the anchor's depth"
+    );
+}
+
+#[test]
+fn a_head_locked_panels_element_is_not_individually_marked() {
+    // Guards the fix directly: an element carrying its own XrdsHeadLocked would
+    // double-apply the camera-follow — the panel moves it once via parenting,
+    // and the element would then move itself a second time on top of that.
     use crate::xrds_api::anchor::XrdsHeadLocked;
 
     let mut app = xrds_test_app();
@@ -2851,12 +2882,7 @@ fn a_head_locked_element_is_placed_at_the_anchors_depth_not_the_templates() {
         .expect("instance")
         .items[0]
         .1;
-
-    let head_locked = app.world().get::<XrdsHeadLocked>(item).expect("must be head-locked");
-    assert_eq!(
-        head_locked.local_offset.translation.z, -1.25,
-        "camera-local -Z at the anchor's depth"
-    );
+    assert!(app.world().get::<XrdsHeadLocked>(item).is_none());
 }
 
 #[test]
@@ -3885,4 +3911,67 @@ fn a_disabled_button_stops_emitting_press_events() {
         Some(0.0),
         "a disabled element must not drive its Track"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Panel backdrop and pointer surface
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_panel_node_gets_a_pointer_surface_matching_its_templates_size() {
+    // The load-bearing property. `world_ui_button_system` requires a button's
+    // parent to carry `XrdsWorldSurface` to convert a hit's UV into panel-local
+    // metres — without it, a hit could never be mapped to a button even if one
+    // somehow occurred.
+    let mut app = xrds_test_app();
+    import_panel_instances(&mut app, 1, vec![button_element("go")], vec![], &[], vec![]);
+    let panel = app.world().resource::<XrdsIdIndex>().entity_of(XrdsId(900)).expect("indexed");
+
+    let surface = app
+        .world()
+        .get::<xrds_components::XrdsWorldSurface>(panel)
+        .expect("a Panel node must carry a pointer surface");
+    // The default template size, asserted concretely rather than just
+    // "is present" — a surface with the wrong size would silently mis-map every
+    // hit near an edge.
+    assert_eq!((surface.size.x, surface.size.y), (0.6, 0.4));
+}
+
+#[test]
+fn a_panel_node_gets_a_mesh_so_a_ray_can_hit_it_at_all() {
+    // The other half: `find_nearest_surface` raycasts against `Mesh3d` geometry.
+    // A surface component with no mesh is unreachable — the ray has nothing to
+    // intersect — so both must be present together.
+    let mut app = xrds_test_app();
+    import_panel_instances(&mut app, 1, vec![button_element("go")], vec![], &[], vec![]);
+    let panel = app.world().resource::<XrdsIdIndex>().entity_of(XrdsId(900)).expect("indexed");
+    assert!(app.world().get::<Mesh3d>(panel).is_some(), "must have geometry to be hit");
+}
+
+#[test]
+fn two_panel_instances_get_independent_surfaces() {
+    let mut app = xrds_test_app();
+    import_panel_instances(&mut app, 2, vec![button_element("go")], vec![], &[], vec![]);
+    let a = app.world().resource::<XrdsIdIndex>().entity_of(XrdsId(900)).expect("indexed");
+    let b = app.world().resource::<XrdsIdIndex>().entity_of(XrdsId(901)).expect("indexed");
+    assert!(app.world().get::<xrds_components::XrdsWorldSurface>(a).is_some());
+    assert!(app.world().get::<xrds_components::XrdsWorldSurface>(b).is_some());
+}
+
+#[test]
+fn a_head_locked_panel_also_gets_a_surface() {
+    // The backdrop/surface pass runs before the head-lock decision and does not
+    // depend on it — a HUD panel needs to be pressable exactly as much as a
+    // world one.
+    let mut app = xrds_test_app();
+    let _anchor = import_head_locked_panel(
+        &mut app,
+        vec![button_element("go")],
+        vec![],
+        0.5,
+        &[],
+        vec![],
+    );
+    let panel = app.world().resource::<XrdsIdIndex>().entity_of(XrdsId(941)).expect("indexed");
+    assert!(app.world().get::<xrds_components::XrdsWorldSurface>(panel).is_some());
 }
