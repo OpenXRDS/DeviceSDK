@@ -11392,15 +11392,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "xrds-gltf"
-version = "0.1.0"
-dependencies = [
- "gltf-json",
- "serde_json",
- "xrds-scene-graph",
-]
-
-[[package]]
 name = "xrds-media"
 version = "0.1.0"
 dependencies = [

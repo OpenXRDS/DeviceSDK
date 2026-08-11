@@ -445,34 +445,6 @@ pub(super) fn tag_player_anchor_entities(
                     });
                     anchor_tagged += 1;
                 }
-                // Instantiate the head-locked panel template this anchor links.
-                // There used to be a second `hud_template_id` branch here, with a
-                // precedence rule between them; the unification left exactly one
-                // kind of template, so there is nothing to prefer.
-                if let Some(tid) = a.panel_template_id {
-                    if let Some(template) = document.panel_template(tid) {
-                        let template = template.clone();
-                        let instance = spawn_panel_template_head_locked(
-                            world,
-                            entity,
-                            &template,
-                            a.panel_depth,
-                            // See api.rs `link_panel`: an anchor link has no
-                            // place for per-element bindings. §A6-2 replaces this
-                            // whole branch with a `Panel` node under the anchor.
-                            &Default::default(),
-                        );
-                        if let Ok(mut e) = world.get_entity_mut(entity) {
-                            e.insert(instance);
-                        }
-                    } else {
-                        log::warn!(
-                            "PlayerAnchor {:?} links panel template {tid:?}, which is not in this \
-                             document — nothing head-locked.",
-                            node.id
-                        );
-                    }
-                }
             }
             _ => {}
         }

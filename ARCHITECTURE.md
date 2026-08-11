@@ -16,7 +16,6 @@ flowchart TB
     subgraph sdk["SDK crates"]
         runtime["xrds-runtime<br/>XrdsApp / XrdsAPI / XrdsUpdateContext<br/>runtime projection layer"]
         scenegraph["xrds-scene-graph<br/>XrdsSceneDocument (JSON persistence,<br/>validation, undo/redo sessions)"]
-        gltf["xrds-gltf<br/>(deprecated: scene glTF export retired)"]
         components["xrds-components<br/>shared XRDS descriptors<br/>(primitives, world-UI widgets, …)"]
         openxr["xrds-openxr<br/>OpenXR backend, XrInput"]
         net["xrds-net<br/>networking integrations"]
@@ -29,8 +28,6 @@ flowchart TB
     %% blue: app → SDK dependencies
     editor --> runtime
     editor --> scenegraph
-    %% `editor --> gltf` was here. The editor's dependency on xrds-gltf was
-    %% dropped with the Export Scene GLB command; the crate now has no consumers.
     xrdsapp --> runtime
     xrdsapp --> scenegraph
     xrdsapp --> openxr
@@ -42,7 +39,6 @@ flowchart TB
     runtime --> net
     runtime --> audio
     %% orange: other intra-SDK dependencies
-    gltf --> scenegraph
     scenegraph --> components
 
     %% purple: external engines

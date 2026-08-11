@@ -80,8 +80,8 @@ pub enum EditorCommand {
     SetHudText      { id: u64, text: String, font_size: f32, color: [f32; 4], anchor: String, offset: [f32; 2] },
     // The 12 HUD-library commands lived here. They are gone with
     // `XrdsHudTemplate`: a HUD is an `XrdsPanelTemplate` head-locked to an
-    // anchor, so the panel commands below cover every one of them, and
-    // `LinkHudTemplate` became `LinkPanelTemplate`.
+    // anchor by parenting a `Panel` node under it — see
+    // `SetPanelInstanceTemplate` below.
     // --- Panel template library (unified model) ---
     // Elements are addressed by **name**, never index: reordering must not
     // silently re-point a trigger binding.
@@ -114,18 +114,10 @@ pub enum EditorCommand {
     /// effect: "Fire" | "Stop" — a panel button that stops a Track rather than
     /// starting one.
     SetPanelNodeTriggerEffect { id: u64, element: String, index: usize, effect: String },
-    /// Head-lock a panel template to a `PlayerAnchor`, or clear the link with
-    /// `template_id: None`. Successor to `LinkHudTemplate`.
-    ///
-    /// `depth` is per-link, not per-template, which is exactly what the old
-    /// `XrdsHudTemplate::depth` prevented: two anchors can now head-lock the same
-    /// template at different distances.
-    LinkPanelTemplate { anchor_id: u64, template_id: Option<u64>, depth: f32 },
     /// Repoint a scene-placed `Panel` node at a different template.
     ///
-    /// Not `Option<u64>` unlike `LinkPanelTemplate`: an anchor can have no panel,
-    /// but a Panel node *is* its template reference — clearing it would leave a
-    /// node that can never render. Delete the node instead.
+    /// Not `Option<u64>`: a Panel node *is* its template reference — clearing it
+    /// would leave a node that can never render. Delete the node instead.
     SetPanelInstanceTemplate { id: u64, template_id: u64 },
     SetTextContent { id: u64, text: String, font_size: f32, color: [f32; 4], alignment: String, anchor: String, anchor_param: f32 },
     SetExtrudedText { id: u64, text: String, font_size: f32, depth: f32, color: [f32; 4], alignment: String },
@@ -494,10 +486,7 @@ pub enum NodePayloadDto {
     GltfAsset { clips: Vec<GltfClipDto> },
     HudText   { text: String, font_size: f32, color: [f32; 4], anchor: String, offset: [f32; 2] },
     Player,
-    /// `panel_template_id` + `panel_depth` replace the old `hud_template_id`.
-    /// Depth is exposed because it lives on the anchor, not the template — that
-    /// is what lets two anchors share one template at different distances.
-    PlayerAnchor  { fov_deg: f32, is_initial: bool, panel_template_id: Option<u64>, panel_depth: f32, exposure: Option<f32> },
+    PlayerAnchor  { fov_deg: f32, is_initial: bool, exposure: Option<f32> },
     PlayerSpawnZone { size: [f32; 3], player_node_id: Option<u64> },
     /// A scene-placed instance of a panel template — the counterpart to a
     /// PlayerAnchor's head-locked link.

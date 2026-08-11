@@ -1138,34 +1138,6 @@ pub struct XrdsScenePlayerAnchor {
     /// If `true`, the runtime spawns the player pawn at this anchor on play-mode start.
     /// At most one `PlayerAnchor` per scene should have `is_initial: true`.
     pub is_initial: bool,
-    /// **Deprecated — kept working as reference, not to be used.** Head-lock a
-    /// panel by parenting a `Panel` **node** under this anchor instead.
-    ///
-    /// This link cannot carry `element_triggers`, so a panel attached through it
-    /// renders and can never fire anything — its buttons are dead. A Panel node
-    /// carries its own wiring and gets a full `transform` instead of the scalar
-    /// `panel_depth` below. Nothing in the editor authors this path any more.
-    ///
-    /// Optional [`XrdsPanelTemplate`] to instantiate head-locked for this anchor.
-    ///
-    /// **The camera half of "attachment is the only difference."** The same
-    /// template can also be placed in the scene via
-    /// `XrdsSceneNodePayload::Panel`; what differs is only where it ends up.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub panel_template_id: Option<XrdsPanelTemplateId>,
-    /// **Deprecated with `panel_template_id` above.** A `Panel` node's own
-    /// `transform` supersedes this: it gives position *and* rotation rather than
-    /// one distance, and it is where a head-locked panel's placement now lives.
-    ///
-    /// How far in front of the lens a `panel_template_id` instance sits, in
-    /// metres.
-    ///
-    /// **Depth lives here, not on the template**, which is the whole reason the
-    /// retired `XrdsHudTemplate::depth` had to move: with depth on the template,
-    /// one template could never be used at two depths. Ignored unless
-    /// `panel_template_id` is set.
-    #[serde(default = "default_panel_depth")]
-    pub panel_depth: f32,
     /// Per-anchor exposure override (ev100).  Overrides the scene-wide exposure while
     /// this anchor is active.  `None` = use the scene-wide exposure setting.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1179,8 +1151,6 @@ impl Default for XrdsScenePlayerAnchor {
             locomotion_mode: XrdsPlayerLocomotionMode::default(),
             fov_deg: 60.0,
             is_initial: false,
-            panel_template_id: None,
-            panel_depth: default_panel_depth(),
             exposure: None,
         }
     }
@@ -1496,10 +1466,6 @@ pub enum XrdsSceneWorldWidget {
     Slider(XrdsSceneWorldSlider),
     Toggle(XrdsSceneWorldToggle),
 }
-
-/// Matches the depth the retired `XrdsHudTemplate` defaulted to, so a HUD that
-/// became a panel template did not silently move.
-fn default_panel_depth() -> f32 { 0.5 }
 
 // `XrdsSceneWorldPanel` lived here: an authored world-space panel with inline
 // widgets and layout, both fields directly on the node. Retired because inline

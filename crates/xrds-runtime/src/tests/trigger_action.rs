@@ -2707,13 +2707,10 @@ fn a_panel_instance_naming_a_missing_template_loads_as_an_empty_node() {
 // ---------------------------------------------------------------------------
 
 /// A document with one panel template head-locked to a PlayerAnchor.
-/// A PlayerAnchor with a `Panel` node **parented under it** — which is what makes
-/// the panel head-locked. `depth` becomes the panel node's local -Z, replacing the
-/// old scalar `XrdsScenePlayerAnchor::panel_depth`.
 ///
-/// Authored this way rather than through the anchor's `panel_template_id` link
-/// because only a node can carry `element_triggers`. The link has nowhere to put
-/// them, which is exactly why attachment became parenting.
+/// A PlayerAnchor with a `Panel` node **parented under it** — which is what makes
+/// the panel head-locked. `depth` becomes the panel node's local -Z. Only a node
+/// can carry `element_triggers`, which is exactly why attachment is parenting.
 fn import_head_locked_panel(
     app: &mut App,
     elements: Vec<xrds_scene_graph::XrdsPanelElement>,

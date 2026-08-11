@@ -975,63 +975,6 @@ pub(super) fn spawn_interaction_zone_entity(
     entity
 }
 
-/// Instantiates a panel template head-locked to `anchor_entity` — the camera
-/// half of "attachment is the only difference".
-///
-/// Exactly the same elements a scene-placed `Panel` node would spawn; only the
-/// placement differs. Each element goes through `spawn_panel_element_in_world`,
-/// so its authored triggers land on its entity and fire like any other binding —
-/// which means a HUD can now carry buttons and sliders, not just text.
-///
-/// **Returns [`super::state::XrdsStoredHudInstance`] deliberately.** That is the
-/// same component `set_hud_item` already resolves against, keyed by element
-/// name, so a public API that predates all of this keeps working unchanged
-/// against a migrated template. Preserving it was the cheapest part of the
-/// migration precisely because both models address by name.
-///
-/// `depth` comes from the *anchor*, not the template (see
-/// `XrdsScenePlayerAnchor::panel_depth`): that is what lets one template be
-/// instanced at two different depths, which `XrdsHudTemplate::depth` could not.
-///
-/// `element_triggers` is the wiring for this attachment, keyed by element name —
-/// the same map a scene-placed `Panel` node carries. The anchor-link path has
-/// nowhere to store one and passes an empty map, which is exactly the asymmetry
-/// §A6-2 removes by making a head-locked panel a `Panel` node parented under the
-/// anchor rather than a field on it.
-pub(super) fn spawn_panel_template_head_locked(
-    world: &mut World,
-    anchor_entity: Entity,
-    template: &xrds_scene_graph::XrdsPanelTemplate,
-    depth: f32,
-    element_triggers: &std::collections::BTreeMap<String, Vec<xrds_scene_graph::XrdsTriggerBinding>>,
-) -> super::state::XrdsStoredHudInstance {
-    use crate::xrds_api::anchor::XrdsHeadLocked;
-
-    let mut items: Vec<(String, Entity)> = Vec::new();
-
-    for element in &template.elements {
-        let entity = crate::xrds_api::trigger_action::spawn_panel_element_in_world(
-            world,
-            anchor_entity,
-            element,
-            element_triggers.get(&element.name).map_or(&[], Vec::as_slice),
-        );
-
-        // The element spawned at its canvas position on a panel plane; the
-        // attachment decides where that plane sits. Camera-local space is X
-        // right, Y up, -Z forward, so the canvas lands `depth` metres ahead.
-        let [x, y] = element.local_position();
-        let local_offset = Transform::from_translation(Vec3::new(x, y, -depth));
-        if let Ok(mut e) = world.get_entity_mut(entity) {
-            e.insert((local_offset, XrdsHeadLocked { local_offset }));
-        }
-
-        items.push((element.name.clone(), entity));
-    }
-
-    super::state::XrdsStoredHudInstance { items }
-}
-
 // ── World-space widget spawn functions ────────────────────────────────────────
 
 /// Runtime component that caches the three pre-created material handles for a button so

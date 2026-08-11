@@ -1207,9 +1207,7 @@ function PlayerAnchorSection({ id, p, send, isPlaying, snapshot }: { id: number;
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [p.exposure]);
 
-  const panelTemplateId: number | null = p.panel_template_id ?? null;
   const templates = snapshot.panel_library;
-  const panelDepth = p.panel_depth ?? 0.5;
 
   return (
     <div className="insp-section">
@@ -1243,11 +1241,8 @@ function PlayerAnchorSection({ id, p, send, isPlaying, snapshot }: { id: number;
         )}
       </div>
 
-      {/* Head-locked panels are **parented**, not linked. A child Panel node
-        * carries its own element wiring and a full transform; the old
-        * `panel_template_id` link could carry neither, so a panel attached that
-        * way rendered with dead buttons. The link still loads for existing
-        * documents — flagged below — but nothing here authors it. */}
+      {/* Head-locked panels are **parented**, not linked: a child Panel node
+        * carries its own element wiring and a full transform. */}
       <div className="insp-row" style={{ marginTop: 8 }}>
         <label>Head-locked Panel</label>
         <button className="tb-btn" style={{ flex: 1, fontSize: 11 }}
@@ -1267,16 +1262,6 @@ function PlayerAnchorSection({ id, p, send, isPlaying, snapshot }: { id: number;
         it sits in front of the lens, and its Inspector is where its buttons are
         wired.
       </div>
-      {panelTemplateId !== null && (
-        <div className="insp-note" style={{ color: "var(--yellow)" }}>
-          ⚠ This anchor uses the old <code>panel_template_id</code> link
-          {templates.find(t => t.id === panelTemplateId) == null
-            ? " and the template it names was deleted."
-            : ` (${templates.find(t => t.id === panelTemplateId)!.name}, depth ${panelDepth}m).`}
-          {" "}That path cannot carry trigger bindings, so its buttons will never
-          fire. Add a panel child instead.
-        </div>
-      )}
     </div>
   );
 }

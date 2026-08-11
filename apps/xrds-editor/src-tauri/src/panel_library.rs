@@ -214,27 +214,14 @@ pub fn apply_panel_library_command(
 
         EditorCommand::DeletePanelTemplate { id } => {
             let id = XrdsPanelTemplateId(*id);
+            // `Panel` nodes referencing this template are deliberately left
+            // dangling. Their whole payload is the template reference — there is
+            // no empty state to fall back to, so the alternatives are deleting the
+            // author's node outright or leaving a diagnosable reference.
+            // `panel_diagnostics` reports it as "Panel instance names a missing
+            // template"; silently deleting scene nodes is worse.
             match session.0.edit(|doc| {
                 doc.panels.retain(|t| t.id != id);
-                // Anchors get their link cleared, same choice as DeleteTrack: the
-                // field is optional, so "no panel" is representable and honest.
-                //
-                // `Panel` *nodes* are deliberately left dangling instead. Their
-                // whole payload is the template reference — there is no empty
-                // state to fall back to, so the alternatives are deleting the
-                // author's node outright or leaving a diagnosable reference.
-                // `panel_diagnostics` reports it as "Panel instance names a
-                // missing template"; silently deleting scene nodes is worse.
-                for node in &mut doc.nodes {
-                    match &mut node.payload {
-                        xrds_scene_graph::XrdsSceneNodePayload::PlayerAnchor(a)
-                            if a.panel_template_id == Some(id) =>
-                        {
-                            a.panel_template_id = None;
-                        }
-                        _ => {}
-                    }
-                }
             }) {
                 Ok(_) => {}
                 Err(e) => error!("[panel] DeletePanelTemplate failed: {:?}", e),
@@ -441,45 +428,11 @@ pub fn apply_panel_library_command(
             true
         }
 
-        // Successor to `LinkHudTemplate`. Writes both fields together because
-        // depth is meaningless without a template, and a stale depth left behind
-        // by an unlink would silently apply to the next template linked.
-        EditorCommand::LinkPanelTemplate { anchor_id, template_id, depth } => {
-            let tid = template_id.map(XrdsPanelTemplateId);
-            let depth = *depth;
-            let anchor_id = *anchor_id;
-            if let Some(tid) = tid {
-                // Checked here rather than tolerated: unlike an element miss,
-                // a dangling link spawns nothing at all with no visible cause.
-                let missing = session.0.document().panel_template(tid).is_none();
-                if missing {
-                    error!("[panel] LinkPanelTemplate: template {tid:?} does not exist");
-                    return false;
-                }
-            }
-            match session.0.edit(|doc| {
-                let Some(node) = doc.node_mut(XrdsSceneNodeId(anchor_id)) else {
-                    error!("[panel] LinkPanelTemplate: node {anchor_id} not found");
-                    return;
-                };
-                if let XrdsSceneNodePayload::PlayerAnchor(ref mut a) = node.payload {
-                    a.panel_template_id = tid;
-                    a.panel_depth = depth;
-                } else {
-                    error!("[panel] LinkPanelTemplate: node {anchor_id} is not a PlayerAnchor");
-                }
-            }) {
-                Ok(_) => {}
-                Err(e) => error!("[panel] LinkPanelTemplate failed: {:?}", e),
-            }
-            true
-        }
-
         EditorCommand::SetPanelInstanceTemplate { id, template_id } => {
             let tid = XrdsPanelTemplateId(*template_id);
             let node_id = XrdsSceneNodeId(*id);
-            // Same reasoning as LinkPanelTemplate: a dangling reference renders
-            // nothing with no visible cause, so it is refused rather than stored.
+            // A dangling reference renders nothing with no visible cause, so it is
+            // refused rather than stored.
             if session.0.document().panel_template(tid).is_none() {
                 error!("[panel] SetPanelInstanceTemplate: template {tid:?} does not exist");
                 return false;

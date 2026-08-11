@@ -38,22 +38,12 @@ impl XrdsSceneDocument {
         })
     }
 
-    /// How many places instance `template_id` — scene `Panel` nodes plus
-    /// PlayerAnchors that head-lock it.
-    ///
-    /// Both attachments count, because the hazard in
-    /// [`XrdsSceneDocument::panel_diagnostics`] is about *how many live copies
-    /// of an element exist*, and it does not care how each one got there.
+    /// How many scene `Panel` nodes instance `template_id`.
     pub fn panel_instance_count(&self, template_id: XrdsPanelTemplateId) -> usize {
         self.nodes
             .iter()
-            .filter(|n| match &n.payload {
-                XrdsSceneNodePayload::Panel(i) => i.template_id == template_id,
-                XrdsSceneNodePayload::PlayerAnchor(a) => {
-                    a.panel_template_id == Some(template_id)
-                }
-                _ => false,
-            })
+            .filter(|n| matches!(&n.payload,
+                XrdsSceneNodePayload::Panel(i) if i.template_id == template_id))
             .count()
     }
 
@@ -274,26 +264,6 @@ impl XrdsSceneDocument {
                                 node.name, instance.template_id
                             ),
                         });
-                    }
-                }
-                XrdsSceneNodePayload::PlayerAnchor(anchor) => {
-                    if let Some(tid) = anchor.panel_template_id {
-                        if self.panel_template(tid).is_none() {
-                            out.push(XrdsSceneTriggerDiagnostic {
-                                node_id: Some(node.id),
-                                severity: Severity::Error,
-                                title: "Anchor names a missing panel template".to_string(),
-                                detail: format!(
-                                    "Anchor {:?} links panel template {tid:?}, which is not in \
-                                     this document. Nothing will be head-locked.",
-                                    node.name
-                                ),
-                            });
-                        }
-                        // There was a "links both a HUD and a panel template"
-                        // warning here. It is gone with `hud_template_id`: there
-                        // is now only one kind of template to link, so the
-                        // ambiguity it warned about cannot be expressed.
                     }
                 }
                 _ => {}

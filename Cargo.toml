@@ -19,10 +19,6 @@ members = ["crates/*", "apps/xrds-editor/src-tauri", "apps/xrds-app"]
 [profile.dev]
 debug = 1
 
-[workspace.dependencies.xrds-gltf]
-package = "xrds-gltf"
-path = "./crates/xrds-gltf"
-
 [workspace.dependencies.xrds-audio]
 package = "xrds-audio"
 path = "./crates/xrds-audio"

@@ -204,49 +204,6 @@ fn renaming_a_template_needs_no_reference_fixups() {
 }
 
 #[test]
-fn deleting_a_template_clears_anchors_that_linked_it() {
-    // Same choice as DeleteTrack: a cleared reference is honest about what
-    // happened, a dangling one is merely diagnosable.
-    use xrds_scene_graph::{
-        XrdsEditorMetadata, XrdsSceneNode, XrdsSceneNodeId, XrdsSceneNodePayload,
-        XrdsScenePlayerAnchor, XrdsSceneTransform,
-    };
-    let (mut session, mut state) = fresh();
-    let id = create(&mut session, &mut state, "Menu");
-    session
-        .0
-        .edit(|doc| {
-            doc.nodes.push(XrdsSceneNode {
-                id: XrdsSceneNodeId(1),
-                parent_id: None,
-                name: "Anchor".to_string(),
-                enabled: true,
-                visible: true,
-                grabbable: false,
-                transform: XrdsSceneTransform::default(),
-                payload: XrdsSceneNodePayload::PlayerAnchor(XrdsScenePlayerAnchor {
-                    panel_template_id: Some(XrdsPanelTemplateId(id)),
-                    ..Default::default()
-                }),
-                editor: XrdsEditorMetadata::default(),
-                triggers: Vec::new(),
-                watchers: Vec::new(),
-            });
-        })
-        .expect("edit");
-
-    apply(&mut session, &mut state, EditorCommand::DeletePanelTemplate { id });
-
-    assert!(session.0.document().panels.is_empty());
-    match &session.0.document().nodes[0].payload {
-        XrdsSceneNodePayload::PlayerAnchor(a) => {
-            assert_eq!(a.panel_template_id, None, "the link must be cleared, not left dangling");
-        }
-        other => panic!("expected an anchor, got {other:?}"),
-    }
-}
-
-#[test]
 fn the_dto_reports_which_triggers_an_element_can_emit() {
     // Sent from Rust so the picker cannot drift from the diagnostics.
     let (mut session, mut state) = fresh();
@@ -579,7 +536,7 @@ fn a_refused_rename_does_not_move_any_wiring() {
 }
 
 // ---------------------------------------------------------------------------
-// LinkPanelTemplate — successor to LinkHudTemplate (§A4b-1)
+// Head-locked panel placement
 // ---------------------------------------------------------------------------
 
 /// Adds a `PlayerAnchor` node and returns its id.
@@ -605,140 +562,6 @@ fn add_anchor(session: &mut EditorSession) -> u64 {
         })
         .expect("adding an anchor is a valid edit");
     500
-}
-
-fn anchor_link(session: &EditorSession) -> (Option<u64>, f32) {
-    let node = session
-        .0
-        .document()
-        .node(xrds_scene_graph::XrdsSceneNodeId(500))
-        .expect("anchor present");
-    match &node.payload {
-        xrds_scene_graph::XrdsSceneNodePayload::PlayerAnchor(a) => {
-            (a.panel_template_id.map(|i| i.0), a.panel_depth)
-        }
-        _ => panic!("not an anchor"),
-    }
-}
-
-#[test]
-fn linking_a_template_to_an_anchor_writes_both_id_and_depth() {
-    // Depth travels with the link because it lives on the anchor, not the
-    // template — that is what lets two anchors share one template at different
-    // distances, which `XrdsHudTemplate::depth` could not express.
-    let (mut session, mut state) = fresh();
-    let tid = create(&mut session, &mut state, "HUD");
-    let anchor = add_anchor(&mut session);
-
-    let reimport = apply(&mut session, &mut state, EditorCommand::LinkPanelTemplate {
-        anchor_id: anchor,
-        template_id: Some(tid),
-        depth: 1.25,
-    });
-
-    assert!(reimport, "instances spawn at import, so the link must reimport");
-    assert_eq!(anchor_link(&session), (Some(tid), 1.25));
-}
-
-#[test]
-fn two_anchors_can_head_lock_one_template_at_different_depths() {
-    // The concrete capability the unification bought. Asserted through the
-    // command surface, not just the schema, so a per-template depth cannot creep
-    // back in via the editor.
-    let (mut session, mut state) = fresh();
-    let tid = create(&mut session, &mut state, "HUD");
-    add_anchor(&mut session);
-    session
-        .0
-        .edit(|doc| {
-            let mut second = doc.nodes[0].clone();
-            second.id = xrds_scene_graph::XrdsSceneNodeId(501);
-            second.name = "Anchor2".to_string();
-            doc.nodes.push(second);
-        })
-        .expect("valid edit");
-
-    for (id, depth) in [(500u64, 0.3f32), (501, 1.5)] {
-        apply(&mut session, &mut state, EditorCommand::LinkPanelTemplate {
-            anchor_id: id,
-            template_id: Some(tid),
-            depth,
-        });
-    }
-
-    let depths: Vec<f32> = session
-        .0
-        .document()
-        .nodes
-        .iter()
-        .filter_map(|n| match &n.payload {
-            xrds_scene_graph::XrdsSceneNodePayload::PlayerAnchor(a) => Some(a.panel_depth),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(depths, vec![0.3, 1.5]);
-}
-
-#[test]
-fn unlinking_clears_the_template() {
-    let (mut session, mut state) = fresh();
-    let tid = create(&mut session, &mut state, "HUD");
-    let anchor = add_anchor(&mut session);
-    apply(&mut session, &mut state, EditorCommand::LinkPanelTemplate {
-        anchor_id: anchor, template_id: Some(tid), depth: 0.8,
-    });
-    apply(&mut session, &mut state, EditorCommand::LinkPanelTemplate {
-        anchor_id: anchor, template_id: None, depth: 0.8,
-    });
-    assert_eq!(anchor_link(&session).0, None);
-}
-
-#[test]
-fn linking_a_template_that_does_not_exist_is_refused() {
-    // Unlike a missed element name, a dangling link spawns nothing at all with no
-    // visible cause — so this is rejected rather than tolerated.
-    let (mut session, mut state) = fresh();
-    let anchor = add_anchor(&mut session);
-    let reimport = apply(&mut session, &mut state, EditorCommand::LinkPanelTemplate {
-        anchor_id: anchor, template_id: Some(404), depth: 0.5,
-    });
-    assert!(!reimport, "a refused command must not trigger a reimport");
-    assert_eq!(anchor_link(&session).0, None);
-}
-
-#[test]
-fn linking_a_node_that_is_not_an_anchor_changes_nothing() {
-    let (mut session, mut state) = fresh();
-    let tid = create(&mut session, &mut state, "HUD");
-    session
-        .0
-        .edit(|doc| {
-            doc.nodes.push(xrds_scene_graph::XrdsSceneNode {
-                id: xrds_scene_graph::XrdsSceneNodeId(600),
-                parent_id: None,
-                name: "JustACube".to_string(),
-                enabled: true,
-                visible: true,
-                grabbable: false,
-                transform: Default::default(),
-                payload: xrds_scene_graph::XrdsSceneNodePayload::Empty,
-                editor: Default::default(),
-                triggers: Vec::new(),
-                watchers: Vec::new(),
-            });
-        })
-        .expect("valid edit");
-
-    apply(&mut session, &mut state, EditorCommand::LinkPanelTemplate {
-        anchor_id: 600, template_id: Some(tid), depth: 0.5,
-    });
-
-    let node = session
-        .0
-        .document()
-        .node(xrds_scene_graph::XrdsSceneNodeId(600))
-        .expect("node present");
-    assert!(matches!(node.payload, xrds_scene_graph::XrdsSceneNodePayload::Empty));
 }
 
 // ---------------------------------------------------------------------------
@@ -909,8 +732,8 @@ fn transform_of(session: &EditorSession, id: u64) -> [f32; 3] {
 fn a_panel_under_an_anchor_defaults_to_camera_local_placement() {
     // A head-locked panel's transform is read as **camera-local**, so the
     // world-space default (eye height, 1 m forward) would put it 1.5 m above the
-    // viewer's own eye. Half a metre straight ahead matches the depth the retired
-    // `panel_depth` defaulted to, so migrating does not move anything.
+    // viewer's own eye. 1.5 m straight ahead instead — see `palette.rs` for why
+    // that value and not the panel's own backdrop size.
     let (mut session, mut state) = fresh();
     create(&mut session, &mut state, "Hud");
     let anchor = add_anchor(&mut session);

@@ -491,94 +491,14 @@ fn panel_node(id: u64, template: u64) -> XrdsSceneNode {
     }
 }
 
-fn anchor_node(id: u64, panel: Option<u64>) -> XrdsSceneNode {
-    XrdsSceneNode {
-        id: XrdsSceneNodeId(id),
-        parent_id: None,
-        name: format!("Anchor{id}"),
-        enabled: true,
-        visible: true,
-        grabbable: false,
-        transform: XrdsSceneTransform::default(),
-        payload: XrdsSceneNodePayload::PlayerAnchor(XrdsScenePlayerAnchor {
-            panel_template_id: panel.map(XrdsPanelTemplateId),
-            ..Default::default()
-        }),
-        editor: XrdsEditorMetadata::default(),
-        triggers: Vec::new(),
-        watchers: Vec::new(),
-    }
-}
-
 fn doc_with_nodes(nodes: Vec<XrdsSceneNode>, panels: Vec<XrdsPanelTemplate>) -> XrdsSceneDocument {
     XrdsSceneDocument { nodes, panels, ..XrdsSceneDocument::default() }
-}
-
-#[test]
-fn a_panel_template_can_be_attached_to_the_scene_and_to_the_camera() {
-    // The claim being tested: attachment is the only difference. One template,
-    // two attachment points, no per-attachment content.
-    let t = XrdsPanelTemplate { id: XrdsPanelTemplateId(1), ..template("Shared", vec![]) };
-    let d = doc_with_nodes(vec![panel_node(10, 1), anchor_node(11, Some(1))], vec![t]);
-    assert!(d.panel_diagnostics().is_empty(), "{:?}", titles(&d));
-}
-
-#[test]
-fn depth_lives_on_the_anchor_so_one_template_serves_two_depths() {
-    // The concrete reason `XrdsHudTemplate::depth` had to move.
-    let t = XrdsPanelTemplate { id: XrdsPanelTemplateId(1), ..template("Shared", vec![]) };
-    let mut near = anchor_node(20, Some(1));
-    let mut far = anchor_node(21, Some(1));
-    if let XrdsSceneNodePayload::PlayerAnchor(ref mut a) = near.payload {
-        a.panel_depth = 0.3;
-    }
-    if let XrdsSceneNodePayload::PlayerAnchor(ref mut a) = far.payload {
-        a.panel_depth = 1.5;
-    }
-    let d = doc_with_nodes(vec![near, far], vec![t]);
-    assert!(d.panel_diagnostics().is_empty(), "two depths, one template: {:?}", titles(&d));
 }
 
 #[test]
 fn diagnostics_flag_a_panel_instance_naming_a_missing_template() {
     let d = doc_with_nodes(vec![panel_node(30, 404)], vec![]);
     assert!(has(&d, "Panel instance names a missing template"), "{:?}", titles(&d));
-}
-
-#[test]
-fn diagnostics_flag_an_anchor_naming_a_missing_panel_template() {
-    let d = doc_with_nodes(vec![anchor_node(31, Some(404))], vec![]);
-    assert!(has(&d, "Anchor names a missing panel template"), "{:?}", titles(&d));
-}
-
-// Two tests here covered the "anchor links both a HUD and a panel template"
-// warning. Both are gone with `hud_template_id`: there is only one kind of
-// template to link now, so the ambiguity they described cannot be expressed and
-// there is nothing left to assert.
-
-#[test]
-fn an_anchor_that_links_no_panel_template_is_quiet() {
-    // The common case — most anchors have no panel at all — must not warn now
-    // that `panel_template_id` is the only link.
-    let d = doc_with_nodes(vec![anchor_node(33, None)], vec![]);
-    assert!(d.panel_diagnostics().is_empty(), "{:?}", titles(&d));
-}
-
-
-#[test]
-fn panel_depth_defaults_to_the_old_hud_depth_so_migration_does_not_move_anything() {
-    let a = XrdsScenePlayerAnchor::default();
-    assert_eq!(a.panel_depth, 0.5, "must match XrdsHudTemplate's default depth");
-    assert_eq!(a.panel_template_id, None);
-}
-
-#[test]
-fn an_anchor_without_the_new_fields_still_deserializes() {
-    // Additive-schema guarantee: documents authored before this exist.
-    let json = r#"{"label":"A","locomotion_mode":"Smooth","fov_deg":60.0,"is_initial":false}"#;
-    let a: XrdsScenePlayerAnchor = serde_json::from_str(json).expect("must load");
-    assert_eq!(a.panel_template_id, None);
-    assert_eq!(a.panel_depth, 0.5);
 }
 
 // ---------------------------------------------------------------------------

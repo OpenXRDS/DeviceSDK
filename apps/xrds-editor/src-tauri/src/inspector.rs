@@ -135,8 +135,6 @@ fn build_payload_dto(
             NodePayloadDto::PlayerAnchor {
                 fov_deg: a.fov_deg,
                 is_initial: a.is_initial,
-                panel_template_id: a.panel_template_id.map(|id| id.0),
-                panel_depth: a.panel_depth,
                 exposure: a.exposure,
             },
 

@@ -210,8 +210,8 @@ pub fn apply_io_command(
 
         // `ExportGlb` was handled here. Scene export to glTF is retired: glTF has
         // no vocabulary for panels, triggers, Tracks, anchors or zones, so it
-        // wrote a file that looked complete and was a mesh dump. See the
-        // `xrds-gltf` crate docs.
+        // wrote a file that looked complete and was a mesh dump. The crate that
+        // did this export (`xrds-gltf`) has since been deleted outright.
         //
         // Note this is unrelated to `ExportApplication`/`ExportApk` below, which
         // only *copy* existing `.glb` assets and rewrite `asset_uri`. Importing

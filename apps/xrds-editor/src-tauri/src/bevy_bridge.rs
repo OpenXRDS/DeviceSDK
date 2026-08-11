@@ -184,7 +184,7 @@ fn is_structural_command(cmd: &EditorCommand) -> bool {
         SetPanelNodeTriggerKind{..} | SetPanelNodeTriggerTrack{..} |
         SetPanelNodeTriggerHand{..} | SetPanelNodeTriggerDisabled{..} |
         SetPanelNodeTriggerEffect{..} | SetTriggerBindingEffect{..} |
-        LinkPanelTemplate{..} | SetPanelInstanceTemplate{..} |
+        SetPanelInstanceTemplate{..} |
         // Tracks / bindings / watchers
         CreateTrack{..} | DeleteTrack{..} | RenameTrack{..} |
         SetTrackLooping{..} | SetTrackDuration{..} |

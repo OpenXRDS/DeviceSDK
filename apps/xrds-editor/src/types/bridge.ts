@@ -150,10 +150,7 @@ export type NodePayload =
   | { type: "GltfAsset";    clips: { index: number; name: string }[] }
   | { type: "HudText";   text: string; font_size: number; color: [number,number,number,number]; anchor: string; offset: [number,number] }
   | { type: "Player" }
-  // `panel_template_id` + `panel_depth` replace `hud_template_id`. Depth is here
-  // rather than on the template so two anchors can share one at different
-  // distances — the limitation that retired `XrdsHudTemplate::depth`.
-  | { type: "PlayerAnchor"; fov_deg: number; is_initial: boolean; panel_template_id: number | null; panel_depth: number; exposure: number | null }
+  | { type: "PlayerAnchor"; fov_deg: number; is_initial: boolean; exposure: number | null }
   | { type: "PlayerSpawnZone"; size: [number, number, number]; player_node_id: number | null }
   // `WorldPanel` lived here: a panel with widgets stored inline, and no triggers
   // field to wire them — every button on one was permanently dead.
@@ -566,8 +563,8 @@ export type EditorCommand =
   | { type: "ClearSkybox" }
   | { type: "SetHudText";         payload: { id: number; text: string; font_size: number; color: [number,number,number,number]; anchor: string; offset: [number,number] } }
   // The 12 HudTemplate/HudItem commands are gone with `XrdsHudTemplate`: a HUD is
-  // a panel template head-locked to an anchor, so the panel commands below cover
-  // every one of them, and `LinkHudTemplate` became `LinkPanelTemplate`.
+  // a panel template head-locked to an anchor by parenting a Panel node under
+  // it — see SetPanelInstanceTemplate below.
   | { type: "SetCameraParams";    payload: { id: number; fov: number; near: number; far: number } }
   | { type: "CommitCameraParams"; payload: { id: number; fov: number; near: number; far: number } }
   | { type: "SetPlayerAnchorFov";      payload: { id: number; fov_deg: number } }
@@ -597,9 +594,8 @@ export type EditorCommand =
   | { type: "SetPanelNodeTriggerTrack";    payload: { id: number; element: string; index: number; track: string | null } }
   | { type: "SetPanelNodeTriggerHand";     payload: { id: number; element: string; index: number; hand: string | null } }
   | { type: "SetPanelNodeTriggerDisabled"; payload: { id: number; element: string; index: number; disabled: boolean } }
-  | { type: "LinkPanelTemplate"; payload: { anchor_id: number; template_id: number | null; depth: number } }
-  // Not nullable, unlike LinkPanelTemplate: a Panel node *is* its template
-  // reference, so clearing it would leave a node that can never render.
+  // Not nullable: a Panel node *is* its template reference, so clearing it
+  // would leave a node that can never render.
   | { type: "SetPanelInstanceTemplate"; payload: { id: number; template_id: number } }
   | { type: "SetPhysicsBody";          payload: { id: number; physics_body: string } }
   | { type: "SetGravityScale";         payload: { id: number; value: number } }
