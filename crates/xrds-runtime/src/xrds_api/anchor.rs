@@ -649,3 +649,59 @@ pub fn vis_diag_system(
         }
     }
 }
+
+/// Alias for "carries any anchor-mode mark", i.e. owns its own `GlobalTransform`.
+type AnchoredRoot = Or<(
+    With<XrdsHeadLocked>,
+    With<XrdsBodyLocked>,
+    With<XrdsComfortPinned>,
+    With<XrdsCylindrical>,
+)>;
+
+/// Re-propagate `GlobalTransform` into the descendants of anchor-driven entities.
+///
+/// **Why this is needed at all.** The anchor-mode systems must run *after*
+/// `TransformSystems::Propagate` so the camera's `GlobalTransform` is fresh, and they
+/// write their entity's `GlobalTransform` directly so visibility sees the right
+/// position this frame. Both are correct — but Bevy already propagated to that
+/// entity's children earlier in the frame, using its *previous* transform. The
+/// children are therefore one frame stale, every frame.
+///
+/// That was invisible while the anchor mark sat on a leaf. It stopped being
+/// invisible once a panel node became the marked entity: its backdrop moves with the
+/// node, its labels are children, so the text visibly trails the panel it is written
+/// on whenever the head turns. Reported as the label "stuttering on move".
+///
+/// Waiting a frame is not an option here, and re-running Bevy's whole propagation
+/// would redo the entire scene to fix a handful of entities. Walking just the marked
+/// subtrees is proportional to what actually moved.
+///
+/// Descendants that carry a mark of their own are skipped and not descended into:
+/// they own their `GlobalTransform`, and overwriting it from a parent would
+/// double-apply the camera pose.
+pub(super) fn propagate_anchor_subtrees_system(
+    roots: Query<Entity, AnchoredRoot>,
+    anchored: Query<(), AnchoredRoot>,
+    children_q: Query<&Children>,
+    mut tf_q: Query<(&Transform, &mut GlobalTransform)>,
+) {
+    let mut stack: Vec<(Entity, GlobalTransform)> = Vec::new();
+    for root in &roots {
+        if let Ok((_, gt)) = tf_q.get(root) {
+            stack.push((root, *gt));
+        }
+    }
+
+    while let Some((parent, parent_gt)) = stack.pop() {
+        let Ok(children) = children_q.get(parent) else { continue };
+        for child in children.iter() {
+            if anchored.contains(child) {
+                continue;
+            }
+            let Ok((tf, mut gt)) = tf_q.get_mut(child) else { continue };
+            let child_gt = parent_gt.mul_transform(*tf);
+            *gt = child_gt;
+            stack.push((child, child_gt));
+        }
+    }
+}

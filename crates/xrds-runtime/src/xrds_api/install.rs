@@ -160,6 +160,11 @@ pub(super) fn install_xrds(app: &mut App) {
             crate::xrds_api::anchor::cylindrical_system,
             crate::xrds_api::anchor::apply_anchor_fov_system,
             crate::xrds_api::anchor::apply_anchor_exposure_system,
+            // Last in the chain: the systems above write their own entity's
+            // GlobalTransform, leaving descendants on the value Bevy propagated
+            // earlier this frame from the *previous* pose. A head-locked panel's
+            // labels would trail the backdrop they sit on by one frame.
+            crate::xrds_api::anchor::propagate_anchor_subtrees_system,
         )
             .chain()
             .after(bevy::transform::TransformSystems::Propagate)

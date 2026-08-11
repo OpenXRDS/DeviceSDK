@@ -562,6 +562,8 @@ fn drive_until_terminal_status(
     last_status
 }
 
+#[path = "tests/anchor_subtree.rs"]
+mod anchor_subtree;
 #[path = "tests/builtins.rs"]
 mod builtins;
 #[path = "tests/document_roundtrip.rs"]
