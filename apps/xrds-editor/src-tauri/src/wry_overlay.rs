@@ -189,7 +189,10 @@ fn parent_hwnd_val() -> &'static Mutex<isize> {
 
 /// Last applied region parameters (win_w, win_h, vp_x, vp_y, vp_w, vp_h) in physical pixels.
 /// Stored so the hole can be restored after a modal clears it.
-#[cfg(windows)]
+///
+/// Defined for every platform, not just those with a region implementation:
+/// `handle_editor_resize` uses "is this set?" to mean "React has reported exact
+/// bounds, stop approximating", which is platform-independent logic.
 fn last_region_params() -> &'static Mutex<Option<(u32, u32, u32, u32, u32, u32)>> {
     static S: OnceLock<Mutex<Option<(u32, u32, u32, u32, u32, u32)>>> = OnceLock::new();
     S.get_or_init(|| Mutex::new(None))
@@ -202,11 +205,91 @@ fn container_xwin_val() -> &'static Mutex<u32> {
     S.get_or_init(|| Mutex::new(0))
 }
 
-/// Last applied region parameters on Linux — mirrors the Windows version.
-#[cfg(target_os = "linux")]
-fn last_region_params() -> &'static Mutex<Option<(u32, u32, u32, u32, u32, u32)>> {
-    static S: OnceLock<Mutex<Option<(u32, u32, u32, u32, u32, u32)>>> = OnceLock::new();
-    S.get_or_init(|| Mutex::new(None))
+/// Rectangles of floating UI that must stay painted *inside* the viewport hole,
+/// in logical CSS pixels relative to the window.
+///
+/// **Why rectangles and not just closing the hole.** `SetWindowRgn` (and the X11 /
+/// CoreAnimation equivalents) is a clip, not a z-order — the WebView is either
+/// removed inside the hole or it is not. Closing the hole so a dropdown could be
+/// seen therefore let the WebView paint over the whole viewport, and since the page
+/// has an opaque background the 3D scene went **black** for as long as the dropdown
+/// was open. That traded a clipped dropdown for a dead viewport, which is worse.
+///
+/// There is no third option that composites the two surfaces: no alpha blending
+/// exists between the WebView and Bevy's swap-chain. What there is, is control over
+/// the *shape* of the hole. Subtracting just the dropdown's own rectangle keeps 3D
+/// rendering everywhere else, which is what "UI above the viewport" actually needs.
+///
+/// The visible consequence, accepted: a modal's dim backdrop cannot tint the
+/// viewport, so dimming stops at the hole's edge while the dialog itself paints
+/// solid and correctly. A live 3D scene beats uniform dimming.
+fn ui_occluders() -> &'static Mutex<Vec<(f64, f64, f64, f64)>> {
+    static S: OnceLock<Mutex<Vec<(f64, f64, f64, f64)>>> = OnceLock::new();
+    S.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+/// Scale factor from the last region application, for converting [`ui_occluders`].
+///
+/// Kept separately rather than added to `last_region_params` so the occluder path
+/// does not depend on the platform-specific shape of that tuple.
+fn last_scale_factor() -> &'static Mutex<f64> {
+    static S: OnceLock<Mutex<f64>> = OnceLock::new();
+    S.get_or_init(|| Mutex::new(1.0))
+}
+
+/// [`ui_occluders`] converted to physical pixels, dropping degenerate rectangles.
+///
+/// Read by each platform's `apply_region`, which unions these back into the
+/// WebView's visible area. Empty is the normal case and costs one lock.
+#[allow(dead_code)] // unused on platforms without a region implementation
+fn ui_occluders_phys() -> Vec<(u32, u32, u32, u32)> {
+    let sf = *last_scale_factor().lock().unwrap();
+    ui_occluders()
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(_, _, w, h)| *w > 0.0 && *h > 0.0)
+        .map(|(x, y, w, h)| {
+            (
+                (x * sf).max(0.0) as u32,
+                (y * sf).max(0.0) as u32,
+                (w * sf) as u32,
+                (h * sf) as u32,
+            )
+        })
+        .collect()
+}
+
+/// Re-apply the last known region, picking up any change to [`ui_occluders`].
+///
+/// The hole's geometry is unchanged — only its shape, once the occluders are
+/// subtracted. A no-op before React's first report, which is correct: there is no
+/// hole to reshape yet.
+fn reapply_region_with_occluders() {
+    #[cfg(windows)]
+    {
+        let hwnd_val = *container_hwnd_val().lock().unwrap();
+        if hwnd_val != 0 {
+            if let Some((pw, ph, vx, vy, vw, vh)) = *last_region_params().lock().unwrap() {
+                win32::apply_region(hwnd_val, pw, ph, vx, vy, vw, vh);
+            }
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let xwin_val = *container_xwin_val().lock().unwrap();
+        if xwin_val != 0 {
+            if let Some((pw, ph, vx, vy, vw, vh)) = *last_region_params().lock().unwrap() {
+                x11::apply_region(xwin_val, pw, ph, vx, vy, vw, vh);
+            }
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        if let Some((pw, ph, vx, vy, vw, vh, sf)) = *appkit::last_region().lock().unwrap() {
+            appkit::apply_region(pw, ph, vx, vy, vw, vh, sf);
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -493,6 +576,7 @@ pub fn drain_responses_and_viewport(
         return;
     }
 
+    *last_scale_factor().lock().unwrap() = sf as f64;
     let phys_x = (bx * sf) as u32;
     let phys_y = (by * sf) as u32;
     let phys_w = (bw * sf) as u32;
@@ -527,6 +611,10 @@ pub fn drain_responses_and_viewport(
         *appkit::last_region().lock().unwrap() =
             Some((pw, ph, phys_x, phys_y, phys_w, phys_h, sf));
         appkit::apply_region(pw, ph, phys_x, phys_y, phys_w, phys_h, sf);
+        // Also recorded here even though macOS reads its own `appkit::last_region`:
+        // `handle_editor_resize` uses *this* being set to mean "React has reported,
+        // stop approximating", and that must hold on every platform.
+        *last_region_params().lock().unwrap() = Some((pw, ph, phys_x, phys_y, phys_w, phys_h));
     }
     let _ = (pw, ph);
 }
@@ -574,7 +662,35 @@ pub fn handle_editor_resize(
         }
     });
 
-    // Approximate camera viewport — refined once React sends exact bounds
+    // **The approximation is a bootstrap, not a fallback.**
+    //
+    // `approx_vp_phys` derives the hole from the hardcoded LEFT_W/RIGHT_W/TOP_H/BOT_H
+    // constants, but both side panels are drag-resizable, so the guess is wrong by
+    // however far the author has dragged them. That was tolerable while it only ever
+    // ran before React's first report — "refined once React sends exact bounds", as
+    // this comment used to promise.
+    //
+    // The promise did not hold. React re-reports from a ResizeObserver on
+    // `.editor-center`, and minimise → restore returns that element to the *identical*
+    // size, so the observer never fires. The approximation therefore replaced a known
+    // exact rect and nothing ever corrected it: the hole came back misaligned and
+    // stayed misaligned, which is precisely the bug reported against the earlier
+    // zero-area guards. Those guards were real but addressed a different half — a 0×0
+    // rect being cached, not a plausible-but-wrong one overwriting a correct one.
+    //
+    // So once exact bounds have ever arrived, they are the only authority. A genuine
+    // resize always changes `.editor-center`'s size (the sidebars are fixed-width and
+    // the centre flexes), so React always re-reports and the exact rect follows within
+    // a frame. Skipping the region update here costs nothing in that case and keeps
+    // the correct hole across a minimise.
+    *last_scale_factor().lock().unwrap() = sf as f64;
+
+    // The WebView resize above must always happen — that is not an approximation.
+    // Everything below is, so it only runs until React's first exact report.
+    if last_region_params().lock().unwrap().is_some() {
+        return;
+    }
+
     let (phys_x, phys_y, phys_w, phys_h) = approx_vp_phys(pw, ph, sf);
     for mut cam in &mut camera_q {
         if let Some(v) = &mut cam.viewport {
@@ -644,6 +760,30 @@ fn ipc_handler(req: wry::http::Request<String>, inbound: &Arc<Mutex<VecDeque<Edi
                     delete window.__xrds__.dialogs[{id_json}]; }}"
             );
             pending_responses().lock().unwrap().push(js);
+        }
+
+        // Floating UI reporting where it sits, so the hole can be reshaped around it
+        // instead of being switched off. `rects` is in logical CSS pixels; an empty
+        // list means nothing is floating and restores the plain rectangular hole.
+        Some("set_ui_occluders") => {
+            let rects: Vec<(f64, f64, f64, f64)> = msg["rects"]
+                .as_array()
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(|r| {
+                            Some((
+                                r["x"].as_f64()?,
+                                r["y"].as_f64()?,
+                                r["w"].as_f64()?,
+                                r["h"].as_f64()?,
+                            ))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            *ui_occluders().lock().unwrap() = rects;
+            reapply_region_with_occluders();
         }
 
         Some("set_viewport_hole") => {
@@ -799,7 +939,18 @@ mod x11 {
     pub fn apply_region(xwin: u32, win_w: u32, win_h: u32,
                         vp_x: u32, vp_y: u32, vp_w: u32, vp_h: u32) {
         let Some(c) = conn() else { return };
-        let rects = frame_rects(win_w, win_h, vp_x, vp_y, vp_w, vp_h);
+        let mut rects = frame_rects(win_w, win_h, vp_x, vp_y, vp_w, vp_h);
+        // Floating UI over the viewport stays visible and interactive by being added
+        // to the shape rather than by dropping the mask entirely — see `ui_occluders`.
+        // ShapeBounding and ShapeInput both get them, so the dropdown is clickable.
+        for (ox, oy, ow, oh) in super::ui_occluders_phys() {
+            rects.push(Rectangle {
+                x: ox as i16,
+                y: oy as i16,
+                width: ow as u16,
+                height: oh as u16,
+            });
+        }
         if rects.is_empty() { return; }
         for kind in [shape::SK::BOUNDING, shape::SK::INPUT] {
             let _ = c.shape_rectangles(
@@ -1104,7 +1255,9 @@ mod win32 {
     // windows-sys 0.52: HWND = isize, HRGN = isize (type aliases, not newtypes)
     use windows_sys::Win32::Foundation::HWND;
     use windows_sys::Win32::UI::WindowsAndMessaging::{GetWindow, GW_CHILD, GW_HWNDNEXT};
-    use windows_sys::Win32::Graphics::Gdi::{CombineRgn, CreateRectRgn, DeleteObject, HRGN, RGN_DIFF};
+    use windows_sys::Win32::Graphics::Gdi::{
+        CombineRgn, CreateRectRgn, DeleteObject, HRGN, RGN_DIFF, RGN_OR,
+    };
 
     // SetWindowRgn and SetFocus have cross-module feature dependencies in windows-sys 0.52;
     // both live in user32.dll already linked via Win32_UI_WindowsAndMessaging.
@@ -1158,6 +1311,18 @@ mod win32 {
             let hole  = CreateRectRgn(ix, iy, ix2, iy2);
             let frame = CreateRectRgn(0,  0,  iw,  ih);
             CombineRgn(frame, full, hole, RGN_DIFF);
+
+            // Add back the floating UI that sits over the viewport, so the hole is
+            // the viewport *minus* those rectangles rather than all-or-nothing. See
+            // `ui_occluders` for why this replaced clearing the region outright.
+            for (ox, oy, ow, oh) in super::ui_occluders_phys() {
+                let occ = CreateRectRgn(
+                    ox as i32, oy as i32, (ox + ow) as i32, (oy + oh) as i32,
+                );
+                CombineRgn(frame, frame, occ, RGN_OR);
+                DeleteObject(occ as _);
+            }
+
             // SetWindowRgn takes ownership of `frame`; do NOT delete it.
             SetWindowRgn(hwnd, frame, 1); // 1 = TRUE (redraw)
             DeleteObject(full  as _);

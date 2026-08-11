@@ -84,7 +84,19 @@ export default function App() {
     const ro = new ResizeObserver(notify);
     ro.observe(el);
     notify();
-    return () => ro.disconnect();
+
+    // A ResizeObserver is not enough on its own. Minimise → restore returns this
+    // element to the *identical* size, so the observer never fires, and anything on
+    // the Rust side that reset the hole meanwhile has nothing to correct it with.
+    // Re-reporting on focus and on visibility change costs one IPC message per
+    // window activation and closes that gap.
+    window.addEventListener("focus", notify);
+    document.addEventListener("visibilitychange", notify);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener("focus", notify);
+      document.removeEventListener("visibilitychange", notify);
+    };
     // `workspace` is a real dependency, not noise: switching layouts can
     // unmount/remount .editor-center, which would leave the observer bound
     // to a detached node and freeze the Bevy viewport hole in place.

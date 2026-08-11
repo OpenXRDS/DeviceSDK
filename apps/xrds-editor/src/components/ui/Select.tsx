@@ -1,9 +1,6 @@
 import * as RadixSelect from "@radix-ui/react-select";
-import { useEffect, useRef } from "react";
-import {
-  acquireViewportHoleSuppression,
-  releaseViewportHoleSuppression,
-} from "../../lib/viewportHole";
+import { useEffect, useId, useRef, useState } from "react";
+import { clearOccluder, trackOccluder } from "../../lib/uiOccluders";
 
 /** Shared, Tailwind-styled wrapper around Radix Select — the "try Radix UI"
  * pilot's replacement for a raw `<select>`. Same `onValueChange` → `send(...)`
@@ -32,41 +29,55 @@ interface Props {
 }
 
 export function Select({ value, onValueChange, options, placeholder, disabled, className }: Props) {
-  // Close the Bevy viewport hole while the dropdown is open.
+  // Punch the open dropdown's own rectangle out of the Bevy viewport hole.
   //
   // `SetWindowRgn` *clips* the WebView rather than layering it, so any part of the
-  // list that extends over the 3D viewport is cut away instead of drawn on top —
-  // which is what happens to a long trigger-candidate list. Handled here, once,
-  // rather than at each of the ~20 call sites: a picker that forgets would be
-  // silently truncated only when the list happens to be long enough to reach the
-  // viewport, which is the kind of bug that survives review.
+  // list extending over the 3D viewport is cut away instead of drawn on top — which
+  // is what happens to a long trigger-candidate list. Reporting the rectangle keeps
+  // the rest of the viewport live; the earlier attempt closed the hole entirely and
+  // turned the whole 3D view black while any picker was open. See `lib/uiOccluders`.
   //
-  // Released on unmount too, not only on close: a component unmounted while its
-  // dropdown is open (a reimport swapping the Inspector out, say) would otherwise
-  // leave the hole shut for good.
-  const isOpen = useRef(false);
-  useEffect(() => () => {
-    if (isOpen.current) {
-      isOpen.current = false;
-      releaseViewportHoleSuppression();
-    }
-  }, []);
+  // Handled here, once, rather than at each of the ~20 call sites: a picker that
+  // forgot would be truncated only when its list happened to be long enough to
+  // reach the viewport, which is the kind of bug that survives review.
+  const occluderId = useId();
+  const contentRef = useRef<HTMLDivElement | null>(null);
+  // State, not a ref: the tracking effect below has to re-run when the dropdown
+  // opens, and a ref mutation alone would not re-run it.
+  const [open, setOpen] = useState(false);
 
-  const handleOpenChange = (open: boolean) => {
-    // Guarded against a repeat in the same state, so the refcount cannot drift if
-    // Radix ever fires onOpenChange twice for one transition.
-    if (open === isOpen.current) return;
-    isOpen.current = open;
-    if (open) acquireViewportHoleSuppression();
-    else releaseViewportHoleSuppression();
-  };
+  // Radix positions the content *after* mount and repositions it on scroll and on
+  // collision with the window edge, so one measurement at open time is not enough:
+  // a stale rectangle leaves a lit patch of WebView beside a sliced dropdown. Track
+  // it for as long as the list is open. rAF rather than a ResizeObserver, which
+  // reports resizes but never *movement*.
+  //
+  // The cleanup also covers unmount-while-open — a reimport swapping the Inspector
+  // out mid-dropdown would otherwise leave a permanent bite out of the viewport.
+  useEffect(() => {
+    if (!open) {
+      clearOccluder(occluderId);
+      return;
+    }
+    let raf = 0;
+    const tick = () => {
+      trackOccluder(occluderId, contentRef.current);
+      raf = requestAnimationFrame(tick);
+    };
+    tick();
+    return () => {
+      cancelAnimationFrame(raf);
+      clearOccluder(occluderId);
+    };
+  }, [open, occluderId]);
 
   return (
     <RadixSelect.Root
       value={value}
       onValueChange={onValueChange}
       disabled={disabled}
-      onOpenChange={handleOpenChange}
+      open={open}
+      onOpenChange={setOpen}
     >
       <RadixSelect.Trigger
         className={`inline-flex items-center justify-between gap-1 rounded border border-surface1
@@ -78,6 +89,7 @@ export function Select({ value, onValueChange, options, placeholder, disabled, c
       </RadixSelect.Trigger>
       <RadixSelect.Portal>
         <RadixSelect.Content
+          ref={contentRef}
           position="popper"
           sideOffset={4}
           className="z-[1000] overflow-hidden rounded border border-surface1 bg-mantle
