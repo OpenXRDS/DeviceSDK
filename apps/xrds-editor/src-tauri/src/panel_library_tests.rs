@@ -926,7 +926,7 @@ fn a_panel_under_an_anchor_defaults_to_camera_local_placement() {
         .id
         .0;
 
-    assert_eq!(transform_of(&session, panel), [0.0, 0.0, -0.5]);
+    assert_eq!(transform_of(&session, panel), [0.0, 0.0, -1.5]);
 }
 
 #[test]
@@ -979,5 +979,5 @@ fn head_locked_placement_looks_through_intermediate_parents() {
         .id
         .0;
 
-    assert_eq!(transform_of(&session, panel), [0.0, 0.0, -0.5]);
+    assert_eq!(transform_of(&session, panel), [0.0, 0.0, -1.5]);
 }

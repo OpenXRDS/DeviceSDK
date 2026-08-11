@@ -15,6 +15,24 @@ pub(super) fn raycast_world(
     direction: Vec3,
     max_distance: f32,
 ) -> Vec<XrRayhit> {
+    raycast_world_meshes(world, origin, direction, max_distance)
+        .into_iter()
+        .map(|(_, hit)| hit)
+        .collect()
+}
+
+/// As [`raycast_world`], but also reports the mesh entity each hit came through.
+///
+/// `XrRayhit` deliberately names the *node* — that is what callers act on — but
+/// the grab system needs to know which surface under that node was struck, so it
+/// can honour [`xrds_components::XrGrabHandleOnly`]. Returning the pair keeps one
+/// raycast implementation rather than a near-copy that would drift.
+pub(super) fn raycast_world_meshes(
+    world: &mut World,
+    origin: Vec3,
+    direction: Vec3,
+    max_distance: f32,
+) -> Vec<(Entity, XrRayhit)> {
     let dir = direction.normalize_or_zero();
     if dir == Vec3::ZERO {
         return vec![];
@@ -34,21 +52,42 @@ pub(super) fn raycast_world(
 
     // Resolve each hit entity to its nearest XrdsId ancestor.
     // Both `world.resource()` and `world.get()` are shared borrows — fine to interleave.
-    let mut hits: Vec<XrRayhit> = candidates
+    let mut hits: Vec<(Entity, XrRayhit)> = candidates
         .into_iter()
         .filter_map(|(entity, t)| {
-            find_xrds_ancestor(world, entity).map(|id| XrRayhit {
-                id,
-                distance: t,
-                point: origin + dir * t,
-            })
+            let id = find_xrds_ancestor(world, entity)?;
+            // **Head-locked things are UI, not world geometry.**
+            //
+            // A head-locked panel sits between the viewer and everything else by
+            // construction, and this returns the nearest hit — so it swallowed every
+            // grab and every `ctx.raycast()`, leaving nothing else in the scene
+            // pointable. That only became visible once panels gained an opaque
+            // backdrop; a head-locked *text* label had no `Aabb` worth hitting.
+            //
+            // Costs nothing to skip them: a head-locked panel gets no grab handle
+            // (`head_locked_system` would overwrite the move), so it was never a
+            // legitimate grab target. Its buttons are unaffected — those resolve
+            // through `world_ui_pointer`'s own `XrdsWorldSurface` query, which does
+            // not come through here.
+            //
+            // Checked on the resolved *node*, not on the hit mesh: the mark lives on
+            // the panel node while the mesh hit is usually one of its elements.
+            let node = world.resource::<XrdsIdIndex>().entity_of(id);
+            if let Some(node) = node {
+                if world.get::<super::anchor::XrdsHeadLocked>(node).is_some() {
+                    return None;
+                }
+            }
+            Some((entity, XrRayhit { id, distance: t, point: origin + dir * t }))
         })
         .collect();
 
     // Sort nearest-first, then keep only the closest hit per unique XRDS entity.
-    hits.sort_by(|a, b| a.distance.partial_cmp(&b.distance).unwrap_or(std::cmp::Ordering::Equal));
+    hits.sort_by(|a, b| {
+        a.1.distance.partial_cmp(&b.1.distance).unwrap_or(std::cmp::Ordering::Equal)
+    });
     let mut seen = HashSet::new();
-    hits.retain(|h| seen.insert(h.id));
+    hits.retain(|h| seen.insert(h.1.id));
     hits
 }
 

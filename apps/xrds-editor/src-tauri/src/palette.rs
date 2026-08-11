@@ -262,10 +262,19 @@ pub fn default_transform_for_payload(
         XrdsSceneNodePayload::PlayerAnchor(_) => [0.0, 1.6, 0.0],
         // A Panel node under a PlayerAnchor is head-locked, and its transform is
         // read as **camera-local** — so the world-space default below would put it
-        // 1.5 m above the viewer's eye. Half a metre straight ahead is the
-        // head-locked default, matching the depth the retired `panel_depth` used.
+        // 1.5 m above the viewer's eye.
+        //
+        // 1.5 m ahead, *not* the 0.5 m that `default_panel_depth` used. That value
+        // was inherited from the retired `XrdsHudTemplate`, whose only element kind
+        // was text and which drew no backdrop: a floating label half a metre out is
+        // a HUD, and nothing behind it was hidden. A panel has an opaque backdrop
+        // now (`apply_panel_backdrop_in_world`), and the same 0.5 m turns the
+        // default 0.6 × 0.4 m template into a blindfold — at the default 60° vertical
+        // FOV the visible height at 0.5 m is only 0.577 m, so a 0.4 m panel covers
+        // ~69% of it, dead centre. At 1.5 m it covers ~23%, which is what a HUD
+        // should look like, and matches where Quest puts its own windows.
         XrdsSceneNodePayload::Panel(_) if is_under_player_anchor(doc, parent_id) => {
-            [0.0, 0.0, -0.5]
+            [0.0, 0.0, -1.5]
         }
         // Otherwise panels default to eye height, slightly in front.
         XrdsSceneNodePayload::Panel(_) => [0.0, 1.5, -1.0],

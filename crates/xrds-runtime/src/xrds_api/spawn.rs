@@ -359,24 +359,195 @@ pub(super) fn apply_panel_backdrop_in_world(
         return;
     }
 
+    let c = template.background.color;
+    let alpha = c[3] * template.background.opacity;
+
+    // **The pointer surface is not the backdrop.** `XrdsWorldSurface` carries the
+    // panel's size and `nearest_panel_hit` intersects the ray against that plane
+    // directly — it never consults a mesh. So the surface goes on regardless of
+    // whether anything is drawn: it is what makes the elements hittable.
+    //
+    // **But only a panel that can be interacted with captures the pointer.**
+    // `nearest_panel_hit` claims the ray for the whole surface rectangle, so an
+    // info-only panel — a label or two, nothing pressable — used to swallow the
+    // pointer across its entire area while offering nothing to press. A HUD is
+    // exactly that case, and the bigger the canvas the more of the view it stole.
+    // Capturing a ray you cannot possibly answer is never right, which is what
+    // `XrdsWorldSurface::enabled` is for.
+    //
+    // Note this is per *panel*, not per element: a panel with one button in the
+    // corner still captures its whole rectangle. Narrowing capture to the elements
+    // themselves is a larger change to the pointer, not a flag.
+    let interactive = template.elements.iter().any(|e| e.is_interactive());
+    if let Ok(mut e) = world.get_entity_mut(entity) {
+        e.insert(XrdsWorldSurface { size: Vec2::new(w, h), enabled: interactive });
+    } else {
+        return;
+    }
+
+    // A fully transparent background gets **no mesh at all**, rather than an
+    // invisible one.
+    //
+    // The mesh is only ever cosmetic, but it is also what gives the node an `Aabb`
+    // (backfilled by `ensure_aabbs_for_unculled_meshes_system`), and an `Aabb` is
+    // what `raycast_world` hits — so an invisible backdrop would still silently
+    // swallow grabs and `ctx.raycast()` aimed anywhere across the panel. Skipping it
+    // means "transparent" means transparent to rays as well as to light, which is
+    // the only reading that isn't a trap.
+    //
+    // The panel's buttons keep working either way: they resolve through the surface
+    // above, not through this.
+    if alpha <= 0.001 {
+        return;
+    }
+
     let mesh = {
         let mut meshes = world.resource_mut::<Assets<Mesh>>();
         meshes.add(Mesh::from(bevy::math::primitives::Rectangle::new(w, h)))
     };
+    if let Ok(mut e) = world.get_entity_mut(entity) {
+        e.insert((Mesh3d(mesh), NoFrustumCulling));
+    }
+    apply_authored_material_to_entity(
+        world,
+        entity,
+        XrdsMaterialParams {
+            base_color: XrdsColor { rgba: [c[0], c[1], c[2], alpha] },
+            unlit: true,
+            ..XrdsMaterialParams::default()
+        },
+    );
+}
 
-    let c = template.background.color;
-    let material = XrdsMaterialParams {
-        base_color: XrdsColor { rgba: [c[0], c[1], c[2], c[3] * template.background.opacity] },
-        unlit: true,
-        ..XrdsMaterialParams::default()
-    };
+/// Handle bar height, in metres. Deliberately chunky enough to hit with a ray at
+/// arm's length without eating into the panel's own clickable face.
+const PANEL_GRAB_HANDLE_H: f32 = 0.022;
+/// Gap between the panel's bottom edge and the handle.
+const PANEL_GRAB_HANDLE_GAP: f32 = 0.012;
+
+/// Give every grabbable panel a grab handle, and take it away again when it stops
+/// being grabbable.
+///
+/// **Why a system rather than a step in the import.** Grabbable reaches a panel by
+/// two routes: the document (`tag_grabbable_entities`) and the editor's checkbox,
+/// which calls `make_grabbable` and inserts the marker directly without ever
+/// rewriting the document. Syncing at import time would leave the second route
+/// arming grab on a panel with no handle — and with no `XrGrabHandleOnly` either,
+/// so the whole face would drag, which is the exact bug the handle exists to fix.
+/// Reacting to the component state instead covers both routes and self-heals.
+///
+/// Keyed on [`XrdsWorldSurface`] because that is what a panel backdrop carries,
+/// and it already knows the size the handle must match.
+///
+/// Head-locked panels are skipped: `head_locked_system` rewrites their Transform
+/// every frame, so a grab is undone before the author sees it move, and a handle
+/// that does nothing is worse than no handle.
+pub(super) fn sync_panel_grab_handles_system(world: &mut World) {
+    let mut q = world.query_filtered::<
+        (Entity, &XrdsWorldSurface),
+        (With<xrds_components::XrGrabbable>, Without<XrdsHeadLocked>),
+    >();
+    let want: Vec<(Entity, [f32; 2])> = q
+        .iter(world)
+        .map(|(e, s)| (e, [s.size.x, s.size.y]))
+        .collect();
+
+    let mut q_stale = world.query_filtered::<Entity, (
+        With<xrds_components::XrGrabHandleOnly>,
+        Or<(Without<xrds_components::XrGrabbable>, With<XrdsHeadLocked>)>,
+    )>();
+    let stale: Vec<Entity> = q_stale.iter(world).collect();
+
+    for entity in stale {
+        sync_panel_grab_handle_in_world(world, entity, None, false);
+    }
+    for (entity, size) in want {
+        // Already handled — leave it alone rather than despawning and respawning a
+        // handle every frame, which would churn meshes and drop any in-flight grab.
+        if world.get::<xrds_components::XrGrabHandleOnly>(entity).is_some() {
+            continue;
+        }
+        sync_panel_grab_handle_in_world(world, entity, Some(size), true);
+    }
+}
+
+/// Bring a panel's grab handle into line with `want`, spawning or removing it.
+///
+/// The handle is what makes a panel movable without making its face draggable —
+/// see [`xrds_components::XrGrabHandleOnly`]. It sits just below the backdrop,
+/// spanning half the panel's width, and moves the *panel node* when grabbed
+/// because the grab system resolves any hit to its owning node.
+///
+/// Idempotent: removes any existing handle first, so a resized panel gets a
+/// correctly sized bar rather than a stale one beside a new backdrop.
+pub(super) fn sync_panel_grab_handle_in_world(
+    world: &mut World,
+    entity: Entity,
+    size: Option<[f32; 2]>,
+    want: bool,
+) {
+    use bevy::camera::visibility::NoFrustumCulling;
+
+    // Remove any existing handle first, so a resized panel gets a correctly sized
+    // one rather than a stale bar next to a new backdrop.
+    let existing: Vec<Entity> = world
+        .get::<Children>(entity)
+        .map(|children| children.iter().collect::<Vec<_>>())
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|&c| world.get::<xrds_components::XrGrabHandle>(c).is_some())
+        .collect();
+    for handle in existing {
+        world.entity_mut(handle).despawn();
+    }
 
     if let Ok(mut e) = world.get_entity_mut(entity) {
-        e.insert((Mesh3d(mesh), XrdsWorldSurface::new(w, h), NoFrustumCulling));
-    } else {
+        e.remove::<xrds_components::XrGrabHandleOnly>();
+    }
+
+    let Some([w, h]) = size else { return };
+    if !want || !(w > 0.0 && h > 0.0) {
         return;
     }
-    apply_authored_material_to_entity(world, entity, material);
+
+    let bar_w = (w * 0.5).max(0.06);
+    let mesh = {
+        let mut meshes = world.resource_mut::<Assets<Mesh>>();
+        meshes.add(Mesh::from(bevy::math::primitives::Rectangle::new(
+            bar_w,
+            PANEL_GRAB_HANDLE_H,
+        )))
+    };
+
+    let handle = world
+        .spawn((
+            Name::new("PanelGrabHandle"),
+            Mesh3d(mesh),
+            Transform::from_xyz(
+                0.0,
+                -(h * 0.5) - PANEL_GRAB_HANDLE_GAP - PANEL_GRAB_HANDLE_H * 0.5,
+                0.0,
+            ),
+            NoFrustumCulling,
+            xrds_components::XrGrabHandle,
+        ))
+        .id();
+    world.entity_mut(handle).insert(ChildOf(entity));
+
+    apply_authored_material_to_entity(
+        world,
+        handle,
+        XrdsMaterialParams {
+            base_color: XrdsColor { rgba: [0.75, 0.75, 0.80, 0.9] },
+            unlit: true,
+            ..XrdsMaterialParams::default()
+        },
+    );
+
+    // Marks the *node*: grab may now only begin from the handle above.
+    if let Ok(mut e) = world.get_entity_mut(entity) {
+        e.insert(xrds_components::XrGrabHandleOnly);
+    }
 }
 
 pub(super) fn spawn_plane_descriptor(commands: &mut Commands, plane: &XrdsPlane3D) -> Entity {
@@ -907,7 +1078,13 @@ pub(super) fn spawn_world_label_entity(
         Text3d::new(text),
         Text3dStyling {
             size: 128.0,
-            world_scale: Some(bevy::math::Vec2::splat(font_size * 0.01)),
+            // **Panel font sizes are already in metres**, unlike the pixel-based
+            // `XrdsText3D` node whose formula this used to copy (`font_size 24 →
+            // 0.24 m/em`). `XrdsSceneWorldLabel::font_size` is documented as "em size
+            // in metres, 0.05 ≈ 5 cm", so multiplying by 0.01 again rendered every
+            // panel label at 1/100 of its authored size — 0.5 mm tall at the default,
+            // which reads as "the text is not visible" rather than as "too small".
+            world_scale: Some(bevy::math::Vec2::splat(font_size)),
             color: Srgba::new(r, g, b, a),
             ..Default::default()
         },
@@ -1013,7 +1190,8 @@ pub(super) fn spawn_world_button_entity(
         Text3d::new(label_text),
         Text3dStyling {
             size: 128.0,
-            world_scale: Some(bevy::math::Vec2::splat(font_size * 0.01)),
+            // Metres, not pixels — same correction as `spawn_world_label_entity`.
+            world_scale: Some(bevy::math::Vec2::splat(font_size)),
             color: Srgba::new(lr, lg, lb, la),
             ..Default::default()
         },

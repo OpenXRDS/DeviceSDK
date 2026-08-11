@@ -521,6 +521,10 @@ pub(super) fn tag_grabbable_entities(world: &mut World, document: &XrdsSceneDocu
             e.remove::<xrds_components::XrGrabbable>();
         }
     }
+    // The panel grab handle is deliberately *not* synced here — see
+    // `sync_panel_grab_handles_system`. Doing it from the document would miss the
+    // editor's live toggle, which reaches `make_grabbable` directly and never
+    // rewrites the document at all.
 }
 
 /// Insert [`crate::xrds_api::trigger_action::XrdsTriggerBindings`] on every entity whose

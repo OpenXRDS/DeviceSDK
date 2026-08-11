@@ -192,23 +192,25 @@ function ColorRow({ label, color, onLive, onCommit }: {
 // ---------------------------------------------------------------------------
 // Main Inspector
 // ---------------------------------------------------------------------------
-/** Payload kinds with no geometry of their own, so grab can never hit them.
+/** Payload kinds that never offer a grabbable checkbox.
  *
- *  Grab raycasts against `Aabb`, which Bevy computes from `Mesh3d` — a node whose
- *  visuals live entirely on child entities has neither, and is unreachable
- *  however `XrGrabbable` is set. Listed as an exclusion rather than an
+ *  Mostly this is "no geometry, so grab can never hit it": grab raycasts against
+ *  `Aabb`, which Bevy computes from `Mesh3d`, and a node whose visuals live
+ *  entirely on child entities has neither. Listed as an exclusion rather than an
  *  allow-list: every ordinary payload spawns a mesh, so an allow-list would
  *  silently drop grabbing from any future kind that forgot to register — the
  *  failure would be a missing checkbox, which nobody reports.
  *
- *  `Empty` is excluded for the same reason and is the honest case: a grouping
- *  node has nothing to grab.
+ *  `Empty` is the honest case: a grouping node has nothing to grab.
  *
- *  **Not `Panel`.** It carries a real backdrop mesh
- *  (`apply_panel_backdrop_in_world`, added so its elements have a pointer
- *  surface at all), and `NoFrustumCulling` meshes still get an `Aabb` backfilled
- *  by `ensure_aabbs_for_unculled_meshes_system` — so it is genuinely grabbable,
- *  same as the retired `WorldPanel` was. */
+ *  **`Panel` is deliberately *not* on this list.** It has real geometry — the
+ *  backdrop from `apply_panel_backdrop_in_world`, with its `Aabb` backfilled by
+ *  `ensure_aabbs_for_unculled_meshes_system` — so grab reaches it fine. The
+ *  earlier worry was that arming grab on a panel steals the clicks its elements
+ *  need, which was a fair objection to grabbing the *face*, not to grabbing the
+ *  panel. It is resolved in the runtime instead: the checkbox arms a handle bar
+ *  below the panel and `XrGrabHandleOnly` refuses a grab that starts anywhere
+ *  else, so pressing a button can never drag its panel. */
 const KINDS_WITHOUT_GEOMETRY = new Set(["Empty", "Player", "PlayerAnchor"]);
 
 function canBeGrabbed(payloadKind: string): boolean {
@@ -274,14 +276,17 @@ export function Inspector({ snapshot, send, onOpenTrack,
             style={{ accentColor: "var(--blue)", cursor: "pointer", width: 16, height: 16 }}
             onChange={e => send({ type: "SetVisible", payload: { id, visible: e.target.checked } })}
           />
-          {/* Hidden where grabbing provably cannot work. Grab raycasts for a mesh
-            * hit, and a `Panel` node is a bare node — its visuals live on child
-            * element entities — so `XrGrabbable` on it is silently inert. Offering
-            * a checkbox that does nothing is worse than offering nothing: the
-            * author ticks it and concludes grab is broken.
+          {/* Hidden for the kinds in KINDS_WITHOUT_GEOMETRY — see there for why
+            * each one is on the list. Offering a checkbox that does nothing is
+            * worse than offering nothing: the author ticks it and concludes grab
+            * is broken.
             *
-            * `WorldPanel` keeps it: that payload does spawn a quad mesh, so it is
-            * genuinely grabbable. */}
+            * On a `Panel` this means "show the grab handle", not "make the whole
+            * surface draggable": the face has to stay clickable for its elements,
+            * so a bar appears under the panel and grab only starts there — the
+            * Meta Quest model. Head-locked panels get no handle at all, since
+            * `head_locked_system` would undo the move. See
+            * `sync_panel_grab_handles_system` in the runtime. */}
           {canBeGrabbed(node.payload.type) && (
             <input type="checkbox" key={`grab-${node.id}`} defaultChecked={node.grabbable}
               title="Grabbable (XR trigger)"

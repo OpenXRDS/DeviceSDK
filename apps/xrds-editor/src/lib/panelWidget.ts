@@ -34,13 +34,13 @@ export const POSITION_FIELD: FieldSpec = {
 const FIELDS: Record<WorldWidget["type"], FieldSpec[]> = {
   Label: [
     { key: "text", label: "TEXT", kind: "text", placeholder: "Label text" },
-    { key: "font_size", label: "FONT SIZE", kind: "number", step: 1, min: 1 },
+    { key: "font_size", label: "EM SIZE (M)", kind: "number", step: 0.01, min: 0.005 },
     { key: "color", label: "COLOUR", kind: "color" },
     { key: "layout_size", label: "LAYOUT SIZE (M)", kind: "vec2", unit: "m" },
   ],
   Button: [
     { key: "label", label: "LABEL", kind: "text", placeholder: "Button text" },
-    { key: "font_size", label: "FONT SIZE", kind: "number", step: 1, min: 1 },
+    { key: "font_size", label: "EM SIZE (M)", kind: "number", step: 0.01, min: 0.005 },
     { key: "label_color", label: "LABEL COLOUR", kind: "color" },
     { key: "size", label: "SIZE (M)", kind: "vec2", unit: "m" },
     { key: "normal_color", label: "NORMAL", kind: "color" },

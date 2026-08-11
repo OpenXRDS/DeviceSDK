@@ -1366,7 +1366,12 @@ pub struct XrdsSceneWorldLabel {
 impl Default for XrdsSceneWorldLabel {
     fn default() -> Self {
         Self {
-            text: String::new(),
+            // Not empty. An element you add and then cannot see reads as broken
+            // rather than as unfilled, and there is nothing on the canvas to click
+            // in order to discover the text field. Same reasoning as the palette
+            // bootstrapping a template for an author who has not opened the Panels
+            // workspace yet.
+            text: "Label".to_string(),
             font_size: 0.05,
             color: [1.0, 1.0, 1.0, 1.0],
             local_position: [0.0, 0.0],
@@ -1390,7 +1395,9 @@ pub struct XrdsSceneWorldButton {
 impl Default for XrdsSceneWorldButton {
     fn default() -> Self {
         Self {
-            label: String::new(),
+            // See `XrdsSceneWorldLabel::default` — a blank button is indistinguishable
+            // from a broken one.
+            label: "Button".to_string(),
             font_size: 0.04,
             label_color: [1.0, 1.0, 1.0, 1.0],
             size: [0.18, 0.06],

@@ -2,10 +2,41 @@ use std::collections::HashSet;
 use avian3d::prelude::{LinearVelocity, RigidBody};
 use bevy::prelude::*;
 use bevy_mod_outline::OutlineVolume;
-use xrds_components::{XrdsId, XrDropEvent, XrGrabEvent, XrGrabHand, XrGrabbable, XrGrabbed};
+use xrds_components::{
+    XrDropEvent, XrGrabEvent, XrGrabHand, XrGrabHandle, XrGrabHandleOnly, XrGrabbable,
+    XrGrabbed,
+};
 use xrds_openxr::{XrHand, XrHapticRequest, XrInput};
 use super::anchor::XrdsPlayerCamera;
-use super::raycast::raycast_world;
+use super::raycast::raycast_world_meshes;
+
+/// Whether a ray hit on `mesh` is allowed to begin a grab of `node`.
+///
+/// Free-for-all by default: any mesh under a grabbable node arms it, which is
+/// what props and multi-submesh GLTFs need. When `node` carries
+/// [`XrGrabHandleOnly`] the hit must come through a designated handle instead —
+/// see that component for why panels require it.
+///
+/// The walk stops at `node` rather than running to the root, so a handle on some
+/// unrelated ancestor cannot silently arm a descendant.
+pub(super) fn grab_may_start_from(world: &World, mesh: Entity, node: Entity) -> bool {
+    if world.get::<XrGrabHandleOnly>(node).is_none() {
+        return true;
+    }
+    let mut cursor = mesh;
+    loop {
+        if world.get::<XrGrabHandle>(cursor).is_some() {
+            return true;
+        }
+        if cursor == node {
+            return false;
+        }
+        match world.get::<ChildOf>(cursor) {
+            Some(parent) => cursor = parent.0,
+            None => return false,
+        }
+    }
+}
 use super::state::XrdsIdIndex;
 
 const GRAB_RANGE: f32 = 3.0;
@@ -113,10 +144,14 @@ pub(super) fn grab_system(world: &mut World) {
         if already_grabbed { continue; }
 
         let Some(aim_tf) = aim else { continue; };
-        let hits = raycast_world(world, aim_tf.translation, aim_tf.rotation * Vec3::NEG_Z, GRAB_RANGE);
-        *new_hover = hits.iter().find_map(|h| {
+        let hits = raycast_world_meshes(
+            world, aim_tf.translation, aim_tf.rotation * Vec3::NEG_Z, GRAB_RANGE,
+        );
+        *new_hover = hits.iter().find_map(|(mesh, h)| {
             let entity = world.resource::<XrdsIdIndex>().entity_of(h.id)?;
-            if world.get::<XrGrabbable>(entity).is_some() { Some(entity) } else { None }
+            if world.get::<XrGrabbable>(entity).is_none() { return None; }
+            if !grab_may_start_from(world, *mesh, entity) { return None; }
+            Some(entity)
         });
     }
 

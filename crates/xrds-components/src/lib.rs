@@ -15,7 +15,8 @@ pub use camera_params::{
 };
 pub use color::{XrdsColor, XrdsLinearRgba};
 pub use interaction::{
-    XrDropEvent, XrGrabEvent, XrGrabHand, XrGrabbable, XrGrabbed, XrRayhit,
+    XrDropEvent, XrGrabEvent, XrGrabHand, XrGrabHandle, XrGrabHandleOnly, XrGrabbable,
+    XrGrabbed, XrRayhit,
     XrdsGrabType, XrdsInteractionZone, XrdsInteractionZoneShape, XrdsPhysicsBody,
     XrdsPlayerSpawnZone, XrZoneEnterEvent, XrZoneExitEvent,
 };

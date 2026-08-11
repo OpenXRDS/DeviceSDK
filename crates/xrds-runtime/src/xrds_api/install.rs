@@ -207,6 +207,13 @@ pub(super) fn install_xrds(app: &mut App) {
     // XrdsAPI::raycast, zones) silently stops seeing it. Backfill the Aabb from
     // the mesh ourselves; NoFrustumCulling still disables culling either way.
     app.add_systems(Update, ensure_aabbs_for_unculled_meshes_system);
+    // Ordered before the Aabb backfill so a freshly spawned handle is raycastable on
+    // the same frame it appears; without an Aabb it is invisible to grab.
+    app.add_systems(
+        Update,
+        crate::xrds_api::spawn::sync_panel_grab_handles_system
+            .before(ensure_aabbs_for_unculled_meshes_system),
+    );
     app.add_systems(Update, crate::xrds_api::grab::grab_system);
     app.add_systems(Update, crate::xrds_api::zone::zone_collision_system);
     // Timeline scheduler (docs/done/xrds-trigger-action-v1.md Phase 9) —

@@ -380,14 +380,17 @@ function PanelCanvas({ template, selected, onSelect, send }: {
     <div className="panel-ws-canvas" ref={wrapRef}>
       <div className="seq-ws-col-head">
         <span className="seq-caption">CANVAS</span>
-        <span className="text-[10px] text-overlay0 font-mono ml-2">
-          {w}×{h}m
-        </span>
         <span className="flex-1" />
         <span className="text-[10px] text-overlay0">
           positions are authored in metres from the centre
         </span>
       </div>
+      {/* Size and backdrop were displayed but not editable: `SetPanelTemplateParams`
+        * existed on both sides of the bridge with nothing calling it, so a panel was
+        * stuck at 0.6×0.4m with an opaque backdrop unless you hand-edited the scene
+        * file. That matters most for a head-locked panel, where an opaque slab in
+        * front of the eye hides the scene and a too-large one covers the view. */}
+      <TemplateParamsRow template={template} send={send} />
       <div className="panel-ws-canvas-area">
         <div
           className="panel-ws-canvas-plane"
@@ -429,6 +432,96 @@ function PanelCanvas({ template, selected, onSelect, send }: {
           })}
         </div>
       </div>
+    </div>
+  );
+}
+
+/** Size and backdrop for the open template.
+ *
+ * Every field goes out through one `SetPanelTemplateParams`, since the command
+ * carries all of them together — sending a partial set would reset whatever it
+ * omitted.
+ *
+ * Alpha is the field that matters most and the reason this exists: a head-locked
+ * panel with an opaque backdrop is a slab in front of the viewer's eye, and at
+ * alpha 0 the runtime drops the backdrop mesh entirely, so the panel stops
+ * blocking both light and grab rays while its elements stay pressable.
+ */
+function TemplateParamsRow({ template, send }: {
+  template: PanelTemplateDto;
+  send: (c: EditorCommand) => void;
+}) {
+  const [w, h] = template.size;
+  const [r, g, b, a] = template.color;
+
+  const commit = (next: Partial<{
+    size: [number, number];
+    color: [number, number, number, number];
+    opacity: number;
+  }>) => send({
+    type: "SetPanelTemplateParams",
+    payload: {
+      id: template.id,
+      size: next.size ?? template.size,
+      color: next.color ?? template.color,
+      corner_radius: template.corner_radius,
+      opacity: next.opacity ?? template.opacity,
+    },
+  });
+
+  // `<input type="color">` speaks "#rrggbb" and the document speaks linear 0..1,
+  // so alpha has to ride separately — which suits it, being the field with its own
+  // meaning here.
+  const hex = "#" + [r, g, b]
+    .map(c => Math.round(Math.max(0, Math.min(1, c)) * 255).toString(16).padStart(2, "0"))
+    .join("");
+  const fromHex = (v: string): [number, number, number, number] => [
+    parseInt(v.slice(1, 3), 16) / 255,
+    parseInt(v.slice(3, 5), 16) / 255,
+    parseInt(v.slice(5, 7), 16) / 255,
+    a,
+  ];
+
+  const num = (value: number, onCommit: (n: number) => void, step = 0.05) => (
+    <input
+      type="number" step={step} min={0} defaultValue={value} key={value}
+      className="w-14 rounded border border-surface1 bg-mantle px-1 py-0.5 text-[10px] text-text"
+      onKeyDown={e => e.stopPropagation()}
+      onBlur={e => {
+        const n = Number(e.target.value);
+        if (Number.isFinite(n)) onCommit(n);
+      }}
+      onKeyUp={e => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+    />
+  );
+
+  return (
+    <div className="flex items-center gap-2 px-2 py-1 border-b border-surface0 text-[10px] text-subtext0">
+      <span className="text-overlay0">size</span>
+      {num(w, n => commit({ size: [n, h] }))}
+      <span className="text-overlay0">×</span>
+      {num(h, n => commit({ size: [w, n] }))}
+      <span className="text-overlay0">m</span>
+
+      <span className="ml-3 text-overlay0">backdrop</span>
+      <input
+        type="color" value={hex}
+        className="h-5 w-7 cursor-pointer rounded border border-surface1 bg-mantle"
+        onChange={e => commit({ color: fromHex(e.target.value) })}
+      />
+
+      <span className="ml-1 text-overlay0">alpha</span>
+      <input
+        type="range" min={0} max={1} step={0.05} value={a}
+        className="w-24 cursor-pointer"
+        onChange={e => commit({ color: [r, g, b, Number(e.target.value)] })}
+      />
+      <span className="w-7 font-mono text-overlay0">{a.toFixed(2)}</span>
+      {a <= 0.001 && (
+        <span className="text-overlay0 italic">
+          no backdrop drawn — passes light and grab rays, buttons still work
+        </span>
+      )}
     </div>
   );
 }

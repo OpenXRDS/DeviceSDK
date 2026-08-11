@@ -34,7 +34,7 @@ mod tests;
 #[path = "xrds_api/anchor.rs"]
 mod anchor;
 #[path = "xrds_api/grab.rs"]
-mod grab;
+pub(crate) mod grab;
 #[path = "xrds_api/raycast.rs"]
 mod raycast;
 #[path = "xrds_api/billboard.rs"]

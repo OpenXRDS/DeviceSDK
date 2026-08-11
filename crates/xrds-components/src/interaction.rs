@@ -21,6 +21,32 @@ pub struct XrRayhit {
 #[derive(Component, Debug, Clone)]
 pub struct XrGrabbable;
 
+/// Restrict where a grab on this entity may *start*.
+///
+/// By default a grab begins from a hit on any mesh under the grabbable node —
+/// the ray resolves to the nearest `XrdsId` ancestor, so a GLTF submesh or a
+/// child widget all count. That is right for props and wrong for UI: a panel's
+/// backdrop and its buttons are the surfaces that must stay clickable, so
+/// arming grab on them means every button press risks dragging the panel
+/// instead.
+///
+/// With this marker present, the grab system accepts the hit only if the mesh
+/// actually struck is, or descends from, an entity carrying [`XrGrabHandle`].
+/// This is the Meta Quest model: the window face takes pointer input, a
+/// dedicated bar underneath moves it.
+///
+/// Absent, behaviour is unchanged — this narrows grab, never widens it.
+#[derive(Component, Debug, Clone)]
+pub struct XrGrabHandleOnly;
+
+/// Marks a mesh as a grab affordance for its [`XrGrabHandleOnly`] ancestor.
+///
+/// The grab still moves the resolved *node*, not the handle: the handle is only
+/// how the author says "here". Carrying it without an `XrGrabHandleOnly`
+/// ancestor is harmless and inert.
+#[derive(Component, Debug, Clone)]
+pub struct XrGrabHandle;
+
 /// Inserted by the SDK while an entity is being held; removed on drop.
 #[derive(Component, Debug, Clone)]
 pub struct XrGrabbed {

@@ -572,6 +572,10 @@ mod gltf_document;
 mod gltf_runtime;
 #[path = "tests/gltf_samples.rs"]
 mod gltf_samples;
+#[path = "tests/panel_grab_handle.rs"]
+mod panel_grab_handle;
+#[path = "tests/panel_text.rs"]
+mod panel_text;
 #[path = "tests/scene_environment.rs"]
 mod scene_environment;
 #[path = "tests/trigger_action.rs"]
