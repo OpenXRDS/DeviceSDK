@@ -38,6 +38,20 @@ pub(super) fn register_default_interpreters(registry: &mut SurfaceInterpreterReg
     registry.register_entity::<XrdsCylinder, _>(|cylinder, commands, _asset_server| {
         spawn_cylinder_descriptor(commands, cylinder)
     });
+    registry.register_recipe_only::<XrdsCapsule, _>(|capsule| XrdsGeometrySource::PbrCapsule {
+        radius: capsule.radius,
+        half_length: capsule.length * 0.5,
+        material: XrdsMaterialParams::default(),
+    });
+    registry.register_entity::<XrdsCapsule, _>(|capsule, commands, _asset_server| {
+        spawn_capsule_descriptor(commands, capsule)
+    });
+    // register_entity only, no register_recipe_only: an effect has no mesh, so
+    // there is nothing for the geometry-recipe/rebuild path to produce. Same
+    // shape as XrdsWorldPanel/XrdsAudioClip/XrdsText.
+    registry.register_entity::<XrdsEffect, _>(|effect, commands, _asset_server| {
+        spawn_effect_descriptor(commands, effect)
+    });
     registry.register_recipe_only::<XrdsSphere, _>(|sphere| XrdsGeometrySource::PbrSphere {
         radius: sphere.radius,
         material: XrdsMaterialParams::default(),
@@ -94,6 +108,8 @@ pub(super) fn register_default_descriptor_cloners(registry: &mut SurfaceDescript
     registry.register_clone::<XrdsGltfAsset>();
     registry.register_clone::<XrdsCube>();
     registry.register_clone::<XrdsCylinder>();
+    registry.register_clone::<XrdsCapsule>();
+    registry.register_clone::<XrdsEffect>();
     registry.register_clone::<XrdsSphere>();
     registry.register_clone::<XrdsPlane3D>();
     registry.register_clone::<XrdsTetrahedron>();

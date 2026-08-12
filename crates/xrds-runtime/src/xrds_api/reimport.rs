@@ -238,6 +238,8 @@ fn spawn_runtime_component(
         XrdsSceneRuntimeComponent::GltfAsset(c) => spawn_gltf_descriptor(commands, c),
         XrdsSceneRuntimeComponent::Cube(c) => Some(spawn_cube_descriptor(commands, c)),
         XrdsSceneRuntimeComponent::Cylinder(c) => Some(spawn_cylinder_descriptor(commands, c)),
+        XrdsSceneRuntimeComponent::Capsule(c) => Some(spawn_capsule_descriptor(commands, c)),
+        XrdsSceneRuntimeComponent::Effect(c) => Some(spawn_effect_descriptor(commands, c)),
         XrdsSceneRuntimeComponent::Sphere(c) => Some(spawn_sphere_descriptor(commands, c)),
         XrdsSceneRuntimeComponent::Plane3D(c) => Some(spawn_plane_descriptor(commands, c)),
         XrdsSceneRuntimeComponent::Tetrahedron(c) => {

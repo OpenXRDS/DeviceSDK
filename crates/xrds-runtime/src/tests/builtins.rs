@@ -4,10 +4,11 @@ use super::*;
 fn built_in_geometry_commit_helpers_update_runtime_and_exported_document() {
     let mut app = xrds_test_app();
 
-    let (cube_id, cylinder_id, sphere_id, plane_id, tetrahedron_id) = {
+    let (cube_id, cylinder_id, capsule_id, sphere_id, plane_id, tetrahedron_id) = {
         let mut xrds = XrdsAPI::attach(&mut app);
         let cube = xrds.spawn(&XrdsCube::new().with_name("Cube"));
         let cylinder = xrds.spawn(&XrdsCylinder::new().with_name("Cylinder"));
+        let capsule = xrds.spawn(&XrdsCapsule::new().with_name("Capsule"));
         let sphere = xrds.spawn(&XrdsSphere::new().with_name("Sphere"));
         let plane = xrds.spawn(&XrdsPlane3D::new().with_name("Plane"));
         let tetrahedron = xrds.spawn(&XrdsTetrahedron::new().with_name("Tetrahedron"));
@@ -23,6 +24,13 @@ fn built_in_geometry_commit_helpers_update_runtime_and_exported_document() {
             CylinderGeometryParams {
                 radius: 0.75,
                 height: 5.0,
+            },
+        )
+        .set_capsule_geometry(
+            &capsule,
+            CapsuleGeometryParams {
+                radius: 0.6,
+                length: 2.0,
             },
         )
         .set_sphere_geometry(&sphere, SphereGeometryParams { radius: 1.25 })
@@ -42,6 +50,7 @@ fn built_in_geometry_commit_helpers_update_runtime_and_exported_document() {
         (
             xrds.id_of(&cube).expect("cube should have an id"),
             xrds.id_of(&cylinder).expect("cylinder should have an id"),
+            xrds.id_of(&capsule).expect("capsule should have an id"),
             xrds.id_of(&sphere).expect("sphere should have an id"),
             xrds.id_of(&plane).expect("plane should have an id"),
             xrds.id_of(&tetrahedron)
@@ -75,6 +84,16 @@ fn built_in_geometry_commit_helpers_update_runtime_and_exported_document() {
     };
     assert_eq!(cylinder.radius, 0.75);
     assert_eq!(cylinder.height, 5.0);
+
+    let XrdsSceneNodePayload::Capsule(capsule) = &exported
+        .node(XrdsSceneNodeId(capsule_id.0))
+        .expect("capsule node should be exported")
+        .payload
+    else {
+        panic!("expected capsule payload");
+    };
+    assert_eq!(capsule.radius, 0.6);
+    assert_eq!(capsule.length, 2.0);
 
     let XrdsSceneNodePayload::Sphere(sphere) = &exported
         .node(XrdsSceneNodeId(sphere_id.0))

@@ -828,7 +828,7 @@ fn trigger_bindings_survive_import_export_round_trip() {
     let tracks = vec![xrds_scene_graph::XrdsNamedTrack {
         name: "teleport".to_string(),
         track: xrds_scene_graph::XrdsTrack {
-            assets: vec![xrds_scene_graph::XrdsTrackAsset {
+            assets: vec![xrds_scene_graph::XrdsTrackAsset { when_finished: Default::default(),
                 target: XrdsActionTarget::SelfNode,
                 keys: vec![xrds_scene_graph::XrdsTrackKey {
                     at_secs: 0.0,

@@ -56,6 +56,35 @@ pub struct XrdsTrackKey {
 /// so this is the single place all of that node's events live. Two keys
 /// sharing an `at_secs` is not an error — that is how concurrent change on
 /// one asset is expressed (move it *and* recolour it on the same beat).
+/// Time granted after the final event of an effects-only Track that has no
+/// explicit duration.
+///
+/// Sized against `XrdsEffect`'s own 1.5s default `lifetime_secs`, so a default
+/// burst finishes before the Track does rather than being cut off mid-flight.
+pub const EFFECT_ONLY_TRACK_TAIL_SECS: f32 = 2.0;
+
+/// What happens to a row's node when its Track finishes on its own.
+///
+/// Modelled on Unreal Sequencer's per-track `When Finished` (Restore State vs
+/// Keep State), for the same reason: whether a Track's changes should persist is
+/// an authoring decision, not something the engine can infer. A cinematic that
+/// opens a door wants the door to stay open; a shot that nudges a prop wants the
+/// prop back so it does not bleed into the next take.
+///
+/// `Restore` is the default, matching Unreal.
+///
+/// Note this governs *natural completion only*. Pressing Stop in the editor is an
+/// explicit "put everything back" and restores every row regardless, as does
+/// starting a run, so no run inherits the previous one's leftovers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum XrdsWhenFinished {
+    /// Put this row's node back as the document describes it.
+    #[default]
+    Restore,
+    /// Leave whatever the Track did in place.
+    Keep,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct XrdsTrackAsset {
     /// Which node this row drives. `Node(id)` is the normal case;
@@ -65,6 +94,14 @@ pub struct XrdsTrackAsset {
     pub target: XrdsActionTarget,
     #[serde(default)]
     pub keys: Vec<XrdsTrackKey>,
+    /// See [`XrdsWhenFinished`]. `#[serde(default)]` keeps documents written
+    /// before this field existed loading as `Restore`.
+    #[serde(default, skip_serializing_if = "is_restore")]
+    pub when_finished: XrdsWhenFinished,
+}
+
+fn is_restore(value: &XrdsWhenFinished) -> bool {
+    matches!(value, XrdsWhenFinished::Restore)
 }
 
 /// A timeline-based sequence: absolute-time, concurrent choreography over a
@@ -110,11 +147,41 @@ impl XrdsTrack {
         if let Some(d) = self.duration_secs {
             return d;
         }
-        self.assets
-            .iter()
-            .flat_map(|a| a.keys.iter())
-            .map(|k| k.at_secs + k.action.self_duration_secs())
-            .fold(0.0f32, f32::max)
+
+        let mut last_at = 0.0f32;
+        let mut computed = 0.0f32;
+        let mut keys = 0usize;
+        let mut effect_keys = 0usize;
+        for key in self.assets.iter().flat_map(|a| a.keys.iter()) {
+            keys += 1;
+            if key.action.is_effect_action() {
+                effect_keys += 1;
+            }
+            last_at = last_at.max(key.at_secs);
+            computed = computed.max(key.at_secs + key.action.self_duration_secs());
+        }
+
+        // A Track made only of effect actions gets time after its last event.
+        //
+        // Without it, firing and completing coincide (`advance_tracks` fires at
+        // `at_secs <= elapsed` and completes at `elapsed >= duration_secs`), so the
+        // effect is torn down before a single particle is drawn and the playhead
+        // can never pass the event. Whatever the effect, it shows almost nothing.
+        //
+        // Deliberately narrow. Extending *every* Track whose last event is
+        // instantaneous was tried and reverted: the agent then outlives its last
+        // event holding its asset locks, and a rapid re-fire is refused — a
+        // threshold crossing stopped firing on both directions, and a
+        // disable-then-re-enable stopped clearing its marker. Those Tracks are
+        // fire-and-forget reactions and *want* to release immediately. An
+        // effects-only Track is the opposite: its whole purpose is something with
+        // a visible lifetime.
+        //
+        // An explicit `duration_secs` always wins; this only fills in a blank.
+        if keys > 0 && effect_keys == keys && computed <= last_at {
+            return computed + EFFECT_ONLY_TRACK_TAIL_SECS;
+        }
+        computed
     }
 
     /// Every concrete node this Track drives. `SelfNode`/`TriggerSource`

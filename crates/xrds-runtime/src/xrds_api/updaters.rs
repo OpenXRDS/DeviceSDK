@@ -77,6 +77,98 @@ fn register_stored_cylinder_updaters(registry: &mut SurfaceUpdateRegistry) {
     });
 }
 
+fn register_stored_effect_updaters(registry: &mut SurfaceUpdateRegistry) {
+    register_common_stored_updaters::<XrdsEffect>(registry);
+
+    // No material/colour updaters here: an effect's colour is its own curated
+    // gradient, not an XrdsMaterialParams on a mesh. Registering XrdsColor for
+    // it would silently do nothing.
+    registry.register::<XrdsEffect, EffectParams, _>(|world, entity, params| {
+        if with_stored_descriptor_mut::<XrdsEffect, _>(world, entity, |descriptor| {
+            descriptor.kind = params.kind;
+            descriptor.auto_play = params.auto_play;
+            descriptor.burst_count = params.burst_count;
+            descriptor.spawn_rate = params.spawn_rate;
+            descriptor.lifetime_secs = params.lifetime_secs;
+            descriptor.size_min = params.size_min;
+            descriptor.size_max = params.size_max;
+            descriptor.color_start = params.color_start;
+            descriptor.color_end = params.color_end;
+            descriptor.speed_min = params.speed_min;
+            descriptor.speed_max = params.speed_max;
+            descriptor.omnidirectional = params.omnidirectional;
+            descriptor.spread_deg = params.spread_deg;
+            descriptor.gravity = params.gravity;
+            descriptor.emission_radius = params.emission_radius;
+            descriptor.blend = params.blend;
+            descriptor.size_end = params.size_end;
+            descriptor.drag = params.drag;
+            descriptor.fade_edge = params.fade_edge;
+            descriptor.fade_scene = params.fade_scene;
+        })
+        .is_none()
+        {
+            return;
+        }
+
+        // Rebuild the spawner component in place. Unlike the mesh primitives
+        // there is no recipe/respawn round-trip and no asset to re-add —
+        // `ParticleSpawner` is a plain component, so swapping it is the whole
+        // update.
+        //
+        // Note this DOES clear particles already alive: any change to
+        // `ParticleSpawner` triggers bevy_firework's `sync_spawner_data`, which
+        // resets `ParticleSpawnerData::particles`. So retuning a running effect
+        // restarts its particle population rather than blending. (An earlier
+        // version of this comment claimed live particles survived — they do not.)
+        // It is unnoticeable on a continuous Trail, which refills immediately,
+        // and is why StopEffect avoids this path entirely.
+        let Some(descriptor) = world
+            .get::<XrdsStored<XrdsEffect>>(entity)
+            .map(|stored| stored.0.clone())
+        else {
+            return;
+        };
+        let spawner = crate::xrds_api::spawn::build_particle_spawner(&descriptor);
+        if let Ok(mut entity_mut) = world.get_entity_mut(entity) {
+            entity_mut.insert(spawner);
+        }
+    });
+}
+
+fn register_stored_capsule_updaters(registry: &mut SurfaceUpdateRegistry) {
+    register_common_stored_updaters::<XrdsCapsule>(registry);
+
+    registry.register::<XrdsCapsule, XrdsColor, _>(|world, entity, color| {
+        let mut params = material_params_for_entity(world, entity).unwrap_or_default();
+        params.base_color = *color;
+        apply_authored_material_to_entity(world, entity, params);
+    });
+
+    registry.register::<XrdsCapsule, XrdsMaterialParams, _>(|world, entity, params| {
+        apply_authored_material_to_entity(world, entity, params.clone());
+    });
+
+    registry.register::<XrdsCapsule, CapsuleGeometryParams, _>(|world, entity, params| {
+        if with_stored_descriptor_mut::<XrdsCapsule, _>(world, entity, |descriptor| {
+            descriptor.radius = params.radius;
+            descriptor.length = params.length;
+        })
+        .is_none()
+        {
+            return;
+        }
+
+        let Some((recipe, name, transform, visible)) =
+            capsule_recipe_and_common_state_for(world, entity)
+        else {
+            return;
+        };
+
+        apply_spawn_recipe_to_entity(world, entity, recipe, name, transform, visible);
+    });
+}
+
 fn register_stored_cube_updaters(registry: &mut SurfaceUpdateRegistry) {
     register_common_stored_updaters::<XrdsCube>(registry);
 
@@ -395,6 +487,8 @@ fn register_default_mutable_updaters(registry: &mut SurfaceUpdateRegistry) {
     register_stored_gltf_updaters(registry);
     register_stored_cube_updaters(registry);
     register_stored_cylinder_updaters(registry);
+    register_stored_capsule_updaters(registry);
+    register_stored_effect_updaters(registry);
     register_stored_sphere_updaters(registry);
     register_stored_plane_updaters(registry);
     register_stored_tetrahedron_updaters(registry);

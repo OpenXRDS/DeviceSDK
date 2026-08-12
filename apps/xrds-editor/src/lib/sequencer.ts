@@ -523,6 +523,7 @@ export function elementRowLabel(element: PanelElementDto): { title: string; sub:
 export const TRACK_ACTION_KINDS = [
   "SetTransform", "SetVisible", "SetMaterial",
   "PlayGltfAnimation", "StopGltfAnimation", "ModifyHealth",
+  "PlayEffect", "StopEffect",
   "SetElementText", "SetElementValue", "SetElementEnabled",
 ] as const;
 

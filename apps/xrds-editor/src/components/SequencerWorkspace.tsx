@@ -61,6 +61,20 @@ export function SequencerWorkspace({
   const [renaming, setRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState("");
   const [activeAssetIndex, setActiveAssetIndex] = useState<number | null>(null);
+  /** Where a click landed on a lane, in seconds — the time a newly added event
+   *  should use. Null means "no explicit choice", in which case the inspector
+   *  falls back to placing after the row's last event. Cleared whenever the
+   *  active row changes so a stale time can't leak onto a different row. */
+  const [insertAtSecs, setInsertAtSecs] = useState<number | null>(null);
+  /** An event being dragged along its lane. `at` is the live, uncommitted time so
+   *  the dot follows the cursor without a command per mouse-move. */
+  const [drag, setDrag] = useState<
+    { assetIndex: number; keyIndex: number; startX: number; startAt: number; at: number } | null
+  >(null);
+  /** Set once a pointer-down turns into an actual drag, so the click handler can
+   *  tell "moved an event" from "selected an event" — otherwise every drag would
+   *  also re-select, and a 1px twitch would rewrite the time. */
+  const draggedRef = useRef(false);
 
   const track = trackName === null
     ? null
@@ -184,9 +198,16 @@ export function SequencerWorkspace({
               }}>
               {isPreviewingThis && preview!.playing ? "⏸" : "▶"}
             </button>
+            {/* Deliberately NOT gated on isPreviewingThis, for the same reason as
+                ⏮/▶ above — and more sharply so. A Track can leave state behind
+                that outlives its timeline: PlayEffect on a Trail enables emission
+                that keeps running after the last key, so the moment an author
+                needs Stop is *after* the preview has finished on its own. Gating
+                it meant the only button that cleans up was disabled exactly when
+                cleanup was required. It restores assets from the document, which
+                is well-defined with or without a live agent. */}
             <button className="seq-transport-btn"
               title="Stop the preview and put every asset back where the document says it is"
-              disabled={!isPreviewingThis}
               onClick={() => send({ type: "PreviewStopTrack" })}>
               ■
             </button>
@@ -198,12 +219,19 @@ export function SequencerWorkspace({
 
             <span className="seq-ws-divider" />
 
-            <label className="text-[10.5px] text-overlay0">Duration</label>
-            <input type="number" step={0.1} min={0}
+            {/* Promoted from a dim label to a proper field: duration is the
+                setting authors actually need when a Track behaves oddly (an event
+                on the end boundary fires and completes in the same instant), and
+                it read as decoration before. The placeholder shows the value
+                actually in use when blank, so "auto" is no longer opaque. */}
+            <label className="seq-duration-label" htmlFor="seq-duration">Duration</label>
+            <input id="seq-duration" type="number" step={0.1} min={0}
               value={track.duration_secs ?? ""}
-              placeholder="auto"
-              title="Blank means: however long the events actually span, including a trailing interpolation."
-              className="w-[64px] text-[11px] text-bright bg-well rounded px-1.5 py-0.5 border border-surface0 focus:outline focus:outline-1 focus:outline-blue font-mono"
+              placeholder={`auto ${track.effective_duration_secs.toFixed(1)}s`}
+              title={track.duration_secs === null
+                ? `Auto: currently ${track.effective_duration_secs.toFixed(2)}s, from however long the events span. A Track made only of effects also gets time added after its last event, so the effect can be seen. Type a number to fix the length.`
+                : "Fixed length. Events past this never fire. Clear the box to go back to auto."}
+              className="seq-duration-input font-mono"
               onKeyDown={e => e.stopPropagation()}
               onChange={e => send({
                 type: "SetTrackDuration",
@@ -282,7 +310,7 @@ export function SequencerWorkspace({
                   <div key={i}
                     className={`seq-ws-track-row${isActive ? " active" : ""}`}
                     style={{ height: rowLayouts[i]?.height ?? ROW_H }}
-                    onClick={() => setActiveAssetIndex(i)}>
+                    onClick={() => { setActiveAssetIndex(i); setInsertAtSecs(null); }}>
                     <span className="seq-dot"
                       style={{ background: ACTION_COLOR[asset.keys[0]?.action.kind] ?? "var(--surface1)" }} />
                     <div className="flex flex-col min-w-0 gap-px">
@@ -295,6 +323,30 @@ export function SequencerWorkspace({
                       <span className="text-[9px] text-overlay0 font-mono truncate">{label.sub}</span>
                     </div>
                     <span className="flex-1" />
+                    {/* Per-row When Finished, following Unreal Sequencer. Keep is
+                        what makes a Track's change outlive its timeline, so it
+                        needs to be findable: the first version was a bare grey
+                        glyph and was reported as impossible to spot. Now a filled
+                        chip with an explicit RST/KEEP label and a tooltip
+                        spelling out the consequence rather than naming the mode. */}
+                    <button
+                      className={`seq-wf-btn${asset.when_finished === "Keep" ? " keep" : ""}`}
+                      title={asset.when_finished === "Keep"
+                        ? "When finished: KEEP — when this Track ends on its own, what it did to this node stays (a moved object stays moved, a fired trail keeps running). Stop and Play still reset it. Click for Restore."
+                        : "When finished: RESTORE (default) — when this Track ends on its own, this node goes back to the document, and any effect it started stops with existing particles fading out. Click for Keep."}
+                      onClick={e => {
+                        e.stopPropagation();
+                        send({
+                          type: "SetTrackAssetWhenFinished",
+                          payload: {
+                            track: track.name,
+                            asset_index: i,
+                            when_finished: asset.when_finished === "Keep" ? "Restore" : "Keep",
+                          },
+                        });
+                      }}>
+                      {asset.when_finished === "Keep" ? "KEEP" : "RST"}
+                    </button>
                     <button className="seq-list-row-del"
                       title="Remove this asset row and all its events"
                       onClick={e => {
@@ -319,25 +371,126 @@ export function SequencerWorkspace({
             <div className="seq-ws-lane-list" ref={lanesRef}>
               {track.assets.map((asset, assetIndex) => {
                 const layout = rowLayouts[assetIndex] ?? { height: ROW_H, lanes: [], count: 1 };
+                // Same expression as the nameplate column so the two highlight in
+                // lockstep — a selected key implies its row, otherwise the row
+                // the author last clicked.
+                const laneActive = (selected?.assetIndex ?? activeAssetIndex) === assetIndex;
                 return (
-                  <div key={assetIndex} className="seq-ws-lane" style={{ height: layout.height }}>
+                  <div key={assetIndex}
+                    className={`seq-ws-lane${laneActive ? " active" : ""}`}
+                    style={{ height: layout.height }}
+                    title="Click to select this row and set where the next event goes"
+                    onClick={e => {
+                      // Only a click on the lane background gets here — the key
+                      // buttons stopPropagation, so selecting an existing event
+                      // is not mistaken for choosing an insert point.
+                      const box = e.currentTarget.getBoundingClientRect();
+                      const ratio = box.width > 0
+                        ? (e.clientX - box.left) / box.width
+                        : 0;
+                      const at = +Math.min(duration, Math.max(0, ratio * duration)).toFixed(3);
+                      setActiveAssetIndex(assetIndex);
+                      setSelected(null);
+                      setInsertAtSecs(at);
+                    }}>
+                    {/* Where the next added event will land. Without this the
+                        chosen time is invisible state, which reads as the click
+                        having done nothing. */}
+                    {(selected?.assetIndex ?? activeAssetIndex) === assetIndex
+                      && insertAtSecs !== null && (
+                      <div className="seq-insert-marker"
+                        style={{ left: `${(insertAtSecs / duration) * 100}%` }} />
+                    )}
                     {asset.keys.map((key, keyIndex) => {
                       const colour = ACTION_COLOR[key.action.kind] ?? "var(--surface1)";
                       const dur = actionDuration(key.action);
                       const isSel = selected?.assetIndex === assetIndex
                         && selected?.keyIndex === keyIndex;
                       const lane = layout.lanes[keyIndex] ?? 0;
+                      const isDragging = drag?.assetIndex === assetIndex
+                        && drag?.keyIndex === keyIndex;
+                      const shownAt = isDragging ? drag!.at : key.at_secs;
                       return (
                         <button key={keyIndex}
-                          className={`seq-key${isSel ? " selected" : ""}${dur > 0 ? " seq-key-bar" : ""}`}
+                          className={`seq-key${isSel ? " selected" : ""}${dur > 0 ? " seq-key-bar" : ""}${isDragging ? " dragging" : ""}`}
                           style={{
-                            left: `${(key.at_secs / duration) * 100}%`,
+                            left: `${(shownAt / duration) * 100}%`,
                             top: `${keyTopPx(lane, layout.count, layout.height)}px`,
                             width: dur > 0 ? `${(dur / duration) * 100}%` : undefined,
                             ["--k" as string]: colour,
                           }}
-                          title={`t=${key.at_secs.toFixed(2)}s · ${summarizeAction(key.action)}`}
-                          onClick={() => setSelected({ assetIndex, keyIndex })}
+                          title={`t=${shownAt.toFixed(2)}s · ${summarizeAction(key.action)} — drag to move, Shift for fine`}
+                          onPointerDown={e => {
+                            // Left button only: a right-click should not start a
+                            // drag, and a middle-click scroll must not either.
+                            if (e.button !== 0) return;
+                            e.stopPropagation();
+                            e.preventDefault();
+                            draggedRef.current = false;
+                            // Pointer capture keeps move/up events coming to this
+                            // element even once the cursor leaves it, which is what
+                            // makes a drag survive leaving the lane.
+                            e.currentTarget.setPointerCapture(e.pointerId);
+                            setSelected({ assetIndex, keyIndex });
+                            setDrag({
+                              assetIndex,
+                              keyIndex,
+                              startX: e.clientX,
+                              startAt: key.at_secs,
+                              at: key.at_secs,
+                            });
+                          }}
+                          onPointerMove={e => {
+                            if (!isDragging || lanesWidthPx <= 0) return;
+                            const dx = e.clientX - drag!.startX;
+                            // 3px dead zone so a click with a twitch in it stays a
+                            // click and does not silently retime the event.
+                            if (!draggedRef.current && Math.abs(dx) < 3) return;
+                            draggedRef.current = true;
+                            const secondsPerPx = duration / lanesWidthPx;
+                            const raw = drag!.startAt + dx * secondsPerPx;
+                            // Snap to 0.05s, which lands on round numbers at normal
+                            // zoom; Shift gives the untouched value for fine work.
+                            const snapped = e.shiftKey ? raw : Math.round(raw / 0.05) * 0.05;
+                            const at = +Math.min(duration, Math.max(0, snapped)).toFixed(3);
+                            setDrag({ ...drag!, at });
+                          }}
+                          onPointerUp={e => {
+                            if (!isDragging) return;
+                            e.currentTarget.releasePointerCapture(e.pointerId);
+                            const moved = draggedRef.current;
+                            const at = drag!.at;
+                            setDrag(null);
+                            if (!moved || at === drag!.startAt) return;
+
+                            send({
+                              type: "SetTrackKey",
+                              payload: {
+                                track: track.name,
+                                asset_index: assetIndex,
+                                key_index: keyIndex,
+                                key: { at_secs: at, action: key.action },
+                              },
+                            });
+
+                            // Rust re-sorts the row by time, so this event's index
+                            // may change. Mirror that sort locally — JS and Rust
+                            // sorts are both stable, so equal times keep their
+                            // relative order — and follow the event rather than
+                            // leaving the selection on whatever slid into its slot.
+                            const reordered = asset.keys
+                              .map((k, i) => ({ i, at: i === keyIndex ? at : k.at_secs }))
+                              .sort((a, b) => a.at - b.at)
+                              .findIndex(entry => entry.i === keyIndex);
+                            setSelected({ assetIndex, keyIndex: reordered });
+                          }}
+                          onPointerCancel={() => setDrag(null)}
+                          onClick={e => {
+                            e.stopPropagation();
+                            // Selection already happened on pointer-down; this only
+                            // needs to stop the lane handler from treating the
+                            // release as "choose an insert point".
+                          }}
                         />
                       );
                     })}
@@ -360,6 +513,7 @@ export function SequencerWorkspace({
             selected={selected}
             onSelectedChange={setSelected}
             activeAssetIndex={activeAssetIndex}
+            insertAtSecs={insertAtSecs}
             firesWhen={firesWhen}
           />
         </div>

@@ -32,6 +32,29 @@ pub enum XrdsAction {
         playback: XrdsSceneGltfPlayback,
     },
     StopGltfAnimation,
+    /// Fire a particle effect on the target node.
+    ///
+    /// Only meaningful on an `Effect` node whose `auto_play` is `false`: the
+    /// backend's one-shot pacing disables itself the moment it fires, so an
+    /// auto-playing burst has already spent itself at scene load and cannot be
+    /// re-fired. An `auto_play: false` effect sits on on-demand pacing waiting
+    /// for exactly this. See `docs/done/vfx-particle-effects-plan.md`.
+    ///
+    /// `count` overrides the effect's authored `burst_count` when `Some`, so one
+    /// effect node can be fired at different intensities from different triggers
+    /// without duplicating the node.
+    PlayEffect {
+        count: Option<u32>,
+    },
+    /// Stop a particle effect: cease emitting, but let particles already alive
+    /// finish their lifetime and fade out.
+    ///
+    /// The soft-stop semantic is deliberate, matching Unity's
+    /// `ParticleSystemStopBehavior::StopEmitting` and Niagara's `Deactivate`
+    /// rather than their hard "kill and clear" counterparts. Yanking live
+    /// particles out of the air reads as a glitch; letting a plume trail off
+    /// reads as intent.
+    StopEffect,
     SetVisible(bool),
     /// Moves translation/rotation/scale toward the given values over
     /// `duration_secs`, easing by `ease`. Each of `position`/`rotation`/`scale`
@@ -182,6 +205,11 @@ enum XrdsActionKnown {
         playback: XrdsSceneGltfPlayback,
     },
     StopGltfAnimation,
+    PlayEffect {
+        #[serde(default)]
+        count: Option<u32>,
+    },
+    StopEffect,
     SetVisible(bool),
     SetTransform {
         position: Option<[f32; 3]>,
@@ -219,6 +247,8 @@ impl From<XrdsActionKnown> for XrdsAction {
                 XrdsAction::PlayGltfAnimation { playback }
             }
             XrdsActionKnown::StopGltfAnimation => XrdsAction::StopGltfAnimation,
+            XrdsActionKnown::PlayEffect { count } => XrdsAction::PlayEffect { count },
+            XrdsActionKnown::StopEffect => XrdsAction::StopEffect,
             XrdsActionKnown::SetVisible(visible) => XrdsAction::SetVisible(visible),
             XrdsActionKnown::SetTransform { position, rotation, scale, duration_secs, ease } => {
                 XrdsAction::SetTransform { position, rotation, scale, duration_secs, ease }
@@ -244,6 +274,8 @@ impl From<XrdsActionKnown> for XrdsAction {
 const KNOWN_ACTION_KINDS: &[&str] = &[
     "PlayGltfAnimation",
     "StopGltfAnimation",
+    "PlayEffect",
+    "StopEffect",
     "SetVisible",
     "SetTransform",
     "SetMaterial",
@@ -312,6 +344,14 @@ impl XrdsAction {
     /// exist. Only `Unknown` is rejected, so a document from a *newer*
     /// editor reports one clear diagnostic rather than silently dropping a
     /// key.
+    /// Whether this action only drives a particle effect.
+    ///
+    /// Used to decide whether a Track is "effects only", which gets extra time on
+    /// the clock — see `XrdsTrack::effective_duration_secs`.
+    pub fn is_effect_action(&self) -> bool {
+        matches!(self, Self::PlayEffect { .. } | Self::StopEffect)
+    }
+
     pub fn is_valid_in_track(&self) -> bool {
         !matches!(self, XrdsAction::Unknown)
     }
@@ -634,6 +674,21 @@ impl XrdsSceneDocument {
             .filter(|n| matches!(n.payload, XrdsSceneNodePayload::GltfAsset(_)))
             .map(|n| n.id)
             .collect();
+        let effect_nodes: std::collections::HashSet<XrdsSceneNodeId> = self
+            .nodes
+            .iter()
+            .filter(|n| matches!(n.payload, XrdsSceneNodePayload::Effect(_)))
+            .map(|n| n.id)
+            .collect();
+        // Auto-playing effects get their own message. PlayEffect *does* fire them
+        // (fire_effect_in_world swaps pacing as needed), so this is not an error —
+        // it is the unwanted extra burst at scene load that is worth flagging.
+        let auto_play_effect_nodes: std::collections::HashSet<XrdsSceneNodeId> = self
+            .nodes
+            .iter()
+            .filter(|n| matches!(&n.payload, XrdsSceneNodePayload::Effect(e) if e.auto_play))
+            .map(|n| n.id)
+            .collect();
 
         // -- Track names ------------------------------------------------------
         // Names are keys, so a bad one silently breaks wiring rather than
@@ -941,6 +996,35 @@ impl XrdsSceneDocument {
                         }
                     }
 
+                    if matches!(
+                        key.action,
+                        XrdsAction::PlayEffect { .. } | XrdsAction::StopEffect
+                    ) {
+                        if let XrdsActionTarget::Node(id) = asset.target {
+                            if node_ids.contains(&id) && !effect_nodes.contains(&id) {
+                                out.push(XrdsSceneTriggerDiagnostic {
+                                    node_id: None,
+                                    severity: Severity::Error,
+                                    title: "Effect action on a non-effect node".to_string(),
+                                    detail: format!(
+ "{at} controls a particle effect, but node {id:?} has no effect payload — nothing will happen."
+                                    ),
+                                });
+                            } else if auto_play_effect_nodes.contains(&id)
+                                && matches!(key.action, XrdsAction::PlayEffect { .. })
+                            {
+                                out.push(XrdsSceneTriggerDiagnostic {
+                                    node_id: None,
+                                    severity: Severity::Warning,
+                                    title: "Effect also fires itself on load".to_string(),
+                                    detail: format!(
+ "{at} fires node {id:?}, and that effect also has Auto Play on, so it fires once on its own when the scene loads as well as when this Track runs. Turn Auto Play off if it should only fire from the Track."
+                                    ),
+                                });
+                            }
+                        }
+                    }
+
                     // `duration_secs` is deliberately not bound: the only check
                     // that read it was the zero-duration warning, deleted when
                     // `Teleport` was removed (duration 0 is now the normal way
@@ -1037,6 +1121,7 @@ impl XrdsSceneDocument {
 
         out.extend(self.watcher_diagnostics(&node_ids));
         out.extend(self.track_conflict_diagnostics());
+        out.extend(self.effect_on_track_end_diagnostics());
         out
     }
 
@@ -1153,6 +1238,62 @@ impl XrdsSceneDocument {
     /// A *looping* Track is different in kind: it never releases its assets,
     /// so anything sharing one can never run at all. Permanent rather than
     /// situational, so it is an error.
+    /// A `PlayEffect` sitting on the very end of an auto-duration Track fires and
+    /// is undone in the same instant, so it looks like nothing happened.
+    ///
+    /// In practice this now only catches *mixed* Tracks. A Track made purely of
+    /// effect actions grants itself a tail in `effective_duration_secs`, so the
+    /// common "just fire this burst" case needs no warning at all.
+    ///
+    /// Scoped narrowly on purpose. An earlier version warned about *any*
+    /// instantaneous last event and three existing tests immediately caught it
+    /// firing on healthy documents — a trailing `SetVisible` or `ModifyHealth` is
+    /// perfectly normal, because its result persists and is plainly visible. Only
+    /// an effect needs time on the clock to be seen at all.
+    ///
+    /// Also silent when the row is `Keep`, which already means "leave it running".
+    ///
+    /// Reported rather than fixed by padding the duration: padding was tried and
+    /// reverted, because keeping the agent alive past its last event holds its
+    /// asset locks and blocks a rapid re-fire (a threshold crossing up-then-down
+    /// stopped firing twice). Runtime timing is not worth bending for an
+    /// authoring-time surprise.
+    fn effect_on_track_end_diagnostics(&self) -> Vec<XrdsSceneTriggerDiagnostic> {
+        use XrdsSceneTriggerDiagnosticSeverity as Severity;
+        let mut out = Vec::new();
+        for named in &self.tracks {
+            if named.track.duration_secs.is_some() {
+                continue;
+            }
+            // Ask the Track how long it actually runs rather than recomputing:
+            // an effects-only Track already grants itself a tail
+            // (EFFECT_ONLY_TRACK_TAIL_SECS), so it must not be warned about. What
+            // is left is the mixed case — a PlayEffect at the end of a Track that
+            // also does other things — which gets no tail and does still bite.
+            let end = named.track.effective_duration_secs();
+            for asset in &named.track.assets {
+                if asset.when_finished == XrdsWhenFinished::Keep {
+                    continue;
+                }
+                for key in &asset.keys {
+                    let is_effect = matches!(key.action, XrdsAction::PlayEffect { .. });
+                    if is_effect && key.at_secs >= end {
+                        out.push(XrdsSceneTriggerDiagnostic {
+                            node_id: None,
+                            severity: Severity::Warning,
+                            title: "Effect fires as the Track ends".to_string(),
+                            detail: format!(
+ "Track \"{}\" has no duration set, so it ends at {end}s — the same moment this PlayEffect fires. The effect is undone before it can be seen, and the playhead cannot move past it. Set the Track's duration longer than {end}s, or set this row's When Finished to Keep.",
+                                named.name
+                            ),
+                        });
+                    }
+                }
+            }
+        }
+        out
+    }
+
     fn track_conflict_diagnostics(&self) -> Vec<XrdsSceneTriggerDiagnostic> {
         use XrdsSceneTriggerDiagnosticSeverity as Severity;
         let mut out = Vec::new();

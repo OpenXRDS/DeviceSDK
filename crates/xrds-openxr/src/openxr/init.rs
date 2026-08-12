@@ -11,7 +11,7 @@ use bevy::{
         RenderApp, RenderPlugin,
     },
 };
-use openxr::{ApplicationInfo, Entry, ExtensionSet, FormFactor};
+use openxr::{ApplicationInfo, Entry, ExtensionSet, FormFactor, SystemId};
 
 #[cfg(target_os = "windows")]
 use crate::windows::try_load_windows_oxr_runtime;
@@ -191,15 +191,7 @@ impl OpenXrInitPlugin {
         let instance = entry
             .create_instance(&application_info, &openxr_extensions, &[])
             .map_err(|e| anyhow::anyhow!("Could not create OpenXR instance: {e}"))?;
-        let system_id_res = (
-            instance.system(FormFactor::HEAD_MOUNTED_DISPLAY),
-            instance.system(FormFactor::HANDHELD_DISPLAY),
-        );
-        let system_id = match system_id_res {
-            (Ok(hmd_system_id), Ok(_)) | (Ok(hmd_system_id), Err(_)) => hmd_system_id,
-            (Err(_), Ok(handheld_system_id)) => handheld_system_id,
-            (Err(_), Err(_)) => anyhow::bail!("No XR system found (no HMD or handheld device detected)"),
-        };
+        let system_id = Self::get_hmd_or_handheld_system(&instance)?;
 
         let system_properties = instance.system_properties(system_id)?;
         let instance_properties = instance.properties()?;
@@ -247,6 +239,59 @@ impl OpenXrInitPlugin {
         };
 
         Ok((openxr_instance, graphics_backends))
+    }
+
+    /// Resolve an HMD or handheld system, retrying on `ERROR_FORM_FACTOR_UNAVAILABLE`.
+    ///
+    /// That specific error is spec-documented as transient — "the specified form
+    /// factor is supported, but the device is currently not available" — as
+    /// opposed to `ERROR_FORM_FACTOR_UNSUPPORTED`, which means the runtime never
+    /// supports it and retrying cannot help. A single unretried call is known to
+    /// race Quest Link's own session negotiation: the runtime can be genuinely
+    /// present and the headset genuinely worn, and still momentarily report
+    /// "unavailable" if this process's `xrGetSystem` lands before Link has
+    /// finished handing the compositor an active session. Confirmed by reading
+    /// the actual OpenXR error out of a real "wearing the headset, Link running"
+    /// failure — the previous code discarded that error before this distinction
+    /// could even be checked.
+    fn get_hmd_or_handheld_system(instance: &openxr::Instance) -> anyhow::Result<SystemId> {
+        use std::time::{Duration, Instant};
+
+        const RETRY_TIMEOUT: Duration = Duration::from_secs(5);
+        const RETRY_INTERVAL: Duration = Duration::from_millis(200);
+
+        let deadline = Instant::now() + RETRY_TIMEOUT;
+        let mut last_hmd_err = None;
+        let mut last_handheld_err = None;
+
+        loop {
+            let hmd_res = instance.system(FormFactor::HEAD_MOUNTED_DISPLAY);
+            let handheld_res = instance.system(FormFactor::HANDHELD_DISPLAY);
+
+            match (&hmd_res, &handheld_res) {
+                (Ok(hmd_system_id), _) => return Ok(*hmd_system_id),
+                (Err(_), Ok(handheld_system_id)) => return Ok(*handheld_system_id),
+                (Err(hmd_err), Err(handheld_err)) => {
+                    let retryable = *hmd_err == openxr::sys::Result::ERROR_FORM_FACTOR_UNAVAILABLE
+                        || *handheld_err == openxr::sys::Result::ERROR_FORM_FACTOR_UNAVAILABLE;
+                    last_hmd_err = Some(*hmd_err);
+                    last_handheld_err = Some(*handheld_err);
+                    if !retryable || Instant::now() >= deadline {
+                        break;
+                    }
+                    std::thread::sleep(RETRY_INTERVAL);
+                }
+            }
+        }
+
+        anyhow::bail!(
+            "No XR system found (no HMD or handheld device detected) after retrying for \
+             {RETRY_TIMEOUT:?}. HMD form factor error: {last_hmd_err:?}. Handheld form \
+             factor error: {last_handheld_err:?}. If using Quest Link: confirm Link (or \
+             Air Link) shows as actively connected in the Oculus app — not just \
+             USB-connected/charging — and that the headset is awake, *before* launching \
+             this app."
+        );
     }
 }
 

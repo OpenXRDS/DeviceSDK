@@ -74,7 +74,9 @@ use std::collections::{HashMap, HashSet};
 use std::marker::PhantomData;
 use std::sync::Arc;
 use xrds_components::primitives::{
-    XrdsCube, XrdsCylinder, XrdsExtrudedText, XrdsExtrudedTextAlignment,
+    XrdsCapsule, XrdsCube, XrdsCylinder, XrdsEffect, XrdsEffectBlend, XrdsEffectKind,
+    XrdsExtrudedText,
+    XrdsExtrudedTextAlignment,
     XrdsPlane3D, XrdsSphere, XrdsTetrahedron,
 };
 use xrds_components::world::lights::{
@@ -83,7 +85,9 @@ use xrds_components::world::lights::{
 use xrds_components::world::{XrdsAudioClip, XrdsCamera, XrdsGltfAsset, XrdsNode};
 use xrds_components::{
     AmbientLightParams, CameraKind, CameraLookAtPatch, CameraProjectionParams,
-    CameraProjectionPatch, CubeGeometryParams, CylinderGeometryParams, DirectionalLightParams,
+    CameraProjectionPatch, CapsuleGeometryParams, CubeGeometryParams, CylinderGeometryParams,
+    EffectParams,
+    DirectionalLightParams,
     GltfAssetSourcePatch, NamePatch, OrthographicCameraParams, ParentPatch,
     PerspectiveCameraParams, Plane3DGeometryParams, PointLightParams, SphereGeometryParams,
     ExtrudedTextParams, SpotLightParams, TetrahedronGeometryParams, TransformParams,
@@ -172,6 +176,15 @@ pub enum XrdsGeometrySource {
     PbrCylinder {
         radius: f32,
         half_height: f32,
+        material: XrdsMaterialParams,
+    },
+    /// Fallback: PBR capsule primitive. `name`, `transform`, and `visible` are filled
+    /// from the descriptor. `half_length` excludes the hemispherical caps — matches
+    /// `bevy::math::primitives::Capsule3d::half_length` and half of
+    /// `XrdsCapsule::length`.
+    PbrCapsule {
+        radius: f32,
+        half_length: f32,
         material: XrdsMaterialParams,
     },
     /// Fallback: PBR plane primitive. `name`, `transform`, and `visible` are filled from the descriptor.

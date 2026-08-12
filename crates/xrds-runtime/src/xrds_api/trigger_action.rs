@@ -1858,6 +1858,36 @@ impl Action for XrdsActionRunner {
                 true
             }
 
+            XrdsAction::PlayEffect { count } => {
+                // Fire-and-forget: returns true immediately rather than blocking
+                // the sequence until the particles die. A burst is a visual
+                // flourish, and making a Track wait on it would stall
+                // choreography for no authored reason.
+                //
+                // queue_particles is additive and drained next frame under
+                // OnDemand pacing, so two triggers firing the same effect on one
+                // frame emit both bursts rather than one overwriting the other.
+                let queued = fire_effect_in_world(world, self.target, count);
+                if !queued {
+                    // Deliberately a warning, not silence: a mis-aimed
+                    // PlayEffect is invisible on-device, and the authored
+                    // document carries a matching diagnostic for the static case.
+                    warn!(
+ "[trigger-action] PlayEffect on {:?} did nothing — the target is not an effect node, or its burst count resolved to zero.",
+                        self.target
+                    );
+                }
+                true
+            }
+            XrdsAction::StopEffect => {
+                if !stop_effect_in_world(world, self.target) {
+                    warn!(
+ "[trigger-action] StopEffect on {:?} did nothing — the target is not an effect node.",
+                        self.target
+                    );
+                }
+                true
+            }
             XrdsAction::StopGltfAnimation => {
                 for player_entity in
                     animation_player_entities_for_root_in_world(world, self.target)

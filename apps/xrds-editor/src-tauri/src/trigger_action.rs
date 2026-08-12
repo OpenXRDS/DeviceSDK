@@ -27,6 +27,21 @@ use crate::editor_state::{EditorSession, EditorState};
 // Snapshot serializers
 // ---------------------------------------------------------------------------
 
+fn when_finished_str(value: xrds_scene_graph::XrdsWhenFinished) -> &'static str {
+    match value {
+        xrds_scene_graph::XrdsWhenFinished::Restore => "Restore",
+        xrds_scene_graph::XrdsWhenFinished::Keep => "Keep",
+    }
+}
+
+fn when_finished_from_str(value: &str) -> Option<xrds_scene_graph::XrdsWhenFinished> {
+    match value {
+        "Restore" => Some(xrds_scene_graph::XrdsWhenFinished::Restore),
+        "Keep" => Some(xrds_scene_graph::XrdsWhenFinished::Keep),
+        _ => None,
+    }
+}
+
 pub fn build_tracks_dto(doc: &XrdsSceneDocument) -> Vec<NamedTrackDto> {
     doc.tracks
         .iter()
@@ -52,6 +67,7 @@ pub fn build_tracks_dto(doc: &XrdsSceneDocument) -> Vec<NamedTrackDto> {
                         _ => None,
                     },
                     keys: asset.keys.iter().map(track_key_to_dto).collect(),
+                    when_finished: when_finished_str(asset.when_finished).to_string(),
                 })
                 .collect(),
             duration_secs: entry.track.duration_secs,
@@ -292,6 +308,7 @@ pub fn apply_trigger_action_command(
                 entry.track.assets.push(XrdsTrackAsset {
                     target: XrdsActionTarget::Node(node_id),
                     keys: Vec::new(),
+                    when_finished: Default::default(),
                 });
             }) {
                 Ok(_) => {}
@@ -337,7 +354,11 @@ pub fn apply_trigger_action_command(
                     );
                     return;
                 }
-                entry.track.assets.push(XrdsTrackAsset { target, keys: Vec::new() });
+                entry.track.assets.push(XrdsTrackAsset {
+                    target,
+                    keys: Vec::new(),
+                    when_finished: Default::default(),
+                });
             }) {
                 Ok(_) => {}
                 Err(e) => error!("[track] AddTrackElementAsset failed: {:?}", e),
@@ -451,6 +472,28 @@ pub fn apply_trigger_action_command(
                 Some(crate::editor_state::TrackPreviewRequest::Pause(*paused));
             false
         }
+        EditorCommand::SetTrackAssetWhenFinished { track, asset_index, when_finished } => {
+            // Unknown values are rejected rather than defaulted: silently turning
+            // a Keep row back into Restore would quietly delete the author's
+            // choice, and this one is only visible when a Track ends.
+            let Some(parsed) = when_finished_from_str(when_finished) else {
+                error!("[track] SetTrackAssetWhenFinished: unknown value {when_finished:?}");
+                return false;
+            };
+            let (name, index) = (track.clone(), *asset_index);
+            match session.0.edit(|doc| {
+                if let Some(entry) = doc.tracks.iter_mut().find(|t| t.name == name) {
+                    if let Some(asset) = entry.track.assets.get_mut(index) {
+                        asset.when_finished = parsed;
+                    }
+                }
+            }) {
+                Ok(_) => {}
+                Err(e) => error!("[track] SetTrackAssetWhenFinished failed: {:?}", e),
+            }
+            true
+        }
+
         EditorCommand::PreviewStopTrack => {
             state.pending_track_preview = Some(crate::editor_state::TrackPreviewRequest::Stop);
             false
@@ -664,6 +707,9 @@ fn default_action_for_kind(kind: &str) -> Option<XrdsAction> {
     Some(match kind {
         "PlayGltfAnimation" => XrdsAction::PlayGltfAnimation { playback: XrdsSceneGltfPlayback::default() },
         "StopGltfAnimation" => XrdsAction::StopGltfAnimation,
+        // None = use the effect's own authored Burst Count.
+        "PlayEffect" => XrdsAction::PlayEffect { count: None },
+        "StopEffect" => XrdsAction::StopEffect,
         "SetVisible" => XrdsAction::SetVisible(true),
         "SetTransform" => XrdsAction::SetTransform {
             position: Some([0.0, 0.0, 0.0]),
@@ -710,6 +756,8 @@ fn action_to_dto(a: &XrdsAction) -> XrdsActionDto {
             start_paused: playback.start_paused,
         },
         XrdsAction::StopGltfAnimation => XrdsActionDto::StopGltfAnimation,
+        XrdsAction::PlayEffect { count } => XrdsActionDto::PlayEffect { count: *count },
+        XrdsAction::StopEffect => XrdsActionDto::StopEffect,
         XrdsAction::SetVisible(v) => XrdsActionDto::SetVisible(*v),
         XrdsAction::SetTransform { position, rotation, scale, duration_secs, ease } =>
             XrdsActionDto::SetTransform {
@@ -760,6 +808,8 @@ fn action_from_dto(a: &XrdsActionDto) -> XrdsAction {
                 },
             },
         XrdsActionDto::StopGltfAnimation => XrdsAction::StopGltfAnimation,
+        XrdsActionDto::PlayEffect { count } => XrdsAction::PlayEffect { count: *count },
+        XrdsActionDto::StopEffect => XrdsAction::StopEffect,
         XrdsActionDto::SetVisible(v) => XrdsAction::SetVisible(*v),
         XrdsActionDto::SetTransform { position, rotation, scale, duration_secs, ease } =>
             XrdsAction::SetTransform {

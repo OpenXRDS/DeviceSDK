@@ -1,6 +1,7 @@
 use xrds_scene_graph::{
     XrdsEditorMetadata, XrdsSceneAmbientLight, XrdsSceneAssetKind, XrdsSceneAudioClip,
-    XrdsSceneCamera, XrdsSceneCameraProjection, XrdsSceneCube, XrdsSceneCylinder,
+    XrdsSceneCamera, XrdsSceneCameraProjection, XrdsSceneCapsule, XrdsSceneCube, XrdsSceneCylinder,
+    XrdsSceneEffect, XrdsSceneEffectKind,
     XrdsSceneDirectionalLight, XrdsSceneDocument, XrdsSceneExtrudedText, XrdsSceneGltfAsset,
     XrdsSceneHudText, XrdsSceneInteractionZone, XrdsSceneNode, XrdsSceneNodeId,
     XrdsSceneNodePayload, XrdsScenePlane3D, XrdsScenePlayer, XrdsScenePlayerAnchor,
@@ -142,6 +143,24 @@ fn build_primitive_node(
         "Cube"            => XrdsSceneNodePayload::Cube(XrdsSceneCube::default()),
         "Sphere"          => XrdsSceneNodePayload::Sphere(XrdsSceneSphere::default()),
         "Cylinder"        => XrdsSceneNodePayload::Cylinder(XrdsSceneCylinder::default()),
+        "Capsule"         => XrdsSceneNodePayload::Capsule(XrdsSceneCapsule::default()),
+        // auto_play=false, deliberately differing from the Rust default: a burst
+        // placed by hand almost always wants a trigger to fire it, and an
+        // auto-playing one would go off once at load and never again. Trail
+        // keeps auto_play=true so it visibly runs as soon as it is placed.
+        "EffectBurst"     => XrdsSceneNodePayload::Effect(XrdsSceneEffect {
+            kind: XrdsSceneEffectKind::Burst,
+            auto_play: false,
+            ..Default::default()
+        }),
+        "EffectTrail"     => XrdsSceneNodePayload::Effect(XrdsSceneEffect {
+            kind: XrdsSceneEffectKind::Trail,
+            auto_play: true,
+            omnidirectional: false,
+            spread_deg: 20.0,
+            gravity: [0.0, 0.5, 0.0],
+            ..Default::default()
+        }),
         "Plane"           => XrdsSceneNodePayload::Plane3D(XrdsScenePlane3D::default()),
         "Tetrahedron"     => XrdsSceneNodePayload::Tetrahedron(XrdsSceneTetrahedron::default()),
         "PointLight"      => XrdsSceneNodePayload::PointLight(XrdsScenePointLight::default()),
@@ -246,9 +265,15 @@ pub fn default_transform_for_payload(
             let height = if parent_id.is_some() { 2.0 } else { 1.5 };
             [0.0_f32, height, 0.0]
         }
+        // Eye-ish height rather than the 0.5 the meshes use. An effect has no
+        // silhouette, so one sitting on the floor reads as "effects don't work"
+        // rather than "look down" -- exactly the confusion hit during on-device
+        // verification, where effects authored far from the viewer looked absent.
+        XrdsSceneNodePayload::Effect(_) => [0.0_f32, 1.4, 0.0],
         XrdsSceneNodePayload::Cube(_)
         | XrdsSceneNodePayload::Sphere(_)
         | XrdsSceneNodePayload::Cylinder(_)
+        | XrdsSceneNodePayload::Capsule(_)
         | XrdsSceneNodePayload::Tetrahedron(_)
         | XrdsSceneNodePayload::Text(_)
         | XrdsSceneNodePayload::ExtrudedText(_)
@@ -288,7 +313,8 @@ pub fn default_transform_for_payload(
         let geometry_count = doc.nodes.iter()
             .filter(|n| matches!(n.payload,
                 XrdsSceneNodePayload::Cube(_)     | XrdsSceneNodePayload::Sphere(_)   |
-                XrdsSceneNodePayload::Cylinder(_) | XrdsSceneNodePayload::Plane3D(_)  |
+                XrdsSceneNodePayload::Cylinder(_) | XrdsSceneNodePayload::Capsule(_)  |
+                XrdsSceneNodePayload::Plane3D(_)  | XrdsSceneNodePayload::Effect(_)   |
                 XrdsSceneNodePayload::Tetrahedron(_) | XrdsSceneNodePayload::GltfAsset(_) |
                 XrdsSceneNodePayload::Text(_)     | XrdsSceneNodePayload::ExtrudedText(_)
             ))

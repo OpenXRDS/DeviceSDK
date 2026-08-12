@@ -96,6 +96,10 @@ pub struct EditorState {
     pub pending_anchor_fov:        Option<(XrdsSceneNodeId, f32)>,
     pub pending_gravity_scale:     Option<(XrdsSceneNodeId, f32)>,
     pub pending_mass:              Option<(XrdsSceneNodeId, f32)>,
+    pub pending_capsule_geometry:  Option<(XrdsSceneNodeId, f32, f32)>,
+    /// Whole-struct rather than per-field, matching `SetEffectParams`: the
+    /// frontend re-sends every value on each edit, so there is nothing to merge.
+    pub pending_effect_params:     Option<(XrdsSceneNodeId, xrds_scene_graph::XrdsSceneEffect)>,
 
     // ── Gizmo state ───────────────────────────────────────────────────────
     pub gizmo_mode:  GizmoMode,
@@ -224,6 +228,8 @@ impl Default for EditorState {
             pending_anchor_fov: None,
             pending_gravity_scale: None,
             pending_mass: None,
+            pending_capsule_geometry: None,
+            pending_effect_params: None,
             gizmo_mode: GizmoMode::Translate,
             gizmo_hover: None,
             gizmo_drag: None,

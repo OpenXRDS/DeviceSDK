@@ -115,9 +115,11 @@ pub enum XrdsSceneRuntimeComponent {
     GltfAsset(XrdsGltfAsset),
     Cube(XrdsCube),
     Cylinder(XrdsCylinder),
+    Capsule(XrdsCapsule),
     Sphere(XrdsSphere),
     Plane3D(XrdsPlane3D),
     Tetrahedron(XrdsTetrahedron),
+    Effect(XrdsEffect),
     AmbientLight(XrdsAmbientLight),
     DirectionalLight(XrdsDirectionalLight),
     PointLight(XrdsPointLight),
@@ -228,6 +230,70 @@ impl XrdsSceneNode {
                     mass: cylinder.mass,
                 }),
                 material: Some(cylinder.material.clone().into()),
+                editor,
+                gltf_node_authoring: None,
+            },
+            XrdsSceneNodePayload::Capsule(capsule) => XrdsSceneRuntimeNode {
+                id: self.id.into(),
+                parent_id: self.parent_id.map(Into::into),
+                component: XrdsSceneRuntimeComponent::Capsule(XrdsCapsule {
+                    name: self.name.clone(),
+                    enabled: self.enabled,
+                    visible: self.visible,
+                    transform,
+                    radius: capsule.radius,
+                    length: capsule.length,
+                    physics_body: capsule.physics_body,
+                    gravity_scale: capsule.gravity_scale,
+                    mass: capsule.mass,
+                }),
+                material: Some(capsule.material.clone().into()),
+                editor,
+                gltf_node_authoring: None,
+            },
+            XrdsSceneNodePayload::Effect(effect) => XrdsSceneRuntimeNode {
+                id: self.id.into(),
+                parent_id: self.parent_id.map(Into::into),
+                component: XrdsSceneRuntimeComponent::Effect(XrdsEffect {
+                    name: self.name.clone(),
+                    enabled: self.enabled,
+                    visible: self.visible,
+                    transform,
+                    kind: match effect.kind {
+                        XrdsSceneEffectKind::Burst => XrdsEffectKind::Burst,
+                        XrdsSceneEffectKind::Trail => XrdsEffectKind::Trail,
+                    },
+                    auto_play: effect.auto_play,
+                    burst_count: effect.burst_count,
+                    spawn_rate: effect.spawn_rate,
+                    lifetime_secs: effect.lifetime_secs,
+                    size_min: effect.size_min,
+                    size_max: effect.size_max,
+                    color_start: XrdsColor {
+                        rgba: effect.color_start,
+                    },
+                    color_end: XrdsColor {
+                        rgba: effect.color_end,
+                    },
+                    speed_min: effect.speed_min,
+                    speed_max: effect.speed_max,
+                    omnidirectional: effect.omnidirectional,
+                    spread_deg: effect.spread_deg,
+                    gravity: effect.gravity,
+                    emission_radius: effect.emission_radius,
+                    blend: match effect.blend {
+                        XrdsSceneEffectBlend::Blend => XrdsEffectBlend::Blend,
+                        XrdsSceneEffectBlend::Add => XrdsEffectBlend::Add,
+                        XrdsSceneEffectBlend::Multiply => XrdsEffectBlend::Multiply,
+                    },
+                    size_end: effect.size_end,
+                    drag: effect.drag,
+                    fade_edge: effect.fade_edge,
+                    fade_scene: effect.fade_scene,
+                }),
+                // None: an effect's colour is its own gradient, not an
+                // XrdsSceneMaterial on a mesh.
+                material: None,
                 editor,
                 gltf_node_authoring: None,
             },
@@ -671,6 +737,74 @@ impl XrdsSceneNode {
                 physics_body: cylinder.physics_body,
                 gravity_scale: cylinder.gravity_scale,
                 mass: cylinder.mass,
+            }),
+        )
+    }
+
+    pub fn from_xrds_capsule(
+        id: XrdsSceneNodeId,
+        parent_id: Option<XrdsSceneNodeId>,
+        capsule: &XrdsCapsule,
+        material: Option<XrdsMaterialParams>,
+    ) -> Self {
+        Self::from_parts(
+            id,
+            parent_id,
+            &capsule.name,
+            capsule.enabled,
+            capsule.visible,
+            capsule.transform,
+            XrdsSceneNodePayload::Capsule(XrdsSceneCapsule {
+                radius: capsule.radius,
+                length: capsule.length,
+                material: material.unwrap_or_default().into(),
+                physics_body: capsule.physics_body,
+                gravity_scale: capsule.gravity_scale,
+                mass: capsule.mass,
+            }),
+        )
+    }
+
+    pub fn from_xrds_effect(
+        id: XrdsSceneNodeId,
+        parent_id: Option<XrdsSceneNodeId>,
+        effect: &XrdsEffect,
+    ) -> Self {
+        Self::from_parts(
+            id,
+            parent_id,
+            &effect.name,
+            effect.enabled,
+            effect.visible,
+            effect.transform,
+            XrdsSceneNodePayload::Effect(XrdsSceneEffect {
+                kind: match effect.kind {
+                    XrdsEffectKind::Burst => XrdsSceneEffectKind::Burst,
+                    XrdsEffectKind::Trail => XrdsSceneEffectKind::Trail,
+                },
+                auto_play: effect.auto_play,
+                burst_count: effect.burst_count,
+                spawn_rate: effect.spawn_rate,
+                lifetime_secs: effect.lifetime_secs,
+                size_min: effect.size_min,
+                size_max: effect.size_max,
+                color_start: effect.color_start.rgba,
+                color_end: effect.color_end.rgba,
+                speed_min: effect.speed_min,
+                speed_max: effect.speed_max,
+                omnidirectional: effect.omnidirectional,
+                spread_deg: effect.spread_deg,
+                gravity: effect.gravity,
+                emission_radius: effect.emission_radius,
+                blend: match effect.blend {
+                    XrdsEffectBlend::Blend => XrdsSceneEffectBlend::Blend,
+                    XrdsEffectBlend::Add => XrdsSceneEffectBlend::Add,
+                    XrdsEffectBlend::Multiply => XrdsSceneEffectBlend::Multiply,
+                },
+                size_end: effect.size_end,
+                drag: effect.drag,
+                fade_edge: effect.fade_edge,
+                fade_scene: effect.fade_scene,
             }),
         )
     }

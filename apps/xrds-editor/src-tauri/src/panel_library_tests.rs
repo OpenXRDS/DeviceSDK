@@ -1,5 +1,5 @@
 //! Tests for the panel-template command surface — see
-//! `docs/xrds-widget-template-plan.md` §A3.
+//! `docs/done/xrds-widget-template-plan.md` §A3.
 //!
 //! The property worth pinning is that elements are addressed **by name**:
 //! reordering or renaming must never silently re-point something.

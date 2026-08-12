@@ -483,7 +483,27 @@ button, input, select, textarea { font-family: inherit; }
 .seq-ws-track-row {
   display: flex; align-items: center; gap: 7px; padding: 0 10px 0 20px;
   border-bottom: 1px solid var(--surface0);
+  cursor: pointer;
+  /* Room for the .active accent bar, which is drawn inside this padding rather
+   * than as a border so selecting a row does not shift its contents. */
+  position: relative;
 }
+.seq-ws-track-row:hover { background: color-mix(in srgb, var(--surface0) 40%, transparent); }
+
+/* Selected row. The `active` class was already being applied in
+ * SequencerWorkspace.tsx but had no rule at all, so clicking a nameplate gave no
+ * feedback whatsoever and read as "not clickable". The lane rule below is the
+ * matching half: nameplate and timeline row highlight together, so it is obvious
+ * which lane an added event will land on. */
+.seq-ws-track-row.active {
+  background: color-mix(in srgb, var(--mauve) 14%, transparent);
+}
+.seq-ws-track-row.active::before {
+  content: ""; position: absolute; left: 0; top: 0; bottom: 0;
+  width: 3px; background: var(--mauve);
+}
+.seq-ws-lane.active { background-color: color-mix(in srgb, var(--mauve) 8%, transparent); }
+
 .seq-ws-track-row.dimmed, .seq-ws-lane.dimmed { opacity: .4; }
 
 .seq-msl { display: inline-flex; gap: 3px; }
@@ -518,7 +538,11 @@ button, input, select, textarea { font-family: inherit; }
   font-family: var(--font-mono); font-size: 10.5px; color: var(--surface1);
 }
 
-.seq-ws-lane-list { flex: 1; min-height: 0; overflow-y: auto; }
+/* `position: relative` is load-bearing: the playhead and insert marker are
+ * absolutely positioned with `left: <percent>`, which needs this element to be
+ * their containing block. Without it they resolve against some further ancestor
+ * and land in the wrong place. */
+.seq-ws-lane-list { flex: 1; min-height: 0; overflow-y: auto; position: relative; }
 /* Mirrors .seq-ws-track-parent's height so lane rows line up with their
  * track labels — the two columns scroll independently and nothing else
  * enforces the alignment. */
@@ -530,6 +554,63 @@ button, input, select, textarea { font-family: inherit; }
   background-size: 12.5% 100%;
 }
 
+/* Duration was a dim label plus an unstyled box and read as decoration. It is
+ * the control an author reaches for when a Track behaves oddly, so it now looks
+ * like a control. */
+.seq-duration-label {
+  font-size: 10px; letter-spacing: .04em; text-transform: uppercase;
+  color: var(--subtext0);
+}
+.seq-duration-input {
+  width: 78px; font-size: 11px; padding: 3px 6px;
+  color: var(--text); background: var(--well);
+  border: 1px solid var(--surface1); border-radius: 3px;
+}
+.seq-duration-input::placeholder { color: var(--overlay0); font-style: italic; }
+.seq-duration-input:hover { border-color: var(--overlay0); }
+.seq-duration-input:focus { outline: 1px solid var(--blue); border-color: var(--blue); }
+
+/* Per-row "When Finished" toggle. Deliberately quiet by default (Restore is the
+ * common case) and clearly marked when set to Keep, since a Keep row is the one
+ * that leaves state behind after a Track ends. */
+.seq-wf-btn {
+  font-family: var(--font-mono); font-size: 9.5px; line-height: 1;
+  letter-spacing: .02em; white-space: nowrap;
+  padding: 3px 6px; border-radius: 3px; cursor: pointer;
+  /* A filled chip rather than a bare glyph: the first version was too quiet to
+   * find at all, which defeated the point of exposing the setting. */
+  background: var(--surface0); border: 1px solid var(--surface1); color: var(--subtext0);
+}
+.seq-wf-btn:hover {
+  border-color: var(--mauve); color: var(--text);
+  background: color-mix(in srgb, var(--mauve) 18%, var(--surface0));
+}
+.seq-wf-btn.keep {
+  border-color: var(--yellow);
+  color: var(--yellow);
+  background: color-mix(in srgb, var(--yellow) 12%, transparent);
+}
+
+/* Live playback position during a Track preview. Solid and bright, versus the
+ * dashed .seq-insert-marker below: one is where playback *is*, the other is
+ * where the next event *would go*. */
+.seq-playhead {
+  position: absolute; top: 0; bottom: 0; width: 0;
+  border-left: 2px solid var(--red);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--red) 60%, transparent);
+  pointer-events: none;
+  z-index: 3;
+}
+
+/* Where a lane click landed — the insert point for the next added event.
+ * Dashed and dimmer than .seq-playhead so the two are not confused: the
+ * playhead is live playback position, this is an authoring intent. */
+.seq-insert-marker {
+  position: absolute; top: 0; bottom: 0; width: 0;
+  border-left: 1px dashed color-mix(in srgb, var(--mauve) 70%, transparent);
+  pointer-events: none;
+}
+
 /* A key: instant actions are a dot, timed ones (AnimateTransform) stretch
  * into a bar spanning their duration — the mockup's dot-vs-bar language. */
 .seq-key {
@@ -537,9 +618,17 @@ button, input, select, textarea { font-family: inherit; }
   width: 12px; height: 12px; border-radius: 50%; padding: 0;
   background: var(--k, var(--surface1));
   border: 1px solid color-mix(in srgb, var(--k, var(--surface1)) 55%, black);
-  cursor: pointer;
+  /* grab, not pointer: a key is draggable along its lane to retime the event. */
+  cursor: grab;
 }
 .seq-key:hover { filter: brightness(1.25); }
+.seq-key:active, .seq-key.dragging { cursor: grabbing; }
+.seq-key.dragging {
+  filter: brightness(1.4);
+  /* Above its neighbours while moving, so it is never hidden behind a key it is
+   * being dragged past. */
+  z-index: 2;
+}
 .seq-key.seq-key-bar {
   border-radius: 6px; min-width: 12px; transform: translate(0, -50%);
   background: linear-gradient(90deg,

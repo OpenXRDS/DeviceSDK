@@ -139,6 +139,16 @@ export type NodePayload =
   | { type: "Cube";     material: MaterialParams; physics_body: string; gravity_scale: number; mass: number }
   | { type: "Sphere";   material: MaterialParams; physics_body: string; gravity_scale: number; mass: number }
   | { type: "Cylinder"; material: MaterialParams; physics_body: string; gravity_scale: number; mass: number }
+  | { type: "Capsule";  material: MaterialParams; physics_body: string; gravity_scale: number; mass: number; radius: number; length: number }
+  // No `material`: an effect's colour is its own start/end gradient, not a
+  // MaterialParams. Keep colour components <= 1.0 -- the runtime clamps, since
+  // the XR cameras have no HDR pass, so >1 would render flat white on device.
+  | { type: "Effect"; kind: string; auto_play: boolean; burst_count: number; spawn_rate: number;
+      lifetime_secs: number; size_min: number; size_max: number;
+      color_start: [number, number, number, number]; color_end: [number, number, number, number];
+      speed_min: number; speed_max: number; omnidirectional: boolean; spread_deg: number;
+      gravity: [number, number, number]; emission_radius: number;
+      blend: string; size_end: number; drag: number; fade_edge: number; fade_scene: number }
   | { type: "Plane";    material: MaterialParams; physics_body: string; gravity_scale: number; mass: number }
   | { type: "Camera";   fov: number; near: number; far: number }
   | { type: "PointLight";       color: [number,number,number,number]; intensity: number; range: number }
@@ -221,6 +231,9 @@ export interface ActionTexture {
 export type XrdsAction =
   | { kind: "PlayGltfAnimation"; data: { clip_index: number; speed: number; repeat: string; start_paused: boolean } }
   | { kind: "StopGltfAnimation" }
+  // `count: null` uses the effect node's own authored Burst Count.
+  | { kind: "PlayEffect"; data: { count: number | null } }
+  | { kind: "StopEffect" }
   | { kind: "SetVisible"; data: boolean }
   | {
       kind: "SetTransform";
@@ -302,7 +315,8 @@ export interface XrdsTrackKeyDto {
 export interface XrdsTrackAssetDto {
   target: ActionTarget;
   node_name: string | null;
-  keys: XrdsTrackKeyDto[];
+  keys: XrdsTrackKeyDto[];  /** "Restore" | "Keep" — what happens to this row when the Track ends by itself. */
+  when_finished: string;
 }
 
 export interface NamedTrackDto {
@@ -600,6 +614,14 @@ export type EditorCommand =
   | { type: "SetPhysicsBody";          payload: { id: number; physics_body: string } }
   | { type: "SetGravityScale";         payload: { id: number; value: number } }
   | { type: "SetMass";                 payload: { id: number; value: number } }
+  | { type: "SetCapsuleGeometry";      payload: { id: number; radius: number; length: number } }
+  | { type: "SetTrackAssetWhenFinished"; payload: { track: string; asset_index: number; when_finished: string } }
+  | { type: "SetEffectParams";         payload: { id: number; kind: string; auto_play: boolean;
+      burst_count: number; spawn_rate: number; lifetime_secs: number; size_min: number; size_max: number;
+      color_start: [number, number, number, number]; color_end: [number, number, number, number];
+      speed_min: number; speed_max: number; omnidirectional: boolean; spread_deg: number;
+      gravity: [number, number, number]; emission_radius: number;
+      blend: string; size_end: number; drag: number; fade_edge: number; fade_scene: number } }
   | { type: "SetActiveCamera";    payload: { id: number | null } }
   | { type: "SetActivePlayerAnchor"; payload: { id: number | null } }
   | { type: "PreviewFromAnchor";     payload: { id: number } }
@@ -696,11 +718,12 @@ export function hexToRgba(hex: string, a = 1.0): [number,number,number,number] {
 }
 
 export const KIND_ICON: Record<string, string> = {
-  Cube: "⬛", Sphere: "⚪", Cylinder: "🥫", Plane: "▭", Tetrahedron: "△",
+  Cube: "⬛", Sphere: "⚪", Cylinder: "🥫", Capsule: "💊", Plane: "▭", Tetrahedron: "△",
   Camera: "📷", DirectionalLight: "☀", PointLight: "💡", SpotLight: "🔦",
   AmbientLight: "🌤", GltfAsset: "📦", Text: "T", ExtrudedText: "E³", Billboard: "📋",
   HudText: "HUD", AudioClip: "♪", InteractionZone: "⬡", PlayerSpawn: "🧍", PlayerSpawnZone: "◻",
   Player: "🎮", PlayerAnchor: "📍",
+  Effect: "✨", EffectBurst: "💥", EffectTrail: "💨",
   // `Panel` had no entry at all before this — a placed panel showed no icon in
   // the hierarchy tree. `WorldPanel`'s icon moves here rather than being lost.
   Panel: "🪟",

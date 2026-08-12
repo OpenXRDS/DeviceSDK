@@ -3,7 +3,7 @@ use bevy::log::error;
 use xrds_scene_graph::{
     XrdsHudAnchor, XrdsSceneDocument, XrdsSceneNodeId, XrdsSceneNodePayload,
     XrdsSceneMaterial, XrdsSceneCameraProjection, XrdsSceneTextAlignment, XrdsSceneTextAnchor,
-    XrdsScenePlayerSpawnZone,
+    XrdsScenePlayerSpawnZone, XrdsSceneEffect, XrdsSceneEffectBlend, XrdsSceneEffectKind,
     XrdsSceneWorldLayout, XrdsSceneWorldWidget,
     XrdsSceneWorldLabel, XrdsSceneWorldButton, XrdsSceneWorldImage,
     XrdsSceneWorldSlider, XrdsSceneWorldToggle,
@@ -64,6 +64,8 @@ fn build_payload_dto(
         XrdsSceneNodePayload::Cube(c)       => NodePayloadDto::Cube     { material: mat_dto(&c.material), physics_body: physics_body_str(c.physics_body), gravity_scale: c.gravity_scale, mass: c.mass },
         XrdsSceneNodePayload::Sphere(c)     => NodePayloadDto::Sphere   { material: mat_dto(&c.material), physics_body: physics_body_str(c.physics_body), gravity_scale: c.gravity_scale, mass: c.mass },
         XrdsSceneNodePayload::Cylinder(c)   => NodePayloadDto::Cylinder { material: mat_dto(&c.material), physics_body: physics_body_str(c.physics_body), gravity_scale: c.gravity_scale, mass: c.mass },
+        XrdsSceneNodePayload::Effect(e)     => NodePayloadDto::Effect   { kind: effect_kind_str(e.kind).to_string(), auto_play: e.auto_play, burst_count: e.burst_count, spawn_rate: e.spawn_rate, lifetime_secs: e.lifetime_secs, size_min: e.size_min, size_max: e.size_max, color_start: e.color_start, color_end: e.color_end, speed_min: e.speed_min, speed_max: e.speed_max, omnidirectional: e.omnidirectional, spread_deg: e.spread_deg, gravity: e.gravity, emission_radius: e.emission_radius, blend: effect_blend_str(e.blend).to_string(), size_end: e.size_end, drag: e.drag, fade_edge: e.fade_edge, fade_scene: e.fade_scene },
+        XrdsSceneNodePayload::Capsule(c)    => NodePayloadDto::Capsule  { material: mat_dto(&c.material), physics_body: physics_body_str(c.physics_body), gravity_scale: c.gravity_scale, mass: c.mass, radius: c.radius, length: c.length },
         XrdsSceneNodePayload::Plane3D(c)    => NodePayloadDto::Plane    { material: mat_dto(&c.material), physics_body: physics_body_str(c.physics_body), gravity_scale: c.gravity_scale, mass: c.mass },
         XrdsSceneNodePayload::Tetrahedron(c)=> NodePayloadDto::Cube     { material: mat_dto(&c.material), physics_body: "None".to_string(), gravity_scale: 1.0, mass: 1.0 }, // reuse Cube DTO for now
 
@@ -160,6 +162,11 @@ fn payload_kind_name(p: &XrdsSceneNodePayload) -> &'static str {
         XrdsSceneNodePayload::Cube(_)         => "Cube",
         XrdsSceneNodePayload::Sphere(_)       => "Sphere",
         XrdsSceneNodePayload::Cylinder(_)     => "Cylinder",
+        XrdsSceneNodePayload::Capsule(_)      => "Capsule",
+        // Kind string only. Full editor authoring (palette entry, DTO,
+        // Inspector section) is Phase 3 of docs/done/vfx-particle-effects-plan.md;
+        // this arm exists because the match is exhaustive.
+        XrdsSceneNodePayload::Effect(_)       => "Effect",
         XrdsSceneNodePayload::Plane3D(_)      => "Plane",
         XrdsSceneNodePayload::Tetrahedron(_)  => "Tetrahedron",
         XrdsSceneNodePayload::Camera(_)       => "Camera",
@@ -465,6 +472,7 @@ pub fn apply_inspector_command(
                         XrdsSceneNodePayload::Cube(ref mut c)     => c.physics_body = pb,
                         XrdsSceneNodePayload::Sphere(ref mut c)   => c.physics_body = pb,
                         XrdsSceneNodePayload::Cylinder(ref mut c) => c.physics_body = pb,
+                        XrdsSceneNodePayload::Capsule(ref mut c)  => c.physics_body = pb,
                         XrdsSceneNodePayload::Plane3D(ref mut c)  => c.physics_body = pb,
                         _ => {}
                     }
@@ -485,6 +493,7 @@ pub fn apply_inspector_command(
                         XrdsSceneNodePayload::Cube(ref mut c)     => c.gravity_scale = v,
                         XrdsSceneNodePayload::Sphere(ref mut c)   => c.gravity_scale = v,
                         XrdsSceneNodePayload::Cylinder(ref mut c) => c.gravity_scale = v,
+                        XrdsSceneNodePayload::Capsule(ref mut c)  => c.gravity_scale = v,
                         XrdsSceneNodePayload::Plane3D(ref mut c)  => c.gravity_scale = v,
                         _ => {}
                     }
@@ -506,6 +515,7 @@ pub fn apply_inspector_command(
                         XrdsSceneNodePayload::Cube(ref mut c)     => c.mass = v,
                         XrdsSceneNodePayload::Sphere(ref mut c)   => c.mass = v,
                         XrdsSceneNodePayload::Cylinder(ref mut c) => c.mass = v,
+                        XrdsSceneNodePayload::Capsule(ref mut c)  => c.mass = v,
                         XrdsSceneNodePayload::Plane3D(ref mut c)  => c.mass = v,
                         _ => {}
                     }
@@ -515,6 +525,96 @@ pub fn apply_inspector_command(
                 Err(e) => error!("[inspector] SetMass failed: {:?}", e),
             }
             state.pending_mass = Some((id, v));
+            false
+        }
+
+        EditorCommand::SetCapsuleGeometry { id, radius, length } => {
+            let id = XrdsSceneNodeId(*id);
+            let (r, l) = (*radius, *length);
+            match session.0.edit(|doc| {
+                if let Some(node) = doc.node_mut(id) {
+                    if let XrdsSceneNodePayload::Capsule(ref mut c) = node.payload {
+                        c.radius = r;
+                        c.length = l;
+                    }
+                }
+            }) {
+                Ok(_) => {}
+                Err(e) => error!("[inspector] SetCapsuleGeometry failed: {:?}", e),
+            }
+            state.pending_capsule_geometry = Some((id, r, l));
+            false
+        }
+
+        EditorCommand::SetEffectParams {
+            id,
+            kind,
+            auto_play,
+            burst_count,
+            spawn_rate,
+            lifetime_secs,
+            size_min,
+            size_max,
+            color_start,
+            color_end,
+            speed_min,
+            speed_max,
+            omnidirectional,
+            spread_deg,
+            gravity,
+            emission_radius,
+            blend,
+            size_end,
+            drag,
+            fade_edge,
+            fade_scene,
+        } => {
+            let id = XrdsSceneNodeId(*id);
+            // Unknown kind strings are ignored rather than defaulted: silently
+            // turning a Trail into a Burst because of a frontend typo would be a
+            // confusing edit to debug.
+            let Some(parsed_kind) = effect_kind_from_str(kind) else {
+                error!("[inspector] SetEffectParams: unknown kind {kind:?}, ignoring");
+                return false;
+            };
+            let Some(parsed_blend) = effect_blend_from_str(blend) else {
+                error!("[inspector] SetEffectParams: unknown blend {blend:?}, ignoring");
+                return false;
+            };
+            let params = XrdsSceneEffect {
+                kind: parsed_kind,
+                auto_play: *auto_play,
+                burst_count: *burst_count,
+                spawn_rate: *spawn_rate,
+                lifetime_secs: *lifetime_secs,
+                size_min: *size_min,
+                size_max: *size_max,
+                color_start: *color_start,
+                color_end: *color_end,
+                speed_min: *speed_min,
+                speed_max: *speed_max,
+                omnidirectional: *omnidirectional,
+                spread_deg: *spread_deg,
+                gravity: *gravity,
+                emission_radius: *emission_radius,
+                blend: parsed_blend,
+                size_end: *size_end,
+                drag: *drag,
+                fade_edge: *fade_edge,
+                fade_scene: *fade_scene,
+            };
+            let stored = params.clone();
+            match session.0.edit(|doc| {
+                if let Some(node) = doc.node_mut(id) {
+                    if let XrdsSceneNodePayload::Effect(ref mut e) = node.payload {
+                        *e = stored.clone();
+                    }
+                }
+            }) {
+                Ok(_) => {}
+                Err(e) => error!("[inspector] SetEffectParams failed: {:?}", e),
+            }
+            state.pending_effect_params = Some((id, params));
             false
         }
 
@@ -673,6 +773,38 @@ pub fn euler_degrees_to_quat(degrees: [f32; 3]) -> [f32; 4] {
 // Helpers — physics body string ↔ XrdsPhysicsBody
 // ---------------------------------------------------------------------------
 
+fn effect_kind_str(kind: XrdsSceneEffectKind) -> &'static str {
+    match kind {
+        XrdsSceneEffectKind::Burst => "Burst",
+        XrdsSceneEffectKind::Trail => "Trail",
+    }
+}
+
+fn effect_kind_from_str(kind: &str) -> Option<XrdsSceneEffectKind> {
+    match kind {
+        "Burst" => Some(XrdsSceneEffectKind::Burst),
+        "Trail" => Some(XrdsSceneEffectKind::Trail),
+        _ => None,
+    }
+}
+
+fn effect_blend_str(blend: XrdsSceneEffectBlend) -> &'static str {
+    match blend {
+        XrdsSceneEffectBlend::Blend => "Blend",
+        XrdsSceneEffectBlend::Add => "Add",
+        XrdsSceneEffectBlend::Multiply => "Multiply",
+    }
+}
+
+fn effect_blend_from_str(blend: &str) -> Option<XrdsSceneEffectBlend> {
+    match blend {
+        "Blend" => Some(XrdsSceneEffectBlend::Blend),
+        "Add" => Some(XrdsSceneEffectBlend::Add),
+        "Multiply" => Some(XrdsSceneEffectBlend::Multiply),
+        _ => None,
+    }
+}
+
 fn physics_body_str(pb: xrds_scene_graph::XrdsPhysicsBody) -> String {
     match pb {
         xrds_scene_graph::XrdsPhysicsBody::None    => "None".to_string(),
@@ -812,6 +944,7 @@ fn set_node_material(node: &mut xrds_scene_graph::XrdsSceneNode, mat: XrdsSceneM
         XrdsSceneNodePayload::Cube(c)      => c.material = mat,
         XrdsSceneNodePayload::Sphere(c)    => c.material = mat,
         XrdsSceneNodePayload::Cylinder(c)  => c.material = mat,
+        XrdsSceneNodePayload::Capsule(c)   => c.material = mat,
         XrdsSceneNodePayload::Plane3D(c)   => c.material = mat,
         XrdsSceneNodePayload::Tetrahedron(c) => c.material = mat,
         _ => {}

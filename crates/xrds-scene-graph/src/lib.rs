@@ -14,7 +14,9 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 use xrds_components::primitives::{
-    XrdsCube, XrdsCylinder, XrdsExtrudedText, XrdsExtrudedTextAlignment,
+    XrdsCapsule, XrdsCube, XrdsCylinder, XrdsEffect, XrdsEffectBlend, XrdsEffectKind,
+    XrdsExtrudedText,
+    XrdsExtrudedTextAlignment,
     XrdsPlane3D, XrdsSphere, XrdsTetrahedron, XrdsText, XrdsTextAlignment,
     XrdsTextAnchor,
 };

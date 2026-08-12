@@ -235,9 +235,200 @@ pub(super) fn spawn_cylinder_descriptor(
             NoFrustumCulling,
         ));
         apply_authored_material_to_entity(world, entity, material);
-        // Avian3d cylinder: radius, half_height
+        // `Collider::cylinder` takes the FULL height and halves it internally
+        // (avian3d 0.4: `SharedShape::cylinder(height * 0.5, radius)`) — matching
+        // `Mesh::from(Cylinder::new(radius, height))` above, which is also full
+        // height. Passing `height / 2.0` here (as this line previously did) made
+        // every cylinder's collider half as tall as its visible mesh.
         insert_physics_components(world, entity, physics_body, gravity_scale, mass, |_| {
-            avian3d::prelude::Collider::cylinder(radius, height / 2.0)
+            avian3d::prelude::Collider::cylinder(radius, height)
+        }, [0.0f32; 1]);
+    });
+
+    entity
+}
+
+/// Translate an [`XrdsEffect`] descriptor into a `bevy_firework`
+/// `ParticleSpawner`.
+///
+/// This is the single place the backend's vocabulary is spoken — keeping every
+/// `bevy_firework` type behind this function is what makes the backend
+/// swappable, which is not a hypothetical concern here (see
+/// `docs/done/vfx-particle-effects-plan.md` for why the first backend was replaced).
+pub(super) fn build_particle_spawner(effect: &XrdsEffect) -> bevy_firework::core::ParticleSpawner {
+    use bevy_firework::{
+        bevy_utilitarian::prelude::{RandF32, RandValue, RandVec3},
+        core::{BlendMode, EmissionPacing, EmissionSettings, ParticleSettings, ParticleSpawner},
+        curve::{FireworkCurve, FireworkGradient},
+        emission_shape::EmissionShape,
+    };
+
+    // Clamp to LDR. Values >1.0 are an HDR/bloom idiom, and the SDK's XR eye
+    // cameras have neither Hdr nor Bloom — anything brighter silently clamps and
+    // renders pure white on device. Clamping here means an author who types 30.0
+    // gets the brightest representable colour instead of a white blob.
+    let clamp_ldr = |c: xrds_components::XrdsColor| {
+        LinearRgba::new(
+            c.rgba[0].clamp(0.0, 1.0),
+            c.rgba[1].clamp(0.0, 1.0),
+            c.rgba[2].clamp(0.0, 1.0),
+            c.rgba[3].clamp(0.0, 1.0),
+        )
+    };
+
+    // Each kind reads its own field; the other is ignored rather than
+    // reinterpreted, so flipping `kind` can't silently turn a count into a rate.
+    //
+    // `auto_play` is expressed through two different backend mechanisms because
+    // the backend has no single "idle" switch that covers both cases:
+    //
+    //   Burst + auto_play  -> OneShot: fires once, immediately, then the backend
+    //                         disables that emission itself.
+    //   Burst + !auto_play -> OnDemand: emits only what `queue_particles` asks
+    //                         for, which is what PlayEffect will drive (Phase 4).
+    //   Trail + auto_play  -> rate: runs continuously.
+    //   Trail + !auto_play -> rate, but `starts_enabled: false` so nothing is
+    //                         emitted until it is enabled.
+    //
+    // Note OnDemand must keep `starts_enabled: true` — the emission loop bails
+    // on `!enabled` before it ever looks at the queued count
+    // (bevy_firework core.rs:387), so an OnDemand spawner that starts disabled
+    // would ignore every fire request.
+    let pacing = match (effect.kind, effect.auto_play) {
+        (XrdsEffectKind::Burst, true) => EmissionPacing::OneShot(effect.burst_count as usize),
+        (XrdsEffectKind::Burst, false) => EmissionPacing::OnDemand,
+        (XrdsEffectKind::Trail, _) => EmissionPacing::rate(effect.spawn_rate.max(0.0)),
+    };
+    let starts_enabled = match effect.kind {
+        XrdsEffectKind::Burst => true,
+        XrdsEffectKind::Trail => effect.auto_play,
+    };
+
+    // Omnidirectional and cone emission are mutually exclusive in bevy_firework:
+    // one pushes radially out of the emission point, the other picks a direction
+    // and spreads around it. Driven by an explicit flag rather than inferred from
+    // the angle.
+    let (initial_velocity, initial_velocity_radial) = if effect.omnidirectional {
+        (
+            RandVec3::constant(Vec3::ZERO),
+            RandF32 {
+                min: effect.speed_min,
+                max: effect.speed_max,
+            },
+        )
+    } else {
+        (
+            RandVec3 {
+                magnitude: RandF32 {
+                    min: effect.speed_min,
+                    max: effect.speed_max,
+                },
+                direction: Vec3::Y,
+                spread: effect.spread_deg.to_radians(),
+            },
+            RandF32::constant(0.0),
+        )
+    };
+
+    ParticleSpawner {
+        particle_settings: vec![ParticleSettings {
+            lifetime: RandF32::constant(effect.lifetime_secs.max(0.0)),
+            initial_scale: RandF32 {
+                min: effect.size_min,
+                max: effect.size_max,
+            },
+            // Two-stop curve from spawn size (1.0x) to size_end. Equivalent to
+            // the previous constant(1.0) when size_end is its 1.0 default.
+            scale_curve: FireworkCurve::uneven_samples(vec![(0.0, 1.0), (1.0, effect.size_end.max(0.0))]),
+            base_color: FireworkGradient::uneven_samples(vec![
+                (0.0, clamp_ldr(effect.color_start)),
+                (1.0, clamp_ldr(effect.color_end)),
+            ]),
+            blend_mode: match effect.blend {
+                XrdsEffectBlend::Blend => BlendMode::Blend,
+                XrdsEffectBlend::Add => BlendMode::Add,
+                XrdsEffectBlend::Multiply => BlendMode::Multiply,
+            },
+            linear_drag: effect.drag.max(0.0),
+            fade_edge: effect.fade_edge.clamp(0.0, 1.0),
+            fade_scene: effect.fade_scene.max(0.0),
+            // Unlit: a particle should look the same regardless of whether the
+            // authored scene happens to contain lights.
+            pbr: false,
+            acceleration: Vec3::from_array(effect.gravity),
+            ..Default::default()
+        }],
+        emission_settings: vec![EmissionSettings {
+            emission_pacing: pacing,
+            emission_shape: EmissionShape::Sphere(effect.emission_radius.max(0.0)),
+            initial_velocity,
+            initial_velocity_radial,
+            ..Default::default()
+        }],
+        starts_enabled,
+        ..Default::default()
+    }
+}
+
+pub(super) fn spawn_effect_descriptor(commands: &mut Commands, effect: &XrdsEffect) -> Entity {
+    let entity = commands.spawn_empty().id();
+    let descriptor = effect.clone();
+    let name = effect.name.clone();
+    let transform = effect.transform;
+    let visible = effect.visible;
+    let spawner = build_particle_spawner(effect);
+
+    commands.queue(move |world: &mut World| {
+        world.entity_mut(entity).insert((
+            Name::new(name),
+            spawner,
+            build_transform(&transform),
+            build_visibility_hierarchy_components(visible),
+            XrdsStored(descriptor),
+        ));
+    });
+
+    entity
+}
+
+pub(super) fn spawn_capsule_descriptor(
+    commands: &mut Commands,
+    capsule: &XrdsCapsule,
+) -> Entity {
+    let entity = commands.spawn_empty().id();
+    let descriptor = capsule.clone();
+    let name = capsule.name.clone();
+    let transform = capsule.transform;
+    let visible = capsule.visible;
+    let radius = capsule.radius;
+    let length = capsule.length;
+    let physics_body = capsule.physics_body;
+    let gravity_scale = capsule.gravity_scale;
+    let mass = capsule.mass;
+    let material = XrdsMaterialParams::default();
+
+    commands.queue(move |world: &mut World| {
+        let mesh = {
+            let mut meshes = world.resource_mut::<Assets<Mesh>>();
+            meshes.add(Mesh::from(Capsule3d::new(radius, length)))
+        };
+
+        use bevy::camera::visibility::NoFrustumCulling;
+        world.entity_mut(entity).insert((
+            Name::new(name),
+            Mesh3d(mesh),
+            build_transform(&transform),
+            build_visibility_hierarchy_components(visible),
+            XrdsStored(descriptor),
+            NoFrustumCulling,
+        ));
+        apply_authored_material_to_entity(world, entity, material);
+        // `Collider::capsule(radius, length)` and `Capsule3d::new(radius, length)`
+        // agree on what `length` means — the straight segment, excluding the two
+        // hemispherical caps — so no halving or unit conversion is needed here,
+        // unlike the cylinder case above.
+        insert_physics_components(world, entity, physics_body, gravity_scale, mass, |_| {
+            avian3d::prelude::Collider::capsule(radius, length)
         }, [0.0f32; 1]);
     });
 

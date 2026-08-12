@@ -568,6 +568,8 @@ mod anchor_subtree;
 mod builtins;
 #[path = "tests/document_roundtrip.rs"]
 mod document_roundtrip;
+#[path = "tests/effect.rs"]
+mod effect;
 #[path = "tests/gltf_document.rs"]
 mod gltf_document;
 #[path = "tests/gltf_runtime.rs"]

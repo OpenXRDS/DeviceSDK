@@ -46,8 +46,10 @@ pub use patches::{
     ParentPatch, TextParams, VisibilityPatch,
 };
 pub use values::{
-    CubeGeometryParams, CylinderGeometryParams, Plane3DGeometryParams, SphereGeometryParams,
-    TetrahedronGeometryParams, TransformParams, XrdsMaterialAlphaMode, XrdsMaterialParams,
+    CapsuleGeometryParams, CubeGeometryParams, CylinderGeometryParams, EffectParams,
+    Plane3DGeometryParams,
+    SphereGeometryParams, TetrahedronGeometryParams, TransformParams, XrdsMaterialAlphaMode,
+    XrdsMaterialParams,
     XrdsMaterialPbrParams, XrdsMaterialTextureFilterMode, XrdsMaterialTextureRef,
     XrdsMaterialTextureSamplerParams, XrdsMaterialTextureSlotKind, XrdsMaterialTextureSlots,
     XrdsMaterialTextureUvParams, XrdsMaterialTextureUvTransformMode, XrdsMaterialTextureWrapMode,

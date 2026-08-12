@@ -51,7 +51,7 @@ fn binding_for(track: &str) -> XrdsTriggerBinding {
 
 /// One asset row driving `node_id`, with the given keys.
 fn row(node_id: u64, keys: Vec<XrdsTrackKey>) -> XrdsTrackAsset {
-    XrdsTrackAsset { target: XrdsActionTarget::Node(XrdsSceneNodeId(node_id)), keys }
+    XrdsTrackAsset { when_finished: Default::default(), target: XrdsActionTarget::Node(XrdsSceneNodeId(node_id)), keys }
 }
 
 fn key(at_secs: f32, action: XrdsAction) -> XrdsTrackKey {
@@ -163,7 +163,7 @@ fn track_round_trips_every_surviving_action_variant() {
                     key(2.0, animate(0.75)),
                 ],
             ),
-            XrdsTrackAsset {
+            XrdsTrackAsset { when_finished: Default::default(),
                 target: XrdsActionTarget::TriggerSource,
                 keys: vec![
                     key(
@@ -366,8 +366,8 @@ fn owned_nodes_reports_only_concrete_node_rows() {
     let track = XrdsTrack {
         assets: vec![
             row(1, vec![]),
-            XrdsTrackAsset { target: XrdsActionTarget::SelfNode, keys: vec![] },
-            XrdsTrackAsset { target: XrdsActionTarget::TriggerSource, keys: vec![] },
+            XrdsTrackAsset { when_finished: Default::default(), target: XrdsActionTarget::SelfNode, keys: vec![] },
+            XrdsTrackAsset { when_finished: Default::default(), target: XrdsActionTarget::TriggerSource, keys: vec![] },
             row(2, vec![]),
         ],
         ..XrdsTrack::default()
@@ -596,7 +596,7 @@ fn diagnostics_skip_the_gltf_check_for_a_self_node_row() {
         vec![named(
             "T",
             XrdsTrack {
-                assets: vec![XrdsTrackAsset {
+                assets: vec![XrdsTrackAsset { when_finished: Default::default(),
                     target: XrdsActionTarget::SelfNode,
                     keys: vec![key(0.0, XrdsAction::StopGltfAnimation)],
                 }],
@@ -877,7 +877,7 @@ fn self_node_rows_never_produce_a_false_conflict() {
     // Two Tracks each using SelfNode resolve to different entities at fire
     // time, so treating them as a shared asset would be wrong.
     let self_row =
-        || XrdsTrackAsset { target: XrdsActionTarget::SelfNode, keys: vec![key(0.0, teleport())] };
+        || XrdsTrackAsset { when_finished: Default::default(), target: XrdsActionTarget::SelfNode, keys: vec![key(0.0, teleport())] };
     let d = doc(
         vec![node(1)],
         vec![

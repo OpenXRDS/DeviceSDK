@@ -179,6 +179,7 @@ pub(crate) fn node_material_ref(node: &XrdsSceneNode) -> Option<&XrdsSceneMateri
     match &node.payload {
         XrdsSceneNodePayload::Cube(cube) => Some(&cube.material),
         XrdsSceneNodePayload::Cylinder(cylinder) => Some(&cylinder.material),
+        XrdsSceneNodePayload::Capsule(capsule) => Some(&capsule.material),
         XrdsSceneNodePayload::Sphere(sphere) => Some(&sphere.material),
         XrdsSceneNodePayload::Plane3D(plane) => Some(&plane.material),
         XrdsSceneNodePayload::Tetrahedron(tetrahedron) => Some(&tetrahedron.material),
@@ -190,6 +191,7 @@ fn node_material_mut(node: &mut XrdsSceneNode) -> Option<&mut XrdsSceneMaterial>
     match &mut node.payload {
         XrdsSceneNodePayload::Cube(cube) => Some(&mut cube.material),
         XrdsSceneNodePayload::Cylinder(cylinder) => Some(&mut cylinder.material),
+        XrdsSceneNodePayload::Capsule(capsule) => Some(&mut capsule.material),
         XrdsSceneNodePayload::Sphere(sphere) => Some(&mut sphere.material),
         XrdsSceneNodePayload::Plane3D(plane) => Some(&mut plane.material),
         XrdsSceneNodePayload::Tetrahedron(tetrahedron) => Some(&mut tetrahedron.material),

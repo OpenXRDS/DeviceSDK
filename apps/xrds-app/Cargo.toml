@@ -23,19 +23,18 @@ default = ["ftp-server"]
 # aws-lc-sys) isn't cross-compile-proven for Android. See
 # docs/done/xrds-net-android-shipping.md Phase 3.
 ftp-server = ["xrds-runtime/ftp-server"]
-
 [dependencies]
 xrds-runtime     = { workspace = true, default-features = false }
 xrds-scene-graph = { workspace = true }
 xrds-openxr      = { workspace = true }
 bevy             = { workspace = true }
+log              = { workspace = true }
 
 [target.'cfg(target_os = "android")'.dependencies]
 winit          = { version = "0.30.5", features = ["android-native-activity"] }
 bevy_winit     = { version = "0.17.2", features = ["android-native-activity"] }
 bevy_android   = { version = "0.17.2" }
 android_logger = "0.14"
-log            = { workspace = true }
 # ndk 0.9 matches android-activity 0.6 (transitive via winit). Declared explicitly
 # so asset_manager() types are unambiguous in android_main.
 ndk            = { version = "0.9", default-features = false }

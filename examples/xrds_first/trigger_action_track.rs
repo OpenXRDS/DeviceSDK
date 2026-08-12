@@ -141,7 +141,7 @@ fn key(at_secs: f32, action: XrdsAction) -> XrdsTrackKey {
 
 /// One asset row: every event for `node_id` inside this Track.
 fn row(node_id: u64, keys: Vec<XrdsTrackKey>) -> XrdsTrackAsset {
-    XrdsTrackAsset {
+    XrdsTrackAsset { when_finished: Default::default(),
         target: XrdsActionTarget::Node(XrdsSceneNodeId(node_id)),
         keys,
     }

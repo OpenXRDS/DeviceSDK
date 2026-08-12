@@ -135,7 +135,14 @@ export CMAKE_MAKE_PROGRAM="${CMAKE_MAKE_PROGRAM:-}"
 # feature's dependency chain (libunftp -> aws-lc-sys) isn't cross-compile
 # proven for Android. See docs/done/xrds-net-android-shipping.md Phase 3 for why
 # this can't be expressed as a per-target Cargo.toml default instead.
-(cd "$WORKSPACE_ROOT" && cargo ndk -t arm64-v8a -P 32 -o "$SCRIPT_DIR/jni" build --release -p xrds-app --no-default-features)
+#
+# EXTRA_CARGO_FEATURES: optional, passed through as --features. Exists for
+# one-off verification builds without editing this script.
+EXTRA_FEATURE_ARGS=()
+if [[ -n "${EXTRA_CARGO_FEATURES:-}" ]]; then
+    EXTRA_FEATURE_ARGS=(--features "$EXTRA_CARGO_FEATURES")
+fi
+(cd "$WORKSPACE_ROOT" && cargo ndk -t arm64-v8a -P 32 -o "$SCRIPT_DIR/jni" build --release -p xrds-app --no-default-features "${EXTRA_FEATURE_ARGS[@]}")
 
 unset CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS
 unset CMAKE_GENERATOR CMAKE_MAKE_PROGRAM
@@ -178,6 +185,16 @@ fi
 echo "    Generating ASSET_MANIFEST..."
 (cd "$STAGING" && find . -type f | sed 's|^\./||' | LC_ALL=C sort) > "$STAGING/ASSET_MANIFEST"
 echo "    $(wc -l < "$STAGING/ASSET_MANIFEST" | tr -d ' ') file(s) listed in manifest"
+
+# Generate ASSET_STAMP — a per-build marker android_main uses to decide whether the
+# on-device cache is stale.  Deliberately a fresh timestamp on every build rather than a
+# content hash: it can never false-match, so newly built assets always reach the device.
+# The device's cache dir survives APK upgrades, so without this a changed asset that kept
+# its byte length would be ignored forever (the previous size-comparison bug).
+# android_main opens it by name, so it does not need a manifest entry.
+echo "    Generating ASSET_STAMP..."
+printf 'build=%s\n' "$(date -u +%Y%m%dT%H%M%SZ)" > "$STAGING/ASSET_STAMP"
+echo "    stamp: $(cat "$STAGING/ASSET_STAMP")"
 
 # Step 4: Package APK
 echo "==> Step 4: Packaging APK..."

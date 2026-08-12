@@ -110,6 +110,9 @@ fn pick_radius(payload: &XrdsSceneNodePayload, scale: &[f32; 3]) -> f32 {
         XrdsSceneNodePayload::Sphere(sp)  => sp.radius * s,
         XrdsSceneNodePayload::Cube(c)     => Vec3::from_array(c.size).length() * 0.5 * s,
         XrdsSceneNodePayload::Cylinder(c) => c.radius.max(c.height * 0.5) * s,
+        // Bounding radius from the centre to a cap's outer tip: half the
+        // straight segment plus the hemisphere radius.
+        XrdsSceneNodePayload::Capsule(c)  => (c.length * 0.5 + c.radius) * s,
         // Plane3D is handled by ray_plane() — not via bounding sphere
         XrdsSceneNodePayload::PointLight(_) | XrdsSceneNodePayload::SpotLight(_)
         | XrdsSceneNodePayload::DirectionalLight(_) | XrdsSceneNodePayload::AmbientLight(_) => 0.35 * s,

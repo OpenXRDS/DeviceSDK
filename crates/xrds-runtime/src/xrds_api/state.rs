@@ -489,6 +489,12 @@ pub(super) fn cylinder_descriptor_ref(world: &World, entity: Entity) -> Option<&
         .map(|descriptor| &descriptor.0)
 }
 
+pub(super) fn capsule_descriptor_ref(world: &World, entity: Entity) -> Option<&XrdsCapsule> {
+    world
+        .get::<XrdsStored<XrdsCapsule>>(entity)
+        .map(|descriptor| &descriptor.0)
+}
+
 pub(super) fn cube_descriptor_ref(world: &World, entity: Entity) -> Option<&XrdsCube> {
     world
         .get::<XrdsStored<XrdsCube>>(entity)

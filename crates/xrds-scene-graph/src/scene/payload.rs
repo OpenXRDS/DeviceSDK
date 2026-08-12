@@ -8,9 +8,11 @@ pub enum XrdsSceneNodePayload {
     GltfAsset(XrdsSceneGltfAsset),
     Cube(XrdsSceneCube),
     Cylinder(XrdsSceneCylinder),
+    Capsule(XrdsSceneCapsule),
     Sphere(XrdsSceneSphere),
     Plane3D(XrdsScenePlane3D),
     Tetrahedron(XrdsSceneTetrahedron),
+    Effect(XrdsSceneEffect),
     AmbientLight(XrdsSceneAmbientLight),
     DirectionalLight(XrdsSceneDirectionalLight),
     PointLight(XrdsScenePointLight),
@@ -115,6 +117,7 @@ impl XrdsSceneNodePayload {
             Self::GltfAsset(_) => XrdsGltfExportClass::ExternalSceneReference,
             Self::Cube(_)
             | Self::Cylinder(_)
+            | Self::Capsule(_)
             | Self::Sphere(_)
             | Self::Plane3D(_)
             | Self::Tetrahedron(_) => XrdsGltfExportClass::ProceduralMeshBake,
@@ -122,6 +125,10 @@ impl XrdsSceneNodePayload {
             | Self::DirectionalLight(_)
             | Self::PointLight(_)
             | Self::SpotLight(_) => XrdsGltfExportClass::Light,
+            // NodeOnly: a particle effect has no bakeable mesh, and glTF has no
+            // vocabulary for emitters. Scene GLB export is retired project-wide
+            // anyway (see xrds-gltf in CLAUDE.md).
+            Self::Effect(_) => XrdsGltfExportClass::NodeOnly,
             Self::AudioClip(_) => XrdsGltfExportClass::NodeOnly,
             Self::InteractionZone(_) => XrdsGltfExportClass::NodeOnly,
             Self::PlayerSpawn(_) => XrdsGltfExportClass::NodeOnly,
@@ -807,6 +814,194 @@ impl Default for XrdsSceneCylinder {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct XrdsSceneCapsule {
+    pub radius: f32,
+    /// Excludes the two hemispherical caps — see `XrdsCapsule::length`.
+    pub length: f32,
+    pub material: XrdsSceneMaterial,
+    #[serde(default, skip_serializing_if = "XrdsPhysicsBody::is_none")]
+    pub physics_body: XrdsPhysicsBody,
+    #[serde(default = "default_one", skip_serializing_if = "is_one")]
+    pub gravity_scale: f32,
+    #[serde(default = "default_one", skip_serializing_if = "is_one")]
+    pub mass: f32,
+}
+
+impl Default for XrdsSceneCapsule {
+    fn default() -> Self {
+        Self {
+            radius: 0.5,
+            length: 1.0,
+            material: XrdsSceneMaterial::default(),
+            physics_body: XrdsPhysicsBody::None,
+            gravity_scale: 1.0,
+            mass: 1.0,
+        }
+    }
+}
+
+/// Serialized form of an `XrdsEffect`.
+///
+/// Field-for-field with the runtime descriptor's tunable set, minus
+/// identity/placement, which every node carries already. Colours are `[f32; 4]`
+/// linear RGBA to match the rest of this format.
+///
+/// `#[serde(default)]` on every field with a sane default: a scene authored
+/// before a field existed still loads, which matters because this format is
+/// already in users' hands.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct XrdsSceneEffect {
+    #[serde(default)]
+    pub kind: XrdsSceneEffectKind,
+    /// Emit as soon as the node loads. `false` leaves it idle for a trigger to
+    /// fire — see `XrdsEffect::auto_play`.
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    pub auto_play: bool,
+    /// Particles per firing; `Burst` only.
+    #[serde(default = "default_burst_count")]
+    pub burst_count: u32,
+    /// Particles per second; `Trail` only.
+    #[serde(default = "default_spawn_rate")]
+    pub spawn_rate: f32,
+    #[serde(default = "default_lifetime_secs")]
+    pub lifetime_secs: f32,
+    #[serde(default = "default_size_min")]
+    pub size_min: f32,
+    #[serde(default = "default_size_max")]
+    pub size_max: f32,
+    /// Linear RGBA. Keep components <= 1.0 — brighter values clamp, because the
+    /// SDK's XR cameras have no HDR pass. See `XrdsEffect::color_start`.
+    #[serde(default = "default_effect_color_start")]
+    pub color_start: [f32; 4],
+    #[serde(default = "default_effect_color_end")]
+    pub color_end: [f32; 4],
+    #[serde(default = "default_speed_min")]
+    pub speed_min: f32,
+    #[serde(default = "default_speed_max")]
+    pub speed_max: f32,
+    /// Emit in all directions, ignoring `spread_deg`.
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    pub omnidirectional: bool,
+    /// Cone half-angle about local +Y in degrees; ignored if `omnidirectional`.
+    #[serde(default = "default_spread_deg")]
+    pub spread_deg: f32,
+    #[serde(default = "default_effect_gravity")]
+    pub gravity: [f32; 3],
+    #[serde(default = "default_emission_radius")]
+    pub emission_radius: f32,
+    #[serde(default)]
+    pub blend: XrdsSceneEffectBlend,
+    /// End-of-life size multiplier; `1.0` holds size constant.
+    #[serde(default = "default_one_f32")]
+    pub size_end: f32,
+    #[serde(default = "default_drag")]
+    pub drag: f32,
+    #[serde(default = "default_fade_edge")]
+    pub fade_edge: f32,
+    #[serde(default = "default_one_f32")]
+    pub fade_scene: f32,
+}
+
+/// Wire form of `XrdsEffectBlend`. Separate from the runtime enum for the same
+/// reason as `XrdsSceneEffectKind`: these names are a file-format contract.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum XrdsSceneEffectBlend {
+    #[default]
+    Blend,
+    Add,
+    Multiply,
+}
+
+fn default_one_f32() -> f32 {
+    1.0
+}
+fn default_drag() -> f32 {
+    0.2
+}
+fn default_fade_edge() -> f32 {
+    0.7
+}
+
+/// Wire form of `XrdsEffectKind`. Separate from the runtime enum so the
+/// serialized names are ours to keep stable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum XrdsSceneEffectKind {
+    #[default]
+    Burst,
+    Trail,
+}
+
+fn default_true() -> bool {
+    true
+}
+fn is_true(value: &bool) -> bool {
+    *value
+}
+fn default_burst_count() -> u32 {
+    300
+}
+fn default_spawn_rate() -> f32 {
+    100.0
+}
+fn default_lifetime_secs() -> f32 {
+    1.5
+}
+fn default_size_min() -> f32 {
+    0.05
+}
+fn default_size_max() -> f32 {
+    0.15
+}
+fn default_effect_color_start() -> [f32; 4] {
+    [1.0, 0.85, 0.35, 1.0]
+}
+fn default_effect_color_end() -> [f32; 4] {
+    [0.5, 0.08, 0.0, 0.0]
+}
+fn default_speed_min() -> f32 {
+    0.8
+}
+fn default_speed_max() -> f32 {
+    1.6
+}
+fn default_spread_deg() -> f32 {
+    45.0
+}
+fn default_effect_gravity() -> [f32; 3] {
+    [0.0, -1.2, 0.0]
+}
+fn default_emission_radius() -> f32 {
+    0.05
+}
+
+impl Default for XrdsSceneEffect {
+    fn default() -> Self {
+        Self {
+            kind: XrdsSceneEffectKind::Burst,
+            auto_play: true,
+            burst_count: default_burst_count(),
+            spawn_rate: default_spawn_rate(),
+            lifetime_secs: default_lifetime_secs(),
+            size_min: default_size_min(),
+            size_max: default_size_max(),
+            color_start: default_effect_color_start(),
+            color_end: default_effect_color_end(),
+            speed_min: default_speed_min(),
+            speed_max: default_speed_max(),
+            omnidirectional: true,
+            spread_deg: default_spread_deg(),
+            gravity: default_effect_gravity(),
+            emission_radius: default_emission_radius(),
+            blend: XrdsSceneEffectBlend::Blend,
+            size_end: 1.0,
+            drag: default_drag(),
+            fade_edge: default_fade_edge(),
+            fade_scene: 1.0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct XrdsSceneSphere {
     pub radius: f32,
     pub material: XrdsSceneMaterial,
@@ -1471,7 +1666,7 @@ pub enum XrdsSceneWorldWidget {
 // widgets and layout, both fields directly on the node. Retired because inline
 // widgets carry no `triggers` — every button on one was permanently dead, unlike
 // an `XrdsPanelTemplate` element wired through a `Panel` node's own instance. No
-// tracked document ever used it. See docs/xrds-widget-template-plan.md §A4b-2.
+// tracked document ever used it. See docs/done/xrds-widget-template-plan.md §A4b-2.
 //
 // `XrdsSceneWorldLayout` (below) and `XrdsSceneWorldWidget` are unrelated and
 // stay: `XrdsPanelTemplate::layout` and `XrdsPanelElement::kind` are the live

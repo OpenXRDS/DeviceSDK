@@ -1,5 +1,5 @@
 //! Tests for panel templates and `panel_diagnostics` — see
-//! `docs/xrds-widget-template-plan.md` §A1.
+//! `docs/done/xrds-widget-template-plan.md` §A1.
 
 use super::*;
 
@@ -507,7 +507,7 @@ fn diagnostics_flag_a_panel_instance_naming_a_missing_template() {
 
 fn element_row_track(panel: u64, element: &str) -> XrdsTrack {
     XrdsTrack {
-        assets: vec![XrdsTrackAsset {
+        assets: vec![XrdsTrackAsset { when_finished: Default::default(),
             target: XrdsActionTarget::Element {
                 panel: XrdsSceneNodeId(panel),
                 name: element.to_string(),

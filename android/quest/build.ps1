@@ -144,7 +144,16 @@ try {
     # cross-compile proven for Android. -P 32 matches the OpenSSL prebuilt's
     # API level and the Quest 3/Pro baseline. See
     # docs/xrds-net-android-shipping.md Phase 3.
-    cargo ndk -t arm64-v8a -P 32 -o "$ScriptDir\jni" build --release -p xrds-app --no-default-features
+    #
+    # $env:EXTRA_CARGO_FEATURES: optional, space/comma-separated feature list
+    # appended via --features, for one-off verification builds without editing
+    # this script.
+    $cargoArgs = @("ndk", "-t", "arm64-v8a", "-P", "32", "-o", "$ScriptDir\jni",
+                   "build", "--release", "-p", "xrds-app", "--no-default-features")
+    if ($env:EXTRA_CARGO_FEATURES) {
+        $cargoArgs += @("--features", $env:EXTRA_CARGO_FEATURES)
+    }
+    & cargo @cargoArgs
     if ($LASTEXITCODE -ne 0) { throw "cargo ndk failed" }
 } finally {
     Pop-Location
@@ -196,12 +205,23 @@ if ($SceneDir) {
 Write-Host "    Generating ASSET_MANIFEST..."
 Push-Location $Staging
 try {
+    # Generate ASSET_STAMP first, so the manifest lists it like any other asset.
+    #
+    # A per-build marker android_main uses to decide whether the on-device cache is stale.
+    # Deliberately a fresh timestamp on every build rather than a content hash: it can
+    # never false-match, so newly built assets always reach the device. The device's cache
+    # dir survives APK upgrades, so without this a changed asset that kept its byte length
+    # would be ignored forever (the previous size-comparison bug).
+    $stamp = "build=$([DateTime]::UtcNow.ToString('yyyyMMddTHHmmssZ'))"
+    [System.IO.File]::WriteAllText("$Staging\ASSET_STAMP", "$stamp`n")
+
     $manifestLines = Get-ChildItem -Recurse -File |
         ForEach-Object { $_.FullName.Substring($Staging.Length + 1).Replace('\', '/') } |
         Sort-Object
     # Use WriteAllLines (UTF-8 without BOM) — compatible with Windows PowerShell 5.1.
     [System.IO.File]::WriteAllLines("$Staging\ASSET_MANIFEST", $manifestLines)
     Write-Host "    $($manifestLines.Count) file(s) listed in manifest"
+    Write-Host "    stamp: $stamp"
 } finally { Pop-Location }
 
 # ---------------------------------------------------------------------------

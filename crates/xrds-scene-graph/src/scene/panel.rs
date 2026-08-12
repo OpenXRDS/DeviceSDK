@@ -1,5 +1,5 @@
 //! Reusable panel templates — the unified model behind both HUD panels and
-//! world-space panels. See `docs/xrds-widget-template-plan.md`.
+//! world-space panels. See `docs/done/xrds-widget-template-plan.md`.
 //!
 //! **Why one model.** The two sides were complementary rather than similar: the
 //! HUD had identity (`name`, addressable via `set_hud_item`), a template

@@ -440,6 +440,7 @@ pub fn physics_collider_gizmo_system(
             XrdsSceneNodePayload::Cube(c)     if !c.physics_body.is_none() => (c.physics_body, ColliderShape::Cube(c.size)),
             XrdsSceneNodePayload::Sphere(c)   if !c.physics_body.is_none() => (c.physics_body, ColliderShape::Sphere(c.radius)),
             XrdsSceneNodePayload::Cylinder(c) if !c.physics_body.is_none() => (c.physics_body, ColliderShape::Cylinder(c.radius, c.height)),
+            XrdsSceneNodePayload::Capsule(c)  if !c.physics_body.is_none() => (c.physics_body, ColliderShape::Capsule(c.radius, c.length)),
             XrdsSceneNodePayload::Plane3D(c)  if !c.physics_body.is_none() => (c.physics_body, ColliderShape::Plane),
             _ => continue,
         };
@@ -484,6 +485,25 @@ pub fn physics_collider_gizmo_system(
                     gizmos.line(bot + offset, top + offset, color);
                 }
             }
+            ColliderShape::Capsule(radius, length) => {
+                // Same wireframe as Cylinder for the straight segment, plus a small
+                // sphere at each end to distinguish the rounded caps from Cylinder's
+                // flat ones. `length` excludes the caps, matching `XrdsCapsule::length`.
+                let r  = radius * scale.x.max(scale.z);
+                let hl = length * scale.y * 0.5;
+                let up = rot * Vec3::Y;
+                let top = pos + up * hl;
+                let bot = pos - up * hl;
+                let ring_rot = rot * Quat::from_rotation_x(std::f32::consts::FRAC_PI_2);
+                gizmos.circle(Isometry3d::new(top, ring_rot), r, color);
+                gizmos.circle(Isometry3d::new(bot, ring_rot), r, color);
+                for angle_deg in [0.0f32, 90.0, 180.0, 270.0] {
+                    let offset = rot * Quat::from_rotation_y(angle_deg.to_radians()) * (Vec3::X * r);
+                    gizmos.line(bot + offset, top + offset, color);
+                }
+                gizmos.sphere(Isometry3d::new(top, rot), r, color);
+                gizmos.sphere(Isometry3d::new(bot, rot), r, color);
+            }
             ColliderShape::Plane => {
                 // Draw a 5×5 grid to represent the infinite half-space floor.
                 let right  = rot * Vec3::X;
@@ -507,5 +527,6 @@ enum ColliderShape {
     Cube([f32; 3]),
     Sphere(f32),
     Cylinder(f32, f32),
+    Capsule(f32, f32),
     Plane,
 }

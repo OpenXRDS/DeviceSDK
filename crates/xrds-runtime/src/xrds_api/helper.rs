@@ -247,6 +247,31 @@ pub(super) fn export_scene_node_in_world(
         ));
     }
 
+    if let Some(descriptor) = world.get::<XrdsStored<XrdsCapsule>>(entity) {
+        return Ok(apply_editor_metadata_to_node(
+            world,
+            entity,
+            XrdsSceneNode::from_xrds_capsule(
+                node_id,
+                parent_node_id,
+                &descriptor.0,
+                material_params_for_entity_in_world(world, entity),
+            ),
+        ));
+    }
+
+    // NOT compiler-enforced, unlike the payload/component matches: omitting this
+    // branch silently exports the node as Empty and drops the effect from the
+    // saved scene. The round-trip test in xrds-scene-graph is what actually
+    // guards it. No material lookup -- an effect's colour is its own gradient.
+    if let Some(descriptor) = world.get::<XrdsStored<XrdsEffect>>(entity) {
+        return Ok(apply_editor_metadata_to_node(
+            world,
+            entity,
+            XrdsSceneNode::from_xrds_effect(node_id, parent_node_id, &descriptor.0),
+        ));
+    }
+
     if let Some(descriptor) = world.get::<XrdsStored<XrdsSphere>>(entity) {
         return Ok(apply_editor_metadata_to_node(
             world,
@@ -988,6 +1013,130 @@ fn descendant_entities_with_paths_in_world(
     }
 
     descendants
+}
+
+/// Stop emitting on `target`, leaving particles already alive to fade out.
+///
+/// Implemented by clearing `ParticleSpawnerData::emission`, which is the only
+/// public lever available: `EmissionData::enabled` is private, and *any* change to
+/// `ParticleSpawner` triggers `sync_spawner_data`, which wipes
+/// `ParticleSpawnerData::particles` — i.e. a hard kill, not a fade.
+///
+/// With `emission` empty, `ParticleSpawnerData::active()` returns false, so
+/// `spawn_particles` skips this entity entirely. Crucially `update_particles` is a
+/// *separate* system with no `active()` gate, so existing particles keep ageing,
+/// moving and dying naturally. That is the soft stop.
+///
+/// `fire_effect_in_world` knows to rebuild the spawner when `emission` is empty,
+/// which is what makes a stopped effect re-fireable.
+pub(super) fn stop_effect_in_world(world: &mut World, target: Entity) -> bool {
+    let Some(mut data) = world.get_mut::<bevy_firework::core::ParticleSpawnerData>(target) else {
+        return false;
+    };
+    if data.emission.is_empty() {
+        // Already stopped; report success so a Track firing StopEffect twice is
+        // not logged as a failure.
+        return true;
+    }
+    data.emission.clear();
+    true
+}
+
+/// Fire the effect on `target`, returning whether anything was actually started.
+///
+/// **This has to do more than call `queue_particles`.** That method only adds to
+/// `ParticleSpawnerData::manual_queued_count`, and bevy_firework only *drains*
+/// that counter under `EmissionPacing::OnDemand` (`core.rs:400`). So:
+///
+/// - A `Trail` uses rate-based pacing, so a queued count is never read at all —
+///   firing one means *enabling* its emission instead.
+/// - A `Burst` with `auto_play: true` is on `OneShot`, which sets its own
+///   `enabled = false` the moment it fires at load, so it too ignores the queue.
+///
+/// Both were silent no-ops in the first cut of this. `PlayEffect` now works
+/// whichever way the effect is authored, because an author wiring a trigger to an
+/// effect has stated their intent unambiguously; `auto_play` is about what
+/// happens *at load*, not about what a trigger may do later.
+///
+/// Re-inserting `ParticleSpawner` is how emission gets re-enabled:
+/// `EmissionData::enabled` is private, but `sync_spawner_data` re-derives it from
+/// `starts_enabled` on any `Changed<ParticleSpawner>`. `manual_queued_count` is
+/// not touched by that sync, so queueing across a re-insert is safe.
+pub(super) fn fire_effect_in_world(
+    world: &mut World,
+    target: Entity,
+    count: Option<u32>,
+) -> bool {
+    use bevy_firework::core::{EmissionPacing, ParticleSpawner, ParticleSpawnerData};
+
+    let Some(descriptor) = world
+        .get::<XrdsStored<XrdsEffect>>(target)
+        .map(|stored| stored.0.clone())
+    else {
+        // Not an effect node at all. The authored document has a matching
+        // diagnostic for the static case.
+        return false;
+    };
+
+    // Rebuild the spawner as if `auto_play` were `force_auto_play`, which is what
+    // selects pacing and `starts_enabled` in `build_particle_spawner`.
+    let reinsert_as = |world: &mut World, force_auto_play: bool| {
+        let mut forced = descriptor.clone();
+        forced.auto_play = force_auto_play;
+        let spawner = crate::xrds_api::spawn::build_particle_spawner(&forced);
+        if let Ok(mut entity) = world.get_entity_mut(target) {
+            entity.insert(spawner);
+            true
+        } else {
+            false
+        }
+    };
+
+    match descriptor.kind {
+        XrdsEffectKind::Trail => {
+            // Already emitting: leave it alone rather than re-inserting, which
+            // would clear the live particles and make a running plume visibly
+            // hiccup on every trigger. `active()` is also false after a
+            // StopEffect (emission cleared), so a stopped trail correctly
+            // rebuilds and resumes.
+            let already_running = world
+                .get::<ParticleSpawnerData>(target)
+                .map(|data| data.active())
+                .unwrap_or(false);
+            if already_running {
+                return true;
+            }
+            reinsert_as(world, true)
+        }
+        XrdsEffectKind::Burst => {
+            let requested = count.unwrap_or(descriptor.burst_count) as usize;
+            if requested == 0 {
+                return false;
+            }
+            // Only swap pacing when it isn't already OnDemand — re-inserting
+            // needlessly would discard particles from a previous burst.
+            let on_demand = world
+                .get::<ParticleSpawner>(target)
+                .and_then(|s| s.emission_settings.first().map(|e| e.emission_pacing.clone()))
+                .map(|pacing| matches!(pacing, EmissionPacing::OnDemand))
+                .unwrap_or(false);
+            // A StopEffect leaves `emission` empty, which makes the spawner
+            // inactive — queueing into it would go nowhere. Rebuilding restores
+            // emission from settings, so a stopped burst can be fired again.
+            let stopped = world
+                .get::<ParticleSpawnerData>(target)
+                .map(|data| data.emission.is_empty())
+                .unwrap_or(false);
+            if (!on_demand || stopped) && !reinsert_as(world, false) {
+                return false;
+            }
+            let Some(mut data) = world.get_mut::<ParticleSpawnerData>(target) else {
+                return false;
+            };
+            data.queue_particles(requested);
+            true
+        }
+    }
 }
 
 pub(super) fn animation_player_entities_for_root_in_world(

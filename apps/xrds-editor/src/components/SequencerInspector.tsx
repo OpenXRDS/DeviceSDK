@@ -15,11 +15,13 @@ import { Checkbox } from "./ui/Checkbox";
 export const ACTION_KINDS = [
   "SetTransform", "SetVisible", "SetMaterial",
   "PlayGltfAnimation", "StopGltfAnimation", "ModifyHealth",
+  "PlayEffect", "StopEffect",
 ] as const;
 
 export const ACTION_ICONS: Record<string, string> = {
   SetVisible: "👁", SetTransform: "🎬", SetMaterial: "🎨",
-  ModifyHealth: "❤", PlayGltfAnimation: "🎞", StopGltfAnimation: "⏹", Unknown: "?",
+  ModifyHealth: "❤", PlayGltfAnimation: "🎞", StopGltfAnimation: "⏹",
+  PlayEffect: "💥", StopEffect: "🛑", Unknown: "?",
 };
 
 /** Lane-category colour, matching the mockup's per-track dot colours — one
@@ -28,6 +30,7 @@ export const ACTION_COLOR: Record<string, string> = {
   SetTransform: "var(--teal)", SetVisible: "var(--mauve)",
   SetMaterial: "var(--flamingo)", ModifyHealth: "var(--red)",
   PlayGltfAnimation: "var(--blue)", StopGltfAnimation: "var(--surface1)",
+  PlayEffect: "var(--peach)", StopEffect: "var(--surface1)",
   Unknown: "var(--surface1)",
 };
 
@@ -55,6 +58,11 @@ export function summarizeAction(a: XrdsAction): string {
     case "ModifyHealth": return "ModifyHealth";
     case "PlayGltfAnimation": return `PlayGltfAnimation(clip ${a.data.clip_index})`;
     case "StopGltfAnimation": return "StopGltfAnimation";
+    // Spell out the default rather than showing "PlayEffect(null)": the count
+    // falling back to the node's own Burst Count is the common case.
+    case "PlayEffect":
+      return a.data.count === null ? "PlayEffect (authored count)" : `PlayEffect × ${a.data.count}`;
+    case "StopEffect": return "StopEffect (fade out)";
     // Element actions show their value: on a panel row the value *is* the point,
     // unlike SetMaterial where the detail lives in the editor below.
     case "SetElementText": return `Text "${a.data.text}"`;
@@ -152,6 +160,9 @@ interface Props {
   onSelectedChange: (s: SelectedEvent | null) => void;
   /** Which row a newly-added event should go on when nothing is selected. */
   activeAssetIndex: number | null;
+  /** Time chosen by clicking a lane, or null to place after the row's last
+   *  event (the original behaviour). */
+  insertAtSecs: number | null;
   /** Trigger kinds that fire this Track, for the read-only "FIRES WHEN"
    * block — empty when nothing references it. */
   firesWhen: string[];
@@ -163,7 +174,7 @@ interface Props {
  * they are only ever issued from these controls. */
 export function SequencerInspector({
   track, snapshot, send, selected, onSelectedChange: setSelected,
-  activeAssetIndex, firesWhen,
+  activeAssetIndex, insertAtSecs, firesWhen,
 }: Props) {
   const [draftAction, setDraftAction] = useState<XrdsAction | null>(null);
   const [draftAtSecs, setDraftAtSecs] = useState(0);
@@ -218,9 +229,13 @@ export function SequencerInspector({
     // Place a new event just after the last one on that row, so successive
     // adds lay out along the ruler instead of stacking at t=0.
     const row = track.assets[assetIndex];
-    const at = row.keys.length === 0
-      ? 0
-      : +(Math.max(...row.keys.map(k => k.at_secs)) + 0.5).toFixed(3);
+    // An explicit lane click wins; otherwise fall back to just after the row's
+    // last event so successive adds lay out along the ruler instead of stacking.
+    const at = insertAtSecs !== null
+      ? insertAtSecs
+      : row.keys.length === 0
+        ? 0
+        : +(Math.max(...row.keys.map(k => k.at_secs)) + 0.5).toFixed(3);
     send({
       type: "AddTrackKey",
       payload: { track: track.name, asset_index: assetIndex, at_secs: at, kind },
@@ -299,7 +314,11 @@ export function SequencerInspector({
 
       {!draftAction || selected === null ? (
         <div className="seq-ws-inspector-hint">
-          Click an event on a row to edit it
+          {track.assets.length === 0
+            ? "Add an asset row above, then click its lane to place an event."
+            : insertAtSecs !== null
+              ? `Next event will be added at t=${insertAtSecs.toFixed(2)}s — pick an action above.`
+              : "Click a lane to choose where an event goes, or an existing event to edit it."}
         </div>
       ) : (
         <div className="flex-1 min-h-0 overflow-y-auto p-3 flex flex-col gap-3.5">

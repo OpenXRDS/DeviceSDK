@@ -131,6 +131,21 @@ pub(super) fn apply_spawn_recipe_to_entity(
                 material,
             );
         }
+        XrdsGeometrySource::PbrCapsule {
+            radius,
+            half_length,
+            material,
+        } => {
+            apply_pbr_recipe_to_entity(
+                world,
+                entity,
+                Mesh::from(Capsule3d {
+                    radius,
+                    half_length,
+                }),
+                material,
+            );
+        }
         XrdsGeometrySource::PbrPlane { size, material } => {
             apply_pbr_recipe_to_entity(
                 world,
@@ -154,6 +169,25 @@ pub(super) fn cylinder_recipe_and_common_state_for(
     let recipe = XrdsGeometrySource::PbrCylinder {
         radius: descriptor.radius,
         half_height: descriptor.height * 0.5,
+        material,
+    };
+    Some((
+        recipe,
+        descriptor.name.clone(),
+        descriptor.transform,
+        descriptor.visible,
+    ))
+}
+
+pub(super) fn capsule_recipe_and_common_state_for(
+    world: &World,
+    entity: Entity,
+) -> Option<(XrdsGeometrySource, String, TransformParams, bool)> {
+    let descriptor = capsule_descriptor_ref(world, entity)?;
+    let material = material_params_for_entity(world, entity).unwrap_or_default();
+    let recipe = XrdsGeometrySource::PbrCapsule {
+        radius: descriptor.radius,
+        half_length: descriptor.length * 0.5,
         material,
     };
     Some((
@@ -392,6 +426,21 @@ pub(super) fn execute_spawn_recipe(
             Mesh::from(Cylinder {
                 radius,
                 half_height,
+            }),
+            material,
+        ),
+        XrdsGeometrySource::PbrCapsule {
+            radius,
+            half_length,
+            material,
+        } => spawn_pbr_recipe_entity(
+            commands,
+            name,
+            transform,
+            visible,
+            Mesh::from(Capsule3d {
+                radius,
+                half_length,
             }),
             material,
         ),

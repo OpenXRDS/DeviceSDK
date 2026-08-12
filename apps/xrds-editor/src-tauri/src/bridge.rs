@@ -134,6 +134,42 @@ pub enum EditorCommand {
     SetPhysicsBody  { id: u64, physics_body: String },
     SetGravityScale { id: u64, value: f32 },
     SetMass         { id: u64, value: f32 },
+    /// Radius and length (excluding the hemispherical caps) of a `Capsule` node.
+    /// Same live-preview-on-every-event shape as `SetGravityScale`/`SetMass`.
+    SetCapsuleGeometry { id: u64, radius: f32, length: f32 },
+    /// Every tunable field of an `Effect` node, sent as a whole on each edit.
+    /// Same live-preview-on-every-event shape as `SetCapsuleGeometry`: the
+    /// frontend owns the current values and re-sends them all, so the backend
+    /// needs no per-field commands and no partial-update merge logic.
+    /// `when_finished` is "Restore" | "Keep".
+    SetTrackAssetWhenFinished { track: String, asset_index: usize, when_finished: String },
+    SetEffectParams {
+        id: u64,
+        /// "Burst" | "Trail"
+        kind: String,
+        auto_play: bool,
+        burst_count: u32,
+        spawn_rate: f32,
+        lifetime_secs: f32,
+        size_min: f32,
+        size_max: f32,
+        /// Linear RGBA, components <= 1.0 (brighter values are clamped by the
+        /// runtime -- the XR cameras have no HDR pass).
+        color_start: [f32; 4],
+        color_end: [f32; 4],
+        speed_min: f32,
+        speed_max: f32,
+        omnidirectional: bool,
+        spread_deg: f32,
+        gravity: [f32; 3],
+        emission_radius: f32,
+        /// "Blend" | "Add" | "Multiply"
+        blend: String,
+        size_end: f32,
+        drag: f32,
+        fade_edge: f32,
+        fade_scene: f32,
+    },
 
     // The 7 World Panel commands lived here (SetWorldPanelParams,
     // Add/Remove/MoveWorldPanelWidget, SetWorldPanelWidget(s),
@@ -475,7 +511,33 @@ pub enum NodePayloadDto {
     Cube    { material: MaterialParamsDto, physics_body: String, gravity_scale: f32, mass: f32 },
     Sphere  { material: MaterialParamsDto, physics_body: String, gravity_scale: f32, mass: f32 },
     Cylinder{ material: MaterialParamsDto, physics_body: String, gravity_scale: f32, mass: f32 },
+    Capsule { material: MaterialParamsDto, physics_body: String, gravity_scale: f32, mass: f32, radius: f32, length: f32 },
     Plane   { material: MaterialParamsDto, physics_body: String, gravity_scale: f32, mass: f32 },
+    /// No `material` field, unlike the mesh primitives: an effect's colour is
+    /// its own start/end gradient, not an `XrdsSceneMaterial`.
+    Effect  {
+        kind: String,
+        auto_play: bool,
+        burst_count: u32,
+        spawn_rate: f32,
+        lifetime_secs: f32,
+        size_min: f32,
+        size_max: f32,
+        color_start: [f32; 4],
+        color_end: [f32; 4],
+        speed_min: f32,
+        speed_max: f32,
+        omnidirectional: bool,
+        spread_deg: f32,
+        gravity: [f32; 3],
+        emission_radius: f32,
+        /// "Blend" | "Add" | "Multiply"
+        blend: String,
+        size_end: f32,
+        drag: f32,
+        fade_edge: f32,
+        fade_scene: f32,
+    },
     Camera  { fov: f32, near: f32, far: f32 },
     PointLight { color: [f32; 4], intensity: f32, range: f32 },
     DirectionalLight { color: [f32; 4], illuminance: f32 },
@@ -706,6 +768,12 @@ pub enum XrdsActionDto {
     /// command's convention (also index-only).
     PlayGltfAnimation { clip_index: usize, speed: f32, repeat: String, start_paused: bool },
     StopGltfAnimation,
+    /// `count: None` uses the effect node's authored Burst Count; `Some` overrides
+    /// it, so one effect can be fired at different intensities from different
+    /// triggers without duplicating the node.
+    PlayEffect { count: Option<u32> },
+    /// Stops emitting; particles already alive fade out rather than vanishing.
+    StopEffect,
     SetVisible(bool),
     /// `ease` is "Linear" | "Quad" | "Cubic" — same plain-String-for-a-
     /// closed-set convention as `repeat`/`hand`/`crossing` elsewhere in
@@ -781,7 +849,9 @@ pub struct XrdsTrackAssetDto {
     /// Resolved display name for a `Node` target, so the frontend does not
     /// have to walk the hierarchy to label a row.
     pub node_name: Option<String>,
-    pub keys: Vec<XrdsTrackKeyDto>,
+    pub keys: Vec<XrdsTrackKeyDto>,    /// "Restore" | "Keep" — what happens to this row's node when the Track
+    /// finishes on its own. Mirrors Unreal Sequencer's per-track `When Finished`.
+    pub when_finished: String,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]

@@ -419,6 +419,12 @@ impl XrdsAPI<'_> {
                 XrdsSceneRuntimeComponent::Cylinder(component) => {
                     self.spawn_with_id(id, &component)?.entity()
                 }
+                XrdsSceneRuntimeComponent::Capsule(component) => {
+                    self.spawn_with_id(id, &component)?.entity()
+                }
+                XrdsSceneRuntimeComponent::Effect(component) => {
+                    self.spawn_with_id(id, &component)?.entity()
+                }
                 XrdsSceneRuntimeComponent::Sphere(component) => {
                     self.spawn_with_id(id, &component)?.entity()
                 }
@@ -1069,11 +1075,37 @@ impl XrdsAPI<'_> {
         self.queue_update(handle, params)
     }
 
+    /// Queue a capsule geometry update.
+    pub fn set_capsule_geometry(
+        &mut self,
+        handle: &Handle<XrdsCapsule>,
+        params: CapsuleGeometryParams,
+    ) -> &mut Self {
+        self.queue_update(handle, params)
+    }
+
     /// Queue a sphere geometry update.
     pub fn set_sphere_geometry(
         &mut self,
         handle: &Handle<XrdsSphere>,
         params: SphereGeometryParams,
+    ) -> &mut Self {
+        self.queue_update(handle, params)
+    }
+
+    /// Queue a particle-effect parameter update.
+    ///
+    /// The spawner is rebuilt from the new parameters; particles already alive
+    /// finish their current lifetime under the old settings rather than snapping
+    /// to the new ones.
+    ///
+    /// Keep colour components ≤ 1.0 — values above that are clamped, because the
+    /// SDK's XR cameras have no HDR/bloom pass and brighter values would
+    /// otherwise render as flat white. See `XrdsEffect::color_start`.
+    pub fn set_effect_params(
+        &mut self,
+        handle: &Handle<XrdsEffect>,
+        params: EffectParams,
     ) -> &mut Self {
         self.queue_update(handle, params)
     }

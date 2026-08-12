@@ -49,7 +49,7 @@ impl Bound {
         let track = XrdsNamedTrack {
             name: track_name,
             track: XrdsTrack {
-                assets: vec![XrdsTrackAsset {
+                assets: vec![XrdsTrackAsset { when_finished: Default::default(),
                     target: XrdsActionTarget::SelfNode,
                     keys,
                 }],
@@ -158,7 +158,7 @@ fn import_timed_track(
         tracks: vec![XrdsNamedTrack {
             name,
             track: XrdsTrack {
-                assets: vec![XrdsTrackAsset {
+                assets: vec![XrdsTrackAsset { when_finished: Default::default(),
                     target: XrdsActionTarget::SelfNode,
                     keys: keys
                         .into_iter()
@@ -1697,7 +1697,7 @@ fn set_material_applies_only_the_provided_fields() {
         tracks: vec![XrdsNamedTrack {
             name: "recolour".to_string(),
             track: XrdsTrack {
-                assets: vec![XrdsTrackAsset {
+                assets: vec![XrdsTrackAsset { when_finished: Default::default(),
                     target: XrdsActionTarget::SelfNode,
                     keys: vec![XrdsTrackKey {
                         at_secs: 0.0,
@@ -1751,7 +1751,7 @@ fn set_material_applies_only_the_provided_fields() {
 
 /// One asset row driving `node_id`.
 fn node_row(node_id: u64, keys: Vec<(f32, XrdsAction)>) -> XrdsTrackAsset {
-    XrdsTrackAsset {
+    XrdsTrackAsset { when_finished: Default::default(),
         target: XrdsActionTarget::Node(XrdsSceneNodeId(node_id)),
         keys: keys
             .into_iter()
@@ -1946,7 +1946,7 @@ fn one_track_fired_from_several_sources_runs_concurrently_on_disjoint_assets() {
             // A TriggerSource row resolves to whoever fired it, so each firing
             // touches a different entity.
             track: XrdsTrack {
-                assets: vec![XrdsTrackAsset {
+                assets: vec![XrdsTrackAsset { when_finished: Default::default(),
                     target: XrdsActionTarget::TriggerSource,
                     keys: vec![XrdsTrackKey { at_secs: 0.0, action: long_tween() }],
                 }],
@@ -3352,7 +3352,7 @@ fn stopping_one_instances_run_leaves_another_instances_disjoint_run_alive() {
         vec![XrdsNamedTrack {
             name: "PerSource".to_string(),
             track: XrdsTrack {
-                assets: vec![XrdsTrackAsset {
+                assets: vec![XrdsTrackAsset { when_finished: Default::default(),
                     target: XrdsActionTarget::TriggerSource,
                     keys: vec![XrdsTrackKey { at_secs: 0.0, action: long_tween() }],
                 }],
@@ -3478,7 +3478,7 @@ fn element_track(name: &str, panel: u64, element: &str) -> XrdsNamedTrack {
     XrdsNamedTrack {
         name: name.to_string(),
         track: XrdsTrack {
-            assets: vec![XrdsTrackAsset {
+            assets: vec![XrdsTrackAsset { when_finished: Default::default(),
                 target: XrdsActionTarget::Element {
                     panel: xrds_scene_graph::XrdsSceneNodeId(panel),
                     name: element.to_string(),
@@ -3662,7 +3662,7 @@ fn element_action_track(
     XrdsNamedTrack {
         name: name.to_string(),
         track: XrdsTrack {
-            assets: vec![XrdsTrackAsset {
+            assets: vec![XrdsTrackAsset { when_finished: Default::default(),
                 target: XrdsActionTarget::Element {
                     panel: xrds_scene_graph::XrdsSceneNodeId(panel),
                     name: element.to_string(),

@@ -22,7 +22,7 @@ import type {
 // ---------------------------------------------------------------------------
 
 function nodeRow(id: number, name: string | null, keys: XrdsTrackKeyDto[] = []): XrdsTrackAssetDto {
-  return { target: { type: "Node", id }, node_name: name, keys };
+  return { target: { type: "Node", id }, node_name: name, keys, when_finished: "Restore" };
 }
 
 function key(at_secs: number, action: XrdsAction): XrdsTrackKeyDto {
@@ -236,9 +236,9 @@ describe("assetRowLabel", () => {
 
   it("does not invent a name for SelfNode or TriggerSource rows", () => {
     // Neither has a concrete node until the Track is fired.
-    expect(assetRowLabel({ target: { type: "SelfNode" }, node_name: null, keys: [] }).title)
+    expect(assetRowLabel({ target: { type: "SelfNode" }, node_name: null, keys: [], when_finished: "Restore" }).title)
       .toBe("Self");
-    expect(assetRowLabel({ target: { type: "TriggerSource" }, node_name: null, keys: [] }).title)
+    expect(assetRowLabel({ target: { type: "TriggerSource" }, node_name: null, keys: [], when_finished: "Restore" }).title)
       .toBe("Trigger source");
   });
 });
@@ -324,7 +324,7 @@ describe("conflictingTracks", () => {
   it("ignores SelfNode rows, which resolve differently per firing", () => {
     const selfish = (name: string): NamedTrackDto => ({
       name,
-      assets: [{ target: { type: "SelfNode" }, node_name: null, keys: [] }],
+      assets: [{ target: { type: "SelfNode" }, node_name: null, keys: [], when_finished: "Restore" }],
       duration_secs: null,
       effective_duration_secs: 0,
       looping: false,
@@ -656,6 +656,7 @@ describe("assetRowLabel for element rows", () => {
     target: { type: "Element" as const, panel: 10, name: "go" },
     node_name,
     keys: [],
+    when_finished: "Restore",
   });
 
   it("uses the server-side panel · element join when it resolves", () => {
@@ -747,6 +748,7 @@ describe("addableAssets with panel elements", () => {
   const elementRow = (panel: number, name: string): XrdsTrackAssetDto => ({
     target: { type: "Element", panel, name },
     node_name: null,
+    when_finished: "Restore",
     keys: [],
   });
 

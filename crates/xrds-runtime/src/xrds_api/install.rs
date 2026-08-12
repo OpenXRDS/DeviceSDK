@@ -46,6 +46,37 @@ pub(super) fn install_xrds(app: &mut App) {
     if !app.is_plugin_added::<bevy_mod_outline::OutlinePlugin>() {
         app.add_plugins(bevy_mod_outline::OutlinePlugin);
     }
+    // Particle backend for XrdsEffect. Same `cfg(not(test))` reasoning as
+    // OutlinePlugin above, and for the same concrete reason: it pulls in
+    // `bevy_firework::render::CustomMaterialPlugin`, whose `build()` calls
+    // `app.sub_app_mut(RenderApp)` unconditionally, which panics in the
+    // headless xrds_test_app() harness.
+    #[cfg(not(test))]
+    if !app.is_plugin_added::<bevy_firework::plugin::ParticleSystemPlugin>() {
+        app.add_plugins(bevy_firework::plugin::ParticleSystemPlugin::default());
+    }
+    // wgpu's *default* uncaptured-error handler is `panic!()` (see
+    // wgpu::backend::wgpu_core::default_error_handler) — any validation error
+    // that doesn't land in an error scope aborts the whole process. Downgrading
+    // that to a log is worth doing on its own terms: a dropped frame is
+    // recoverable, a crashed VR app is not.
+    //
+    // Scope, honestly: this only covers errors routed through the *error sink*.
+    // It does NOT catch `handle_error_fatal` call sites (e.g.
+    // `Buffer::get_mapped_range`), plain `.unwrap()`s in bevy_render (e.g.
+    // `uniform_buffer.rs`'s `write_buffer_with(..).unwrap()`), or a queue
+    // submission timeout — all of which panic regardless. Confirmed on Quest:
+    // with this handler installed the process still aborted across an Android
+    // window destroy/recreate (doff/resume), just via those other paths, and
+    // this handler never fired at all. Treat it as defence in depth, not as a
+    // fix for surface-lifecycle crashes — those need the render schedule gated
+    // off while the native window is gone.
+    #[cfg(not(test))]
+    app.sub_app_mut(bevy::render::RenderApp).add_systems(
+        bevy::render::Render,
+        install_non_fatal_wgpu_error_handler
+            .run_if(bevy::ecs::schedule::common_conditions::run_once),
+    );
     app.init_resource::<crate::xrds_api::anchor::ActivePlayerAnchorEntity>();
     app.init_resource::<XrdsIdAllocator>();
     app.init_resource::<XrdsIdIndex>();
@@ -70,6 +101,15 @@ pub(super) fn install_xrds(app: &mut App) {
     // initialises it when an XR runtime is attached). Desktop hosts (e.g. the editor's
     // play mode) drive it synthetically from mouse input.
     app.init_resource::<xrds_openxr::XrInput>();
+    // Same reasoning as XrInput above, for the same reason: `XrInputPlugin`
+    // registers both, and it is absent whenever XR is off (no HMD, or
+    // RuntimeParameters::enable_xr=false). A system holding
+    // `MessageWriter<XrHapticRequest>` then fails Bevy 0.17 parameter
+    // validation — "Message not initialized" — which is escalated to a panic
+    // that kills the app on its first frame. `add_message` is idempotent
+    // (SubApp::add_message guards on `contains_resource::<Messages<T>>`), so
+    // this is harmless when the real plugin is present.
+    app.add_message::<xrds_openxr::XrHapticRequest>();
     app.init_resource::<crate::xrds_api::environment::XrdsAnchorExposureOverride>();
     app.init_resource::<crate::xrds_api::trigger_action::XrdsTrackRegistry>();
     // Which entities each running Track holds. Must exist before any Track
@@ -489,6 +529,17 @@ fn ensure_visibility_hierarchy_components_system(world: &mut World) {
             e.insert(GlobalTransform::default());
         }
     }
+}
+
+/// Replaces wgpu's default fatal (panicking) uncaptured-error handler with one
+/// that logs and returns. Runs once, the first time the `RenderApp`'s `Render`
+/// schedule executes — by then `RenderDevice` is guaranteed to exist (inserted
+/// during `RenderPlugin::finish`, which runs before any frame is rendered).
+#[cfg(not(test))]
+fn install_non_fatal_wgpu_error_handler(device: Res<bevy::render::renderer::RenderDevice>) {
+    device.wgpu_device().on_uncaptured_error(Box::new(|err| {
+        error!("[xrds] non-fatal wgpu error (recovered, not crashing the app): {err}");
+    }));
 }
 
 pub(super) fn build_transform(t: &TransformParams) -> Transform {

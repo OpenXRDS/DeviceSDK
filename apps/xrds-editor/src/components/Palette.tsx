@@ -15,6 +15,7 @@ const PALETTE_META: Record<string, ItemMeta> = {
   Cube:             { label: "Cube",           tip: "Axis-aligned box primitive." },
   Sphere:           { label: "Sphere",         tip: "UV sphere primitive." },
   Cylinder:         { label: "Cylinder",       tip: "Cylinder primitive." },
+  Capsule:          { label: "Capsule",        tip: "Capsule primitive — a cylinder with hemispherical caps. Useful as a character/physics collider shape." },
   Plane:            { label: "Plane",          tip: "Flat plane primitive." },
   Tetrahedron:      { label: "Tetrahedron",    tip: "Four-sided solid." },
   Empty:            { label: "Empty",          tip: "Invisible transform-only node. Use as a group parent." },
@@ -37,12 +38,15 @@ const PALETTE_META: Record<string, ItemMeta> = {
   ExtrudedText:     { label: "Extruded Text",  tip: "3-D extruded text mesh." },
   Billboard:        { label: "Billboard",      tip: "Sprite-like quad that always faces the camera." },
   HudText:          { label: "HUD Text",       tip: "Head-locked text element. For a full head-locked layout, build a panel template in the Panels workspace and link it on a Player Anchor instead." },
+  // Effects
+  EffectBurst:      { label: "Burst",          tip: "One-shot particle burst — an impact, explosion or spark hit. Placed idle so a Track can fire it; nothing is drawn until it fires. Tune it in the Inspector." },
+  EffectTrail:      { label: "Trail",          tip: "Continuously emitting particles — smoke, a plume, a sparkle trail. Starts running as soon as it is placed." },
   // XR
   Panel:            { label: "Panel",          tip: "Places a panel template in the scene. Its buttons, sliders and toggles can fire Tracks. Build the template in the Panels workspace; the same template can also be head-locked to a Player Anchor." },
 };
 
 const PRIMITIVE_GROUPS = [
-  { label: "Geometry", items: ["Cube","Sphere","Cylinder","Plane","Tetrahedron","Empty"] },
+  { label: "Geometry", items: ["Cube","Sphere","Cylinder","Capsule","Plane","Tetrahedron","Empty"] },
   { label: "Lights",   items: ["PointLight","SpotLight","DirectionalLight","AmbientLight"] },
   { label: "Scene",    items: ["Camera","AudioClip","InteractionZone"] },
   { label: "Player",   items: ["PlayerSpawn","PlayerSpawnZone","Player","PlayerAnchor"] },
@@ -51,6 +55,10 @@ const PRIMITIVE_GROUPS = [
   // inline widgets carried no triggers, so every button on one was dead), and is
   // now retired from the schema entirely — no tracked scene ever used it.
   // `Panel` is the working replacement.
+  // Effects get their own group rather than folding into Geometry: a particle
+  // effect is not a mesh shape, and the two kinds differ in behaviour (one-shot
+  // vs continuous) rather than in form.
+  { label: "Effects",  items: ["EffectBurst","EffectTrail"] },
   { label: "XR",       items: ["Panel"] },
 ];
 

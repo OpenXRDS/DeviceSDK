@@ -37,6 +37,19 @@ fn payload_kind(payload: &XrdsSceneNodePayload) -> &'static str {
         XrdsSceneNodePayload::Cube(_)         => "Cube",
         XrdsSceneNodePayload::Sphere(_)       => "Sphere",
         XrdsSceneNodePayload::Cylinder(_)     => "Cylinder",
+        XrdsSceneNodePayload::Capsule(_)      => "Capsule",
+        // Split by emission kind, unlike every other arm here, which maps one
+        // payload variant to one string. Burst and Trail share a payload (kind is
+        // a field, not a variant), but a hierarchy full of identically-iconed
+        // "Effect" rows tells the author nothing about which is which. This field
+        // is display-only -- the icon in Hierarchy.tsx and the kind badge beside
+        // the name -- so distinguishing them here is free. Note the Inspector's
+        // own payload_kind_name still reports "Effect", since that one describes
+        // the payload type.
+        XrdsSceneNodePayload::Effect(e) => match e.kind {
+            xrds_scene_graph::XrdsSceneEffectKind::Burst => "EffectBurst",
+            xrds_scene_graph::XrdsSceneEffectKind::Trail => "EffectTrail",
+        },
         XrdsSceneNodePayload::Plane3D(_)      => "Plane",
         XrdsSceneNodePayload::Tetrahedron(_)  => "Tetrahedron",
         XrdsSceneNodePayload::Camera(_)       => "Camera",

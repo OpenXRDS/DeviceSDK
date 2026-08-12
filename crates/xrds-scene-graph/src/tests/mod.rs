@@ -6,6 +6,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 mod assets;
 mod core;
 mod editing;
+mod effect;
+mod gen_device_check_scene;
 mod naming;
 mod panel;
 mod session;

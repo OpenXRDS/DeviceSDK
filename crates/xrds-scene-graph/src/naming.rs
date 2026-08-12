@@ -1,7 +1,7 @@
 //! Authored-name policy — one validator for every name that is used as a
 //! **key** rather than as a label.
 //!
-//! See `docs/xrds-widget-template-plan.md` §3b. Track names, panel-template
+//! See `docs/done/xrds-widget-template-plan.md` §3b. Track names, panel-template
 //! names and panel-element names are all keys: bindings reference Tracks by
 //! name, and elements will be addressed by name. That makes loose naming a
 //! correctness problem, not a style one.

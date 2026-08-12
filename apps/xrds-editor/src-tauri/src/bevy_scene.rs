@@ -349,7 +349,9 @@ impl XrdsApp for XrdsEditorTauriApp {
                     // naturally, so no live agent exists to report what it
                     // touched — the document's own asset rows are what we fall
                     // back to in that case, since they name the same nodes.
-                    restore_track_nodes_from_document(ctx, &name);
+                    // Play restores everything, effects included: a fresh run
+                    // must not inherit a trail left running by the last one.
+                    restore_track_nodes_from_document(ctx, &name, RestoreScope::Everything);
                     if ctx.preview_play_track(&name) {
                         if let Some(mut state) = ctx.resource_mut::<EditorState>() {
                             state.track_preview_name = Some(name);
@@ -378,7 +380,8 @@ impl XrdsApp for XrdsEditorTauriApp {
                     // (which the runtime's lock table has no notion of) is
                     // restored too, not just transform/visibility.
                     if let Some(name) = &name {
-                        restore_track_nodes_from_document(ctx, name);
+                        // Explicit Stop means "clean up", so effects stop too.
+                        restore_track_nodes_from_document(ctx, name, RestoreScope::Everything);
                     }
                     if let Some(mut state) = ctx.resource_mut::<EditorState>() {
                         state.track_preview_name = None;
@@ -411,6 +414,33 @@ impl XrdsApp for XrdsEditorTauriApp {
                     contended: names,
                 }
             });
+        // A preview that ran to its end leaves no agent behind, so
+        // `track_preview_state()` goes None while `track_preview_name` is still
+        // set. That is the "time is over" moment: honour each row's
+        // `When Finished`, soft-stopping effects so live particles fade.
+        //
+        // This is a behaviour change: previously a finished Track's end state
+        // persisted until the next Play (which restores first) or an explicit
+        // Stop, so an author could inspect where it left things. That was
+        // defensible while every action produced a *static* end state, but
+        // PlayEffect on a Trail leaves emission running indefinitely — CPU spent
+        // and the view spammed, with the cleanup button greyed out. Resetting on
+        // completion also matches what every other timeline tool does. Pausing
+        // near the end still lets an author inspect a final pose, so nothing is
+        // actually lost.
+        let finished_preview = if preview_state.is_none() {
+            ctx.resource::<EditorState>()
+                .and_then(|s| s.track_preview_name.clone())
+        } else {
+            None
+        };
+        if let Some(name) = finished_preview {
+            restore_track_nodes_from_document(ctx, &name, RestoreScope::OnCompletion);
+            if let Some(mut state) = ctx.resource_mut::<EditorState>() {
+                state.track_preview_name = None;
+            }
+        }
+
         if let Some(mut state) = ctx.resource_mut::<EditorState>() {
             state.track_preview = preview_state.map(|(name, elapsed, duration, playing)| {
                 crate::bridge::TrackPreviewDto {
@@ -544,6 +574,26 @@ impl XrdsApp for XrdsEditorTauriApp {
                 state.pending_mass = None;
             }
         }
+        let pending_cg = ctx.resource::<EditorState>().and_then(|s| s.pending_capsule_geometry);
+        if let Some((id, radius, length)) = pending_cg {
+            ctx.set_capsule_geometry_for_node(
+                id.into(),
+                xrds_components::CapsuleGeometryParams { radius, length },
+            );
+            if let Some(mut state) = ctx.resource_mut::<EditorState>() {
+                state.pending_capsule_geometry = None;
+            }
+        }
+
+        let pending_fx = ctx
+            .resource::<EditorState>()
+            .and_then(|s| s.pending_effect_params.clone());
+        if let Some((id, fx)) = pending_fx {
+            ctx.set_effect_params_for_node(id.into(), effect_params_from_scene(&fx));
+            if let Some(mut state) = ctx.resource_mut::<EditorState>() {
+                state.pending_effect_params = None;
+            }
+        }
 
         // Keep physics paused outside play mode so Dynamic objects stay at authored positions.
         let is_playing = ctx.resource::<EditorState>().map(|s| s.is_playing).unwrap_or(false);
@@ -591,8 +641,95 @@ impl XrdsApp for XrdsEditorTauriApp {
 /// resolves those to a stand-in that is always also a `Node` row in the same
 /// Track (see `preview_play_track_in_world`), so restoring the `Node` rows
 /// covers them too.
-fn restore_track_nodes_from_document(ctx: &mut XrdsUpdateContext<'_>, track_name: &str) {
-    let restorations: Vec<(u64, [f32; 3], [f32; 4], [f32; 3], bool, Option<XrdsSceneMaterial>)> = ctx
+/// Scene-format effect payload -> runtime `EffectParams`.
+///
+/// Shared by the Inspector's live preview and by preview-stop restoration, which
+/// both need the same translation. Kept as one function so the two cannot drift.
+fn effect_params_from_scene(fx: &xrds_scene_graph::XrdsSceneEffect) -> xrds_components::EffectParams {
+    xrds_components::EffectParams {
+        kind: match fx.kind {
+            xrds_scene_graph::XrdsSceneEffectKind::Burst => {
+                xrds_components::primitives::XrdsEffectKind::Burst
+            }
+            xrds_scene_graph::XrdsSceneEffectKind::Trail => {
+                xrds_components::primitives::XrdsEffectKind::Trail
+            }
+        },
+        auto_play: fx.auto_play,
+        burst_count: fx.burst_count,
+        spawn_rate: fx.spawn_rate,
+        lifetime_secs: fx.lifetime_secs,
+        size_min: fx.size_min,
+        size_max: fx.size_max,
+        color_start: xrds_components::XrdsColor { rgba: fx.color_start },
+        color_end: xrds_components::XrdsColor { rgba: fx.color_end },
+        speed_min: fx.speed_min,
+        speed_max: fx.speed_max,
+        omnidirectional: fx.omnidirectional,
+        spread_deg: fx.spread_deg,
+        gravity: fx.gravity,
+        emission_radius: fx.emission_radius,
+        blend: match fx.blend {
+            xrds_scene_graph::XrdsSceneEffectBlend::Blend => {
+                xrds_components::primitives::XrdsEffectBlend::Blend
+            }
+            xrds_scene_graph::XrdsSceneEffectBlend::Add => {
+                xrds_components::primitives::XrdsEffectBlend::Add
+            }
+            xrds_scene_graph::XrdsSceneEffectBlend::Multiply => {
+                xrds_components::primitives::XrdsEffectBlend::Multiply
+            }
+        },
+        size_end: fx.size_end,
+        drag: fx.drag,
+        fade_edge: fx.fade_edge,
+        fade_scene: fx.fade_scene,
+    }
+}
+
+/// Why a Track's assets are being put back, which decides how much to undo.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RestoreScope {
+    /// Every row, unconditionally — the author pressed Stop, or a new run is
+    /// starting and must not inherit the last one's leftovers. Effects are reset
+    /// to their authored params, which also clears any live particles.
+    Everything,
+    /// The Track reached its end on its own. Honours each row's
+    /// `XrdsWhenFinished`, and stops effects *softly* so particles already in
+    /// flight fade instead of vanishing.
+    OnCompletion,
+}
+
+/// Put a Track's assets back where the document says they belong.
+///
+/// Rows opting into `XrdsWhenFinished::Keep` are skipped on completion — that is
+/// the author saying "leave what this Track did in place", modelled on Unreal
+/// Sequencer's per-track `When Finished`. It is deliberately ignored for
+/// `Everything`: Stop means reset, and a fresh run needs a clean slate.
+///
+/// Effects are handled apart from transform/visibility/material because "undo an
+/// effect" has two very different meanings. On completion the right one is a soft
+/// stop (cease emitting, let live particles fade) — re-applying params instead
+/// would rebuild `ParticleSpawner`, and bevy_firework discards live particles on
+/// any spawner change, so a burst fired near the end would blink out. This also
+/// removes what used to be a hard-coded "never restore effects on completion"
+/// exception: the behaviour is now the author's choice, and visible in the UI.
+fn restore_track_nodes_from_document(
+    ctx: &mut XrdsUpdateContext<'_>,
+    track_name: &str,
+    scope: RestoreScope,
+) {
+    struct Row {
+        id: u64,
+        translation: [f32; 3],
+        rotation: [f32; 4],
+        scale: [f32; 3],
+        visible: bool,
+        material: Option<XrdsSceneMaterial>,
+        effect: Option<xrds_scene_graph::XrdsSceneEffect>,
+    }
+
+    let rows: Vec<Row> = ctx
         .resource::<EditorSession>()
         .and_then(|session| {
             let doc = session.0.document();
@@ -602,17 +739,25 @@ fn restore_track_nodes_from_document(ctx: &mut XrdsUpdateContext<'_>, track_name
                     .track
                     .assets
                     .iter()
+                    .filter(|asset| {
+                        scope == RestoreScope::Everything
+                            || asset.when_finished == xrds_scene_graph::XrdsWhenFinished::Restore
+                    })
                     .filter_map(|asset| match asset.target {
                         xrds_scene_graph::XrdsActionTarget::Node(id) => {
                             let node = doc.node(id)?;
-                            Some((
-                                node.id.0,
-                                node.transform.translation,
-                                node.transform.rotation_quat_xyzw,
-                                node.transform.scale,
-                                node.visible,
-                                doc.node_material(id).ok().cloned(),
-                            ))
+                            Some(Row {
+                                id: node.id.0,
+                                translation: node.transform.translation,
+                                rotation: node.transform.rotation_quat_xyzw,
+                                scale: node.transform.scale,
+                                visible: node.visible,
+                                material: doc.node_material(id).ok().cloned(),
+                                effect: match &node.payload {
+                                    XrdsSceneNodePayload::Effect(fx) => Some(fx.clone()),
+                                    _ => None,
+                                },
+                            })
                         }
                         _ => None,
                     })
@@ -621,13 +766,27 @@ fn restore_track_nodes_from_document(ctx: &mut XrdsUpdateContext<'_>, track_name
         })
         .unwrap_or_default();
 
-    for (id, translation, rotation, scale, visible, material) in restorations {
-        let id = xrds_runtime::sdk::XrdsId(id);
-        ctx.set_translation_for_node(id, translation);
-        ctx.set_rotation_for_node(id, rotation);
-        ctx.set_scale_for_node(id, scale);
-        ctx.set_visible_for_node(id, visible);
-        if let Some(material) = material {
+    for row in rows {
+        let id = xrds_runtime::sdk::XrdsId(row.id);
+
+        if let Some(fx) = &row.effect {
+            match scope {
+                RestoreScope::Everything => {
+                    ctx.set_effect_params_for_node(id, effect_params_from_scene(fx));
+                }
+                RestoreScope::OnCompletion => {
+                    ctx.stop_effect_for_node(id);
+                }
+            }
+            // An effect node has no material, and its transform is restored below
+            // like any other node's.
+        }
+
+        ctx.set_translation_for_node(id, row.translation);
+        ctx.set_rotation_for_node(id, row.rotation);
+        ctx.set_scale_for_node(id, row.scale);
+        ctx.set_visible_for_node(id, row.visible);
+        if let Some(material) = row.material {
             ctx.set_material_params_for_node(id, material.into());
         }
     }

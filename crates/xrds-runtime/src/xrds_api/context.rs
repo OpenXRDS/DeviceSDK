@@ -531,6 +531,45 @@ impl XrdsUpdateContext<'_> {
         self.world.entity_mut(entity).insert(avian3d::prelude::Mass(mass_kg));
     }
 
+    /// Update a capsule's radius/length (live preview, no reimport).
+    ///
+    /// Unlike `set_gravity_scale_for_node`/`set_mass_for_node` above, this cannot
+    /// be a single direct component insert — changing dimensions means rebuilding
+    /// both `Mesh3d` and the physics `Collider`. Routed through the same
+    /// `queue_update`/`SurfaceUpdateRegistry` path `XrdsAPI::set_capsule_geometry`
+    /// uses, just via an `Entity`-derived `Handle` instead of a caller-held one,
+    /// since the editor addresses nodes by `XrdsId`, not by typed handle.
+    pub fn set_capsule_geometry_for_node(&mut self, id: XrdsId, params: CapsuleGeometryParams) {
+        let Some(entity) = self.world.resource::<XrdsIdIndex>().entity_of(id) else { return; };
+        let handle: Handle<XrdsCapsule> = entity.into();
+        self.queue_update(&handle, params);
+    }
+
+    /// Live-preview counterpart of `XrdsAPI::set_effect_params`, same
+    /// `queue_update`/`SurfaceUpdateRegistry` path, addressed by `XrdsId` because
+    /// the editor holds node ids rather than typed handles.
+    ///
+    /// Deferred out of Phase 1 on purpose and added here once the editor
+    /// Inspector actually needed it, rather than being built speculatively.
+    pub fn set_effect_params_for_node(&mut self, id: XrdsId, params: EffectParams) {
+        let Some(entity) = self.world.resource::<XrdsIdIndex>().entity_of(id) else { return; };
+        let handle: Handle<XrdsEffect> = entity.into();
+        self.queue_update(&handle, params);
+    }
+
+    /// Stop an effect emitting, letting particles already alive fade out.
+    ///
+    /// The soft-stop counterpart to firing. Prefer this over re-applying params
+    /// when the intent is "stop": re-applying rebuilds `ParticleSpawner`, which
+    /// makes bevy_firework discard live particles, so a burst would vanish
+    /// mid-flight instead of fading.
+    pub fn stop_effect_for_node(&mut self, id: XrdsId) -> bool {
+        let Some(entity) = self.world.resource::<XrdsIdIndex>().entity_of(id) else {
+            return false;
+        };
+        crate::xrds_api::stop_effect_in_world(self.world, entity)
+    }
+
     /// Update the perspective FOV on a camera entity (live preview).
     /// Modifies `Projection::Perspective.fov` in-place without reimporting.
     pub fn set_camera_fov_for_node(&mut self, id: XrdsId, fov_deg: f32) {

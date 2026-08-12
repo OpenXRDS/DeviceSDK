@@ -1,5 +1,5 @@
 //! Tests for the authored-name policy — see `naming.rs` and
-//! `docs/xrds-widget-template-plan.md` §3b.
+//! `docs/done/xrds-widget-template-plan.md` §3b.
 //!
 //! The bug being guarded is the *invisible* kind: names that render
 //! identically but hash differently, so a binding silently misses.

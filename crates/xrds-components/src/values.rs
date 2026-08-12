@@ -29,6 +29,90 @@ impl Default for CylinderGeometryParams {
 }
 
 #[derive(Debug, Clone, Copy)]
+pub struct CapsuleGeometryParams {
+    pub radius: f32,
+    /// Excludes the two hemispherical caps — see `XrdsCapsule::length`.
+    pub length: f32,
+}
+
+impl Default for CapsuleGeometryParams {
+    fn default() -> Self {
+        Self {
+            radius: 0.5,
+            length: 1.0,
+        }
+    }
+}
+
+/// Tunable parameters of an `XrdsEffect`, as passed to
+/// `XrdsAPI::set_effect_params`.
+///
+/// Mirrors the descriptor's tunable fields but omits identity/placement (`name`,
+/// `transform`, `visible`), which are handled by the common updaters every
+/// surface type already gets. `kind` is included: switching Burst <-> Trail is a
+/// parameter change, not a different primitive.
+#[derive(Debug, Clone, Copy)]
+pub struct EffectParams {
+    pub kind: crate::primitives::XrdsEffectKind,
+    /// Whether the effect emits as soon as it exists. `false` leaves it idle,
+    /// waiting for a trigger — see `XrdsEffect::auto_play`.
+    pub auto_play: bool,
+    /// Total particles per firing; used only when `kind` is `Burst`.
+    pub burst_count: u32,
+    /// Particles per second; used only when `kind` is `Trail`.
+    pub spawn_rate: f32,
+    pub lifetime_secs: f32,
+    pub size_min: f32,
+    pub size_max: f32,
+    /// Keep components <= 1.0 — see `XrdsEffect::color_start` for why. Values
+    /// above 1.0 are clamped when the effect is built.
+    pub color_start: crate::XrdsColor,
+    pub color_end: crate::XrdsColor,
+    pub speed_min: f32,
+    pub speed_max: f32,
+    /// When true, emit outward in every direction and ignore `spread_deg`.
+    pub omnidirectional: bool,
+    /// Cone half-angle about local +Y in degrees; ignored if `omnidirectional`.
+    pub spread_deg: f32,
+    pub gravity: [f32; 3],
+    pub emission_radius: f32,
+    pub blend: crate::primitives::XrdsEffectBlend,
+    /// End-of-life size multiplier; `1.0` holds size constant.
+    pub size_end: f32,
+    pub drag: f32,
+    pub fade_edge: f32,
+    pub fade_scene: f32,
+}
+
+impl Default for EffectParams {
+    fn default() -> Self {
+        let effect = crate::primitives::XrdsEffect::new();
+        Self {
+            kind: effect.kind,
+            auto_play: effect.auto_play,
+            burst_count: effect.burst_count,
+            spawn_rate: effect.spawn_rate,
+            lifetime_secs: effect.lifetime_secs,
+            size_min: effect.size_min,
+            size_max: effect.size_max,
+            color_start: effect.color_start,
+            color_end: effect.color_end,
+            speed_min: effect.speed_min,
+            speed_max: effect.speed_max,
+            omnidirectional: effect.omnidirectional,
+            spread_deg: effect.spread_deg,
+            gravity: effect.gravity,
+            emission_radius: effect.emission_radius,
+            blend: effect.blend,
+            size_end: effect.size_end,
+            drag: effect.drag,
+            fade_edge: effect.fade_edge,
+            fade_scene: effect.fade_scene,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
 pub struct SphereGeometryParams {
     pub radius: f32,
 }

@@ -6,7 +6,7 @@ pub const XRDS_SCENE_DOCUMENT_VERSION: u32 = 1;
 // here until the panel-template unification retired them. A HUD is no longer a
 // separate kind of thing: it is an `XrdsPanelTemplate` whose attachment happens
 // to be a `PlayerAnchor`, and a HUD text item is a `Label` element. See
-// `docs/xrds-widget-template-plan.md` §A4b-1.
+// `docs/done/xrds-widget-template-plan.md` §A4b-1.
 
 // ---------------------------------------------------------------------------
 // Scene document

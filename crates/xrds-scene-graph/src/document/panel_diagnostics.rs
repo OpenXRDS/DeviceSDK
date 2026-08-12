@@ -1,5 +1,5 @@
 //! Authoring checks for [`XrdsPanelTemplate`]s — see
-//! `docs/xrds-widget-template-plan.md` §A1.
+//! `docs/done/xrds-widget-template-plan.md` §A1.
 //!
 //! Reports [`XrdsSceneTriggerDiagnostic`] rather than a panel-specific type: the
 //! editor already renders that shape, and most of what can go wrong on a panel

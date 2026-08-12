@@ -203,6 +203,12 @@ function ColorRow({ label, color, onLive, onCommit }: {
  *
  *  `Empty` is the honest case: a grouping node has nothing to grab.
  *
+ *  `Effect` is the same story for a different reason: `spawn_effect_descriptor`
+ *  inserts a `ParticleSpawner` and no `Mesh3d`, so there is no `Aabb` for a grab
+ *  raycast to hit. The particles themselves are GPU/CPU-simulated points with no
+ *  collision representation. Offering the checkbox would arm `XrGrabbable` on an
+ *  entity that can never be picked up.
+ *
  *  **`Panel` is deliberately *not* on this list.** It has real geometry — the
  *  backdrop from `apply_panel_backdrop_in_world`, with its `Aabb` backfilled by
  *  `ensure_aabbs_for_unculled_meshes_system` — so grab reaches it fine. The
@@ -211,7 +217,7 @@ function ColorRow({ label, color, onLive, onCommit }: {
  *  panel. It is resolved in the runtime instead: the checkbox arms a handle bar
  *  below the panel and `XrGrabHandleOnly` refuses a grab that starts anywhere
  *  else, so pressing a button can never drag its panel. */
-const KINDS_WITHOUT_GEOMETRY = new Set(["Empty", "Player", "PlayerAnchor"]);
+const KINDS_WITHOUT_GEOMETRY = new Set(["Empty", "Player", "PlayerAnchor", "Effect"]);
 
 function canBeGrabbed(payloadKind: string): boolean {
   return !KINDS_WITHOUT_GEOMETRY.has(payloadKind);
@@ -727,6 +733,21 @@ function SceneEnvironmentSection({ env, send }: { env: EnvironmentDto | null; se
 function PayloadSection({ node, send, isPlaying, snapshot }: { node: NodeInspector; send: (c: EditorCommand) => void; isPlaying: boolean; snapshot: EditorSnapshot }) {
   const { id, payload } = node;
 
+  // Capsule is the only primitive with an editor-side dimensions UI so far —
+  // Cube/Sphere/Cylinder/Plane still only expose material + physics here;
+  // their geometry is Rust-only via set_*_geometry. See
+  // docs/adding-primitive-type.md §"There is currently no editor UI for a
+  // primitive's own dimensions" for why this gap exists and how to close it
+  // for another shape.
+  if (payload.type === "Capsule") {
+    return <>
+      <CapsuleGeometrySection id={id} radius={payload.radius} length={payload.length} send={send} />
+      <PrimitiveSection id={id} mat={payload.material} assets={snapshot.asset_catalog} physics_body={payload.physics_body} gravity_scale={payload.gravity_scale} mass={payload.mass} send={send} />
+    </>;
+  }
+  if (payload.type === "Effect") {
+    return <EffectParamsSection id={id} fx={payload} send={send} />;
+  }
   // Tetrahedron is mapped to Cube DTO on the Rust side
   if (payload.type === "Cube" || payload.type === "Sphere" || payload.type === "Cylinder" ||
       payload.type === "Plane") {
@@ -838,6 +859,227 @@ function PanelInstanceSection({ id, p, send, snapshot }: {
 }
 
 const PHYSICS_BODY_OPTIONS = ["None", "Static", "Dynamic"] as const;
+
+/** `radius`/`length` for a `Capsule` node — `length` excludes the two
+ * hemispherical caps, matching `XrdsCapsule::length` and both Bevy's
+ * `Capsule3d` and avian3d's `Collider::capsule`. Total visible extent is
+ * `length + 2 * radius`.
+ *
+ * `SetCapsuleGeometry` doc-edits and live-previews on every drag frame —
+ * same one-command shape as `SetGravityScale`/`SetMass` beside it, not the
+ * separate live/commit split `SetMaterial`/`CommitMaterial` use. */
+function CapsuleGeometrySection({ id, radius, length, send }: {
+  id: number; radius: number; length: number; send: (c: EditorCommand) => void;
+}) {
+  return (
+    <div className="insp-section">
+      <h4>Geometry</h4>
+      <SliderRow label="Radius" value={radius} min={0.01} max={5} step={0.01}
+        onLive={v  => send({ type: "SetCapsuleGeometry", payload: { id, radius: v, length } })}
+        onCommit={v => send({ type: "SetCapsuleGeometry", payload: { id, radius: v, length } })}
+      />
+      <SliderRow label="Length" value={length} min={0} max={10} step={0.01}
+        onLive={v  => send({ type: "SetCapsuleGeometry", payload: { id, radius, length: v } })}
+        onCommit={v => send({ type: "SetCapsuleGeometry", payload: { id, radius, length: v } })}
+      />
+      <div className="insp-note">
+        Length excludes the rounded caps — total height is length + 2 × radius.
+      </div>
+    </div>
+  );
+}
+
+function EffectParamsSection({ id, fx, send }: {
+  id: number;
+  fx: Extract<NodePayload, { type: "Effect" }>;
+  send: (c: EditorCommand) => void;
+}) {
+  // Every edit re-sends the whole parameter set, matching SetEffectParams on the
+  // Rust side. Keeps the backend free of partial-merge logic, at the cost of the
+  // slightly verbose spread below.
+  const push = (patch: Partial<Omit<typeof fx, "type">>) =>
+    send({
+      type: "SetEffectParams",
+      payload: {
+        id,
+        kind: fx.kind,
+        auto_play: fx.auto_play,
+        burst_count: fx.burst_count,
+        spawn_rate: fx.spawn_rate,
+        lifetime_secs: fx.lifetime_secs,
+        size_min: fx.size_min,
+        size_max: fx.size_max,
+        color_start: fx.color_start,
+        color_end: fx.color_end,
+        speed_min: fx.speed_min,
+        speed_max: fx.speed_max,
+        omnidirectional: fx.omnidirectional,
+        spread_deg: fx.spread_deg,
+        gravity: fx.gravity,
+        emission_radius: fx.emission_radius,
+        blend: fx.blend,
+        size_end: fx.size_end,
+        drag: fx.drag,
+        fade_edge: fx.fade_edge,
+        fade_scene: fx.fade_scene,
+        ...patch,
+      },
+    });
+
+  const isBurst = fx.kind === "Burst";
+
+  return (
+    <div className="insp-section">
+      <h4>Effect</h4>
+
+      <div className="insp-row">
+        <span className="insp-label">Kind</span>
+        <select value={fx.kind} onChange={e => push({ kind: e.target.value })}>
+          <option value="Burst">Burst (one-shot)</option>
+          <option value="Trail">Trail (continuous)</option>
+        </select>
+      </div>
+
+      <div className="insp-row">
+        <span className="insp-label">Auto Play</span>
+        <input type="checkbox" checked={fx.auto_play}
+          onChange={e => push({ auto_play: e.target.checked })} />
+      </div>
+      {isBurst && !fx.auto_play && (
+        <div className="insp-note">
+          Idle until fired by a Track — nothing is drawn in the viewport. This is
+          the right setting for a trigger-driven burst.
+        </div>
+      )}
+      {isBurst && fx.auto_play && (
+        <div className="insp-note">
+          Fires once when the scene loads and cannot be re-fired. Turn Auto Play
+          off to drive it from a Track instead.
+        </div>
+      )}
+
+      {/* Only the field the current kind actually reads is shown; the other is
+          ignored by the runtime, and showing both invites tuning a dead value. */}
+      {isBurst ? (
+        <SliderRow label="Burst Count" value={fx.burst_count} min={1} max={2000} step={1}
+          onLive={v => push({ burst_count: Math.round(v) })}
+          onCommit={v => push({ burst_count: Math.round(v) })}
+        />
+      ) : (
+        <SliderRow label="Rate (per sec)" value={fx.spawn_rate} min={1} max={1000} step={1}
+          onLive={v => push({ spawn_rate: v })}
+          onCommit={v => push({ spawn_rate: v })}
+        />
+      )}
+
+      <SliderRow label="Lifetime (s)" value={fx.lifetime_secs} min={0.1} max={10} step={0.05}
+        onLive={v => push({ lifetime_secs: v })}
+        onCommit={v => push({ lifetime_secs: v })}
+      />
+      <SliderRow label="Size Min" value={fx.size_min} min={0.005} max={1} step={0.005}
+        onLive={v => push({ size_min: v })}
+        onCommit={v => push({ size_min: v })}
+      />
+      <SliderRow label="Size Max" value={fx.size_max} min={0.005} max={1} step={0.005}
+        onLive={v => push({ size_max: v })}
+        onCommit={v => push({ size_max: v })}
+      />
+      <SliderRow label="Speed Min" value={fx.speed_min} min={0} max={20} step={0.05}
+        onLive={v => push({ speed_min: v })}
+        onCommit={v => push({ speed_min: v })}
+      />
+      <SliderRow label="Speed Max" value={fx.speed_max} min={0} max={20} step={0.05}
+        onLive={v => push({ speed_max: v })}
+        onCommit={v => push({ speed_max: v })}
+      />
+
+      <div className="insp-row">
+        <span className="insp-label">Omnidirectional</span>
+        <input type="checkbox" checked={fx.omnidirectional}
+          onChange={e => push({ omnidirectional: e.target.checked })} />
+      </div>
+      {!fx.omnidirectional && (
+        <SliderRow label="Spread (°)" value={fx.spread_deg} min={0} max={179} step={1}
+          onLive={v => push({ spread_deg: v })}
+          onCommit={v => push({ spread_deg: v })}
+        />
+      )}
+
+      <SliderRow label="Emit Radius" value={fx.emission_radius} min={0} max={5} step={0.01}
+        onLive={v => push({ emission_radius: v })}
+        onCommit={v => push({ emission_radius: v })}
+      />
+      <SliderRow label="Gravity Y" value={fx.gravity[1]} min={-20} max={20} step={0.1}
+        onLive={v => push({ gravity: [fx.gravity[0], v, fx.gravity[2]] })}
+        onCommit={v => push({ gravity: [fx.gravity[0], v, fx.gravity[2]] })}
+      />
+
+      <div className="insp-row">
+        <span className="insp-label">Blend</span>
+        {/* Left enabled but labelled as inert: the value is stored and travels
+            correctly to the backend, which simply ignores it today (bevy_firework
+            0.8 hardcodes alpha blending in its pipeline and its shader never reads
+            the alpha_mode uniform). Verified on a Quest 3 — all three modes looked
+            identical. Better to say so than to present a control that quietly
+            does nothing, which is the same trap as the grabbable checkbox. */}
+        <select value={fx.blend} onChange={e => push({ blend: e.target.value })}>
+          <option value="Blend">Blend (normal)</option>
+          <option value="Add">Add (glow)</option>
+          <option value="Multiply">Multiply (darken)</option>
+        </select>
+      </div>
+      <div className="insp-note">
+        No visible effect yet — the particle backend ignores blend mode in its
+        current version, so all three look the same. The setting is saved and will
+        apply once that is fixed upstream.
+      </div>
+
+      <SliderRow label="End Size ×" value={fx.size_end} min={0} max={4} step={0.05}
+        onLive={v => push({ size_end: v })}
+        onCommit={v => push({ size_end: v })}
+      />
+      <SliderRow label="Drag" value={fx.drag} min={0} max={5} step={0.05}
+        onLive={v => push({ drag: v })}
+        onCommit={v => push({ drag: v })}
+      />
+      <SliderRow label="Edge Softness" value={fx.fade_edge} min={0} max={1} step={0.01}
+        onLive={v => push({ fade_edge: v })}
+        onCommit={v => push({ fade_edge: v })}
+      />
+      <SliderRow label="Scene Fade" value={fx.fade_scene} min={0} max={5} step={0.05}
+        onLive={v => push({ fade_scene: v })}
+        onCommit={v => push({ fade_scene: v })}
+      />
+      <div className="insp-note">
+        End Size scales a particle over its life (1 = constant, 0 = shrink away).
+        Drag settles motion — low for sparks, higher for smoke. Scene Fade softens
+        where particles intersect geometry, removing the hard line where a plume
+        meets the floor.
+      </div>
+
+      <div className="insp-row">
+        <span className="insp-label">Start Colour</span>
+        <input type="color" value={rgbaToHex(fx.color_start)}
+          onChange={e => push({ color_start: hexToRgba(e.target.value, fx.color_start[3]) })} />
+      </div>
+      <div className="insp-row">
+        <span className="insp-label">End Colour</span>
+        <input type="color" value={rgbaToHex(fx.color_end)}
+          onChange={e => push({ color_end: hexToRgba(e.target.value, fx.color_end[3]) })} />
+      </div>
+      <SliderRow label="End Alpha" value={fx.color_end[3]} min={0} max={1} step={0.01}
+        onLive={v => push({ color_end: [fx.color_end[0], fx.color_end[1], fx.color_end[2], v] })}
+        onCommit={v => push({ color_end: [fx.color_end[0], fx.color_end[1], fx.color_end[2], v] })}
+      />
+      <div className="insp-note">
+        Particles fade from Start to End over their lifetime. An End Alpha of 0
+        makes them fade out rather than pop. Colours are capped at full
+        brightness — the XR cameras have no bloom pass, so brighter values would
+        just render white.
+      </div>
+    </div>
+  );
+}
 
 function PrimitiveSection({ id, mat, assets, physics_body, gravity_scale, mass, send }: { id: number; mat: MaterialParams; assets: AssetCatalogEntry[]; physics_body: string; gravity_scale: number; mass: number; send: (c: EditorCommand) => void }) {
   const [local, setLocal] = useState<MaterialParams>(mat);

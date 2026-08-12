@@ -572,10 +572,11 @@ throughout.
 
 Deferred out of A1 (was in scope, now sequenced later):
 
-- [ ] Attachment points — camera `panel_template_id`/`panel_depth`, scene
-      `XrdsSceneNodePayload::Panel { template_id }`. Moved to **A2**, where the
-      runtime that spawns them lands, so the schema and its consumer arrive
-      together.
+- [x] Attachment points — scene `XrdsSceneNodePayload::Panel { template_id }`.
+      Moved to **A2**, where the runtime that spawns them landed. The camera
+      half shipped as `panel_template_id`/`panel_depth` in A2c, then was itself
+      retired in favour of parenting a `Panel` node under the anchor — see A6
+      and A6b-lite, whose fields and `link_panel` were later deleted outright.
 
 ### A4b — retire the old vocabulary (after A2 and A3)
 
@@ -783,6 +784,13 @@ depends on it. A2b below does the wiring.
 
 ### A2c — camera attachment — landed
 
+**Superseded by A6/A6b-lite below.** Everything in this section describes
+`panel_template_id`/`panel_depth`/`link_panel`/`spawn_panel_template_head_locked`,
+all since deleted — a head-locked panel is now authored by parenting a `Panel`
+node under the anchor, which is what A6 exists to explain. Kept as the
+historical record of the step that made "attachment is the only difference"
+literally true, even though the specific mechanism it used did not last.
+
 **"Attachment is the only difference" now holds literally.** One template, two
 attachment points, and the only thing that differs is placement: a scene `Panel`
 node parents elements to itself, the camera path parents them to the anchor with
@@ -820,24 +828,30 @@ document-driven, so it needs no panel branch; a panel equivalent can be added
 when something asks for one.
 
 ### A2 — original scope, for reference
-- [ ] Spawn elements from a template for **both** attachments: the world path
+
+**Cancelled as written — superseded by the A2a/A2b/A2c split below**, which
+shipped every capability listed here (and landed it in three independently
+testable steps instead of one). Kept only so the split is legible against the
+original ask; none of these bullets describe outstanding work.
+
+- [ ] ~~Spawn elements from a template for **both** attachments: the world path
       in `import_runtime_nodes`, and the camera path in `reimport.rs:472`
-      (which currently reads `hud_template`).
-- [ ] Tag element entities with `XrdsTriggerBindings` from the element's own
+      (which currently reads `hud_template`).~~
+- [ ] ~~Tag element entities with `XrdsTriggerBindings` from the element's own
       authored `triggers`, mirroring `tag_trigger_binding_entities`
       (`reimport.rs:536`) — **including its remove-when-empty behaviour**, so
-      unchecking the last binding actually detaches the component.
-- [ ] Confirm no change is needed in `consume_triggers` (§4). If one turns out
-      to be needed, stop and re-read §4 — the analysis says otherwise.
-- [ ] Keep `set_hud_item(name, …)` working (`src/xrds_api/context.rs`) by
+      unchecking the last binding actually detaches the component.~~
+- [ ] ~~Confirm no change is needed in `consume_triggers` (§4). If one turns out
+      to be needed, stop and re-read §4 — the analysis says otherwise.~~
+- [ ] ~~Keep `set_hud_item(name, …)` working (`src/xrds_api/context.rs`) by
       resolving to a `Label` element of that name. Its contract is
-      name-addressed and unification preserves name-addressing.
-- [ ] Tests:
-  - [ ] pressing a button element fires the Track its binding names
-  - [ ] an element with no triggers gets no `XrdsTriggerBindings`
-  - [ ] removing the last binding detaches the component
-  - [ ] `set_hud_item` still updates a migrated Label
-  - [ ] a Track fired by an element participates in the conflict guard
+      name-addressed and unification preserves name-addressing.~~
+- [ ] ~~Tests:~~
+  - [ ] ~~pressing a button element fires the Track its binding names~~
+  - [ ] ~~an element with no triggers gets no `XrdsTriggerBindings`~~
+  - [ ] ~~removing the last binding detaches the component~~
+  - [ ] ~~`set_hud_item` still updates a migrated Label~~
+  - [ ] ~~a Track fired by an element participates in the conflict guard~~
 
 ### A3a — panel bridge (Rust) — landed
 
@@ -935,42 +949,48 @@ A third workspace next to Scene and Sequencer, in the Sequencer's language (§7)
       cannot emit is kept in the list and flagged, so an existing document is
       never silently rewritten.
 
-Deliberately not done in this pass, with reasons:
+Deliberately not done in this pass, with reasons — all three later landed,
+folded into A3b-3 below rather than tracked as their own phase:
 
-- [ ] **Drag-to-move on the canvas.** Position lives *inside* the widget variant,
+- [x] **Drag-to-move on the canvas.** Position lives *inside* the widget variant,
       so moving one element means rebuilding its whole DTO — per pointer-move
       that needs the live-preview/commit split the node Inspector's transform
-      fields already use. Worth doing properly rather than as a first pass; the
-      canvas is read-plus-select until then.
-- [ ] **Per-widget property editing** (label text, colours, sizes). The
-      `SetPanelElementWidget` command exists and is wired; only the form is
-      missing.
-- [ ] Retiring `HudCanvasOverlay`/`WorldPanelCanvasOverlay` — that is A4b, after
-      this workspace has been used enough to trust.
+      fields already use. Shipped in A3b-3 (`dragRef` in `PanelWorkspace.tsx`).
+- [x] **Per-widget property editing** (label text, colours, sizes). The
+      `SetPanelElementWidget` command exists and is wired; only the form was
+      missing. Shipped in A3b-3 as the data-driven `widgetFields`/`withField`
+      table in `lib/panelWidget.ts`.
+- [x] Retiring `HudCanvasOverlay`/`WorldPanelCanvasOverlay` — was A4b, after
+      this workspace had been used enough to trust. Both files are deleted.
 
 ### A3 — original scope, for reference
 
-- [ ] DTOs in `src-tauri/src/bridge.rs`: template, element, element kind;
-      snapshot `panel_library` (generalizing `hud_library`).
-- [ ] Replace the two command surfaces with one element-addressed set. Today:
+**Cancelled as written — superseded by A3a/A3b-1/A3b-2/A3b-3**, which shipped
+every capability listed here across four landed steps instead of one. Kept
+only so the split is legible against the original ask; none of these bullets
+describe outstanding work.
+
+- [ ] ~~DTOs in `src-tauri/src/bridge.rs`: template, element, element kind;
+      snapshot `panel_library` (generalizing `hud_library`).~~
+- [ ] ~~Replace the two command surfaces with one element-addressed set. Today:
       12 HUD commands (`CreateHudTemplate` … `LinkHudTemplate`) and 7 world
       commands (`SetWorldPanelParams`, `AddWorldPanelWidget`,
       `RemoveWorldPanelWidget`, `MoveWorldPanelWidget`, `SetWorldPanelWidget`,
-      `SetWorldPanelWidgets`, `SetWorldPanelLayout`).
-- [ ] Address elements by **name**, not index — `MoveWorldPanelWidget` reorders
-      today, and an index-addressed command would silently re-point bindings.
-- [ ] **Bump `BRIDGE_VERSION`** on both sides. It is 5 now.
-- [ ] Generalize `HudLibraryPanel.tsx` into the template library.
-- [ ] Converge `HudCanvasOverlay.tsx` and `WorldPanelCanvasOverlay.tsx` into
-      one canvas; attachment differs, canvas editing does not.
-- [ ] Element inspector reusing `TriggersSection` from `Inspector.tsx` — a
-      binding is a binding.
-- [ ] `validKindsFor` in `src/lib/sequencer.ts`: `ButtonPress` /
+      `SetWorldPanelWidgets`, `SetWorldPanelLayout`).~~
+- [ ] ~~Address elements by **name**, not index — `MoveWorldPanelWidget` reorders
+      today, and an index-addressed command would silently re-point bindings.~~
+- [ ] ~~**Bump `BRIDGE_VERSION`** on both sides. It is 5 now.~~
+- [ ] ~~Generalize `HudLibraryPanel.tsx` into the template library.~~
+- [ ] ~~Converge `HudCanvasOverlay.tsx` and `WorldPanelCanvasOverlay.tsx` into
+      one canvas; attachment differs, canvas editing does not.~~
+- [ ] ~~Element inspector reusing `TriggersSection` from `Inspector.tsx` — a
+      binding is a binding.~~
+- [ ] ~~`validKindsFor` in `src/lib/sequencer.ts`: `ButtonPress` /
       `ButtonRelease` / `SliderChange` / `ToggleChange` become **available** on
       elements. They are hard-coded `false` today with a comment explaining
-      they are unreachable — that comment is what this plan retires.
-- [ ] Delete `src-tauri/src/hud_library.rs` once its commands are folded in.
-- [ ] Tests: vitest for element-row labelling and kind availability.
+      they are unreachable — that comment is what this plan retires.~~
+- [ ] ~~Delete `src-tauri/src/hud_library.rs` once its commands are folded in.~~
+- [ ] ~~Tests: vitest for element-row labelling and kind availability.~~
 
 ### A4 — the instance hazard (§5)
 
@@ -1128,18 +1148,31 @@ consequence — the PlayerAnchor Inspector still *drove* that path, so an author
 picking "Head-locked Panel" there got a panel with dead buttons, which is exactly
 the trap A6 removed everywhere else.
 
+**"Later" arrived.** The whole anchor-link path — both fields, `link_panel`,
+`spawn_panel_template_head_locked`, its diagnostic, and the Inspector's warning
+below — was deleted outright in a follow-up cleanup pass, once the user
+confirmed no scene relied on it. Nothing below is still working "as reference";
+the bullets are kept as the historical record of the interim state.
+
 - [x] `#[deprecated]` on `link_panel`; doc notes on both anchor fields saying why
-      (they cannot carry `element_triggers`) and what to do instead.
+      (they cannot carry `element_triggers`) and what to do instead. *(Fields and
+      method since deleted — see above.)*
 - [x] The Inspector's picker + depth slider became **"+ Add panel child"**, which
       sends `SpawnPrimitive { kind: "Panel", parent_id: anchor }` — the working
-      path, reusing a command that already existed.
+      path, reusing a command that already existed. *(Still the only path; this
+      part did not change.)*
 - [x] An anchor still holding the old link shows a warning naming the template and
       depth, so an existing document explains itself rather than silently
-      under-performing.
-- [x] **A Panel node under an anchor now defaults to `[0, 0, -0.5]`, not
-      `[0, 1.5, -1]`.** Its transform is read as *camera-local*, so the world-space
+      under-performing. *(The warning itself was deleted along with the fields it
+      read — there is nothing left to warn about.)*
+- [x] A Panel node under an anchor defaults to `[0, 0, -0.5]`, not
+      `[0, 1.5, -1]`. Its transform is read as *camera-local*, so the world-space
       default would have put a HUD a metre and a half above the viewer's own eye.
-      Matches the depth the retired `panel_depth` used, so migrating moves nothing.
+      Matches the depth the retired `panel_depth` used, so migrating moved
+      nothing at the time. **Superseded:** once a panel gained an opaque backdrop
+      (A2c predates that), 0.5 m turned the default template into a blindfold —
+      moved to `-1.5` in the same cleanup pass, matching where Quest places its
+      own windows.
 - [x] The ancestor walk mirrors the runtime's, checking the **whole chain** — a
       panel grouped under an Empty beneath an anchor is still head-locked.
       Mutation-verified (immediate-parent-only fails the test).

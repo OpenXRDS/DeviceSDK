@@ -604,6 +604,9 @@ impl XrdsSceneDocument {
                 XrdsSceneNodePayload::Cylinder(c) => {
                     changed = rewrite_material_texture_asset_ids(&mut c.material, previous_asset_id, new_asset_id);
                 }
+                XrdsSceneNodePayload::Capsule(c) => {
+                    changed = rewrite_material_texture_asset_ids(&mut c.material, previous_asset_id, new_asset_id);
+                }
                 XrdsSceneNodePayload::Plane3D(p) => {
                     changed = rewrite_material_texture_asset_ids(&mut p.material, previous_asset_id, new_asset_id);
                 }

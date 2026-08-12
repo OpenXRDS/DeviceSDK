@@ -1,5 +1,5 @@
 //! Editor bridge for panel templates — the unified model behind HUD panels and
-//! world-space panels. See `docs/xrds-widget-template-plan.md` §A3.
+//! world-space panels. See `docs/done/xrds-widget-template-plan.md` §A3.
 //!
 //! Took the shape of the now-deleted `hud_library.rs` (snapshot serializer +
 //! command dispatcher) and has replaced it outright: a HUD is a panel template

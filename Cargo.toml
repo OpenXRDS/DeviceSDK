@@ -86,6 +86,15 @@ bevy = { version = "0.17.2", default-features = false, features = [
   "jpeg", "mp3", "wav",
 ] }
 avian3d = { version = "0.4", features = ["3d", "parry-f32"] }
+# The adopted VFX backend (docs/vfx-particle-effects-plan.md). CPU-simulated and
+# batch-rendered rather than compute+indirect-draw, which is the specific GPU
+# path that renders nothing on Quest's Adreno 740 (bevy_hanabi#548). 0.8 is the
+# last release tracking Bevy 0.17 (0.9 -> 0.18, 0.10 -> 0.19).
+# default-features = false drops `physics_avian`: particle collision is out of
+# scope for now, and its avian3d dep would be pulled in for nothing. Re-enable
+# it if XrdsEffect ever exposes collision -- the feature wants avian3d ^0.4,
+# which is already this workspace's version.
+bevy_firework = { version = "0.8", default-features = false }
 bevy-sequential-actions = "0.14"
 wgpu = { version = "26.0.1", default-features = false, features = ["wgsl", "vulkan", "vulkan-portability"] }
 wgpu-hal = { version = "26.0.1", features = ["vulkan"] }
@@ -327,6 +336,10 @@ path = "examples/rendering/2d_shapes.rs"
 [[example]]
 name = "3d_bloom"
 path = "examples/rendering/3d_bloom.rs"
+
+[[example]]
+name = "particle_effect"
+path = "examples/rendering/particle_effect.rs"
 
 [[example]]
 name = "3d_shapes"
