@@ -19,7 +19,7 @@ flowchart TB
         components["xrds-components<br/>shared XRDS descriptors<br/>(primitives, world-UI widgets, …)"]
         openxr["xrds-openxr<br/>OpenXR backend, XrInput"]
         net["xrds-net<br/>networking integrations"]
-        audio["xrds-audio<br/>audio integrations"]
+        audio["xrds-audio<br/>DEPRECATED, not built"]
     end
 
     bevy[("Bevy 0.17<br/>(implementation engine,<br/>not part of the public API)")]
@@ -240,7 +240,11 @@ How it relates to SDK layering:
 - `xrds-components`: shared XRDS component descriptors/types used by runtime and SDK surfaces.
 - `xrds-openxr`: OpenXR backend integration.
 - `xrds-net`: networking-related runtime integrations/samples.
-- `xrds-audio`: audio-related runtime integrations.
+- `xrds-audio`: **deprecated and excluded from the workspace** — not built, nothing depends
+  on it, slated for deletion. Bevy already covers spatial audio (`SpatialListener`,
+  `AudioSink`, `PlaybackSettings`), and authored audio goes through `XrdsSceneAudioClip`. The
+  one thing Bevy cannot do — choosing an output device — needs a `bevy_audio` patch to be
+  useful, so listing devices alone was half a feature. See the crate's README.
 
 ## Data Flow
 
