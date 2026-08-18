@@ -18,11 +18,20 @@ limitations under the License.
 //! `docs/done/xrds-net-protocol-handler.md`'s "Method -> handler mapping" for the
 //! full extraction plan; modules land here one at a time (Phase 1).
 
+#[cfg(feature = "protocol-coap")]
 pub mod coap;
+#[cfg(feature = "protocol-ftp")]
 pub mod ftp;
+#[cfg(feature = "protocol-http")]
 pub mod http;
+// HTTP/3 and QUIC are both quiche, so they share one feature — see Cargo.toml.
+#[cfg(feature = "protocol-quic")]
 pub mod http3;
+#[cfg(feature = "protocol-mqtt")]
 pub mod mqtt;
+#[cfg(feature = "protocol-quic")]
 pub mod quic;
+#[cfg(feature = "protocol-quic")]
 mod quic_shared;
+#[cfg(feature = "protocol-ws")]
 pub mod ws;

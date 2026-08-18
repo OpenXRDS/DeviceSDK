@@ -159,7 +159,12 @@ tokio = { workspace = true, features = ["time", "signal"] }
 # despite xrds-runtime's own Android-specific `default-features = false`.
 # See docs/done/xrds-net-android-shipping.md Phase 3.
 [target.'cfg(not(target_os = "android"))'.dev-dependencies]
-xrds-net = { workspace = true }
+# `protocol-webrtc` is declared explicitly because examples/webrtc/* use `WebRTCClient`,
+# `VideoSource` and `AudioSource`. The workspace dependency sets default-features = false
+# (see its comment above), so without this the examples only compiled because some *other*
+# workspace member happened to enable the feature and Cargo unified it — fine until someone
+# builds a narrower subset, at which point the examples break for no visible reason.
+xrds-net = { workspace = true, features = ["protocol-webrtc"] }
 
 # Explicit [[example]] entries below: Cargo's example autodiscovery only
 # finds examples/*.rs (flat) or examples/*/main.rs (one level, must be

@@ -196,7 +196,7 @@ mod tests {
         // A handler with no session capability: send/try_recv report a
         // Capability error rather than panicking; try_recv routes it to
         // take_error and returns None.
-        let mut chan = NetChannel::new(ctx(), Box::new(UnsupportedHandler::new(PROTOCOLS::WEBRTC)));
+        let mut chan = NetChannel::new(ctx(), Box::new(UnsupportedHandler::dedicated_api(PROTOCOLS::WEBRTC, "WebRTCClient")));
 
         assert!(matches!(
             chan.send(b"x".to_vec()),

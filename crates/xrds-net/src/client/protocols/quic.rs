@@ -159,15 +159,29 @@ impl QuicHandler {
         // Matches `http3.rs`'s handshake budget so the two protocols agree on how long
         // an unresponsive peer is worth waiting for.
         let deadline = Duration::from_secs(20);
+        // How long a handshake must make no progress before quiche is told to retransmit.
+        // Long enough that a loopback handshake finishes first, short enough that a lossy
+        // link still retries well inside the deadline.
+        const STALL_BEFORE_RETRANSMIT: Duration = Duration::from_millis(500);
         let started = Instant::now();
 
         loop {
             poll.poll(&mut events, conn.timeout())
                 .map_err(|e| e.to_string())?;
 
-            // No readiness means the poll hit `conn.timeout()`; quiche needs to be told
-            // so it can retransmit and eventually give up.
-            if events.is_empty() {
+            // Tell quiche its timer expired, so it can retransmit a lost handshake packet
+            // and eventually give up — but only once the handshake has genuinely stalled.
+            //
+            // The delay is not cosmetic. Calling `on_timeout()` on every empty poll broke a
+            // *working* local round trip: against a loopback peer the reply lands in
+            // microseconds and quiche's first timer is tiny, so the client retransmitted its
+            // Initial, which this crate's own echo server does not tolerate mid-handshake.
+            // Guarding on real elapsed time was not enough — the timer legitimately expires
+            // that fast — so the guard is "no progress for a while" instead.
+            //
+            // A fast handshake never reaches this branch; a stalled one does, keeps its
+            // retransmission behaviour, and is bounded by the deadline below.
+            if events.is_empty() && started.elapsed() > STALL_BEFORE_RETRANSMIT {
                 conn.on_timeout();
             }
 
