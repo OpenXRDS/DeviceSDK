@@ -28,6 +28,7 @@ limitations under the License.
 //! tore a QUIC connection down); this is new code, not an extraction.
 
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use mio::{Events, Poll};
 use quiche::{Connection, RecvInfo};
@@ -126,6 +127,26 @@ impl QuicHandler {
     }
 
     /* Used for initial handshake */
+    /// Drive the handshake until the connection is established, closed, or the
+    /// deadline passes.
+    ///
+    /// Two things here are load-bearing, and this loop previously had neither —
+    /// which made an unreachable peer hang forever instead of erroring:
+    ///
+    /// - **`conn.on_timeout()` when the poll expires.** `conn.timeout()` is only
+    ///   quiche's *next timer deadline*; quiche does not advance its own clock. Without
+    ///   calling `on_timeout()`, the connection never retransmits and never reaches its
+    ///   idle timeout, so `is_closed()` stays false indefinitely and the loop spins.
+    ///   `quic_server.rs` already does this; the client did not.
+    /// - **A wall-clock deadline.** Belt and braces: even if quiche keeps reporting
+    ///   progress, `establish` must return rather than block a caller forever.
+    ///
+    /// Why an unreachable peer did not simply error out: the socket is bound, never
+    /// `connect`ed, and writes with `send_to`. Linux does not deliver ICMP
+    /// port-unreachable to an unconnected UDP socket, so `recv_from` never fails and
+    /// there is nothing to report. Windows *can* surface `WSAECONNRESET` there, which is
+    /// why `connect_without_a_reachable_peer_is_a_network_error_not_a_panic` passed on a
+    /// dev machine while hanging on Linux CI.
     fn event_loop(
         socket: &mut mio::net::UdpSocket,
         conn: &mut Connection,
@@ -135,15 +156,34 @@ impl QuicHandler {
         let mut buf = [0; 65535];
         let mut out = [0; MAX_DATAGRAM_SIZE];
 
+        // Matches `http3.rs`'s handshake budget so the two protocols agree on how long
+        // an unresponsive peer is worth waiting for.
+        let deadline = Duration::from_secs(20);
+        let started = Instant::now();
+
         loop {
             poll.poll(&mut events, conn.timeout())
                 .map_err(|e| e.to_string())?;
+
+            // No readiness means the poll hit `conn.timeout()`; quiche needs to be told
+            // so it can retransmit and eventually give up.
+            if events.is_empty() {
+                conn.on_timeout();
+            }
+
             if conn.is_closed() {
                 break;
             }
 
             if conn.is_established() {
                 break;
+            }
+
+            if started.elapsed() > deadline {
+                return Err(format!(
+                    "QUIC handshake timed out after {}s (peer unreachable or not speaking QUIC)",
+                    deadline.as_secs()
+                ));
             }
 
             Self::handle_read(socket, conn, &mut buf)?;
