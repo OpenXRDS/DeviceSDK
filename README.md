@@ -64,11 +64,19 @@ For a quick visual verification pass on environment-map lighting, run [examples/
 Install system dependencies (Ubuntu/Debian):
 
 ```shell
-sudo apt install clang libssl-dev libasound2-dev \
+sudo apt install clang libssl-dev libasound2-dev libudev-dev \
     libavcodec-dev libavformat-dev libavutil-dev libavdevice-dev \
     libavfilter-dev libswresample-dev libswscale-dev libpostproc-dev \
-    libxcb-glx0-dev
+    libxcb-glx0-dev cmake perl \
+    libgtk-3-dev libwebkit2gtk-4.1-dev
 ```
+
+`libudev-dev` is required by Bevy's input backend, `cmake`/`perl` by `xrds-net`'s vendored
+BoringSSL, and `libgtk-3-dev`/`libwebkit2gtk-4.1-dev` by the editor —
+`apps/xrds-editor/src-tauri` is a workspace member, so a plain `cargo build` compiles its
+webview and file dialogs too. Without those last two the build fails inside `glib-sys`'s
+build script, nowhere near this project's own code. The earlier version of this list
+omitted them and CI hit exactly that.
 
 Then build:
 

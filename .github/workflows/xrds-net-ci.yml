@@ -20,12 +20,20 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      # cmake/perl are for quiche's vendored BoringSSL. libasound2-dev and libudev-dev
-      # are for Bevy: this job compiles the *whole* workspace, so it pulls in
-      # `alsa-sys` (via rodio/cpal) and `libudev-sys`, both of which resolve their
-      # system library through pkg-config in a build script and hard-fail without it.
-      # Without these the job dies at `alsa-sys` build.rs, nowhere near our own code.
-      - name: Install native build deps (quiche/BoringSSL, Bevy audio/input)
+      # This job compiles the *whole* workspace, and `apps/xrds-editor/src-tauri` is a
+      # member, so the dependency set is much wider than xrds-net's own:
+      #
+      #   cmake, perl                  quiche's vendored BoringSSL
+      #   libasound2-dev, libudev-dev  Bevy audio (alsa-sys via rodio/cpal) and input
+      #   libav*-dev, libpostproc-dev  xrds-media transcoding (ffmpeg)
+      #   libgtk-3-dev                 rfd file dialogs; covers glib/gio/gdk/atk/cairo/pango
+      #   libwebkit2gtk-4.1-dev        wry's webview; covers javascriptcore + soup3
+      #   clang, libssl-dev, libxcb-glx0-dev   per the README's documented list
+      #
+      # Every one of these is a pkg-config lookup inside a *build script*, so a missing
+      # header fails the build long before any of our code is type-checked — the first two
+      # attempts at this job died in `alsa-sys` and then `glib-sys` respectively.
+      - name: Install native build deps (quiche, Bevy, ffmpeg, GTK/WebKit)
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
@@ -33,7 +41,7 @@ jobs:
           # for 70 minutes on a runner: apt has no default network timeout, so a stalled
           # mirror waits forever, and any debconf prompt blocks on stdin that never comes.
           sudo -E apt-get update -o Acquire::Retries=3 -o Acquire::http::Timeout=30
-          sudo -E apt-get install -y --no-install-recommends -o Acquire::Retries=3 -o Acquire::http::Timeout=30 cmake perl libasound2-dev libudev-dev
+          sudo -E apt-get install -y --no-install-recommends -o Acquire::Retries=3 -o Acquire::http::Timeout=30 cmake perl clang libssl-dev libasound2-dev libudev-dev libxcb-glx0-dev libavcodec-dev libavformat-dev libavutil-dev libavdevice-dev libavfilter-dev libswresample-dev libswscale-dev libpostproc-dev libgtk-3-dev libwebkit2gtk-4.1-dev
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.95.0" # keep in sync with the repo's actual toolchain
