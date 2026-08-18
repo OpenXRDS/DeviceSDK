@@ -13,7 +13,7 @@ use super::*;
 ///
 /// # Current check: can the player walk into a zone?
 ///
-/// This is the whole point of `docs/player-body-collider-plan.md`. Before that work
+/// This is the whole point of `docs/done/player-body-collider-plan.md`. Before that work
 /// the answer was no — `zone_collision_system` needs colliders on *both* bodies and
 /// nothing ever gave the player one, so a correctly authored zone produced zero
 /// events. Two earlier device attempts were spent assuming the volume had been

@@ -6,7 +6,7 @@
 //! into a zone did nothing. Confirmed on a Quest 3 — a correctly placed, visibly marked
 //! zone produced zero events.
 //!
-//! See `docs/player-body-collider-plan.md` for the decisions behind the shape below.
+//! See `docs/done/player-body-collider-plan.md` for the decisions behind the shape below.
 
 use super::anchor::XrdsPlayerCamera;
 use super::state::XrdsIdIndex;
@@ -94,8 +94,12 @@ pub(super) fn attach_player_body_system(
     }
 
     // A second body would double every zone event, so refuse to build one while any
-    // still exists. The editor moves the marker between cameras, and `Added` can fire
-    // for the new one in the same frame the old one is torn down.
+    // still exists.
+    //
+    // Load-bearing, not defensive: the editor's `sync_stereo_cameras` re-inserts
+    // `XrdsPlayerCamera` on the *same* entity every frame while stereo preview is on, and
+    // `Added` can also fire for a new camera in the same frame an old one is torn down.
+    // Without this guard either shape stacks bodies.
     if !existing.is_empty() {
         return;
     }
@@ -138,10 +142,11 @@ pub(super) fn attach_player_body_system(
 
 /// Tear the body down when its camera stops being the player camera.
 ///
-/// Load-bearing for the editor, which *removes* `XrdsPlayerCamera` from one camera
-/// before inserting it on another (`viewport_camera.rs:315`). Without this the orphaned
-/// capsule keeps firing zone events from wherever that old camera sits — phantom
-/// triggers rather than an obvious leak.
+/// Load-bearing for the editor: `sync_stereo_cameras` *removes* `XrdsPlayerCamera`
+/// when stereo preview turns off (`viewport_camera.rs:315`) and inserts it back on the
+/// same entity when it turns on. Without this the body outlives its marker and keeps
+/// firing zone events from wherever that camera sits — phantom triggers rather than an
+/// obvious leak.
 pub(super) fn detach_player_body_system(
     mut commands: Commands,
     mut removed: RemovedComponents<XrdsPlayerCamera>,

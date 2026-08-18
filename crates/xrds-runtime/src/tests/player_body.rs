@@ -171,3 +171,129 @@ fn a_degenerate_body_shape_is_clamped_rather_than_panicking() {
     let (collider, _) = body_of(&mut app).expect("a clamped body should still attach");
     assert!(app.world().get::<Collider>(collider).is_some());
 }
+
+/// Mirrors what the **editor actually does**, which is not what the first version of
+/// these tests assumed. `sync_stereo_cameras` (`viewport_camera.rs`) does not move the
+/// marker between two cameras: it removes `XrdsPlayerCamera` from *one* entity when
+/// stereo preview turns off and inserts it back on the *same* entity when it turns on —
+/// and the insert runs **every frame** while enabled.
+///
+/// Two things have to hold. Toggling must not accumulate bodies, and the steady state
+/// (re-inserting a component that is already present) must not build a second one.
+#[test]
+fn toggling_the_marker_on_one_entity_never_accumulates_bodies() {
+    let mut app = xrds_test_app();
+    let camera = spawn_player_camera(&mut app, 1.6);
+    app.update();
+
+    let count = |app: &mut App| {
+        let mut q = app.world_mut().query::<&XrdsPlayerBodyCollider>();
+        q.iter(app.world()).count()
+    };
+    assert_eq!(count(&mut app), 1, "one body after the first attach");
+
+    for round in 0..3 {
+        // Stereo preview off.
+        app.world_mut().entity_mut(camera).remove::<XrdsPlayerCamera>();
+        app.update();
+        assert_eq!(
+            count(&mut app),
+            0,
+            "round {round}: body should be gone while the marker is absent"
+        );
+        assert!(
+            app.world().get::<RigidBody>(camera).is_none(),
+            "round {round}: rigid body should be stripped too"
+        );
+
+        // Stereo preview on.
+        app.world_mut().entity_mut(camera).insert(XrdsPlayerCamera);
+        app.update();
+        assert_eq!(count(&mut app), 1, "round {round}: exactly one body again");
+
+        // The editor re-inserts every frame while enabled; that must be inert.
+        for _ in 0..3 {
+            app.world_mut().entity_mut(camera).insert(XrdsPlayerCamera);
+            app.update();
+        }
+        assert_eq!(
+            count(&mut app),
+            1,
+            "round {round}: re-inserting an existing marker must not add a body"
+        );
+    }
+
+    // The reserved id must still point at the one live body, not a despawned entity.
+    let (body, _) = body_of(&mut app).expect("body");
+    assert_eq!(
+        app.world().resource::<XrdsIdIndex>().entity_of(XRDS_PLAYER_ID),
+        Some(body)
+    );
+}
+
+/// The player must still walk through walls: this feature gives zones something to
+/// detect, it does not add movement blocking. Blocking would need a locomotion
+/// shapecast, and quietly acquiring it here would be a significant behaviour change.
+///
+/// The first assertion is a **control**. Without it the test would pass just as happily
+/// in a world where physics never steps at all, which would make the real assertion
+/// meaningless.
+#[test]
+fn the_player_body_does_not_block_movement_through_static_geometry() {
+    use avian3d::prelude::LinearVelocity;
+
+    let mut app = xrds_test_app();
+
+    // A wall straight ahead of the camera's path.
+    app.world_mut().spawn((
+        RigidBody::Static,
+        Collider::cuboid(4.0, 4.0, 0.2),
+        Transform::from_xyz(0.0, 2.0, -2.0),
+        GlobalTransform::default(),
+    ));
+
+    // Control: a dynamic body under gravity. If this does not move, physics is not
+    // running and the rest of this test proves nothing.
+    let probe = app
+        .world_mut()
+        .spawn((
+            RigidBody::Dynamic,
+            Collider::sphere(0.1),
+            LinearVelocity(Vec3::new(0.0, -1.0, 0.0)),
+            Transform::from_xyz(5.0, 5.0, 0.0),
+            GlobalTransform::default(),
+        ))
+        .id();
+
+    let camera = spawn_player_camera(&mut app, 1.6);
+    app.update();
+    assert!(body_of(&mut app).is_some(), "body should be attached");
+
+    let probe_start = app.world().get::<Transform>(probe).unwrap().translation.y;
+
+    // Walk the camera straight through the wall, as locomotion does: by writing the
+    // transform directly, frame by frame.
+    for step in 1..=20 {
+        let z = 1.0 - step as f32 * 0.25;
+        app.world_mut()
+            .entity_mut(camera)
+            .get_mut::<Transform>()
+            .unwrap()
+            .translation = Vec3::new(0.0, 1.6, z);
+        app.update();
+    }
+
+    let probe_end = app.world().get::<Transform>(probe).unwrap().translation.y;
+    assert!(
+        probe_end < probe_start - 1e-4,
+        "control failed: the dynamic probe did not move ({probe_start} -> {probe_end}), \
+         so physics is not stepping and this test cannot say anything about blocking"
+    );
+
+    let ended_at = app.world().get::<Transform>(camera).unwrap().translation;
+    assert!(
+        (ended_at.z - (-4.0)).abs() < 1e-4,
+        "the player must end where locomotion put them, i.e. past the wall at z=-4; \
+         got {ended_at:?} — the body is blocking movement, which it must not do"
+    );
+}

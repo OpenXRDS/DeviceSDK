@@ -181,7 +181,7 @@ it. Prefer anchored replacement of an exact block, and re-read the file afterwar
 
 **Fixed 2026-08-18** — the player now gets a kinematic capsule and the reserved id 0,
 so `ZoneEnter` works; verified by walking onto a marked pad on a Quest 3. See
-`docs/player-body-collider-plan.md`.
+`docs/done/player-body-collider-plan.md`.
 
 Historically: `ZoneEnter`/`ZoneExit` go through avian3d collision events, and the player
 had no collider, so walking into an `InteractionZone` fired nothing at all — which reads

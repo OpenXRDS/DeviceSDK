@@ -3972,3 +3972,72 @@ fn a_head_locked_panel_also_gets_a_surface() {
     let panel = app.world().resource::<XrdsIdIndex>().entity_of(XrdsId(941)).expect("indexed");
     assert!(app.world().get::<xrds_components::XrdsWorldSurface>(panel).is_some());
 }
+
+/// The player is now a legitimate *source* of a zone trigger, and its reserved id
+/// (`XRDS_PLAYER_ID` = 0) resolves to no document node — every other id in
+/// `XrZoneEnterEvent::entity_id` is an authored node.
+///
+/// This pins the audit that finding raised. `consume_triggers` calls
+/// `event.source().resolve(&id_index)`, so if the player's id were absent from the index
+/// the source would resolve to `None`; here it resolves to the body collider entity,
+/// which is why the trigger fires. That distinction is invisible in the passing case and
+/// is exactly what broke zones for the player in the first place.
+///
+/// Note what `TriggerSource` therefore means for a zone: the player's **body collider
+/// child**, not the camera. Positionally that is the body centre, which is sensible for
+/// spawning effects; it is not a mesh entity, so visibility-style actions aimed at it have
+/// nothing to act on.
+#[test]
+fn a_zone_trigger_sourced_from_the_player_still_fires() {
+    let mut app = xrds_test_app();
+
+    let entity = import_bound(
+        &mut app,
+        940,
+        vec![Bound {
+            trigger: XrdsTriggerKind::ZoneEnter,
+            steps: vec![XrdsAction::SetTransform {
+                position: Some([1.0, 2.0, 3.0]),
+                rotation: None,
+                scale: None,
+                duration_secs: 0.0,
+                ease: XrdsEaseCurve::Linear,
+            }],
+            disabled: false,
+            hand: None,
+        }],
+    );
+
+    // The player body only exists once something carries the marker, exactly as in a
+    // real app.
+    app.world_mut().spawn((
+        crate::xrds_api::XrdsPlayerCamera,
+        Transform::from_xyz(0.0, 1.6, 0.0),
+        GlobalTransform::default(),
+    ));
+    app.update();
+
+    let player_entity = app
+        .world()
+        .resource::<XrdsIdIndex>()
+        .entity_of(crate::xrds_api::XRDS_PLAYER_ID);
+    assert!(
+        player_entity.is_some(),
+        "the player must be resolvable, or `source()` yields None and authored \
+         TriggerSource actions silently do nothing"
+    );
+
+    app.world_mut()
+        .write_message(xrds_components::XrZoneEnterEvent {
+            zone_id: XrdsId(940),
+            entity_id: crate::xrds_api::XRDS_PLAYER_ID,
+        });
+
+    pump(&mut app, 3);
+
+    assert_eq!(
+        app.world().get::<Transform>(entity).map(|t| t.translation),
+        Some(Vec3::new(1.0, 2.0, 3.0)),
+        "a ZoneEnter whose source is the player should run the authored action"
+    );
+}

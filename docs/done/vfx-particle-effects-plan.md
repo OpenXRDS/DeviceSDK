@@ -1392,7 +1392,7 @@ events.
 rather than a curiosity. It is **not** fixed here: giving the player a collider is a
 design decision with consequences worth deciding deliberately — whether the player
 pushes rigid bodies, what shape and height the body is, and how it interacts with
-grab. Now planned separately in `docs/player-body-collider-plan.md`, which also
+grab. Now planned separately in `docs/done/player-body-collider-plan.md`, which also
 records a second blocker found while writing it up: the player has no `XrdsId`
 either, so `zone_collision_system` would still drop the event even with a collider
 present.

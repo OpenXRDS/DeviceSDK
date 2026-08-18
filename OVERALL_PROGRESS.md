@@ -187,7 +187,7 @@ LOD groups were also on that list and are already tracked in Gap Analysis below.
 Separately tracked, both with their own plans and both deliberately unfixed:
 
 - **A player cannot enter an `InteractionZone`** — the player has no collider, so a
-  fundamental XR interaction silently does nothing. `docs/player-body-collider-plan.md`.
+  fundamental XR interaction silently does nothing. `docs/done/player-body-collider-plan.md`.
 - **Android window-lifecycle crash** — intermittent, trigger not yet reproduced.
   `docs/android-window-lifecycle-plan.md`.
 

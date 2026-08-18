@@ -1,4 +1,4 @@
-# Player Body Collider — plan
+# Player Body Collider
 
 **Status:** implemented and **device-verified** 2026-08-18 on Quest 3. Walking onto a
 marked pad fired a `ZoneEnter` Track and started an effect authored with
@@ -7,7 +7,11 @@ zero unresolved actions.
 
 Default is **on** (`Some(XrdsPlayerBody::default())`), per the decision recorded below.
 
-## Why
+## Why (the state before this landed)
+
+Everything in this section and the next describes the bug as it *was*. Both are kept
+because the failure mode — authorable, validated, silently inert — is the kind that
+returns if the id registration or the marker plumbing is ever refactored away.
 
 `XrdsInteractionZone` spawns a working avian3d sensor
 (`Collider + Sensor + CollisionEventsEnabled`, `spawn.rs:1157`), and
@@ -44,7 +48,7 @@ if let (Some(zone_id), Some(entity_id)) = (id_index.id_of(e1), id_index.id_of(e2
 player camera is spawned by host-app code — so `id_of(player)` is `None`, the
 pattern fails, and no event is written even with a collider present.
 
-## Design
+## Design (as built)
 
 ### Opt-in, because "player without physics" is a real mode
 
@@ -75,11 +79,16 @@ pub struct XrdsPlayerBody {
 }
 ```
 
-**The editor moves the marker between entities** — `viewport_camera.rs:315` *removes*
-`XrdsPlayerCamera` before line 326 inserts it elsewhere. The attach system therefore
-has to detach too, or a stale capsule is left behind on the previous camera, still
-firing zone events from wherever that camera sits. A `RemovedComponents` reader, or
-`Added`/`Changed` plus a cleanup pass.
+**The editor takes the marker away and gives it back** — `sync_stereo_cameras`
+*removes* `XrdsPlayerCamera` when stereo preview turns off (`viewport_camera.rs:315`)
+and inserts it on the **same** entity when it turns on (line 326), re-inserting every
+frame while enabled. So the attach system has to detach too, via a `RemovedComponents`
+reader, or a body outlives its marker and keeps firing zone events.
+
+An earlier draft of this section said the editor moves the marker *between two cameras*.
+It does not, and the difference matters: the real sequence is remove/insert on one
+entity at frame rate, which is what makes refusing duplicates load-bearing rather than
+merely defensive. Verified by test, not by reading.
 
 ### Kinematic — and be explicit about what that does not buy
 
@@ -99,10 +108,11 @@ The `XrdsPlayerCamera` transform is at **eye height** (`(0, 1.6, 8)` by default)
 at the feet. A 1.7m capsule centred on the camera would sink half a body into the
 floor and its top would stand above the head.
 
-With `Collider::capsule(radius, height - 2*radius)` centred at the body's midpoint:
-offset the collider **-0.75** in local Y (body centre `0.85` − eye `1.6`), so the
-base lands on the floor. If eye height ever becomes configurable this must derive
-from it rather than hardcode `1.6`.
+With `Collider::capsule(radius, height - 2*radius)` centred at the body's midpoint,
+the collider is offset by `height/2 - eye_height` in local Y — **-0.75** for the default
+1.7 m body at a 1.6 m eye height. As built this is computed from the camera's actual
+`translation.y`, not from a hardcoded 1.6, so a different eye height still lands the base
+on the floor.
 
 ### The reserved id
 
@@ -110,9 +120,9 @@ from it rather than hardcode `1.6`.
 player and `register` the body entity in `XrdsIdIndex`.
 
 This also gives triggers a stable way to express "the player did this", which
-`XrZoneEnterEvent.entity_id` currently has no vocabulary for: today every id in that
-field is an authored node. Anything reading `entity_id` should be checked for how it
-handles an id that resolves to no document node.
+`XrZoneEnterEvent.entity_id` had no vocabulary for: every other id in that field is an
+authored node. That prompted an audit of the field's readers — see Work items for the
+outcome and the `TriggerSource` semantics it settled.
 
 `XrdsIdIndex::register` is `pub(super)`, so this has to live inside `xrds_api`.
 
@@ -159,13 +169,23 @@ for it.
       attach so a marker moving between cameras within one frame is not refused as a
       duplicate.
 - [x] Reserved id 0 (`XRDS_PLAYER_ID`) + `XrdsIdIndex::unregister`.
-- [x] Tests (5, all passing): floor-level offset, reserved-id registration, observer
+- [x] Tests (8, all passing): floor-level offset, reserved-id registration, observer
       mode attaches nothing, marker-move leaves nothing behind, degenerate shape is
-      clamped rather than panicking.
-- [ ] Audit readers of `XrZoneEnterEvent.entity_id` for an id with no backing document
-      node. **Not done** — the field previously only ever held authored node ids, and
-      `XRDS_PLAYER_ID` resolves to no node. Nothing is known to break; it has not been
-      checked.
+      clamped rather than panicking, the editor's toggle-and-re-insert sequence never
+      accumulates bodies, movement is not blocked (with a physics-is-live control), and a
+      zone trigger sourced from the player fires.
+- [x] Audit readers of `XrZoneEnterEvent.entity_id`. **One consumer exists:**
+      `consume_triggers`, which calls `event.source().resolve(&id_index)`. Since
+      `XRDS_PLAYER_ID` *is* registered, that resolves to the body collider rather than
+      `None`, so nothing silently no-ops. Pinned by
+      `a_zone_trigger_sourced_from_the_player_still_fires`.
+
+      **Semantics this settles:** for a zone trigger, `XrdsActionTarget::TriggerSource`
+      resolves to the player's **body collider child**, not the camera. Positionally that
+      is the body centre — sensible for spawning an effect at the player — but it is not a
+      mesh entity, so visibility-style actions aimed at it have nothing to act on. And
+      `XrdsActionValue::FromTriggerSource` finds no `XrdsTriggerValue` there, degrading to
+      `0.0` with a warning, which is the documented fallback rather than a new failure.
 
 ### Implementation notes worth knowing
 
@@ -189,13 +209,21 @@ event, so attach bails while any body still exists.
 
 ## Verification
 
-- [ ] `cargo check --workspace --all-targets` clean.
-- [ ] `cargo test -p xrds-runtime -p xrds-scene-graph -p xrds-editor` no regression.
-- [x] `cargo check --workspace --all-targets` clean; 214 xrds-runtime / 190
-      xrds-scene-graph / 35 xrds-editor passing.
-- [ ] Editor: enter a zone in play mode, confirm the Track fires; toggle play/edit
-      mode repeatedly and confirm no duplicate or stale body (the detach path). The
-      marker-move test covers this in the abstract, not the real editor sequence.
+- [x] `cargo check --workspace --all-targets` clean; 217 xrds-runtime / 190
+      xrds-scene-graph / 35 xrds-editor passing, no regression.
+- [x] Editor marker sequence — and the first version of this item described the wrong
+      sequence. `sync_stereo_cameras` does **not** move the marker between two cameras:
+      it removes `XrdsPlayerCamera` from *one* entity when stereo preview turns off and
+      inserts it back on the **same** entity when it turns on, and that insert runs
+      **every frame** while enabled.
+
+      Covered by `toggling_the_marker_on_one_entity_never_accumulates_bodies`, which
+      toggles three times and re-inserts an already-present marker repeatedly. This is
+      also what makes the duplicate-refusal guard load-bearing rather than defensive:
+      without it the editor's per-frame insert is the exact shape that would stack bodies
+      and double every zone event.
+
+      Still not exercised through the real GUI, only through the sequence it performs.
 - [x] **On device**, per `docs/quest-device-test-recipe.md`. Scene: a bright unlit
       `PAD`, a box `ZONE` covering it (±1.5 m in Y so it cannot be stepped over or
       under), and a `PLUME` with `auto_play = false` bound through Track `on_enter`.
@@ -209,8 +237,17 @@ event, so attach bails while any body still exists.
       `GRABBED`; zones log nothing. Worth adding a log line so a future check can
       separate "event never fired" from "event fired, action failed" without relying on
       someone describing what they saw.
-- [ ] Confirm the player still walks through walls, i.e. that this did not
-      accidentally grow into movement blocking.
+- [x] The player still walks through walls — this feature gives zones something to
+      detect, it does not add movement blocking. Covered by
+      `the_player_body_does_not_block_movement_through_static_geometry`: a static wall is
+      placed across the path and the camera transform is driven through it frame by frame,
+      as locomotion does.
+
+      The test carries a **control**: a dynamic probe under gravity must have moved by the
+      end. Without it the test would pass equally in a world where physics never steps,
+      which would make the real assertion worthless. The control passes, so avian is
+      genuinely stepping in the headless harness and the pass-through result means
+      something.
 
 ## Out of scope
 

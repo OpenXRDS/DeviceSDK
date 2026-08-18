@@ -146,7 +146,7 @@ Needed for fully interactive XR applications; most require new SDK node types.
 
   **Caveat worth carrying forward:** a zone cannot currently be entered by the *player* —
   zone events come from avian3d collisions and nothing gives the player a collider. See
-  `docs/player-body-collider-plan.md`.
+  `docs/done/player-body-collider-plan.md`.
 
 - [ ] **Spatial anchor node** — AR authoring primitive whose transform is defined relative to a
   named world anchor persisted across sessions.

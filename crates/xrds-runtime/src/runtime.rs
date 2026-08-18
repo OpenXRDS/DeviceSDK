@@ -146,7 +146,7 @@ pub struct RuntimeParameters {
     ///
     /// The body is kinematic, so enabling it does not change how the player moves: it
     /// pushes dynamic props and is not stopped by walls. See
-    /// `docs/player-body-collider-plan.md`.
+    /// `docs/done/player-body-collider-plan.md`.
     pub player_body: Option<crate::xrds_api::XrdsPlayerBody>,
 }
 
