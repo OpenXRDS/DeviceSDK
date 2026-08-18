@@ -17,6 +17,7 @@ jobs:
   check:
     name: cargo check (workspace)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       # cmake/perl are for quiche's vendored BoringSSL. libasound2-dev and libudev-dev
@@ -25,7 +26,14 @@ jobs:
       # system library through pkg-config in a build script and hard-fail without it.
       # Without these the job dies at `alsa-sys` build.rs, nowhere near our own code.
       - name: Install native build deps (quiche/BoringSSL, Bevy audio/input)
-        run: sudo apt-get update && sudo apt-get install -y cmake perl libasound2-dev libudev-dev
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          # Bounded and non-interactive on purpose. The unhardened form of this step hung
+          # for 70 minutes on a runner: apt has no default network timeout, so a stalled
+          # mirror waits forever, and any debconf prompt blocks on stdin that never comes.
+          sudo -E apt-get update -o Acquire::Retries=3 -o Acquire::http::Timeout=30
+          sudo -E apt-get install -y --no-install-recommends -o Acquire::Retries=3 -o Acquire::http::Timeout=30 cmake perl libasound2-dev libudev-dev
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.95.0" # keep in sync with the repo's actual toolchain
@@ -35,10 +43,15 @@ jobs:
   clippy:
     name: clippy (xrds-net)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - name: Install native build deps (quiche/BoringSSL)
-        run: sudo apt-get update && sudo apt-get install -y cmake perl
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo -E apt-get update -o Acquire::Retries=3 -o Acquire::http::Timeout=30
+          sudo -E apt-get install -y --no-install-recommends -o Acquire::Retries=3 -o Acquire::http::Timeout=30 cmake perl
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.95.0"
@@ -62,7 +75,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install native build deps (quiche/BoringSSL)
-        run: sudo apt-get update && sudo apt-get install -y cmake perl
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo -E apt-get update -o Acquire::Retries=3 -o Acquire::http::Timeout=30
+          sudo -E apt-get install -y --no-install-recommends -o Acquire::Retries=3 -o Acquire::http::Timeout=30 cmake perl
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.95.0"
@@ -76,7 +93,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install native build deps (quiche/BoringSSL)
-        run: sudo apt-get update && sudo apt-get install -y cmake perl
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo -E apt-get update -o Acquire::Retries=3 -o Acquire::http::Timeout=30
+          sudo -E apt-get install -y --no-install-recommends -o Acquire::Retries=3 -o Acquire::http::Timeout=30 cmake perl
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.95.0"
