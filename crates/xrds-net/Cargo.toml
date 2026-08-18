@@ -29,7 +29,7 @@ default = [
 # native provisioning is unavailable and an XR client never hosts FTP. The
 # ftp/sftp *client* transfer path (suppaftp) is separate and unaffected.
 ftp-server = ["dep:libunftp", "dep:unftp-sbe-fs"]
-# One feature per protocol *dependency* — see docs/xrds-net-protocol-features-plan.md.
+# One feature per protocol *dependency* — see docs/done/xrds-net-protocol-features-plan.md.
 #
 # All default-on, so nobody loses a protocol by accident; narrowing is an explicit
 # `default-features = false`. `PROTOCOLS` and `scheme_to_protocol` stay total in every

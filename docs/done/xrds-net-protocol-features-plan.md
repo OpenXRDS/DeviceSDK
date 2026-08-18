@@ -1,8 +1,11 @@
 # xrds-net protocol features — plan
 
-**Status:** in progress. Branch `net-protocol-features`, off `main` at `d8cf8ff`.
-Phases 1-4 done. The feature family is complete: one feature per protocol dependency, all
-default-on.
+**Status:** complete. Merged to `main` as `2d65e94` (PR #11); branch `net-protocol-features`
+retired. All four phases done — one feature per protocol dependency, all default-on.
+
+Issue #7 was closed with a summary of the outcome. The one thing deliberately left open is
+the 101-crate floor: `tokio`'s `full` + `test-util` feature set, which no protocol gating can
+reach and which is now the largest remaining build-time lever.
 
 Tracks [issue #7](https://github.com/OpenXRDS/DeviceSDK/issues/7) ("xrds-net has too many
 functions without distinct features"). The plan summary was posted as

@@ -107,7 +107,7 @@ pub enum UnsupportedReason {
 ///
 /// Implements neither `request` nor any capability query, so every verb reaches the
 /// trait's default bodies and reports `NetError::Capability` — nothing silently no-ops.
-/// See `docs/xrds-net-protocol-features-plan.md`.
+/// See `docs/done/xrds-net-protocol-features-plan.md`.
 pub struct UnsupportedHandler {
     protocol: PROTOCOLS,
     reason: UnsupportedReason,
