@@ -1,6 +1,7 @@
 # xrds-net protocol features — plan
 
 **Status:** in progress. Branch `net-protocol-features`, off `main` at `d8cf8ff`.
+Phase 1 done (`f385e94`). Next: Phase 2, `protocol-webrtc`.
 
 Tracks [issue #7](https://github.com/OpenXRDS/DeviceSDK/issues/7) ("xrds-net has too many
 functions without distinct features"). The plan summary was posted as
@@ -76,28 +77,34 @@ Therefore:
 
 ## Phases
 
-### Phase 1 — `UnsupportedHandler` must fail loudly (do this first)
+### Phase 1 — an unavailable protocol says which feature to enable — **DONE** (`f385e94`)
 
-Currently it implements `ProtocolHandler` with only `as_any`/`as_any_mut`
-(`client/handler.rs:82-103`) — it returns nothing and errors nowhere. That is harmless
-today because WebRTC's real API lives elsewhere, but the moment a feature can compile a
-protocol out, this type becomes how that is reported. If it stays silent, opting out
-produces precisely the silent-inert failure this plan exists to avoid.
+**This phase's premise was wrong, and correcting it was most of the work.**
 
-Doing this before any feature exists means the feature cannot ship in the broken state.
+The claim was that `UnsupportedHandler` "errors nowhere" and would silently no-op. It does
+not. The `ProtocolHandler` trait's default `request()` already returns
+`NetError::Capability`, the three capability queries default to `None`, and every caller
+converts that into a `Capability` error rather than skipping quietly — `client.rs:213`,
+`net_intent.rs:182`, `net_channel.rs:54`, `event.rs:249`. The type's doc comment already
+anticipated "future feature-disabled protocols once Cargo features exist", and tests already
+pinned the erroring.
 
-- [ ] Return a clear error naming the missing capability from every meaningful
-      `ProtocolHandler` entry point.
-- [ ] Surface it at `validate`/`connect` time, not on first `send`, so an app fails at
-      startup rather than mid-session.
-- [ ] Tests: a handler for a compiled-out protocol errors rather than no-ops, and the
-      message names the protocol and the feature to enable.
+The real gap was *what it says*: the trait default reports "protocol does not support
+request/response", which is true of WEBRTC (dedicated API) but would misattribute a
+compiled-out MQTT to a protocol limitation — sending the reader hunting for a limitation
+that does not exist.
 
-**Open decision:** the error shape. `NetError::Unsupported { protocol, feature }` reads
-best, but it is a public enum, so adding a variant is a breaking change for exhaustive
-matchers — `client/error.rs` is one of the 18 files matching on `PROTOCOLS`. Alternative:
-reuse `NetError::Network(String)` with a formatted message (no API break, weaker to match
-on). Decide before writing it.
+- [x] `UnsupportedReason::{DedicatedApi { api }, FeatureDisabled { feature }}`; the disabled
+      message names the feature to enable.
+- [x] `FeatureDisabled` fails at `validate()` — the first thing every caller runs — so a
+      missing feature surfaces at connect time, not on first send.
+- [x] `DedicatedApi` still validates `Ok` (WebRTC is genuinely available), with a test
+      guarding that distinction so the change is not later applied too broadly.
+- [x] Three tests, including one asserting each case is *not* reported as the other.
+
+**The open decision resolved itself:** no new `NetError` variant was needed.
+`NetError::Capability { protocol, verb, detail }` already existed for exactly this shape, so
+there is no API break and callers that already match on `Capability` keep working.
 
 ### Phase 2 — `protocol-webrtc`
 
