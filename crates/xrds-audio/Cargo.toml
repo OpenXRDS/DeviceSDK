@@ -3,11 +3,19 @@ name = "xrds-audio"
 version = "0.1.0"
 edition = "2021"
 
+# DEPRECATED — excluded from the workspace (see the root Cargo.toml `exclude` comment).
+#
+# Explicit dependency versions rather than `workspace = true`: an excluded package is not a
+# workspace member, so it cannot inherit them. Keeping them explicit means this crate can
+# still be built by hand (`cargo check --manifest-path crates/xrds-audio/Cargo.toml`) if
+# anyone revives it, instead of being dead the moment it left the workspace.
+#
+# cpal is pinned to the version `bevy_audio`'s rodio resolves to (rodio 0.20.1 -> cpal
+# 0.15.3), because `cpal_device()` hands a `cpal::Device` to callers and the types only match
+# if the versions do.
 [lib]
 crate-type = ["lib"]
 
 [dependencies]
-rodio = { workspace = true }
-cpal = { workspace = true }
-anyhow = { workspace = true }
-log = { workspace = true }
+cpal = "0.15.3"
+log = "0.4.25"

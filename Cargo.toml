@@ -10,6 +10,19 @@ authors = ["OpenXRDS developers"]
 
 [workspace]
 members = ["crates/*", "apps/xrds-editor/src-tauri", "apps/xrds-app"]
+# Deprecated and out of the build. `crates/*` would otherwise pick it up.
+#
+# `xrds-audio` turned out to duplicate Bevy's audio almost entirely (see its README): the only
+# capability Bevy lacks is choosing an output device, and honouring a choice needs a
+# `bevy_audio` patch that nobody has needed — an XR headset has one audio path, so it would
+# only ever matter on desktop. Rather than carry a crate whose sole live use is a diagnostic
+# print, it is excluded here and slated for deletion.
+#
+# Consequence, deliberately accepted: nothing builds it, so it will rot. That is the point of
+# deprecating rather than keeping it warm. Its manifest uses explicit dependency versions
+# instead of `workspace = true` so it can still be built by hand from outside the workspace if
+# anyone revives it.
+exclude = ["crates/xrds-audio"]
 
 # Debug info at the default level (2) generates enormous PDBs across this
 # many crates/examples with Bevy in the dependency graph — that's most of
@@ -18,10 +31,6 @@ members = ["crates/*", "apps/xrds-editor/src-tauri", "apps/xrds-app"]
 # workspace-wide since [profile.*] can only be set at the workspace root.
 [profile.dev]
 debug = 1
-
-[workspace.dependencies.xrds-audio]
-package = "xrds-audio"
-path = "./crates/xrds-audio"
 
 [workspace.dependencies.xrds-components]
 package = "xrds-components"
@@ -100,11 +109,6 @@ wgpu = { version = "26.0.1", default-features = false, features = ["wgsl", "vulk
 wgpu-hal = { version = "26.0.1", features = ["vulkan"] }
 ash = "0.38.0"
 glam = { version = "0.29.2", features = ["bytemuck"] }
-# Audio: `xrds-audio` hands a `cpal::Device` to rodio, so cpal MUST be the same version
-# rodio resolves to (0.20.1 -> cpal 0.15.3) or the types will not match. Note xrds-media
-# pins its own, older cpal 0.14 for capture; the two coexist deliberately.
-rodio = "0.20.1"
-cpal = "0.15.3"
 bevy_rich_text3d = "0.5.0"
 bevy_fontmesh = "0.1.1"
 bevy_svg = "0.17.0"

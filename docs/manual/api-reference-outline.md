@@ -70,8 +70,9 @@ hand-written manual is actually good for.
   relevant the moment a reader needs to bridge from document data to a live
   entity (or from the editor, to the expert layer).
 - Crate map (from `ARCHITECTURE.md`): `xrds-runtime`, `xrds-scene-graph`,
-  `xrds-components`, `xrds-openxr`, `xrds-net`, `xrds-audio`, and how they
-  depend on each other.
+  `xrds-components`, `xrds-openxr`, `xrds-net`, `xrds-media`, and how they
+  depend on each other. (`xrds-audio` is deprecated and excluded from the
+  workspace — do not document it as part of the SDK.)
 
 ## 3. Spawning & Managing Objects
 

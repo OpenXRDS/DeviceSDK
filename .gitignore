@@ -22,3 +22,6 @@ android/quest/build/
 android/quest/jni/
 android/quest/libs/**/*.so
 
+# `crates/xrds-audio` is excluded from the workspace (deprecated), so building it by hand
+# generates its own lockfile. Not worth tracking for a crate slated for deletion.
+crates/xrds-audio/Cargo.lock

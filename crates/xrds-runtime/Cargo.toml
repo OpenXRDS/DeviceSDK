@@ -35,7 +35,6 @@ winit = { version = "0.30.5", default-features = false, features = [
     "sctk-adwaita",
     "mint",
 ] }
-xrds-audio = { workspace = true }
 xrds-components = { workspace = true }
 xrds-openxr = { workspace = true }
 xrds-scene-graph = { workspace = true }
