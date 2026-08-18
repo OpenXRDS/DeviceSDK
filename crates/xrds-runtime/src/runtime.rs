@@ -137,6 +137,17 @@ pub struct RuntimeParameters {
     /// When `None` (default), the runtime discovers fonts from `asset_path/fonts/`
     /// automatically, or falls back to `load_system_fonts` if none are found.
     pub font_paths: Option<Vec<String>>,
+    /// The player's physics body, or `None` for an observer that moves through the world
+    /// without touching it.
+    ///
+    /// Defaults to `Some(XrdsPlayerBody::default())` — a 1.7 m capsule. Without a body
+    /// the player cannot be detected by an `XrdsInteractionZone` at all, so walking into
+    /// a zone silently does nothing.
+    ///
+    /// The body is kinematic, so enabling it does not change how the player moves: it
+    /// pushes dynamic props and is not stopped by walls. See
+    /// `docs/player-body-collider-plan.md`.
+    pub player_body: Option<crate::xrds_api::XrdsPlayerBody>,
 }
 
 impl Default for RuntimeParameters {
@@ -149,12 +160,18 @@ impl Default for RuntimeParameters {
             run_on_any_thread: false,
             window_resolution: None,
             font_paths: None,
+            player_body: Some(crate::xrds_api::XrdsPlayerBody::default()),
         }
     }
 }
 
 pub(crate) fn build_bevy_app(params: &RuntimeParameters) -> App {
     let mut app = App::new();
+
+    // Inserted here rather than in `install_xrds` because install has no access to
+    // params. This runs first, so install's `init_resource` sees it already present and
+    // leaves it alone — host config wins over the default.
+    app.insert_resource(crate::xrds_api::XrdsPlayerBodyConfig(params.player_body));
 
     // Add log plugin first for logging in plugin build phase
     app.add_plugins(LogPlugin {

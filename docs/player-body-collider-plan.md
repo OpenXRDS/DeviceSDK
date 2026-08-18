@@ -1,7 +1,11 @@
 # Player Body Collider — plan
 
-**Status:** planned, not started. Independent of the VFX/particle work; shares no
-files with it.
+**Status:** implemented and **device-verified** 2026-08-18 on Quest 3. Walking onto a
+marked pad fired a `ZoneEnter` Track and started an effect authored with
+`auto_play = false`, so the plume could only have come from the trigger. Zero panics,
+zero unresolved actions.
+
+Default is **on** (`Some(XrdsPlayerBody::default())`), per the decision recorded below.
 
 ## Why
 
@@ -128,9 +132,10 @@ Unreal, `RayCast3D.add_exception(self)` in Godot, `layerMask` in Unity). We have
 **no** layer machinery today (`grep CollisionLayers` → nothing), so that work belongs
 with the grab change, not here.
 
-## Open decision: the default
+## Decided: the default is on
 
-Recommendation: **`Some(XrdsPlayerBody::default())`** — on.
+**`Some(XrdsPlayerBody::default())`.** Reasoning, and the counter-argument that was
+weighed against it:
 
 An author who drops an `InteractionZone` expects walking into it to fire; silence is
 the worst outcome and is exactly what happened on device. Observer mode opts out
@@ -146,29 +151,64 @@ for it.
 
 ## Work items
 
-- [ ] `XrdsPlayerBody` + `RuntimeParameters::player_body`, defaulted per the decision
-      above.
-- [ ] Attach system in `xrds_api`: on `XrdsPlayerCamera` added, insert
-      `Collider::capsule` + `RigidBody::Kinematic` at the computed offset; register
-      the reserved id.
-- [ ] Detach on `XrdsPlayerCamera` removal (`RemovedComponents`) — the editor
-      relies on this.
-- [ ] Reserve id 0 in `XrdsIdAllocator` and document it as the player.
-- [ ] Audit readers of `XrZoneEnterEvent.entity_id` for an id with no backing
-      document node.
-- [ ] Tests: zone enter/exit fires for the player; `player_body: None` attaches
-      nothing and fires nothing; moving the marker detaches the old body; the capsule
-      base sits at floor level, not at eye level.
+- [x] `XrdsPlayerBody` + `RuntimeParameters::player_body`, defaulting to `Some`.
+- [x] Attach system (`xrds_api/player_body.rs`): on `XrdsPlayerCamera` added, insert
+      `RigidBody::Kinematic` on the camera and a child carrying
+      `Collider::capsule` + `CollisionEventsEnabled` at the computed offset.
+- [x] Detach on `XrdsPlayerCamera` removal (`RemovedComponents`), ordered *before*
+      attach so a marker moving between cameras within one frame is not refused as a
+      duplicate.
+- [x] Reserved id 0 (`XRDS_PLAYER_ID`) + `XrdsIdIndex::unregister`.
+- [x] Tests (5, all passing): floor-level offset, reserved-id registration, observer
+      mode attaches nothing, marker-move leaves nothing behind, degenerate shape is
+      clamped rather than panicking.
+- [ ] Audit readers of `XrZoneEnterEvent.entity_id` for an id with no backing document
+      node. **Not done** — the field previously only ever held authored node ids, and
+      `XRDS_PLAYER_ID` resolves to no node. Nothing is known to break; it has not been
+      checked.
+
+### Implementation notes worth knowing
+
+**The collider is a child entity, not a component on the camera.** The camera transform
+sits at eye height while the capsule must stand on the floor, and a child carries that
+offset natively; avian3d attributes a child collider to the parent rigid body through
+`ColliderOf`. The offset is derived from the camera's actual `translation.y` rather than
+assuming 1.6 m.
+
+Consequence: the entity in a collision event — and therefore the one holding
+`XRDS_PLAYER_ID` — is the **child**, not the camera.
+
+**Known limitation: the capsule inherits camera rotation.** Because it is a child of the
+camera and the desktop fly-camera writes pitch into that transform, looking up or down
+tilts the body. In XR, locomotion is yaw-only, so this does not arise there. For zone
+overlap the error is small, and the alternative (counter-rotating the child every frame)
+buys little for a v1 whose purpose is trigger volumes.
+
+**Duplicate bodies are refused, not stacked.** A second body would double every zone
+event, so attach bails while any body still exists.
 
 ## Verification
 
 - [ ] `cargo check --workspace --all-targets` clean.
 - [ ] `cargo test -p xrds-runtime -p xrds-scene-graph -p xrds-editor` no regression.
+- [x] `cargo check --workspace --all-targets` clean; 214 xrds-runtime / 190
+      xrds-scene-graph / 35 xrds-editor passing.
 - [ ] Editor: enter a zone in play mode, confirm the Track fires; toggle play/edit
-      mode repeatedly and confirm no duplicate or stale body (the detach path).
-- [ ] **On device**, per `docs/quest-device-test-recipe.md` — this is the case that
-      was broken, so desktop-only sign-off would be missing the point. Mark the zone
-      visibly (Trap 6) and grep for the event (Trap 10).
+      mode repeatedly and confirm no duplicate or stale body (the detach path). The
+      marker-move test covers this in the abstract, not the real editor sequence.
+- [x] **On device**, per `docs/quest-device-test-recipe.md`. Scene: a bright unlit
+      `PAD`, a box `ZONE` covering it (±1.5 m in Y so it cannot be stepped over or
+      under), and a `PLUME` with `auto_play = false` bound through Track `on_enter`.
+      Walking on produced the plume. 5 entities loaded, 0 `did nothing` warnings,
+      0 panics.
+
+      **Caveat on the evidence:** nothing in the runtime logs zone events, so this rests
+      on the visual plus the causal chain — `auto_play = false` means the only route to a
+      running plume is `PlayEffect`, reachable only from the `ZoneEnter` binding. The
+      recipe's Trap 10 implied `zoneenter` could be grepped; it cannot. Grab logs
+      `GRABBED`; zones log nothing. Worth adding a log line so a future check can
+      separate "event never fired" from "event fired, action failed" without relying on
+      someone describing what they saw.
 - [ ] Confirm the player still walks through walls, i.e. that this did not
       accidentally grow into movement blocking.
 

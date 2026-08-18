@@ -179,11 +179,17 @@ it. Prefer anchored replacement of an exact block, and re-read the file afterwar
 
 ### 10. Not every trigger kind can be fired by the player
 
-`ZoneEnter`/`ZoneExit` go through avian3d collision events, and **the player has no
-collider** — so walking into an `InteractionZone` fires nothing at all. This is an
-SDK gap, not a test-setup mistake; see `docs/player-body-collider-plan.md`. Until it
-lands, use `Grabbed`, `Dropped`, or a world-panel `ButtonPress` to drive a Track from
-a device test.
+**Fixed 2026-08-18** — the player now gets a kinematic capsule and the reserved id 0,
+so `ZoneEnter` works; verified by walking onto a marked pad on a Quest 3. See
+`docs/player-body-collider-plan.md`.
+
+Historically: `ZoneEnter`/`ZoneExit` go through avian3d collision events, and the player
+had no collider, so walking into an `InteractionZone` fired nothing at all — which reads
+exactly like a mis-placed volume.
+
+**Zone events are still not logged.** `Grabbed` prints `GRABBED`; zones print nothing,
+so the grep below finds grab and track activity but never the zone event itself. Judge a
+zone visually, or add a log line first.
 
 Confirm the event reached the runtime before blaming placement:
 

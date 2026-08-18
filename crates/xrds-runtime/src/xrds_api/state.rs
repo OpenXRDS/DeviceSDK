@@ -138,6 +138,17 @@ impl XrdsIdIndex {
     pub(super) fn contains_id(&self, id: XrdsId) -> bool {
         self.id_to_entity.contains_key(&id)
     }
+
+    /// Drop an entity's registration, both directions.
+    ///
+    /// Added for the player body, whose collider is torn down and rebuilt when the
+    /// `XrdsPlayerCamera` marker moves. Leaving a stale entry would let `entity_of`
+    /// hand out a despawned entity — or worse, a recycled one.
+    pub(super) fn unregister(&mut self, entity: Entity) {
+        if let Some(id) = self.entity_to_id.remove(&entity) {
+            self.id_to_entity.remove(&id);
+        }
+    }
 }
 
 #[derive(Resource, Debug, Default)]

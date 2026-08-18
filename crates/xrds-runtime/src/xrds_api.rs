@@ -4,6 +4,8 @@
 // When To Use: Construct the app through Runtime, then attach XRDS during runtime setup.
 #[path = "xrds_api/api.rs"]
 mod api;
+#[path = "xrds_api/player_body.rs"]
+mod player_body;
 #[path = "xrds_api/context.rs"]
 mod context;
 #[path = "xrds_api/environment.rs"]
@@ -63,6 +65,9 @@ pub use anchor::{
     ActivePlayerAnchorEntity, PlayerAnchorCameraPose,
     XrdsAnchorExposure, XrdsAnchorFov, XrdsBodyLocked, XrdsComfortPinned, XrdsCylindrical,
     XrdsHeadLocked, XrdsInitialAnchor, XrdsPlayerAnchorRoot, XrdsPlayerCamera, XrdsPlayerRoot,
+};
+pub use player_body::{
+    XrdsPlayerBody, XrdsPlayerBodyCollider, XrdsPlayerBodyConfig, XRDS_PLAYER_ID,
 };
 pub use billboard::XrdsBillboard;
 pub use xrds_components::primitives::{XrdsText, XrdsTextAlignment, XrdsTextAnchor};

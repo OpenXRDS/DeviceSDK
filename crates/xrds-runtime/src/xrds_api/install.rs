@@ -260,6 +260,21 @@ pub(super) fn install_xrds(app: &mut App) {
             .before(ensure_aabbs_for_unculled_meshes_system),
     );
     app.add_systems(Update, crate::xrds_api::grab::grab_system);
+    // The player's physics body. Defaults to on; `RuntimeParameters::player_body` is
+    // inserted before install, so `init_resource` only supplies the default when a host
+    // app (or a test) never set one.
+    app.init_resource::<crate::xrds_api::XrdsPlayerBodyConfig>();
+    // Detach before attach so a marker that moves between cameras within one frame
+    // tears the old body down before the new one is built, rather than being refused as
+    // a duplicate.
+    app.add_systems(
+        Update,
+        (
+            crate::xrds_api::player_body::detach_player_body_system,
+            crate::xrds_api::player_body::attach_player_body_system,
+        )
+            .chain(),
+    );
     app.add_systems(Update, crate::xrds_api::zone::zone_collision_system);
     // Timeline scheduler (docs/done/xrds-trigger-action-v1.md Phase 9) —
     // absolute-time, concurrent choreography, run independently of the

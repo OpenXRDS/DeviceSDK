@@ -11,22 +11,30 @@ use super::*;
 /// Driven by `docs/quest-device-test-recipe.md`, which carries the deploy sequence
 /// and the traps.
 ///
-/// Builds a scene answering the three open questions in one look:
+/// # Current check: can the player walk into a zone?
 ///
-/// 1. **Is `Add` blending actually visible on Adreno?** Two trails, identical
-///    except for blend mode, side by side. "Hard to notice" was reported against a
-///    single sparse trail, where Add and Blend genuinely do look alike — additive
-///    only pays off where particles *overlap*, so both are tuned dense and slow.
-/// 2. **Do the Phase 5a fidelity fields work on device?** The right-hand pair
-///    exercises `size_end`, `drag` and `fade_scene` (the last is only judgeable
-///    where particles meet the floor, so that one emits downward into it).
-/// 3. **Does a Track fire and stop an effect on device?** A zone in front of the
-///    player runs a Track: `PlayEffect` at 0s, `StopEffect` at 3s. Walking in
-///    starts the plume; it should fade out rather than vanish.
+/// This is the whole point of `docs/player-body-collider-plan.md`. Before that work
+/// the answer was no — `zone_collision_system` needs colliders on *both* bodies and
+/// nothing ever gave the player one, so a correctly authored zone produced zero
+/// events. Two earlier device attempts were spent assuming the volume had been
+/// missed before checking whether the event could fire at all.
+///
+/// So the scene is deliberately minimal and the zone is deliberately **visible**:
+///
+/// - `PAD` — a flat, bright, unlit slab marking exactly where the zone is. An
+///   unmarked trigger volume is indistinguishable from a broken one (recipe Trap 6).
+/// - `ZONE` — a box sensor covering the pad, generous in Y so it cannot be stepped
+///   over or under.
+/// - `PLUME` — `auto_play = false`, directly above the pad. If it is already
+///   running the test proves nothing.
+/// - Track `on_enter`, bound to `ZoneEnter` on the zone: `PlayEffect` at 0s.
+///   `when_finished: Keep` so the plume stays up and the result is unambiguous
+///   rather than being cleaned up a frame later.
 ///
 /// Positions are relative to xrds-app's default spawn `(0, 1.6, 8)` looking down
-/// -Z — not the origin. Authoring at z≈-1.5 puts things 9.5m behind the action,
-/// which is exactly how the first device check ended up looking at nothing.
+/// -Z — not the origin. The pad sits at z = 6.5, a step and a half ahead, close
+/// enough to find without locomotion but far enough that the player does not start
+/// inside it (starting inside would mean no *enter* transition at all).
 #[test]
 fn xxx_gen_device_check_scene() {
     let Ok(out) = std::env::var("XRDS_GEN_DEVICE_SCENE") else {
@@ -52,159 +60,101 @@ fn xxx_gen_device_check_scene() {
     doc.nodes
         .push(XrdsSceneNode::from_xrds_directional_light(id(), None, &sun));
 
-    // --- 1. Blend vs Add, identical otherwise -------------------------------
-    // Dense, large, slow: particles pile up near the emitter so overlap is heavy,
-    // which is the only condition under which additive differs visibly.
-    // Three modes side by side, not two. If all three look identical the blend
-    // field is not reaching the material at all; if Multiply visibly darkens but
-    // Add does not, that is a much more specific fact than "Add looks the same".
-    //
-    // Brighter and denser than the previous attempt, which was dimmed so far that
-    // Blend and Add converged. Additive only separates from Blend where particles
-    // pile up *and* there is enough signal to accumulate.
-    let dense = |name: &str, x: f32, blend: XrdsEffectBlend| {
-        let mut fx = XrdsEffect::new()
-            .with_name(name)
-            .with_kind(XrdsEffectKind::Trail);
-        fx.transform.translation = [x, 1.3, 6.3];
-        fx.blend = blend;
-        fx.spawn_rate = 500.0;
-        fx.lifetime_secs = 1.1;
-        fx.size_min = 0.14;
-        fx.size_max = 0.28;
-        fx.speed_min = 0.05;
-        fx.speed_max = 0.30;
-        fx.omnidirectional = true;
-        fx.gravity = [0.0, 0.10, 0.0];
-        fx.emission_radius = 0.13;
-        // Alpha 1.0: with Add, a low alpha scales the contribution down and was
-        // part of why the two modes converged before.
-        fx.color_start = XrdsColor { rgba: [0.60, 0.34, 0.08, 1.0] };
-        fx.color_end = XrdsColor { rgba: [0.35, 0.12, 0.02, 0.0] };
-        fx
+    // --- The visible marker -------------------------------------------------
+    // Unlit so it reads as a marker rather than as lit geometry, and thin enough
+    // to be obviously a floor decal rather than an obstacle. Slightly above the
+    // ground plane to avoid z-fighting with it.
+    const PAD_X: f32 = 0.0;
+    const PAD_Z: f32 = 6.5;
+    const PAD_HALF: f32 = 0.9;
+
+    let mut pad = XrdsCube::new().with_name("PAD");
+    pad.size = [PAD_HALF * 2.0, 0.04, PAD_HALF * 2.0];
+    pad.transform.translation = [PAD_X, 0.02, PAD_Z];
+    let mut pad_mat = xrds_components::XrdsMaterialParams::default();
+    pad_mat.base_color = XrdsColor {
+        rgba: [0.15, 0.85, 0.35, 1.0],
     };
-    doc.nodes.push(XrdsSceneNode::from_xrds_effect(
+    pad_mat.unlit = true;
+    doc.nodes.push(XrdsSceneNode::from_xrds_cube(
         id(),
         None,
-        &dense("A_BLEND", -1.6, XrdsEffectBlend::Blend),
-    ));
-    doc.nodes.push(XrdsSceneNode::from_xrds_effect(
-        id(),
-        None,
-        &dense("B_ADD", 0.0, XrdsEffectBlend::Add),
-    ));
-    doc.nodes.push(XrdsSceneNode::from_xrds_effect(
-        id(),
-        None,
-        &dense("C_MULTIPLY", 1.6, XrdsEffectBlend::Multiply),
+        &pad,
+        Some(pad_mat),
     ));
 
-    // --- 2. Fidelity fields -------------------------------------------------
-    // Emits *downward* so particles intersect the floor: fade_scene is only
-    // judgeable at that intersection.
-    let mut fade = XrdsEffect::new()
-        .with_name("D_FADE_FLOOR")
+    // --- The effect the zone fires ------------------------------------------
+    let mut plume = XrdsEffect::new()
+        .with_name("PLUME")
         .with_kind(XrdsEffectKind::Trail);
-    fade.transform.translation = [2.6, 0.6, 6.0];
-    fade.spawn_rate = 200.0;
-    fade.lifetime_secs = 1.4;
-    fade.size_min = 0.18;
-    fade.size_max = 0.30;
-    fade.omnidirectional = false;
-    fade.spread_deg = 35.0;
-    fade.speed_min = 0.3;
-    fade.speed_max = 0.7;
-    fade.gravity = [0.0, -1.6, 0.0];
-    fade.fade_scene = 3.0;
-    fade.size_end = 1.8;
-    fade.drag = 1.2;
-    fade.color_start = XrdsColor { rgba: [0.55, 0.65, 0.80, 0.8] };
-    fade.color_end = XrdsColor { rgba: [0.20, 0.25, 0.35, 0.0] };
+    // Above the pad, high enough to be visible while standing on it — looking
+    // straight down at your own feet is an awkward way to check a result.
+    plume.transform.translation = [PAD_X, 1.4, PAD_Z];
+    plume.auto_play = false;
+    plume.spawn_rate = 250.0;
+    plume.lifetime_secs = 1.2;
+    plume.size_min = 0.08;
+    plume.size_max = 0.16;
+    plume.omnidirectional = false;
+    plume.spread_deg = 25.0;
+    plume.gravity = [0.0, 0.8, 0.0];
+    plume.color_start = XrdsColor {
+        rgba: [1.0, 0.75, 0.25, 1.0],
+    };
+    plume.color_end = XrdsColor {
+        rgba: [0.5, 0.15, 0.0, 0.0],
+    };
+    let plume_id = id();
     doc.nodes
-        .push(XrdsSceneNode::from_xrds_effect(id(), None, &fade));
-
-    // --- 3. Track-driven fire and stop --------------------------------------
-    let mut triggered = XrdsEffect::new()
-        .with_name("E_TRIGGERED")
-        .with_kind(XrdsEffectKind::Trail);
-    // Directly above the grab cube, so cause and effect are unmistakable.
-    triggered.transform.translation = [0.0, 2.0, 7.2];
-    // auto_play off: nothing until the Track fires it. This is the whole point —
-    // if it is already running, the test proves nothing.
-    triggered.auto_play = false;
-    triggered.spawn_rate = 250.0;
-    triggered.lifetime_secs = 1.2;
-    triggered.size_min = 0.08;
-    triggered.size_max = 0.16;
-    triggered.omnidirectional = false;
-    triggered.spread_deg = 25.0;
-    triggered.gravity = [0.0, 0.8, 0.0];
-    triggered.blend = XrdsEffectBlend::Add;
-    triggered.color_start = XrdsColor { rgba: [0.20, 0.70, 0.45, 1.0] };
-    triggered.color_end = XrdsColor { rgba: [0.05, 0.25, 0.15, 0.0] };
-    let triggered_id = id();
-    doc.nodes.push(XrdsSceneNode::from_xrds_effect(
-        triggered_id,
-        None,
-        &triggered,
-    ));
+        .push(XrdsSceneNode::from_xrds_effect(plume_id, None, &plume));
 
     doc.tracks = vec![XrdsNamedTrack {
-        name: "fire_and_stop".to_string(),
+        name: "on_enter".to_string(),
         track: XrdsTrack {
             assets: vec![XrdsTrackAsset {
-                target: XrdsActionTarget::Node(triggered_id),
-                keys: vec![
-                    XrdsTrackKey { at_secs: 0.0, action: XrdsAction::PlayEffect { count: None } },
-                    XrdsTrackKey { at_secs: 3.0, action: XrdsAction::StopEffect },
-                ],
-                // Restore would soft-stop it at completion anyway; Keep makes the
-                // authored StopEffect at 3s the thing actually being observed.
+                target: XrdsActionTarget::Node(plume_id),
+                keys: vec![XrdsTrackKey {
+                    at_secs: 0.0,
+                    action: XrdsAction::PlayEffect { count: None },
+                }],
+                // Keep, so the plume stays visible after the Track completes.
+                // Restore would soft-stop it almost immediately and the result
+                // would be a flicker nobody could judge.
                 when_finished: XrdsWhenFinished::Keep,
             }],
             ..Default::default()
         },
     }];
 
-    // A zone just in front of the spawn, so a single step forward enters it.
-    let mut zone = XrdsSceneNode::from_xrds_node(
+    // --- The zone itself ----------------------------------------------------
+    // Box, not sphere: a box of the pad's footprint is unambiguous about where the
+    // boundary is, which matters when the whole question is whether crossing it
+    // registers. Tall (±1.5m about y=1.0) so neither a standing nor a crouching
+    // player can pass through without overlapping.
+    let mut zone_node = XrdsSceneNode::from_xrds_node(
         id(),
         None,
         &xrds_components::world::XrdsNode {
-            name: "G_ZONE_ON_PAD".to_string(),
+            name: "ZONE".to_string(),
             enabled: true,
             visible: true,
             transform: Default::default(),
         },
     );
-    // Trigger: GRAB a cube, not walk into a zone.
-    //
-    // ZoneEnter cannot be fired by the player at all. `zone_collision_system`
-    // consumes avian3d `CollisionStart`/`CollisionEnd`, so both bodies need
-    // colliders — the zone gets `Collider + Sensor + CollisionEventsEnabled`
-    // (spawn.rs), but nothing ever gives the player camera or player root a
-    // collider. So walking into a zone produces no event, which is why the first
-    // two attempts here saw nothing. Logged as an SDK gap; using a grab in the
-    // meantime because a cube has a mesh, hence an Aabb, hence grab reach.
-    let mut handle_cube = XrdsCube::new().with_name("F_GRAB_ME_CUBE");
-    handle_cube.size = [0.22, 0.22, 0.22];
-    // Waist-to-chest height, an arm's length ahead of the spawn: reachable
-    // without walking, and locomotion works now if it is not.
-    handle_cube.transform.translation = [0.0, 1.15, 7.2];
-    let mut cube_mat = xrds_components::XrdsMaterialParams::default();
-    cube_mat.base_color = XrdsColor { rgba: [0.15, 0.85, 0.35, 1.0] };
-    cube_mat.unlit = true;
-    let cube_id = id();
-    let mut cube_node =
-        XrdsSceneNode::from_xrds_cube(cube_id, None, &handle_cube, Some(cube_mat));
-    // Grab needs arming per-node; without this the cube is inert scenery.
-    cube_node.grabbable = true;
-    cube_node.triggers = vec![XrdsTriggerBinding {
-        trigger: XrdsTriggerKind::Grabbed,
-        track: Some("fire_and_stop".to_string()),
+    zone_node.transform.translation = [PAD_X, 1.0, PAD_Z];
+    zone_node.payload = XrdsSceneNodePayload::InteractionZone(XrdsSceneInteractionZone {
+        shape: xrds_components::XrdsInteractionZoneShape::Box {
+            half_extents: [PAD_HALF, 1.5, PAD_HALF],
+        },
+        grab_type: xrds_components::XrdsGrabType::None,
+        hoverable: false,
+    });
+    zone_node.triggers = vec![XrdsTriggerBinding {
+        trigger: XrdsTriggerKind::ZoneEnter,
+        track: Some("on_enter".to_string()),
         ..Default::default()
     }];
-    doc.nodes.push(cube_node);
+    doc.nodes.push(zone_node);
 
     doc.save_json(std::path::Path::new(&out))
         .expect("device-check scene should save");

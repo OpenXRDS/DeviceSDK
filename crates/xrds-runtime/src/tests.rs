@@ -578,6 +578,8 @@ mod gltf_runtime;
 mod gltf_samples;
 #[path = "tests/panel_grab_handle.rs"]
 mod panel_grab_handle;
+#[path = "tests/player_body.rs"]
+mod player_body;
 #[path = "tests/panel_text.rs"]
 mod panel_text;
 #[path = "tests/scene_environment.rs"]

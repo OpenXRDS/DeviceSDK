@@ -127,7 +127,8 @@ above.
 
 ### 1) Feature breadth for a fuller primitive palette
 
-- `XrdsCapsule` for character/physics workflows — capsule collider shape useful for character controllers
+- ~~`XrdsCapsule` for character/physics workflows~~ — **done.**
+- `XrdsEffect` (particle effects) — **done**, see `docs/done/vfx-particle-effects-plan.md`.
 - No other primitive gaps currently flagged as blocking
 
 ### 2) `Video` asset kind
@@ -159,6 +160,36 @@ above.
   (parented under a `PlayerAnchor`). No diagnostic or enforcement exists for
   this today; an author can currently head-lock an interactive template with
   no warning.
+
+### 5) Editor items inherited from the archived EDITOR_TODO list
+
+`docs/done/EDITOR_TODO.md` was archived on 2026-08-12 after its statuses were
+re-verified against the code. These are the ones that were still genuinely open, moved
+here so they stay visible:
+
+- **Passthrough / blend-mode toggle — editor half only.** `XrdsXrBlendMode`
+  (`Opaque`/`AlphaBlend`) already exists at `scene/node.rs:20` and the runtime handles
+  `EnvironmentBlendMode` plus the `fb_passthrough` extension. Only the editor toggle is
+  missing, which makes this a small, well-scoped job rather than a feature.
+- **Spatial audio parameters — editor half only.** `XrdsSceneAudioClip` already carries
+  `distance_model`, `min_distance`, `max_distance`, `rolloff_factor` and `hrtf`. No
+  inspector UI reads them, so authored scenes cannot use fields the SDK supports.
+- **Keyframe curve editor.** The Track/Sequencer system covers timed *action*
+  sequencing; interpolating a property along a curve is still unbuilt. Note the original
+  item's "export as a glTF animation track" is void — glTF export is retired.
+- **Spatial anchor node.** Cross-session persisted anchors; needs a new payload plus an
+  OpenXR persist-anchor API. Not started.
+- **Performance budget panel.** Live triangle/draw-call/texture-memory counters in the
+  editor. Editor-only instrumentation; Bevy diagnostics already expose the data.
+
+LOD groups were also on that list and are already tracked in Gap Analysis below.
+
+Separately tracked, both with their own plans and both deliberately unfixed:
+
+- **A player cannot enter an `InteractionZone`** — the player has no collider, so a
+  fundamental XR interaction silently does nothing. `docs/player-body-collider-plan.md`.
+- **Android window-lifecycle crash** — intermittent, trigger not yet reproduced.
+  `docs/android-window-lifecycle-plan.md`.
 
 ## Suggested Next Steps (Short Horizon)
 
