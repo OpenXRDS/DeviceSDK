@@ -1,7 +1,8 @@
 # xrds-net protocol features — plan
 
 **Status:** in progress. Branch `net-protocol-features`, off `main` at `d8cf8ff`.
-Phases 1-3 done (`f385e94`, `539d54e`, this commit). Next: decide on Phase 4.
+Phases 1-4 done. The feature family is complete: one feature per protocol dependency, all
+default-on.
 
 Tracks [issue #7](https://github.com/OpenXRDS/DeviceSDK/issues/7) ("xrds-net has too many
 functions without distinct features"). The plan summary was posted as
@@ -156,17 +157,73 @@ confusion, seen from the other side: the big savings need several gates, not one
 This job had already earned its place before it existed: both latent bugs in Phase 2 are
 precisely what it detects, and neither was visible to any pre-existing job.
 
-### Phase 4 — `protocol-coap`, if the tax is worth paying
+### Phase 4 — complete the family — **DONE**
 
-`coap` is the second-heaviest subtree (172 crates) and nothing in the SDK's own runtime,
-apps, or examples appears to use it — the best value after webrtc. But CoAP *is* wired into
-the dispatch, so this is the first phase to pay the ~18-site cost. Reassess after Phase 3.
+Shipping `protocol-webrtc` alone left a one-member `protocol-*` family beside a
+capability-scoped `ftp-server`: two vocabularies for one idea, and a prefix implying siblings
+that did not exist. That inconsistency is why this phase happened now rather than later.
+
+**Correction to this plan own cost estimate.** It claimed a "~18-site cfg tax" per protocol.
+That was the count of files matching on `PROTOCOLS` *at all*; the real cost is ~3 production
+`#[cfg]`s per protocol, because most matches are grouped arms or tests. The inflated figure
+was the main argument for deferring, and it was wrong.
+
+Features are one per *dependency*, because the handlers group that way:
+
+| feature | dependency | serves |
+|---|---|---|
+| `protocol-http` | `reqwest` | HTTP, HTTPS, **FILE** |
+| `protocol-coap` | `coap`, `coap-lite` | COAP |
+| `protocol-mqtt` | `rumqttc` | MQTT |
+| `protocol-ws` | `tokio-tungstenite` | WS, WSS |
+| `protocol-quic` | `quiche` | **QUIC and HTTP/3** |
+| `protocol-ftp` | `suppaftp` | FTP, SFTP (client) |
+| `ftp-server` | `libunftp` | FTP server (pre-existing) |
+| `protocol-webrtc` | `webrtc` + `protocol-ws` | WEBRTC |
+
+Three couplings a per-protocol scheme cannot express, documented instead of pretended away:
+
+- **`file://` rides `protocol-http`** — one handler serves HTTP, HTTPS and FILE.
+- **QUIC and HTTP/3 are one feature** — both are `quiche`.
+- **`protocol-webrtc` requires `protocol-ws`** — WebRTC signalling runs over WebSocket
+  (`webrtc_client.rs` and `webrtc_server.rs` both use `tokio_tungstenite`). Declared in
+  Cargo rather than left to feature unification.
+
+Sites needing cfg beyond the handler modules, every one found by compiling rather than by
+reading: `common/mod.rs` (quiche h3 header helpers), `client/client.rs` (the MQTT connection
+accessor and `run_ftp_command`, plus imports only they use), `client/event.rs` (MQTT
+subscribe-shaped listen step), `server/server.rs` (WS arms and methods).
+
+The legacy `client/tests.rs` and `server/tests.rs` drive the whole protocol surface including
+the expert-only extras, so they declare the full set rather than scattering a cfg over every
+test fn. Narrow configurations still type-check the library, which is what they exist to prove.
+
+### Delivered savings, and where the floor is
+
+    default (all on)       287
+    protocol-ftp only      108   (-63%)
+    protocol-quic only     110   (-62%)
+    protocol-mqtt only     110   (-62%)
+    protocol-ws only       119   (-59%)
+    protocol-http only     126   (-57%)
+    protocol-coap only     186   (-36%)
+    protocol-webrtc only   208   (-28%)
+    nothing                101   (-65%)
+
+That is the answer to issue #7: a consumer needing one protocol compiles 57-63% fewer crates
+in the typical case.
+
+**Less than this plan projected**, and the reason matters. The subset table earlier predicted
+42 crates for quic-only; the real figure is 110. The projection treated "crates in no
+protocol subtree" (22) as the floor, but the true floor is **101** — tokio, rustls and friends
+are reachable through protocol subtrees *and* required unconditionally by xrds-net itself, so
+no amount of protocol gating removes them.
+
+That makes tokio `features = ["full", "test-util"]` the largest remaining lever, still
+untouched, at 35% of the default graph.
 
 ## Out of scope
 
-- **The remaining protocols** (http, ws, mqtt, ftp, quic). Each pays the ~18-site cfg tax
-  for single-digit unique-crate savings when the others stay enabled. Not worth it until
-  someone is actually blocked.
 - **Trimming `tokio`.** `tokio = { features = ["full", "test-util"] }` is a *normal*
   dependency, so every consumer compiles all of tokio plus test scaffolding. Cheaper than
   anything here and needs no cfg work — but it is a separate change, not a feature gate.

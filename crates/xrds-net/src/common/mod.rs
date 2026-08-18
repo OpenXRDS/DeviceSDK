@@ -5,6 +5,8 @@ use std::io::Read;
 use std::path;
 use std::path::PathBuf;
 
+// h3 header plumbing; quiche serves both QUIC and HTTP/3.
+#[cfg(feature = "protocol-quic")]
 use quiche::h3::NameValue;
 
 use random_string::generate;
@@ -175,6 +177,7 @@ pub fn append_to_path(p: PathBuf, s: &str) -> PathBuf {
     p.into()
 }
 
+#[cfg(feature = "protocol-quic")]
 fn convert_header_to_h3_header(headers: Vec<(String, String)>) -> Vec<quiche::h3::Header> {
     let mut h3_headers: Vec<quiche::h3::Header> = Vec::new();
     for (key, value) in headers {
@@ -202,6 +205,7 @@ fn convert_header_to_h3_header(headers: Vec<(String, String)>) -> Vec<quiche::h3
  * Default Method: GET
  * If method is not provided by either set_method or header, GET method is used.
  */
+#[cfg(feature = "protocol-quic")]
 pub fn fill_mandatory_http_headers(
     url: XrUrl,
     headers: Option<Vec<(String, String)>>,

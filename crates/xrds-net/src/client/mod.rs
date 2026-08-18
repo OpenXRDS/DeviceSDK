@@ -46,5 +46,9 @@ pub use net_intent::{RequestOptions, TransferOp, TransferResult, XrdsNet};
 pub use net_task::{NetTaskSlot, XrdsNetTask};
 pub use scheme::scheme_to_protocol;
 
-#[cfg(test)]
+// These predate the feature split and drive the whole protocol surface, including the
+// per-protocol expert-only extras (`run_ftp_command`, `mqtt_subscribe`). Rather than
+// scatter a cfg over every test fn, the suite declares the set it needs; narrow
+// configurations still type-check the library itself, which is what they exist to prove.
+#[cfg(all(test, feature = "protocol-http", feature = "protocol-coap", feature = "protocol-mqtt", feature = "protocol-ws", feature = "protocol-quic", feature = "protocol-ftp"))]
 mod tests;

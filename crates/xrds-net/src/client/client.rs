@@ -23,19 +23,27 @@ limitations under the License.
 //! `self.handler`.
 
 use std::fmt;
+// Only the MQTT connection accessor needs these.
+#[cfg(feature = "protocol-mqtt")]
 use std::sync::{Arc, Mutex};
 use std::vec;
 
+#[cfg(feature = "protocol-mqtt")]
 use rumqttc::Connection as MqttConnection;
 
-use crate::common::data_structure::{FtpPayload, FtpResponse, NetResponse};
+use crate::common::data_structure::NetResponse;
+// Only `run_ftp_command` uses these.
+#[cfg(feature = "protocol-ftp")]
+use crate::common::data_structure::{FtpPayload, FtpResponse};
 use crate::common::enums::PROTOCOLS;
 use crate::common::{generate_random_string, parse_url};
 
 use super::context::ClientContext;
 use super::error::NetError;
 use super::handler::{create_handler, ProtocolHandler};
+#[cfg(feature = "protocol-ftp")]
 use super::protocols::ftp::FtpHandler;
+#[cfg(feature = "protocol-mqtt")]
 use super::protocols::mqtt::MqttHandler;
 use super::scheme::scheme_to_protocol;
 
@@ -171,6 +179,7 @@ impl Client {
 
     /// Expert-only extra, unchanged in shape — see "Expert-only extras" in
     /// the plan doc. `None` if this `Client` isn't MQTT-protocol.
+#[cfg(feature = "protocol-mqtt")]
     pub fn get_mqtt_connection(&self) -> Option<Arc<Mutex<MqttConnection>>> {
         self.handler
             .as_any()
@@ -278,6 +287,7 @@ impl Client {
     /*************************** */
     /// Expert-only extra, unchanged in shape — see "Expert-only extras" in
     /// the plan doc. Errs if this `Client` isn't MQTT-protocol.
+    #[cfg(feature = "protocol-mqtt")]
     pub fn mqtt_subscribe(mut self, topic: &str) -> Result<Self, NetError> {
         match self.handler.as_any_mut().downcast_mut::<MqttHandler>() {
             Some(mqtt) => {
@@ -312,6 +322,7 @@ impl Client {
     /// the plan doc. Reports an `FtpResponse` error if this `Client` isn't
     /// FTP-protocol (matching the original's all-in-`FtpResponse` error
     /// convention rather than a `Result`).
+    #[cfg(feature = "protocol-ftp")]
     pub fn run_ftp_command(&self, ftp_payload: FtpPayload) -> FtpResponse {
         match self.handler.as_any().downcast_ref::<FtpHandler>() {
             Some(ftp) => ftp.run_command(ftp_payload),

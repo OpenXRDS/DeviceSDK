@@ -136,10 +136,25 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # All on (what every consumer gets) and all off (the floor).
           - name: default
             flags: ""
           - name: none
             flags: "--no-default-features"
+          # Each protocol alone. This is the shape the feature family exists to serve, and
+          # the only way a single protocol's cfg gaps become visible.
+          - name: http-only
+            flags: "--no-default-features --features protocol-http"
+          - name: coap-only
+            flags: "--no-default-features --features protocol-coap"
+          - name: mqtt-only
+            flags: "--no-default-features --features protocol-mqtt"
+          - name: ws-only
+            flags: "--no-default-features --features protocol-ws"
+          - name: quic-only
+            flags: "--no-default-features --features protocol-quic"
+          - name: ftp-only
+            flags: "--no-default-features --features protocol-ftp"
           - name: webrtc-only
             flags: "--no-default-features --features protocol-webrtc"
           - name: ftp-server-only

@@ -29,12 +29,19 @@ use crate::common::enums::PROTOCOLS;
 use super::categories::{FileTransferHandler, SessionHandler, StreamHandler};
 use super::context::ClientContext;
 use super::error::NetError;
+#[cfg(feature = "protocol-coap")]
 use super::protocols::coap::CoapHandler;
+#[cfg(feature = "protocol-ftp")]
 use super::protocols::ftp::FtpHandler;
+#[cfg(feature = "protocol-http")]
 use super::protocols::http::HttpHandler;
+#[cfg(feature = "protocol-quic")]
 use super::protocols::http3::Http3Handler;
+#[cfg(feature = "protocol-mqtt")]
 use super::protocols::mqtt::MqttHandler;
+#[cfg(feature = "protocol-quic")]
 use super::protocols::quic::QuicHandler;
+#[cfg(feature = "protocol-ws")]
 use super::protocols::ws::WsHandler;
 
 pub trait ProtocolHandler: Send + Sync {
@@ -193,13 +200,34 @@ impl ProtocolHandler for UnsupportedHandler {
 /// `UnsupportedHandler` for anything routed through this mechanism.
 pub fn create_handler(protocol: PROTOCOLS) -> Box<dyn ProtocolHandler> {
     match protocol {
+        #[cfg(feature = "protocol-http")]
         PROTOCOLS::HTTP | PROTOCOLS::HTTPS | PROTOCOLS::FILE => Box::new(HttpHandler::new()),
+        #[cfg(not(feature = "protocol-http"))]
+        PROTOCOLS::HTTP | PROTOCOLS::HTTPS | PROTOCOLS::FILE => Box::new(UnsupportedHandler::feature_disabled(protocol, "protocol-http")),
+        #[cfg(feature = "protocol-coap")]
         PROTOCOLS::COAP => Box::new(CoapHandler::new()),
+        #[cfg(not(feature = "protocol-coap"))]
+        PROTOCOLS::COAP => Box::new(UnsupportedHandler::feature_disabled(protocol, "protocol-coap")),
+        #[cfg(feature = "protocol-quic")]
         PROTOCOLS::HTTP3 => Box::new(Http3Handler::new()),
+        #[cfg(not(feature = "protocol-quic"))]
+        PROTOCOLS::HTTP3 => Box::new(UnsupportedHandler::feature_disabled(protocol, "protocol-quic")),
+        #[cfg(feature = "protocol-quic")]
         PROTOCOLS::QUIC => Box::new(QuicHandler::new()),
+        #[cfg(not(feature = "protocol-quic"))]
+        PROTOCOLS::QUIC => Box::new(UnsupportedHandler::feature_disabled(protocol, "protocol-quic")),
+        #[cfg(feature = "protocol-ws")]
         PROTOCOLS::WS | PROTOCOLS::WSS => Box::new(WsHandler::new()),
+        #[cfg(not(feature = "protocol-ws"))]
+        PROTOCOLS::WS | PROTOCOLS::WSS => Box::new(UnsupportedHandler::feature_disabled(protocol, "protocol-ws")),
+        #[cfg(feature = "protocol-mqtt")]
         PROTOCOLS::MQTT => Box::new(MqttHandler::new()),
+        #[cfg(not(feature = "protocol-mqtt"))]
+        PROTOCOLS::MQTT => Box::new(UnsupportedHandler::feature_disabled(protocol, "protocol-mqtt")),
+        #[cfg(feature = "protocol-ftp")]
         PROTOCOLS::FTP | PROTOCOLS::SFTP => Box::new(FtpHandler::new()),
+        #[cfg(not(feature = "protocol-ftp"))]
+        PROTOCOLS::FTP | PROTOCOLS::SFTP => Box::new(UnsupportedHandler::feature_disabled(protocol, "protocol-ftp")),
         // Two different reasons, and the message has to say which: with the feature on,
         // WebRTC is available via its own API; with it off, it is not in this build at all.
         #[cfg(feature = "protocol-webrtc")]

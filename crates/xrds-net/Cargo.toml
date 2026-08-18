@@ -15,21 +15,42 @@ name = "webrtc_integration"
 required-features = ["protocol-webrtc"]
 
 [features]
-default = ["ftp-server", "protocol-webrtc"]
+default = [
+    "ftp-server",
+    "protocol-http",
+    "protocol-coap",
+    "protocol-mqtt",
+    "protocol-ws",
+    "protocol-quic",
+    "protocol-ftp",
+    "protocol-webrtc",
+]
 # FTP *server* (libunftp). Desktop/dev only — excluded on Android, where the
 # native provisioning is unavailable and an XR client never hosts FTP. The
 # ftp/sftp *client* transfer path (suppaftp) is separate and unaffected.
 ftp-server = ["dep:libunftp", "dep:unftp-sbe-fs"]
-# WebRTC. Default-on, so no consumer loses it by accident — see
-# docs/xrds-net-protocol-features-plan.md. Disabling drops ~74 crates from the
-# dependency graph. `PROTOCOLS::WEBRTC` and the `webrtc://` scheme still exist either
-# way; only the handler and the dedicated `WebRTCClient` API go away, and asking for
-# them then reports which feature to enable.
-protocol-webrtc = ["dep:webrtc"]
+# One feature per protocol *dependency* — see docs/xrds-net-protocol-features-plan.md.
+#
+# All default-on, so nobody loses a protocol by accident; narrowing is an explicit
+# `default-features = false`. `PROTOCOLS` and `scheme_to_protocol` stay total in every
+# configuration, so a URL always parses and a disabled protocol reports which feature to
+# enable (Phase 1's `UnsupportedHandler::feature_disabled`).
+#
+# Two riders, because handlers group by dependency rather than by scheme:
+#   * `file://` is served by the HTTP handler, so it rides `protocol-http`.
+#   * QUIC and HTTP/3 are both `quiche`, so they cannot be separated.
+protocol-http  = ["dep:reqwest"]
+protocol-coap  = ["dep:coap", "dep:coap-lite"]
+protocol-mqtt  = ["dep:rumqttc"]
+protocol-ws    = ["dep:tokio-tungstenite"]
+protocol-quic  = ["dep:quiche"]                       # QUIC *and* HTTP/3
+protocol-ftp   = ["dep:suppaftp"]                     # client transfer; server is `ftp-server`
+# WebRTC signalling runs over WebSocket, so this is not independent of protocol-ws.
+protocol-webrtc = ["dep:webrtc", "protocol-ws"]
 
 [dependencies]
 tokio = { version = "^1.32", features = ["full", "test-util"] }
-tokio-tungstenite = { version = "*", features = ["rustls-tls-webpki-roots"] } # rustls enables wss:// — see docs/done/xrds-net-crypto-consolidation.md
+tokio-tungstenite = { version = "*", features = ["rustls-tls-webpki-roots"], optional = true } # rustls enables wss:// — see docs/done/xrds-net-crypto-consolidation.md
 url = "2.5.4"
 mio = "1.0.3"
 random-string = "1.1.0"                                         # for scid (QUIC)
@@ -52,12 +73,12 @@ pretty_env_logger = "0.5.0"
 reqwest = { version = "0.12", default-features = false, features = [
     "blocking",
     "rustls-tls-webpki-roots",
-] } # http / https — see docs/done/xrds-net-crypto-consolidation.md (replaces curl)
-coap = "0.19.1"                                       # coap
-coap-lite = "0.11.3"                                  # coap
-suppaftp = { version = "^6", features = ["rustls"] }  # ftp / sftp — see docs/done/xrds-net-crypto-consolidation.md
-rumqttc = "0.24.0"                                    # mqtt
-quiche = "=0.24.6"                                       # quic / http3 (pinned exact: see [patch.crates-io] in workspace Cargo.toml)
+] , optional = true } # http / https — see docs/done/xrds-net-crypto-consolidation.md (replaces curl)
+coap = { version = "0.19.1", optional = true }  # coap
+coap-lite = { version = "0.11.3", optional = true }  # coap
+suppaftp = { version = "^6", features = ["rustls"], optional = true }  # ftp / sftp — see docs/done/xrds-net-crypto-consolidation.md
+rumqttc = { version = "0.24.0", optional = true }  # mqtt
+quiche = { version = "=0.24.6", optional = true }  # quic / http3 (pinned exact: see [patch.crates-io] in workspace Cargo.toml)
 webrtc = { version = "0.12.0", optional = true }          # webRTC (feature: protocol-webrtc)
 
 rustls = { version = "0.23.10", default-features = false, features = [

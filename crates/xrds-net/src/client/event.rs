@@ -37,12 +37,16 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+// Used by the MQTT subscribe-shaped listen step below.
+#[cfg(feature = "protocol-mqtt")]
 use crate::common::enums::PROTOCOLS;
 
 use super::context::ClientContext;
 use super::error::NetError;
 use super::handler::ProtocolHandler;
+#[cfg(feature = "protocol-mqtt")]
 use super::net_intent::topic_from_path;
+#[cfg(feature = "protocol-mqtt")]
 use super::protocols::mqtt::MqttHandler;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -256,6 +260,7 @@ impl EventStream {
         // only opens the broker connection, it doesn't subscribe to
         // anything. Topic-less transports (WS, raw QUIC) don't need this —
         // their `connect()` is already everything "start listening" means.
+        #[cfg(feature = "protocol-mqtt")]
         if ctx.protocol == PROTOCOLS::MQTT {
             if let Some(topic) = topic_from_path(&ctx.path) {
                 if let Some(mqtt) = handler.as_any_mut().downcast_mut::<MqttHandler>() {

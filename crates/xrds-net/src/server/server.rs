@@ -7,6 +7,7 @@ use crate::common::{validate_path, validate_path_write_permission};
 
 #[cfg(feature = "protocol-webrtc")]
 use crate::server::webrtc_server::WebRTCServer;
+#[cfg(feature = "protocol-ws")]
 use crate::server::ws_server::WebSocketServer;
 
 use std::collections::HashMap;
@@ -125,12 +126,19 @@ impl XRNetServer {
                 PROTOCOLS::FILE => {
                     // self.run_file_server();
                 }
+                #[cfg(feature = "protocol-ws")]
                 PROTOCOLS::WS | PROTOCOLS::WSS => {
                     let server = Arc::clone(&server);
                     let port = self.port[i];
                     tokio::spawn(async move {
                         server.run_ws_server(port).await;
                     });
+                }
+                #[cfg(not(feature = "protocol-ws"))]
+                PROTOCOLS::WS | PROTOCOLS::WSS => {
+                    log::warn!(
+                        "WebSocket server requested but not built in (feature `protocol-ws` disabled)"
+                    );
                 }
                 #[cfg(feature = "protocol-webrtc")]
                 PROTOCOLS::WEBRTC => {
@@ -190,6 +198,7 @@ impl XRNetServer {
         for i in 0..self.protocol.len() {
             let configured_port = self.port[i];
             match self.protocol[i] {
+                #[cfg(feature = "protocol-ws")]
                 PROTOCOLS::WS | PROTOCOLS::WSS => {
                     let server = Arc::clone(&server);
                     let (tx, rx) = tokio::sync::oneshot::channel();
@@ -198,6 +207,14 @@ impl XRNetServer {
                     });
                     let bound = rx.await.unwrap_or(configured_port as u16);
                     actual_ports.push(bound as u32);
+                }
+                #[cfg(not(feature = "protocol-ws"))]
+                PROTOCOLS::WS | PROTOCOLS::WSS => {
+                    log::warn!(
+                        "WebSocket server requested but not built in (feature `protocol-ws` disabled)"
+                    );
+                    // Positional: see the webrtc arm below.
+                    actual_ports.push(configured_port);
                 }
                 #[cfg(feature = "protocol-webrtc")]
                 PROTOCOLS::WEBRTC => {
@@ -257,6 +274,7 @@ impl XRNetServer {
         actual_ports
     }
 
+#[cfg(feature = "protocol-ws")]
     async fn run_ws_server_reporting(&self, port: u32, port_tx: tokio::sync::oneshot::Sender<u16>) {
         println!("WebSocket server started");
 
@@ -326,6 +344,7 @@ impl XRNetServer {
      * Starts WebSocke server with given port
      * Registered user-defined handlers are passed to the server
      */
+#[cfg(feature = "protocol-ws")]
     async fn run_ws_server(&self, port: u32) {
         println!("WebSocket server started");
 
