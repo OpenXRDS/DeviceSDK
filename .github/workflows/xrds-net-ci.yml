@@ -6,6 +6,9 @@ on:
   pull_request:
     paths:
       - "crates/xrds-net/**"
+      # xrds-media was extracted out of xrds-net and was covered by nothing at all,
+      # despite the net stack depending on the code that moved there.
+      - "crates/xrds-media/**"
       - "Cargo.toml"
       - "Cargo.lock"
       - ".github/workflows/xrds-net-ci.yml"
@@ -113,3 +116,54 @@ jobs:
       # `#[serial(webrtc)]`-serialized within the file — must run
       # single-threaded, same as every manual run this session.
       - run: cargo test -p xrds-net --test webrtc_integration -- --test-threads=1
+
+  # Every feature combination is a distinct compilation, so a broken one stays invisible
+  # until a consumer tries it. This job exists because gating `protocol-webrtc` immediately
+  # surfaced two latent bugs that the default build could never have shown:
+  #
+  #   - `uuid` was used with `Uuid::new_v4()` but declared without its `v4` feature; it only
+  #     compiled because the always-on `webrtc` dependency happened to enable it.
+  #   - The webrtc examples resolved `WebRTCClient` only through Cargo's cross-member feature
+  #     unification, not through any declaration of their own.
+  #
+  # `--all-targets` is deliberate: it builds tests too, which is where the `webrtc_integration`
+  # target needed `required-features` to be skipped rather than fail.
+  feature-matrix:
+    name: features (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: default
+            flags: ""
+          - name: none
+            flags: "--no-default-features"
+          - name: webrtc-only
+            flags: "--no-default-features --features protocol-webrtc"
+          - name: ftp-server-only
+            flags: "--no-default-features --features ftp-server"
+    steps:
+      - uses: actions/checkout@v4
+      # Only quiche's BoringSSL needs native deps here — this job builds xrds-net alone, not
+      # the workspace, so Bevy's and the editor's system libraries are not involved.
+      - name: Install native build deps (quiche/BoringSSL)
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo -E apt-get update -o Acquire::Retries=3 -o Acquire::http::Timeout=30
+          sudo -E apt-get install -y --no-install-recommends -o Acquire::Retries=3 -o Acquire::http::Timeout=30 cmake perl
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.95.0"
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: features-${{ matrix.name }}
+      - name: cargo check
+        run: cargo check -p xrds-net ${{ matrix.flags }} --all-targets
+      # Clippy too: a cfg'd-out branch is exactly where dead code and unused imports hide,
+      # and CI already gates the default build on -D warnings.
+      - name: cargo clippy
+        run: cargo clippy -p xrds-net ${{ matrix.flags }} --all-targets -- -D warnings

@@ -1,7 +1,7 @@
 # xrds-net protocol features — plan
 
 **Status:** in progress. Branch `net-protocol-features`, off `main` at `d8cf8ff`.
-Phase 1 done (`f385e94`). Next: Phase 2, `protocol-webrtc`.
+Phases 1-3 done (`f385e94`, `539d54e`, this commit). Next: decide on Phase 4.
 
 Tracks [issue #7](https://github.com/OpenXRDS/DeviceSDK/issues/7) ("xrds-net has too many
 functions without distinct features"). The plan summary was posted as
@@ -106,28 +106,55 @@ that does not exist.
 `NetError::Capability { protocol, verb, detail }` already existed for exactly this shape, so
 there is no API break and callers that already match on `Capability` keep working.
 
-### Phase 2 — `protocol-webrtc`
+### Phase 2 — `protocol-webrtc` — **DONE** (`539d54e`)
 
-The cheapest gate, because WebRTC was never wired into the handler dispatch.
+- [x] `webrtc` optional behind `protocol-webrtc`, which is in `default`.
+- [x] `#[cfg]` on `mod xrds_webrtc`, `mod webrtc_server`, `mod webrtc_ice_config`, the
+      `lib.rs` re-exports, and the two `server/server.rs` arms plus the two
+      `run_webrtc_server*` methods they call.
+- [x] `PROTOCOLS` and `scheme_to_protocol` untouched — no `#[cfg]` in any of the ~18
+      matching files, exactly as designed.
+- [x] Four configurations build with `--all-targets`; clippy clean on all four.
 
-- [ ] `webrtc = { version = "0.12.0", optional = true }`; feature `protocol-webrtc`.
-- [ ] `#[cfg(feature)]` on `mod xrds_webrtc` (`client/mod.rs:21`) and `mod webrtc_server`
-      (`server/mod.rs:5`), plus `webrtc_ice_config.rs`.
-- [ ] The two `PROTOCOLS::WEBRTC` arms in `server/server.rs` (~134, ~194) need a
-      not-enabled path that logs and declines rather than failing to compile.
-- [ ] No change to `PROTOCOLS` or `scheme_to_protocol`.
-- [ ] Verify `--no-default-features --features protocol-webrtc` and the inverse both build.
+**Wider than the plan said.** `media` (`AudioSource`/`VideoSource`) lives *inside*
+`mod xrds_webrtc`, so it gates with WebRTC and disappears from the public root too — hence
+the `!` on that commit. `tests/webrtc_integration.rs` needed `required-features` so Cargo
+skips rather than fails it.
 
-### Phase 3 — feature-matrix CI
+**Payoff was smaller than projected, and the reason matters:**
 
-Without this, `--no-default-features` builds break silently and nobody learns until a
-consumer tries it. Each combination is a separate compilation.
+    default (all on)             287 crates
+    ftp-server only, no webrtc   268   (-19)
+    no-default-features          229   (-58)
 
-- [ ] Add a job building at least: default, `--no-default-features`, and
-      `--no-default-features --features protocol-webrtc`.
-- [ ] Fold in `crates/xrds-media` while touching the workflow — it is *not* in the current
-      path filter (`crates/xrds-net/**`, `Cargo.toml`, `Cargo.lock`), so changes to it
-      trigger no CI at all.
+The −26% figure in the table above assumes every *other* protocol is gated too. With the
+rest enabled, dropping webrtc alone saves 19 crates. Same trap as the "unique vs subset"
+confusion, seen from the other side: the big savings need several gates, not one.
+
+**Two latent bugs surfaced**, neither observable from a default build:
+
+- `uuid` was called as `Uuid::new_v4()` but declared without the `v4` feature. It compiled
+  only because the always-on `webrtc` enabled it transitively. Confirmed not a regression:
+  `--no-default-features` did build on `main`, for that accidental reason.
+- The webrtc examples got `WebRTCClient` purely through Cargo's cross-member feature
+  unification. The workspace dependency sets `default-features = false`, so nothing in the
+  root package actually asked for it. Now declared on the dev-dependency.
+
+### Phase 3 — feature-matrix CI — **DONE**
+
+- [x] `feature-matrix` job, 4 configurations (default / none / webrtc-only /
+      ftp-server-only), `fail-fast: false` so one broken combination does not hide the
+      others.
+- [x] `cargo check` **and** `clippy -D warnings` per configuration — a cfg'd-out branch is
+      exactly where unused imports and dead code hide, and the default build cannot see them.
+- [x] `--all-targets`, which is what makes a mis-declared test target fail loudly; that is
+      how `webrtc_integration` was caught needing `required-features`.
+- [x] `crates/xrds-media/**` added to the path filter. It had been covered by nothing since
+      being split out of xrds-net.
+- [x] All four verified locally before pushing, so CI confirms rather than discovers.
+
+This job had already earned its place before it existed: both latent bugs in Phase 2 are
+precisely what it detects, and neither was visible to any pre-existing job.
 
 ### Phase 4 — `protocol-coap`, if the tax is worth paying
 
