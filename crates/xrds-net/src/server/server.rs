@@ -5,6 +5,7 @@ use std::sync::Arc;
 use crate::common::enums::PROTOCOLS;
 use crate::common::{validate_path, validate_path_write_permission};
 
+#[cfg(feature = "protocol-webrtc")]
 use crate::server::webrtc_server::WebRTCServer;
 use crate::server::ws_server::WebSocketServer;
 
@@ -131,12 +132,19 @@ impl XRNetServer {
                         server.run_ws_server(port).await;
                     });
                 }
+                #[cfg(feature = "protocol-webrtc")]
                 PROTOCOLS::WEBRTC => {
                     let server = Arc::clone(&server);
                     let port = self.port[i];
                     tokio::spawn(async move {
                         server.run_webrtc_server(port).await;
                     });
+                }
+                #[cfg(not(feature = "protocol-webrtc"))]
+                PROTOCOLS::WEBRTC => {
+                    log::warn!(
+                        "WebRTC server requested but not built in (feature `protocol-webrtc` disabled)"
+                    );
                 }
                 PROTOCOLS::HTTP3 => {
                     // self.run_http3_server();
@@ -191,6 +199,7 @@ impl XRNetServer {
                     let bound = rx.await.unwrap_or(configured_port as u16);
                     actual_ports.push(bound as u32);
                 }
+                #[cfg(feature = "protocol-webrtc")]
                 PROTOCOLS::WEBRTC => {
                     let server = Arc::clone(&server);
                     let (tx, rx) = tokio::sync::oneshot::channel();
@@ -201,6 +210,16 @@ impl XRNetServer {
                     });
                     let bound = rx.await.unwrap_or(configured_port as u16);
                     actual_ports.push(bound as u32);
+                }
+                #[cfg(not(feature = "protocol-webrtc"))]
+                PROTOCOLS::WEBRTC => {
+                    log::warn!(
+                        "WebRTC server requested but not built in (feature `protocol-webrtc` disabled)"
+                    );
+                    // Still push a port: callers read `actual_ports` positionally against the
+                    // requested protocol list, so skipping would silently misalign every
+                    // entry after this one.
+                    actual_ports.push(configured_port);
                 }
                 #[cfg(feature = "ftp-server")]
                 PROTOCOLS::FTP | PROTOCOLS::SFTP => {
@@ -253,6 +272,7 @@ impl XRNetServer {
         }
     }
 
+    #[cfg(feature = "protocol-webrtc")]
     async fn run_webrtc_server_reporting(
         &self,
         port: u32,
@@ -329,6 +349,7 @@ impl XRNetServer {
     /**
      * This is an websocket-based WebRTC Signaling server
      */
+    #[cfg(feature = "protocol-webrtc")]
     async fn run_webrtc_server(&self, port: u32) {
         println!("WebRTC server started");
 

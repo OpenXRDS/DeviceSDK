@@ -2,6 +2,7 @@
 // throughout the crate; not worth a rename at this point.
 #[allow(clippy::module_inception)]
 mod server;
+#[cfg(feature = "protocol-webrtc")]
 mod webrtc_server;
 mod ws_server;
 

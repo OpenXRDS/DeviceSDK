@@ -18,6 +18,9 @@ mod net_task;
 mod protocols;
 mod scheme;
 
+// Gated together because `media` (AudioSource/VideoSource) exists to feed WebRTC tracks
+// and has no meaning without it.
+#[cfg(feature = "protocol-webrtc")]
 mod xrds_webrtc {
     pub mod webrtc_client;
     pub mod media {
@@ -29,6 +32,7 @@ mod xrds_webrtc {
     }
 }
 pub use client::*;
+#[cfg(feature = "protocol-webrtc")]
 pub use xrds_webrtc::*;
 
 pub use categories::{FileTransferHandler, SessionHandler, StreamHandler};

@@ -9,12 +9,23 @@ repository = "https://github.com/OpenXRDS/DeviceSDK"
 [lib]
 crate-type = ["lib"]
 
+# Cargo skips a target whose required-features are unmet, instead of failing the build.
+[[test]]
+name = "webrtc_integration"
+required-features = ["protocol-webrtc"]
+
 [features]
-default = ["ftp-server"]
+default = ["ftp-server", "protocol-webrtc"]
 # FTP *server* (libunftp). Desktop/dev only — excluded on Android, where the
 # native provisioning is unavailable and an XR client never hosts FTP. The
 # ftp/sftp *client* transfer path (suppaftp) is separate and unaffected.
 ftp-server = ["dep:libunftp", "dep:unftp-sbe-fs"]
+# WebRTC. Default-on, so no consumer loses it by accident — see
+# docs/xrds-net-protocol-features-plan.md. Disabling drops ~74 crates from the
+# dependency graph. `PROTOCOLS::WEBRTC` and the `webrtc://` scheme still exist either
+# way; only the handler and the dedicated `WebRTCClient` API go away, and asking for
+# them then reports which feature to enable.
+protocol-webrtc = ["dep:webrtc"]
 
 [dependencies]
 tokio = { version = "^1.32", features = ["full", "test-util"] }
@@ -22,7 +33,11 @@ tokio-tungstenite = { version = "*", features = ["rustls-tls-webpki-roots"] } # 
 url = "2.5.4"
 mio = "1.0.3"
 random-string = "1.1.0"                                         # for scid (QUIC)
-uuid = "1.15.1"                                                 # uuid
+# `v4` declared explicitly: `common/mod.rs` calls `Uuid::new_v4()` directly. It used to
+# compile only because the always-on `webrtc` dependency happened to enable that feature —
+# the moment webrtc became optional, `--no-default-features` failed in `uuid`. Never rely on
+# another crate's feature selection for a feature you use yourself.
+uuid = { version = "1.15.1", features = ["v4"] }                 # uuid
 base64 = "0.22.1"
 serde_json = "1.0.139"
 serde = "1.0.218"
@@ -43,7 +58,7 @@ coap-lite = "0.11.3"                                  # coap
 suppaftp = { version = "^6", features = ["rustls"] }  # ftp / sftp — see docs/done/xrds-net-crypto-consolidation.md
 rumqttc = "0.24.0"                                    # mqtt
 quiche = "=0.24.6"                                       # quic / http3 (pinned exact: see [patch.crates-io] in workspace Cargo.toml)
-webrtc = "0.12.0"                                        # webRTC
+webrtc = { version = "0.12.0", optional = true }          # webRTC (feature: protocol-webrtc)
 
 rustls = { version = "0.23.10", default-features = false, features = [
     "std",

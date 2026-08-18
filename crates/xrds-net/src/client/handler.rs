@@ -200,7 +200,15 @@ pub fn create_handler(protocol: PROTOCOLS) -> Box<dyn ProtocolHandler> {
         PROTOCOLS::WS | PROTOCOLS::WSS => Box::new(WsHandler::new()),
         PROTOCOLS::MQTT => Box::new(MqttHandler::new()),
         PROTOCOLS::FTP | PROTOCOLS::SFTP => Box::new(FtpHandler::new()),
+        // Two different reasons, and the message has to say which: with the feature on,
+        // WebRTC is available via its own API; with it off, it is not in this build at all.
+        #[cfg(feature = "protocol-webrtc")]
         PROTOCOLS::WEBRTC => Box::new(UnsupportedHandler::dedicated_api(protocol, "WebRTCClient")),
+        #[cfg(not(feature = "protocol-webrtc"))]
+        PROTOCOLS::WEBRTC => Box::new(UnsupportedHandler::feature_disabled(
+            protocol,
+            "protocol-webrtc",
+        )),
     }
 }
 

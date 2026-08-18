@@ -18,19 +18,24 @@ pub mod client;
 pub mod common;
 pub mod server;
 
+#[cfg(feature = "protocol-webrtc")]
 mod webrtc_ice_config;
 
 pub use client::{
-    media::{AudioSource, VideoSource},
-    webrtc_client::WebRTCClient,
     ClientBuilder, Event, EventStream, ListenOptions, NetChannel, NetError, NetFeed, NetTaskSlot,
     Overflow, RequestOptions, TransferOp, TransferResult, XrdsNet, XrdsNetTask,
+};
+
+#[cfg(feature = "protocol-webrtc")]
+pub use client::{
+    media::{AudioSource, VideoSource},
+    webrtc_client::WebRTCClient,
 };
 
 pub use common::data_structure::NetResponse;
 pub use common::enums::{FtpCommands, PROTOCOLS};
 
-#[cfg(test)]
+#[cfg(all(test, feature = "protocol-webrtc"))]
 mod tests {
     use crate::client::webrtc_client::WebRTCClient;
 
