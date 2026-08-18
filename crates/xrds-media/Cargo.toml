@@ -1,0 +1,42 @@
+[package]
+name = "xrds-media"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Desktop-only media I/O for XRDS: camera/microphone capture, encoding for transport, and (planned) media import/playback for the SDK and editor. No networking dependencies."
+
+[features]
+default = []
+# Synthetic, hardware-free sources for downstream tests (and this crate's own
+# Tier 2 tests). See docs/done/xrds-net-capture-decoupling.md.
+test-util = []
+# JPEG->H264 and PCM->Opus encoding, for feeding xrds-net's already-encoded
+# media sources (VideoSource::EncodedH264, AudioSource). xrds-net itself never
+# depends on a codec library — see docs/done/xrds-net-capture-decoupling.md.
+transcoding = ["dep:ffmpeg-next", "dep:opus"]
+
+[dependencies]
+log = "0.4"
+
+# Camera capture. Kept in sync with the versions xrds-net used before extraction.
+[dependencies.nokhwa]
+version = "0.10.7"
+default-features = false
+features = ["input-native", "output-threaded"]
+
+# Microphone capture.
+[dependencies.cpal]
+version = "=0.14.0"
+
+# Transcoding (optional, see the `transcoding` feature).
+[dependencies.ffmpeg-next]
+version = "8.1.0"
+optional = true
+
+[dependencies.opus]
+version = "0.3.0"
+optional = true
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+pretty_env_logger = "0.5.0"

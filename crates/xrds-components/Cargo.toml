@@ -7,6 +7,6 @@ edition = "2021"
 crate-type = ["lib"]
 
 [dependencies]
-xrds-core = { workspace = true }
-xrds-graphics = { workspace = true }
 glam = { workspace = true }
+bevy = { workspace = true }
+serde = { version = "1.0", features = ["derive"] }

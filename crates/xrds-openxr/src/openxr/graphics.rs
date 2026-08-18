@@ -16,6 +16,7 @@ impl OpenXrGraphicsFamily for () {
 pub enum OpenXrGraphicsWrap<G: OpenXrGraphicsFamily> {
     Vulkan(G::Inner<openxr::Vulkan>),
     OpenGl(G::Inner<openxr::OpenGL>),
+    #[cfg(target_os = "windows")]
     D3d12(G::Inner<openxr::D3D12>),
 }
 

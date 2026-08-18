@@ -1,0 +1,53 @@
+[package]
+name = "xrds-editor"
+version = "0.1.0"
+description = "GUI editor application built on top of the XRDS SDK"
+authors = ["gganjang"]
+license = ""
+repository = ""
+edition = "2021"
+rust-version = "1.77.2"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+name = "app_lib"
+crate-type = ["rlib"]
+
+[features]
+default = ["xrds-runtime/ftp-server"]
+
+[dependencies]
+serde_json = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+log = "0.4"
+tokio = { workspace = true }
+# default-features = false + the forward above: the editor is desktop-only
+# and keeps ftp-server, but an un-gated default-featured edge here would leak
+# into Android's shared feature resolution for xrds-runtime/xrds-net even
+# though the editor itself never targets Android — see
+# docs/done/xrds-net-android-shipping.md Phase 3.
+xrds-runtime = { workspace = true, default-features = false }
+xrds-scene-graph = { workspace = true }
+xrds-components = { workspace = true }
+bevy = { workspace = true }
+bevy_mod_outline = "0.11.0"
+rfd = "0.15"
+wgpu = { workspace = true }
+wry = "0.55"
+raw-window-handle = "0.6"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.52", features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_Graphics_Gdi",
+] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+x11rb = { version = "0.13", features = ["shape"] }
+gtk = "0.18"
+libc = "0.2"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.5"

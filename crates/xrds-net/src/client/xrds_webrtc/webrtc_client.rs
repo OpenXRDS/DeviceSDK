@@ -1,7 +1,4 @@
 use anyhow::Result as AnyResult;
-use bytes::Bytes;
-use cpal::traits::StreamTrait;
-use cpal::Stream;
 use futures_util::stream::SplitSink;
 use futures_util::{SinkExt, StreamExt};
 use std::error::Error;
@@ -10,11 +7,9 @@ use std::future::Future;
 use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::TcpStream;
-use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::Mutex;
 use tokio::sync::{mpsc, Notify};
 use tokio::task::JoinHandle;
@@ -48,12 +43,12 @@ use webrtc::{
     peer_connection::RTCPeerConnection, rtp_transceiver::rtp_codec::RTCRtpCodecCapability,
 };
 
-use crate::client::xrds_webrtc::media::audio_capturer::{resample_and_convert, AudioCapturer};
+use crate::client::xrds_webrtc::media::audio_pipeline::AudioTrackWriter;
 use crate::client::xrds_webrtc::media::handlers::{
     AudioTrackCallback, AudioTrackHandler, MediaTrackCallback, MediaTrackHandler,
     VideoTrackCallback, VideoTrackHandler,
 };
-use crate::client::xrds_webrtc::webcam_reader::WebcamReader;
+use crate::client::xrds_webrtc::media::source::{AudioSource, VideoSource};
 use crate::common::data_structure::WebRTCMessage;
 use crate::common::data_structure::{
     ANSWER, CLOSE_SESSION, CREATE_SESSION, ICE_CANDIDATE, ICE_CANDIDATE_ACK, JOIN_SESSION,
@@ -93,13 +88,6 @@ impl NetworkStreamReader {
     }
 }
 
-pub enum StreamSource {
-    File(String),
-    Webcam(u32), // device ID
-    MediaStream(Box<dyn Read + Send>),
-    RawH264(Vec<u8>),
-}
-
 // For creating different types of readers
 pub struct StreamReaderFactory;
 
@@ -128,6 +116,14 @@ impl StreamReaderFactory {
     }
 }
 
+/// True if `data` contains an H.264 Annex B NAL unit start code (the 3- or
+/// 4-byte `00 00 01` / `00 00 00 01` marker). Used to sanity-check
+/// sent/received video payloads in tests without decoding the stream.
+pub fn is_valid_h264(data: &[u8]) -> bool {
+    data.windows(4).any(|w| w == [0x00, 0x00, 0x00, 0x01])
+        || data.windows(3).any(|w| w == [0x00, 0x00, 0x01])
+}
+
 type WsWriter = Arc<Mutex<SplitSink<WsStream<MaybeTlsStream<TcpStream>>, Message>>>;
 
 pub struct WebRTCClient {
@@ -141,6 +137,7 @@ pub struct WebRTCClient {
     pc: Option<Arc<RTCPeerConnection>>,
     api: Option<webrtc::api::API>,
     rtc_config: Option<RTCConfiguration>,
+    ice_servers_override: Option<Vec<RTCIceServer>>,
     offer: Option<RTCSessionDescription>,
     answer: Option<RTCSessionDescription>,
 
@@ -154,16 +151,13 @@ pub struct WebRTCClient {
     debug_video_file_path: Option<String>,
     debug_audio_file_path: Option<String>,
 
-    // fields for sending video stream from webcam
-    video_stream_shutdown: Option<std::sync::Arc<AtomicBool>>,
+    // fields for injected-source video streaming
     video_stream_handles: Vec<JoinHandle<()>>,
-    video_stream_frame_tx: Option<UnboundedSender<Vec<u8>>>,
 
     pub data_channel: Option<std::sync::Arc<RTCDataChannel>>,
 
-    audio_stream_shutdown: Option<std::sync::Arc<AtomicBool>>,
-    audio_input_stream: Option<Stream>,
-    audio_capturer: Option<AudioCapturer>,
+    // field for injected-source audio streaming (see media::audio_pipeline)
+    audio_track_writer: Option<AudioTrackWriter>,
 
     // Callback handlers
     video_track_handler: Option<Arc<dyn VideoTrackHandler>>,
@@ -198,6 +192,7 @@ impl WebRTCClient {
             pc: None,
             api: None,
             rtc_config: None,
+            ice_servers_override: None,
             offer: None,
             answer: None,
 
@@ -210,17 +205,13 @@ impl WebRTCClient {
             debug_video_file_path: None,
             debug_audio_file_path: None,
 
-            video_stream_shutdown: None,
             video_stream_handles: Vec::new(),
-            video_stream_frame_tx: None,
 
             data_channel: None,
 
-            audio_stream_shutdown: None,
+            audio_track_writer: None,
 
             audio_track: None,
-            audio_input_stream: None,
-            audio_capturer: None,
 
             video_track_handler: None,
             audio_track_handler: None,
@@ -229,6 +220,17 @@ impl WebRTCClient {
             audio_track_callback: None,
             media_track_callback: None,
         }
+    }
+
+    /// Overrides the STUN/TURN servers used for ICE gathering (default:
+    /// `webrtc_ice_config::build_ice_servers()`, the production set). Must
+    /// be called before `publish`/`join_session` (whichever triggers
+    /// `setup_webrtc` first) to take effect. Intended for scenarios where
+    /// remote STUN/TURN is unnecessary and only adds latency — e.g. two
+    /// peers on `127.0.0.1`, where host candidates alone connect — not for
+    /// production use.
+    pub fn set_ice_servers(&mut self, servers: Vec<RTCIceServer>) {
+        self.ice_servers_override = Some(servers);
     }
 
     pub fn get_debug_video_file_path(&self) -> Option<&String> {
@@ -253,6 +255,84 @@ impl WebRTCClient {
 
     pub fn get_offer(&self) -> Option<&RTCSessionDescription> {
         self.offer.as_ref()
+    }
+
+    /// Current ICE connection state, or `None` before a peer connection
+    /// exists. Lets a caller poll for readiness (e.g. wait until
+    /// `Connected` before starting a stream) instead of guessing with a
+    /// fixed sleep.
+    pub fn ice_connection_state(&self) -> Option<RTCIceConnectionState> {
+        self.pc.as_ref().map(|pc| pc.ice_connection_state())
+    }
+
+    /// Polls `ice_connection_state()` every 250ms until it reaches
+    /// `Connected`/`Completed` (`Ok`) or a terminal `Failed`/`Closed` state
+    /// (`Err`), up to `max_wait`. Exists so callers (tests, examples) can
+    /// wait for readiness without depending on the `webrtc` crate's
+    /// `RTCIceConnectionState` enum directly just to match its variants —
+    /// this used to be duplicated as a private test helper in
+    /// `tests/webrtc_integration.rs`; promoted here as the one copy.
+    pub async fn wait_for_ice_connected(&self, max_wait: Duration) -> Result<(), String> {
+        use webrtc::ice_transport::ice_connection_state::RTCIceConnectionState;
+
+        let start = std::time::Instant::now();
+        loop {
+            match self.ice_connection_state() {
+                Some(RTCIceConnectionState::Connected) | Some(RTCIceConnectionState::Completed) => {
+                    return Ok(())
+                }
+                Some(state @ RTCIceConnectionState::Failed)
+                | Some(state @ RTCIceConnectionState::Closed) => {
+                    return Err(format!("ICE reached terminal state {state:?}"))
+                }
+                _ => {}
+            }
+            if start.elapsed() > max_wait {
+                return Err(format!(
+                    "ICE did not connect within {max_wait:?} (last state: {:?})",
+                    self.ice_connection_state()
+                ));
+            }
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+    }
+
+    /// Human-readable summary of the currently *nominated* ICE candidate
+    /// pair — which candidate type (`host`/`srflx`/`prflx`/`relay`) won on
+    /// each side. `None` if there's no peer connection yet, or no pair has
+    /// been nominated yet (call after `ice_connection_state()` reaches
+    /// `Connected`/`Completed`).
+    ///
+    /// This is the actual answer to "did the TURN relay path get used, or
+    /// just direct/STUN?" — `ice_connection_state()` alone only says
+    /// *whether* ICE connected, not *how*. A `relay` type on either side is
+    /// the strongest evidence a TURN server was actually exercised, as
+    /// opposed to a direct or STUN-assisted connection that would have
+    /// worked without one. See docs/done/xrds-net-webrtc-realnet-binaries.md.
+    pub async fn active_candidate_pair_summary(&self) -> Option<String> {
+        let pc = self.pc.as_ref()?;
+        let stats = pc.get_stats().await;
+
+        let pair = stats.reports.values().find_map(|report| match report {
+            webrtc::stats::StatsReportType::CandidatePair(pair) if pair.nominated => Some(pair),
+            _ => None,
+        })?;
+
+        let candidate_type = |id: &str| -> String {
+            match stats.reports.get(id) {
+                Some(webrtc::stats::StatsReportType::LocalCandidate(c))
+                | Some(webrtc::stats::StatsReportType::RemoteCandidate(c)) => {
+                    format!("{:?}", c.candidate_type)
+                }
+                _ => "unknown".to_string(),
+            }
+        };
+
+        Some(format!(
+            "local={} remote={}",
+            candidate_type(&pair.local_candidate_id),
+            candidate_type(&pair.remote_candidate_id)
+        ))
     }
 
     /**
@@ -355,7 +435,13 @@ impl WebRTCClient {
             while let Some(msg) = read.next().await {
                 match msg {
                     Ok(Message::Text(text)) => {
-                        let msg: WebRTCMessage = serde_json::from_str(text.as_ref()).unwrap();
+                        let msg: WebRTCMessage = match serde_json::from_str(text.as_ref()) {
+                            Ok(msg) => msg,
+                            Err(e) => {
+                                log::warn!("Dropping malformed signaling message from server: {e}");
+                                continue;
+                            }
+                        };
 
                         if tx.send(msg).await.is_err() {
                             println!("Receiver dropped, stopping run task");
@@ -452,6 +538,18 @@ impl WebRTCClient {
     /**
      * Close the WebRTC connection and cleanup.
      */
+    /// Closes the peer connection, releasing its ICE agent and the mDNS
+    /// multicast socket it holds. `Drop` can't do this — the cleanup is
+    /// async — so without an explicit call the resources linger past the
+    /// client's lifetime, which matters when something else needs them
+    /// promptly (back-to-back tests all bind the same mDNS port).
+    pub async fn close_peer_connection(&mut self) -> Result<(), String> {
+        if let Some(pc) = self.pc.take() {
+            pc.close().await.map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    }
+
     pub async fn close_connection(&mut self) -> Result<(), Box<dyn Error>> {
         if let Some(write) = &self.write {
             let mut write_guard = write.lock().await;
@@ -576,7 +674,7 @@ impl WebRTCClient {
 
         let join_result = self.wait_for_message_internal(JOIN_SESSION, 5).await?;
 
-        log::debug!("Join session result received: {:?}", join_result);
+        println!("Join session result received: {:?}", join_result);
         // 🔥 내부적으로 offer 처리 및 answer 생성
         if let Some(offer_sdp) = join_result.sdp {
             // 🔥 Check if SDP is empty string
@@ -666,7 +764,14 @@ impl WebRTCClient {
     /* ****************************************** */
     /* WebRTC specific methods */
     /* ****************************************** */
-    pub async fn start_streaming(&mut self, source: Option<StreamSource>) -> Result<(), String> {
+    /// Start streaming `video` (and, if given, `audio`) to the peer over the
+    /// established connection. `video` may be pre-encoded H264 or raw JPEG
+    /// frames (transcoded on the fly) — see [`VideoSource`].
+    pub async fn start_stream(
+        &mut self,
+        video: VideoSource,
+        audio: Option<AudioSource>,
+    ) -> Result<(), String> {
         if self.client_id.is_none() {
             return Err("Client ID is not set".to_string());
         }
@@ -675,12 +780,6 @@ impl WebRTCClient {
             .video_track
             .as_ref()
             .ok_or("Video track not set")?
-            .clone();
-
-        let audio_track = self
-            .audio_track
-            .as_ref()
-            .ok_or("Audio track not set")?
             .clone();
 
         // Wait for ICE connection
@@ -697,178 +796,27 @@ impl WebRTCClient {
             Err(_) => return Err("ICE connection timeout after 10 seconds".to_string()),
         }
 
-        match source {
-            Some(StreamSource::File(path)) => {
-                let file = File::open(&path).map_err(|e| e.to_string())?;
-                self.stream_from_buf_read(BufReader::new(file), video_track)
-                    .await
-            }
-            Some(StreamSource::Webcam(device_id)) => {
-                let webcam_reader = WebcamReader::new(device_id).await?;
-                let audio_capturer = AudioCapturer::new().await?;
-                self.stream_from_webcam(webcam_reader, audio_capturer, video_track, audio_track)
-                    .await
-            }
-            Some(StreamSource::MediaStream(stream_reader)) => {
-                self.stream_from_buf_read(BufReader::new(stream_reader), video_track)
-                    .await
-            }
-            Some(StreamSource::RawH264(data)) => {
-                let cursor = std::io::Cursor::new(data);
-                self.stream_from_buf_read(BufReader::new(cursor), video_track)
-                    .await
-            }
-            None => Err("No stream source provided".to_string()),
+        let VideoSource(reader) = video;
+        self.stream_from_buf_read(BufReader::new(reader), video_track)
+            .await?;
+
+        if let Some(audio) = audio {
+            self.start_audio_stream(audio).await?;
         }
+
+        Ok(())
     }
 
-    /**
-     * Send video stream from webcam device to the peer connection via video track.
-     */
-    async fn stream_from_webcam(
-        &mut self,
-        webcam_reader: WebcamReader,
-        audio_capturer: AudioCapturer,
-        video_track: Arc<TrackLocalStaticSample>,
-        audio_track: Arc<TrackLocalStaticSample>,
-    ) -> Result<(), String> {
-        use crate::client::xrds_webrtc::media::transcoding::jpeg2h264::{
-            H264Packet, Jpeg2H264Transcoder,
-        };
-        use std::sync::Arc;
-        use tokio::sync::mpsc;
+    /// Start (or replace) the audio stream independently of video. See
+    /// [`AudioSource`] — audio can run standalone.
+    pub async fn start_audio_stream(&mut self, audio: AudioSource) -> Result<(), String> {
+        let audio_track = self
+            .audio_track
+            .as_ref()
+            .ok_or("Audio track not set")?
+            .clone();
 
-        let video_shutdown = Arc::new(AtomicBool::new(false));
-        let (video_frame_tx, mut video_frame_rx) = mpsc::unbounded_channel::<Vec<u8>>();
-        let (video_packet_tx, mut video_packet_rx) = mpsc::unbounded_channel::<Vec<H264Packet>>();
-
-        // store control handles on self
-        self.video_stream_shutdown = Some(Arc::clone(&video_shutdown));
-        self.video_stream_frame_tx = Some(video_frame_tx.clone());
-
-        let mut video_handles: Vec<JoinHandle<()>> = Vec::new();
-
-        // capture task: read_single_frame() -> send JPEG frames
-        {
-            let capture_shutdown = Arc::clone(&video_shutdown);
-            let capture_tx = video_frame_tx.clone();
-            let mut reader = webcam_reader;
-            let capture_handle: JoinHandle<()> = tokio::spawn(async move {
-                let mut interval = tokio::time::interval(std::time::Duration::from_millis(33));
-                while !capture_shutdown.load(Ordering::Relaxed) {
-                    interval.tick().await;
-                    match reader.read_single_frame(1).await {
-                        Ok(frame_bytes) => {
-                            let _ = capture_tx.send(frame_bytes);
-                        }
-                        Err(e) => {
-                            eprintln!("webcam read error: {:?}", e);
-                            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-                        }
-                    }
-                }
-                let _ = reader.stop_webcam().await;
-            });
-            video_handles.push(capture_handle);
-        } // end of capture task
-
-        // transcode task: jpeg -> H.264 packets
-        {
-            let trans_shutdown = Arc::clone(&video_shutdown);
-            let tx = video_packet_tx.clone();
-            let trans_handle: JoinHandle<()> = tokio::spawn(async move {
-                let mut transcoder = match Jpeg2H264Transcoder::new(1920, 1080, 30) {
-                    Ok(t) => t,
-                    Err(e) => {
-                        eprintln!("failed to create transcoder: {:?}", e);
-                        return;
-                    }
-                };
-
-                while let Some(jpeg_frame) = video_frame_rx.recv().await {
-                    if trans_shutdown.load(Ordering::Relaxed) {
-                        break;
-                    }
-                    match transcoder.transcode_jpeg_to_h264_packet(&jpeg_frame) {
-                        Ok(pkts) => {
-                            if !pkts.is_empty() {
-                                let _ = tx.send(pkts);
-                            }
-                        }
-                        Err(e) => eprintln!("transcode error: {:?}", e),
-                    }
-                }
-
-                // flush remaining packets on end
-                match transcoder.flush_to_packets() {
-                    Ok(final_pkts) => {
-                        if !final_pkts.is_empty() {
-                            let _ = tx.send(final_pkts);
-                        }
-                    }
-                    Err(e) => eprintln!("flush error: {:?}", e),
-                }
-            });
-            video_handles.push(trans_handle);
-        } // end of transcode task
-
-        // writer task: take H.264 packets and write NALs to video_track
-        {
-            let write_shutdown = Arc::clone(&video_shutdown);
-            let vt = video_track.clone();
-            let write_handle: JoinHandle<()> = tokio::spawn(async move {
-                // send SPS/PPS before frames if available
-                while let Some(pkts) = video_packet_rx.recv().await {
-                    if write_shutdown.load(Ordering::Relaxed) {
-                        break;
-                    }
-
-                    for pkt in pkts {
-                        if pkt.data.is_empty() {
-                            continue;
-                        }
-                        // NAL type: lowest 5 bits of first byte (assuming annex-b payload)
-                        let nalu_type = pkt.data[0] & 0x1F;
-                        // duration: best-effort 33ms per frame
-                        let sample = Sample {
-                            data: Bytes::from(pkt.data),
-                            duration: std::time::Duration::from_millis(33),
-                            ..Default::default()
-                        };
-
-                        // write sample; ignore failures but log
-                        if let Err(e) = vt.write_sample(&sample).await {
-                            eprintln!("video_track.write_sample error: {:?}", e);
-                        }
-
-                        // optional: log SPS/PPS or keyframes
-                        if nalu_type == 7 || nalu_type == 8 {
-                            // sps / pps
-                        }
-                    }
-                }
-            });
-            video_handles.push(write_handle);
-        } // end of writer task
-
-        // audio capture and send task
-        {
-            let mut capturer = audio_capturer;
-            match capturer.init() {
-                Ok(_) => {
-                    capturer.connect_to_webrtc(audio_track.clone()).await?;
-                    self.audio_capturer = Some(capturer);
-                }
-                Err(e) => {
-                    eprintln!(
-                        "⚠️ Audio initialization failed, continuing with video only: {}",
-                        e
-                    );
-                }
-            }
-        }
-
-        self.video_stream_handles = video_handles;
+        self.audio_track_writer = Some(AudioTrackWriter::spawn(audio, audio_track));
 
         Ok(())
     }
@@ -877,15 +825,9 @@ impl WebRTCClient {
      * Stop the ongoing video and audio streams.
      */
     pub async fn stop_stream(&mut self) -> Result<(), String> {
-        // Stop video first
-        if let Some(flag) = &self.video_stream_shutdown {
-            flag.store(true, Ordering::Relaxed);
-        }
-
-        // Stop audio capturer BEFORE waiting for video tasks
-        if let Some(mut capturer) = self.audio_capturer.take() {
-            capturer.stop_capture(); // Add this method to AudioCapturer
-            println!("🔚 Audio capturer stopped");
+        if let Some(mut writer) = self.audio_track_writer.take() {
+            writer.stop().await;
+            println!("🔚 Audio track writer stopped");
         }
 
         // Then wait for video tasks
@@ -896,8 +838,6 @@ impl WebRTCClient {
             }
         }
 
-        self.video_stream_shutdown = None;
-        self.video_stream_frame_tx = None;
         Ok(())
     }
 
@@ -952,10 +892,6 @@ impl WebRTCClient {
         });
 
         Ok(())
-    }
-
-    pub async fn get_available_webcams() -> Result<Vec<String>, String> {
-        WebcamReader::list_available_devices().await
     }
 
     /**
@@ -1032,32 +968,10 @@ impl WebRTCClient {
             .build();
 
         let rtc_config = RTCConfiguration {
-            ice_servers: vec![
-                // STUN servers for NAT discovery
-                RTCIceServer {
-                    urls: vec![
-                        "stun:stun.l.google.com:19302".to_owned(),
-                        "stun:stun1.l.google.com:3478".to_owned(),
-                        "stun:stun2.l.google.com:19302".to_owned(),
-                        "stun:stun.keti.xrds.kr:13478".to_owned(),
-                        "stun:stun.keti.xrds.kr:13478?transport=tcp".to_owned(),
-                        "stun:stun.keti.xrds.kr:13479".to_owned(),
-                        "stun:stun.keti.xrds.kr:13479?transport=tcp".to_owned(),
-                    ],
-                    ..Default::default()
-                },
-                // TURN server for relay when direct connection fails
-                RTCIceServer {
-                    urls: vec![
-                        "turn:turn.keti.xrds.kr:13478".to_owned(),
-                        "turn:turn.keti.xrds.kr:13478?transport=tcp".to_owned(),
-                        "turn:turn.keti.xrds.kr:13479".to_owned(),
-                        "turn:turn.keti.xrds.kr:13479?transport=tcp".to_owned(),
-                    ],
-                    username: "gganjang".to_owned(),
-                    credential: "keti007".to_owned(),
-                },
-            ],
+            ice_servers: self
+                .ice_servers_override
+                .clone()
+                .unwrap_or_else(crate::webrtc_ice_config::build_ice_servers),
             ice_transport_policy: RTCIceTransportPolicy::All, // Use this for testing
             ..Default::default()
         };
@@ -1791,6 +1705,19 @@ impl WebRTCClient {
                         candidates.push(candidate);
                     }
                     _ = &mut ice_complete_rx => {
+                        // `tokio::select!` picks pseudo-randomly among
+                        // already-ready branches, so the completion signal
+                        // can win a poll where a candidate is *also*
+                        // already sitting in the channel unread — drain
+                        // whatever's buffered before treating gathering as
+                        // done. This race was hidden when STUN/TURN made
+                        // gathering slow enough for the channel to always
+                        // drain naturally; without remote servers (fast
+                        // host-only gathering) it fires often enough to
+                        // matter.
+                        while let Ok(candidate) = candidate_rx.try_recv() {
+                            candidates.push(candidate);
+                        }
                         println!("ICE gathering completed with {} candidates", candidates.len());
                         break;
                     }
@@ -1960,437 +1887,6 @@ impl WebRTCClient {
         Ok(())
     }
 
-    /**
-     * FOR TESTING PURPOSES ONLY
-     * To verify audio capture and encoding, capture audio from default input device,
-     * encode it to Opus format, and save to the specified output file path.
-     */
-    pub fn capture_audio_encode_to_file(&mut self, output_path: &str) -> Result<(), String> {
-        use crate::client::xrds_webrtc::media::transcoding::pcm2opus::encode_pcm_to_opus;
-        use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-        use cpal::SampleFormat;
-        use ogg::writing::{PacketWriteEndInfo, PacketWriter};
-        use rand::Rng;
-        use std::fs::File;
-
-        // choose host & device
-        let host = cpal::default_host();
-        let device = host.default_input_device().ok_or("No input device")?;
-        let supported = device.default_input_config().map_err(|e| e.to_string())?;
-        println!("Supported config: {:?}", supported);
-
-        // ensure output dir exists
-        if let Some(parent) = std::path::Path::new(output_path).parent() {
-            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-        }
-
-        // Opus parameters (we target 48k / stereo)
-        let device_sample_rate = supported.sample_rate().0;
-        let device_channels = supported.channels();
-
-        let opus_sample_rate = 48000;
-        let opus_channels = 2;
-        let frame_ms = 20;
-        let opus_frame_samples_per_channel = (opus_sample_rate / 1000 * frame_ms) as i32; // 960
-        let device_frame_samples_per_channel = (device_sample_rate / 1000 * frame_ms) as i32; // 320 for 16kHz
-        let device_frame_total_samples =
-            (device_frame_samples_per_channel * device_channels as i32) as usize;
-
-        let pre_skip = 312u16;
-
-        // channel to move PCM into encoder thread
-        let (tx, rx) = std::sync::mpsc::sync_channel::<Vec<i16>>(10);
-
-        // build input stream with correct sample format handling
-        let tx_cb = tx.clone();
-        let stream = match supported.sample_format() {
-            SampleFormat::F32 => device
-                .build_input_stream(
-                    &supported.into(),
-                    move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                        let mut buf = Vec::with_capacity(data.len());
-                        for &s in data {
-                            let v = (s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
-                            buf.push(v);
-                        }
-                        let _ = tx_cb.send(buf);
-                    },
-                    move |e| eprintln!("cpal input stream error: {:?}", e),
-                )
-                .map_err(|e| e.to_string())?,
-            SampleFormat::I16 => device
-                .build_input_stream(
-                    &supported.into(),
-                    move |data: &[i16], _: &cpal::InputCallbackInfo| {
-                        let _ = tx_cb.send(data.to_vec());
-                    },
-                    move |e| eprintln!("cpal input stream error: {:?}", e),
-                )
-                .map_err(|e| e.to_string())?,
-            SampleFormat::U16 => device
-                .build_input_stream(
-                    &supported.into(),
-                    move |data: &[u16], _: &cpal::InputCallbackInfo| {
-                        let mut tmp = Vec::with_capacity(data.len());
-                        for &u in data {
-                            tmp.push((u as i32 - 0x8000) as i16);
-                        }
-                        let _ = tx_cb.send(tmp);
-                    },
-                    move |e| eprintln!("cpal input stream error: {:?}", e),
-                )
-                .map_err(|e| e.to_string())?,
-        };
-
-        // start and keep stream alive
-        stream.play().map_err(|e| e.to_string())?;
-        println!(
-            "Started audio capture and encoding to Ogg/Opus file: {}",
-            output_path
-        );
-        self.audio_input_stream = Some(stream);
-
-        // spawn encoder + ogg muxer thread
-        let out_path = output_path.to_string();
-
-        let thread_running = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
-        let thread_running_clone = thread_running.clone();
-        self.audio_stream_shutdown = Some(thread_running.clone());
-
-        let _handle = std::thread::spawn(move || {
-            println!("Encoder thread started");
-
-            // create opus encoder inside thread
-            let mut encoder = match opus::Encoder::new(
-                opus_sample_rate,
-                opus::Channels::Stereo,
-                opus::Application::Audio,
-            ) {
-                Ok(e) => e,
-                Err(err) => {
-                    eprintln!("Failed to create Opus encoder: {:?}", err);
-                    return;
-                }
-            };
-
-            // open file and packet writer
-            let file = match File::create(&out_path) {
-                Ok(f) => f,
-                Err(e) => {
-                    eprintln!("Failed to create output file {}: {:?}", out_path, e);
-                    return;
-                }
-            };
-            let mut pw = PacketWriter::new(file);
-            let stream_serial: u32 = rand::thread_rng().gen();
-
-            // OpusHead with CORRECT pre-skip
-            let mut opus_head = Vec::new();
-            opus_head.extend_from_slice(b"OpusHead"); // 8
-            opus_head.push(1); // version
-            opus_head.push(opus_channels as u8); // output channels
-            opus_head.extend_from_slice(&pre_skip.to_le_bytes()); // FIXED: use pre_skip variable
-            opus_head.extend_from_slice(&opus_sample_rate.to_le_bytes()); // output sample rate
-            opus_head.extend_from_slice(&0u16.to_le_bytes()); // output gain
-            opus_head.push(0); // channel mapping family
-
-            println!("OpusHead size: {} bytes", opus_head.len());
-
-            if let Err(e) = pw.write_packet(
-                opus_head.into_boxed_slice(),
-                stream_serial,
-                PacketWriteEndInfo::EndPage,
-                0,
-            ) {
-                eprintln!("Failed to write OpusHead: {:?}", e);
-                return;
-            }
-
-            // OpusTags (minimal)
-            let vendor = b"webrtc-rs";
-            let mut opus_tags = Vec::new();
-            opus_tags.extend_from_slice(b"OpusTags"); // 8
-            opus_tags.extend_from_slice(&(vendor.len() as u32).to_le_bytes());
-            opus_tags.extend_from_slice(vendor);
-            opus_tags.extend_from_slice(&0u32.to_le_bytes()); // user comment list length
-
-            if let Err(e) = pw.write_packet(
-                opus_tags.into_boxed_slice(),
-                stream_serial,
-                PacketWriteEndInfo::EndPage,
-                0,
-            ) {
-                eprintln!("Failed to write OpusTags: {:?}", e);
-                return;
-            }
-
-            // encode loop with CORRECTED granule position
-            let mut acc: Vec<i16> = Vec::new();
-            let mut granule_pos: u64 = pre_skip as u64; // START with pre_skip
-            let mut packet_count = 0;
-
-            println!("Starting encode loop...");
-
-            loop {
-                if !thread_running_clone.load(std::sync::atomic::Ordering::Relaxed) {
-                    println!("Thread stopping signal received");
-                    break;
-                }
-
-                match rx.recv_timeout(std::time::Duration::from_millis(500)) {
-                    Ok(pcm_chunk) => {
-                        acc.extend_from_slice(&pcm_chunk);
-                        while acc.len() >= device_frame_total_samples {
-                            let device_frame: Vec<i16> =
-                                acc.drain(..device_frame_total_samples).collect();
-
-                            let resampled_frame = resample_and_convert(
-                                &device_frame,
-                                device_sample_rate,
-                                device_channels,
-                                opus_sample_rate,
-                                opus_channels as u16,
-                            );
-                            match encode_pcm_to_opus(&mut encoder, &resampled_frame) {
-                                Ok(encoded) => {
-                                    packet_count += 1;
-                                    // granule position increases by samples per channel
-                                    granule_pos += opus_frame_samples_per_channel as u64;
-
-                                    if let Err(e) = pw.write_packet(
-                                        encoded.into_boxed_slice(),
-                                        stream_serial,
-                                        PacketWriteEndInfo::NormalPacket,
-                                        granule_pos,
-                                    ) {
-                                        eprintln!("Failed to write Ogg packet: {:?}", e);
-                                    }
-
-                                    // Debug output every second
-                                    if packet_count % 50 == 0 {
-                                        // 50 packets = 1 second
-                                        println!(
-                                            "Encoded packet #{}, granule_pos: {}, time: {:.2}s",
-                                            packet_count,
-                                            granule_pos,
-                                            (granule_pos - pre_skip as u64) as f64
-                                                / opus_sample_rate as f64
-                                        );
-                                    }
-                                }
-                                Err(err) => {
-                                    eprintln!("Opus encode error: {}", err);
-                                }
-                            }
-                        }
-                    }
-                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                        // 타임아웃은 정상 - 계속 진행
-                        continue;
-                    }
-                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                        println!("Audio input disconnected");
-                        break;
-                    }
-                }
-            }
-
-            // EOS packet with final granule position
-            println!("Writing EOS packet with final granule_pos: {}", granule_pos);
-            if let Err(e) = pw.write_packet(
-                Vec::<u8>::new().into_boxed_slice(),
-                stream_serial,
-                PacketWriteEndInfo::EndStream,
-                granule_pos,
-            ) {
-                eprintln!("Failed to write EOS packet: {:?}", e);
-            }
-
-            println!(
-                "Audio encoding completed. Total packets: {}, Duration: {:.2}s",
-                packet_count,
-                (granule_pos - pre_skip as u64) as f64 / opus_sample_rate as f64
-            );
-        });
-
-        Ok(())
-    }
-
-    /**
-     * For TESTING PURPOSES ONLY
-     */
-    pub fn stop_audio_capture(&mut self) {
-        // 스레드 중지 신호
-        if let Some(running_flag) = &self.audio_stream_shutdown {
-            running_flag.store(false, std::sync::atomic::Ordering::Relaxed);
-        }
-
-        // 스트림 중지
-        if let Some(stream) = self.audio_input_stream.take() {
-            let _ = stream.pause();
-            println!("Audio stream stopped");
-        }
-
-        // 스레드가 정리될 시간을 줌
-        std::thread::sleep(std::time::Duration::from_millis(1000));
-
-        // 플래그 정리
-        self.audio_stream_shutdown = None;
-    }
-
-    /**
-     * Record webcam video to MP4 file for a specified duration.
-     */
-    pub async fn realtime_webcam_to_mp4(
-        device_id: u32,
-        output_path: &str,
-        duration_seconds: u32,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        use crate::client::xrds_webrtc::media::streaming_mp4_writer::StreamingMP4Writer;
-        use crate::client::xrds_webrtc::media::transcoding::jpeg2h264::{
-            H264Packet, Jpeg2H264Transcoder,
-        };
-        use crate::client::xrds_webrtc::webcam_reader::WebcamReader;
-        use std::sync::{
-            atomic::{AtomicBool, Ordering},
-            Arc,
-        };
-        use tokio::sync::mpsc;
-
-        println!(
-            "🎥 Starting real-time webcam to MP4: {} seconds",
-            duration_seconds
-        );
-
-        // Setup webcam reader
-        let mut webcam_reader = WebcamReader::new(device_id).await?;
-
-        // Setup transcoder and MP4 writer
-        let mut transcoder = Jpeg2H264Transcoder::new(1920, 1080, 30)?;
-        let mut mp4_writer = StreamingMP4Writer::new(output_path, 1920, 1080, 30)?;
-
-        // Setup channels for communication
-        let (frame_sender, mut frame_receiver) = mpsc::unbounded_channel::<Vec<u8>>();
-        let (packet_sender, mut packet_receiver) = mpsc::unbounded_channel::<Vec<H264Packet>>();
-
-        let shutdown_flag = Arc::new(AtomicBool::new(false));
-
-        // Task 1: Frame capture (30fps)
-        let capture_shutdown = Arc::clone(&shutdown_flag);
-        let capture_task = tokio::spawn(async move {
-            let mut frame_count = 0;
-            let frame_interval = tokio::time::Duration::from_millis(33); // ~30fps
-            let mut interval = tokio::time::interval(frame_interval);
-
-            while !capture_shutdown.load(Ordering::Relaxed) {
-                interval.tick().await;
-
-                match webcam_reader.read_single_frame(1).await {
-                    Ok(jpeg_frame) => {
-                        if frame_sender.send(jpeg_frame).is_err() {
-                            println!("Frame channel closed");
-                            break;
-                        }
-                        frame_count += 1;
-
-                        if frame_count % 90 == 0 {
-                            // Every 3 seconds
-                            println!("📸 Captured {} frames", frame_count);
-                        }
-                    }
-                    Err(e) => {
-                        eprintln!("Frame capture error: {:?}", e);
-                        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-                    }
-                }
-            }
-
-            // Stop webcam before ending task
-            webcam_reader.stop_webcam().await;
-            println!("🔚 Frame capture ended: {} frames", frame_count);
-        }); // end of capture task
-
-        // Task 2: JPEG to H.264 transcoding
-        let transcode_shutdown = Arc::clone(&shutdown_flag);
-        let transcode_task = tokio::spawn(async move {
-            let mut processed_frames = 0;
-
-            while let Some(jpeg_frame) = frame_receiver.recv().await {
-                if transcode_shutdown.load(Ordering::Relaxed) {
-                    break;
-                }
-
-                match transcoder.transcode_jpeg_to_h264_packet(&jpeg_frame) {
-                    Ok(h264_packets) => {
-                        processed_frames += 1;
-
-                        if !h264_packets.is_empty() && packet_sender.send(h264_packets).is_err() {
-                            println!("Packet channel closed");
-                            break;
-                        }
-
-                        if processed_frames % 90 == 0 {
-                            println!("🔄 Processed {} frames", processed_frames);
-                        }
-                    }
-                    Err(e) => {
-                        eprintln!("Transcoding error: {:?}", e);
-                    }
-                }
-            }
-
-            // Flush remaining packets
-            match transcoder.flush_to_packets() {
-                Ok(final_packets) => {
-                    if !final_packets.is_empty() {
-                        println!("🔄 Flushed {} final packets", final_packets.len());
-                        let _ = packet_sender.send(final_packets);
-                    }
-                }
-                Err(e) => eprintln!("Flush error: {:?}", e),
-            }
-
-            println!(
-                "🔚 Transcoding ended: {} frames processed",
-                processed_frames
-            );
-        }); // end of transcoding task
-
-        // Task 3: H.264 packets to MP4 writing
-        let write_task = tokio::spawn(async move {
-            let mut total_packets = 0;
-
-            while let Some(h264_packets) = packet_receiver.recv().await {
-                match mp4_writer.write_packets(&h264_packets) {
-                    Ok(_) => {
-                        total_packets += h264_packets.len();
-                    }
-                    Err(e) => {
-                        eprintln!("MP4 write error: {:?}", e);
-                        break;
-                    }
-                }
-            }
-
-            // Finalize MP4
-            match mp4_writer.finalize() {
-                Ok(_) => println!("✅ MP4 finalized with {} packets", total_packets),
-                Err(e) => eprintln!("MP4 finalization error: {:?}", e),
-            }
-        }); // end of writing task
-
-        // Run for specified duration
-        tokio::time::sleep(tokio::time::Duration::from_secs(duration_seconds as u64)).await;
-
-        // Signal shutdown
-        shutdown_flag.store(true, Ordering::Relaxed);
-        // Wait for tasks to complete (webcam is stopped in capture task)
-        let _ = tokio::join!(capture_task, transcode_task, write_task);
-
-        println!("✅ Real-time recording completed: {}", output_path);
-
-        Ok(())
-    }
 } // end of impl WebRTCClient
 
 impl Drop for WebRTCClient {
@@ -2569,42 +2065,50 @@ async fn save_audio_to_disk(
     Ok(())
 }
 
-#[tokio::test]
-async fn test_realtime_webcam_to_mp4() {
-    std::env::set_var("RUST_LOG", "info");
-    pretty_env_logger::init();
+#[cfg(test)]
+mod tests {
+    use super::{is_valid_h264, WebRTCClient};
 
-    let device_id = 0; // Adjust based on your system
-    let output_path = "test_output/realtime_webcam.mp4";
-    let duration_seconds = 10; // Record for 10 seconds
+    #[tokio::test]
+    async fn candidate_pair_summary_is_none_before_a_peer_connection_exists() {
+        let client = WebRTCClient::new();
+        assert!(client.active_candidate_pair_summary().await.is_none());
+    }
 
-    match WebRTCClient::realtime_webcam_to_mp4(device_id, output_path, duration_seconds).await {
-        Ok(_) => println!("Test completed successfully."),
-        Err(e) => eprintln!("Test failed: {:?}", e),
+    #[test]
+    fn detects_4_byte_start_code() {
+        assert!(is_valid_h264(&[0x00, 0x00, 0x00, 0x01, 0x67, 0x42]));
+    }
+
+    #[test]
+    fn detects_3_byte_start_code() {
+        assert!(is_valid_h264(&[0x00, 0x00, 0x01, 0x67, 0x42]));
+    }
+
+    #[test]
+    fn detects_start_code_mid_buffer() {
+        assert!(is_valid_h264(&[0xAB, 0xCD, 0x00, 0x00, 0x00, 0x01, 0x67]));
+    }
+
+    #[test]
+    fn rejects_data_with_no_start_code() {
+        assert!(!is_valid_h264(&[0x01, 0x02, 0x03, 0x04, 0x05]));
+    }
+
+    #[test]
+    fn rejects_empty_input() {
+        assert!(!is_valid_h264(&[]));
+    }
+
+    #[test]
+    fn rejects_truncated_start_code() {
+        assert!(!is_valid_h264(&[0x00, 0x00]));
+        assert!(!is_valid_h264(&[0x00]));
+    }
+
+    #[test]
+    fn accepts_a_bare_3_byte_start_code() {
+        assert!(is_valid_h264(&[0x00, 0x00, 0x01]));
     }
 }
 
-/**
- * Test capturing audio from microphone and encoding to Opus file.
- */
-#[tokio::test]
-async fn test_realtime_mic_to_opus_file() {
-    std::env::set_var("RUST_LOG", "debug");
-    pretty_env_logger::init();
-
-    let mut client = WebRTCClient::new();
-    let output_path = "test_output/realtime_mic.opus";
-
-    match client.capture_audio_encode_to_file(output_path) {
-        Ok(_) => println!("Audio capture started successfully"),
-        Err(e) => {
-            eprintln!("Failed to start audio capture: {}", e);
-            return;
-        }
-    }
-
-    // Capture audio for 15 seconds
-    tokio::time::sleep(tokio::time::Duration::from_secs(15)).await;
-    client.stop_audio_capture();
-    println!("Audio capture test completed.");
-}

@@ -1,0 +1,570 @@
+use super::*;
+
+fn register_common_stored_updaters<C>(registry: &mut SurfaceUpdateRegistry)
+where
+    C: XrdsMutableComponent + Send + Sync + 'static,
+{
+    registry.register::<C, TransformParams, _>(|world, entity, params| {
+        apply_transform_to_entity(world, entity, *params);
+        let _ = with_stored_descriptor_mut::<C, _>(world, entity, |descriptor| {
+            *descriptor.local_transform_mut() = *params;
+        });
+    });
+
+    registry.register::<C, ParentPatch, _>(|world, entity, params| {
+        let Some(id) = world.resource::<XrdsIdIndex>().id_of(entity) else {
+            return;
+        };
+
+        world
+            .resource_mut::<QueuedParentChanges>()
+            .changes
+            .push(QueuedParentChange {
+                child_id: id,
+                parent_id: params.parent_id,
+            });
+    });
+
+    registry.register::<C, NamePatch, _>(|world, entity, params| {
+        world
+            .entity_mut(entity)
+            .insert(Name::new(params.name.clone()));
+        let _ = with_stored_descriptor_mut::<C, _>(world, entity, |descriptor| {
+            descriptor.set_name(params.name.clone());
+        });
+    });
+
+    registry.register::<C, VisibilityPatch, _>(|world, entity, params| {
+        world
+            .entity_mut(entity)
+            .insert(build_visibility(params.visible));
+        let _ = with_stored_descriptor_mut::<C, _>(world, entity, |descriptor| {
+            descriptor.set_visible(params.visible);
+        });
+    });
+}
+
+fn register_stored_cylinder_updaters(registry: &mut SurfaceUpdateRegistry) {
+    register_common_stored_updaters::<XrdsCylinder>(registry);
+
+    registry.register::<XrdsCylinder, XrdsColor, _>(|world, entity, color| {
+        let mut params = material_params_for_entity(world, entity).unwrap_or_default();
+        params.base_color = *color;
+        apply_authored_material_to_entity(world, entity, params);
+    });
+
+    registry.register::<XrdsCylinder, XrdsMaterialParams, _>(|world, entity, params| {
+        apply_authored_material_to_entity(world, entity, params.clone());
+    });
+
+    registry.register::<XrdsCylinder, CylinderGeometryParams, _>(|world, entity, params| {
+        if with_stored_descriptor_mut::<XrdsCylinder, _>(world, entity, |descriptor| {
+            descriptor.radius = params.radius;
+            descriptor.height = params.height;
+        })
+        .is_none()
+        {
+            return;
+        }
+
+        let Some((recipe, name, transform, visible)) =
+            cylinder_recipe_and_common_state_for(world, entity)
+        else {
+            return;
+        };
+
+        apply_spawn_recipe_to_entity(world, entity, recipe, name, transform, visible);
+    });
+}
+
+fn register_stored_effect_updaters(registry: &mut SurfaceUpdateRegistry) {
+    register_common_stored_updaters::<XrdsEffect>(registry);
+
+    // No material/colour updaters here: an effect's colour is its own curated
+    // gradient, not an XrdsMaterialParams on a mesh. Registering XrdsColor for
+    // it would silently do nothing.
+    registry.register::<XrdsEffect, EffectParams, _>(|world, entity, params| {
+        if with_stored_descriptor_mut::<XrdsEffect, _>(world, entity, |descriptor| {
+            descriptor.kind = params.kind;
+            descriptor.auto_play = params.auto_play;
+            descriptor.burst_count = params.burst_count;
+            descriptor.spawn_rate = params.spawn_rate;
+            descriptor.lifetime_secs = params.lifetime_secs;
+            descriptor.size_min = params.size_min;
+            descriptor.size_max = params.size_max;
+            descriptor.color_start = params.color_start;
+            descriptor.color_end = params.color_end;
+            descriptor.speed_min = params.speed_min;
+            descriptor.speed_max = params.speed_max;
+            descriptor.omnidirectional = params.omnidirectional;
+            descriptor.spread_deg = params.spread_deg;
+            descriptor.gravity = params.gravity;
+            descriptor.emission_radius = params.emission_radius;
+            descriptor.blend = params.blend;
+            descriptor.size_end = params.size_end;
+            descriptor.drag = params.drag;
+            descriptor.fade_edge = params.fade_edge;
+            descriptor.fade_scene = params.fade_scene;
+        })
+        .is_none()
+        {
+            return;
+        }
+
+        // Rebuild the spawner component in place. Unlike the mesh primitives
+        // there is no recipe/respawn round-trip and no asset to re-add —
+        // `ParticleSpawner` is a plain component, so swapping it is the whole
+        // update.
+        //
+        // Note this DOES clear particles already alive: any change to
+        // `ParticleSpawner` triggers bevy_firework's `sync_spawner_data`, which
+        // resets `ParticleSpawnerData::particles`. So retuning a running effect
+        // restarts its particle population rather than blending. (An earlier
+        // version of this comment claimed live particles survived — they do not.)
+        // It is unnoticeable on a continuous Trail, which refills immediately,
+        // and is why StopEffect avoids this path entirely.
+        let Some(descriptor) = world
+            .get::<XrdsStored<XrdsEffect>>(entity)
+            .map(|stored| stored.0.clone())
+        else {
+            return;
+        };
+        let spawner = crate::xrds_api::spawn::build_particle_spawner(&descriptor);
+        if let Ok(mut entity_mut) = world.get_entity_mut(entity) {
+            entity_mut.insert(spawner);
+        }
+    });
+}
+
+fn register_stored_capsule_updaters(registry: &mut SurfaceUpdateRegistry) {
+    register_common_stored_updaters::<XrdsCapsule>(registry);
+
+    registry.register::<XrdsCapsule, XrdsColor, _>(|world, entity, color| {
+        let mut params = material_params_for_entity(world, entity).unwrap_or_default();
+        params.base_color = *color;
+        apply_authored_material_to_entity(world, entity, params);
+    });
+
+    registry.register::<XrdsCapsule, XrdsMaterialParams, _>(|world, entity, params| {
+        apply_authored_material_to_entity(world, entity, params.clone());
+    });
+
+    registry.register::<XrdsCapsule, CapsuleGeometryParams, _>(|world, entity, params| {
+        if with_stored_descriptor_mut::<XrdsCapsule, _>(world, entity, |descriptor| {
+            descriptor.radius = params.radius;
+            descriptor.length = params.length;
+        })
+        .is_none()
+        {
+            return;
+        }
+
+        let Some((recipe, name, transform, visible)) =
+            capsule_recipe_and_common_state_for(world, entity)
+        else {
+            return;
+        };
+
+        apply_spawn_recipe_to_entity(world, entity, recipe, name, transform, visible);
+    });
+}
+
+fn register_stored_cube_updaters(registry: &mut SurfaceUpdateRegistry) {
+    register_common_stored_updaters::<XrdsCube>(registry);
+
+    registry.register::<XrdsCube, XrdsColor, _>(|world, entity, color| {
+        let mut params = material_params_for_entity(world, entity).unwrap_or_default();
+        params.base_color = *color;
+        apply_authored_material_to_entity(world, entity, params);
+    });
+
+    registry.register::<XrdsCube, XrdsMaterialParams, _>(|world, entity, params| {
+        apply_authored_material_to_entity(world, entity, params.clone());
+    });
+
+    registry.register::<XrdsCube, CubeGeometryParams, _>(|world, entity, params| {
+        if with_stored_descriptor_mut::<XrdsCube, _>(world, entity, |descriptor| {
+            descriptor.size = params.size;
+        })
+        .is_none()
+        {
+            return;
+        }
+
+        let Some((recipe, name, transform, visible)) =
+            cube_recipe_and_common_state_for(world, entity)
+        else {
+            return;
+        };
+
+        apply_spawn_recipe_to_entity(world, entity, recipe, name, transform, visible);
+    });
+}
+
+fn register_stored_sphere_updaters(registry: &mut SurfaceUpdateRegistry) {
+    register_common_stored_updaters::<XrdsSphere>(registry);
+
+    registry.register::<XrdsSphere, XrdsColor, _>(|world, entity, color| {
+        let mut params = material_params_for_entity(world, entity).unwrap_or_default();
+        params.base_color = *color;
+        apply_authored_material_to_entity(world, entity, params);
+    });
+
+    registry.register::<XrdsSphere, XrdsMaterialParams, _>(|world, entity, params| {
+        apply_authored_material_to_entity(world, entity, params.clone());
+    });
+
+    registry.register::<XrdsSphere, SphereGeometryParams, _>(|world, entity, params| {
+        if with_stored_descriptor_mut::<XrdsSphere, _>(world, entity, |descriptor| {
+            descriptor.radius = params.radius;
+        })
+        .is_none()
+        {
+            return;
+        }
+
+        let Some((recipe, name, transform, visible)) =
+            sphere_recipe_and_common_state_for(world, entity)
+        else {
+            return;
+        };
+
+        apply_spawn_recipe_to_entity(world, entity, recipe, name, transform, visible);
+    });
+}
+
+fn register_stored_plane_updaters(registry: &mut SurfaceUpdateRegistry) {
+    register_common_stored_updaters::<XrdsPlane3D>(registry);
+
+    registry.register::<XrdsPlane3D, XrdsColor, _>(|world, entity, color| {
+        let mut params = material_params_for_entity(world, entity).unwrap_or_default();
+        params.base_color = *color;
+        apply_authored_material_to_entity(world, entity, params);
+    });
+
+    registry.register::<XrdsPlane3D, XrdsMaterialParams, _>(|world, entity, params| {
+        apply_authored_material_to_entity(world, entity, params.clone());
+    });
+
+    registry.register::<XrdsPlane3D, Plane3DGeometryParams, _>(|world, entity, params| {
+        if with_stored_descriptor_mut::<XrdsPlane3D, _>(world, entity, |descriptor| {
+            descriptor.size = params.size;
+        })
+        .is_none()
+        {
+            return;
+        }
+
+        let Some((recipe, name, transform, visible)) =
+            plane_recipe_and_common_state_for(world, entity)
+        else {
+            return;
+        };
+
+        apply_spawn_recipe_to_entity(world, entity, recipe, name, transform, visible);
+    });
+}
+
+fn register_stored_tetrahedron_updaters(registry: &mut SurfaceUpdateRegistry) {
+    register_common_stored_updaters::<XrdsTetrahedron>(registry);
+
+    registry.register::<XrdsTetrahedron, XrdsColor, _>(|world, entity, color| {
+        let mut params = material_params_for_entity(world, entity).unwrap_or_default();
+        params.base_color = *color;
+        apply_authored_material_to_entity(world, entity, params);
+    });
+
+    registry.register::<XrdsTetrahedron, XrdsMaterialParams, _>(|world, entity, params| {
+        apply_authored_material_to_entity(world, entity, params.clone());
+    });
+
+    registry.register::<XrdsTetrahedron, TetrahedronGeometryParams, _>(|world, entity, params| {
+        if with_stored_descriptor_mut::<XrdsTetrahedron, _>(world, entity, |descriptor| {
+            descriptor.vertices = params.vertices.map(Into::into);
+        })
+        .is_none()
+        {
+            return;
+        }
+
+        let Some((recipe, name, transform, visible)) =
+            tetrahedron_recipe_and_common_state_for(world, entity)
+        else {
+            return;
+        };
+
+        apply_spawn_recipe_to_entity(world, entity, recipe, name, transform, visible);
+    });
+}
+
+fn register_stored_node_updaters(registry: &mut SurfaceUpdateRegistry) {
+    register_common_stored_updaters::<XrdsNode>(registry);
+}
+
+fn register_stored_camera_updaters(registry: &mut SurfaceUpdateRegistry) {
+    register_common_stored_updaters::<XrdsCamera>(registry);
+}
+
+fn register_stored_gltf_updaters(registry: &mut SurfaceUpdateRegistry) {
+    register_common_stored_updaters::<XrdsGltfAsset>(registry);
+}
+
+fn register_stored_point_light_updaters(registry: &mut SurfaceUpdateRegistry) {
+    register_common_stored_updaters::<XrdsPointLight>(registry);
+
+    registry.register::<XrdsPointLight, PointLightParams, _>(|world, entity, params| {
+        if let Some(mut light) = world.get_mut::<PointLight>(entity) {
+            light.color = params.color.into();
+            light.intensity = params.intensity;
+            light.range = params.range;
+            light.radius = params.radius;
+            light.shadows_enabled = params.shadows;
+        }
+        let _ = with_stored_descriptor_mut::<XrdsPointLight, _>(world, entity, |descriptor| {
+            descriptor.color = params.color;
+            descriptor.intensity = params.intensity;
+            descriptor.range = params.range;
+            descriptor.radius = params.radius;
+            descriptor.shadows = params.shadows;
+        });
+    });
+}
+
+fn register_stored_directional_light_updaters(registry: &mut SurfaceUpdateRegistry) {
+    register_common_stored_updaters::<XrdsDirectionalLight>(registry);
+
+    registry.register::<XrdsDirectionalLight, DirectionalLightParams, _>(
+        |world, entity, params| {
+            if let Some(mut light) = world.get_mut::<DirectionalLight>(entity) {
+                light.color = params.color.into();
+                light.illuminance = params.illuminance;
+                light.shadows_enabled = params.shadows;
+            }
+            let _ = with_stored_descriptor_mut::<XrdsDirectionalLight, _>(
+                world,
+                entity,
+                |descriptor| {
+                    descriptor.color = params.color;
+                    descriptor.illuminance = params.illuminance;
+                    descriptor.shadows = params.shadows;
+                },
+            );
+        },
+    );
+}
+
+fn register_stored_spot_light_updaters(registry: &mut SurfaceUpdateRegistry) {
+    register_common_stored_updaters::<XrdsSpotLight>(registry);
+
+    registry.register::<XrdsSpotLight, SpotLightParams, _>(|world, entity, params| {
+        if let Some(mut light) = world.get_mut::<SpotLight>(entity) {
+            light.color = params.color.into();
+            light.intensity = params.intensity;
+            light.range = params.range;
+            light.inner_angle = params.inner_angle;
+            light.outer_angle = params.outer_angle;
+            light.shadows_enabled = params.shadows;
+        }
+        let _ = with_stored_descriptor_mut::<XrdsSpotLight, _>(world, entity, |descriptor| {
+            descriptor.color = params.color;
+            descriptor.intensity = params.intensity;
+            descriptor.range = params.range;
+            descriptor.inner_angle = params.inner_angle;
+            descriptor.outer_angle = params.outer_angle;
+            descriptor.shadows = params.shadows;
+        });
+    });
+}
+
+fn register_stored_ambient_light_updaters(registry: &mut SurfaceUpdateRegistry) {
+    register_common_stored_updaters::<XrdsAmbientLight>(registry);
+
+    registry.register::<XrdsAmbientLight, AmbientLightParams, _>(|world, entity, params| {
+        if let Some(mut ambient) = world.get_resource_mut::<AmbientLight>() {
+            ambient.color = params.color.into();
+            ambient.brightness = params.brightness;
+            ambient.affects_lightmapped_meshes = params.affects_baked_lighting;
+        }
+        let _ = with_stored_descriptor_mut::<XrdsAmbientLight, _>(world, entity, |descriptor| {
+            descriptor.color = params.color;
+            descriptor.brightness = params.brightness;
+            descriptor.affects_baked_lighting = params.affects_baked_lighting;
+        });
+    });
+}
+
+fn register_stored_audio_clip_updaters(registry: &mut SurfaceUpdateRegistry) {
+    register_common_stored_updaters::<XrdsAudioClip>(registry);
+}
+
+fn register_stored_extruded_text_updaters(registry: &mut SurfaceUpdateRegistry) {
+    register_common_stored_updaters::<XrdsExtrudedText>(registry);
+
+    registry.register::<XrdsExtrudedText, ExtrudedTextParams, _>(|world, entity, params| {
+        use bevy_fontmesh::prelude::{JustifyText, TextAnchor, TextMesh, TextMeshStyle};
+
+        let justify = match params.alignment {
+            XrdsExtrudedTextAlignment::Left => JustifyText::Left,
+            XrdsExtrudedTextAlignment::Center => JustifyText::Center,
+            XrdsExtrudedTextAlignment::Right => JustifyText::Right,
+        };
+
+        if let Some(mut tm) = world.get_mut::<TextMesh>(entity) {
+            tm.text = params.text.clone();
+            tm.style = TextMeshStyle {
+                depth: params.depth,
+                anchor: TextAnchor::Center,
+                justify,
+                ..Default::default()
+            };
+        }
+
+        // Update material color.
+        if let Some(mat_handle) = world
+            .get::<bevy::prelude::MeshMaterial3d<bevy::pbr::StandardMaterial>>(entity)
+            .map(|m| m.0.clone())
+        {
+            let [r, g, b, _a] = params.color;
+            if let Some(mut materials) =
+                world.get_resource_mut::<bevy::asset::Assets<bevy::pbr::StandardMaterial>>()
+            {
+                if let Some(mat) = materials.get_mut(&mat_handle) {
+                    mat.base_color = bevy::color::Color::srgb(r, g, b);
+                }
+            }
+        }
+
+        // Sync the stored descriptor (used by scene export).
+        let _ = with_stored_descriptor_mut::<XrdsExtrudedText, _>(world, entity, |descriptor| {
+            descriptor.text = params.text.clone();
+            descriptor.font_size = params.font_size;
+            descriptor.color = params.color;
+            descriptor.depth = params.depth;
+            descriptor.alignment = params.alignment;
+        });
+    });
+}
+
+fn register_stored_text_updaters(registry: &mut SurfaceUpdateRegistry) {
+    register_common_stored_updaters::<XrdsText>(registry);
+
+    registry.register::<XrdsText, TextParams, _>(|world, entity, params| {
+        use bevy::color::Srgba;
+        use bevy_rich_text3d::{Text3d, Text3dStyling, TextAlign};
+
+        let text_align = match params.alignment {
+            XrdsTextAlignment::Left => TextAlign::Left,
+            XrdsTextAlignment::Center => TextAlign::Center,
+            XrdsTextAlignment::Right => TextAlign::Right,
+        };
+
+        if world.get::<Text3d>(entity).is_some() {
+            world.entity_mut(entity).insert(Text3d::new(params.text.clone()));
+        }
+        if let Some(mut s) = world.get_mut::<Text3dStyling>(entity) {
+            s.size = 128.0;
+            s.world_scale = Some(bevy::math::Vec2::splat(params.font_size * 0.01));
+            s.color = Srgba::new(
+                params.color[0],
+                params.color[1],
+                params.color[2],
+                params.color[3],
+            );
+            s.align = text_align;
+        }
+        let _ = with_stored_descriptor_mut::<XrdsText, _>(world, entity, |descriptor| {
+            descriptor.text = params.text.clone();
+            descriptor.font_size = params.font_size;
+            descriptor.color = params.color;
+            descriptor.alignment = params.alignment;
+        });
+    });
+}
+
+fn register_default_mutable_updaters(registry: &mut SurfaceUpdateRegistry) {
+    register_stored_node_updaters(registry);
+    register_stored_camera_updaters(registry);
+    register_stored_gltf_updaters(registry);
+    register_stored_cube_updaters(registry);
+    register_stored_cylinder_updaters(registry);
+    register_stored_capsule_updaters(registry);
+    register_stored_effect_updaters(registry);
+    register_stored_sphere_updaters(registry);
+    register_stored_plane_updaters(registry);
+    register_stored_tetrahedron_updaters(registry);
+    register_stored_point_light_updaters(registry);
+    register_stored_directional_light_updaters(registry);
+    register_stored_spot_light_updaters(registry);
+    register_stored_ambient_light_updaters(registry);
+    register_stored_audio_clip_updaters(registry);
+    register_stored_text_updaters(registry);
+    register_stored_extruded_text_updaters(registry);
+}
+
+fn register_default_primitive_updaters(registry: &mut SurfaceUpdateRegistry) {
+    let _ = registry;
+}
+
+pub(super) fn register_default_updaters(registry: &mut SurfaceUpdateRegistry) {
+    register_default_mutable_updaters(registry);
+    register_default_primitive_updaters(registry);
+
+    registry.register::<XrdsCamera, CameraProjectionPatch, _>(|world, entity, patch| {
+        let mut entity_mut = world.entity_mut(entity);
+        patch.projection.insert_into(&mut entity_mut);
+        let _ = with_stored_descriptor_mut::<XrdsCamera, _>(world, entity, |descriptor| {
+            descriptor.projection = patch.projection;
+        });
+    });
+    registry.register::<XrdsCamera, CameraLookAtPatch, _>(|world, entity, params| {
+        let position = world
+            .get::<Transform>(entity)
+            .map(|t| t.translation)
+            .unwrap_or(Vec3::ZERO);
+        let rotation = params.look_at.map(|target| {
+            Transform::from_translation(position)
+                .looking_at(Vec3::from_array(target), Vec3::Y)
+                .rotation
+        });
+        if let Some(rotation) = rotation {
+            if let Some(mut transform) = world.get_mut::<Transform>(entity) {
+                transform.rotation = rotation;
+            }
+        }
+        let _ = with_stored_descriptor_mut::<XrdsCamera, _>(world, entity, |descriptor| {
+            descriptor.look_at = params.look_at;
+            if let Some(rotation) = rotation {
+                descriptor.transform.rotation_quat_xyzw =
+                    [rotation.x, rotation.y, rotation.z, rotation.w];
+            }
+        });
+    });
+    registry.register::<XrdsGltfAsset, GltfAssetSourcePatch, _>(|world, entity, params| {
+        if let Err(error) = validate_gltf_source(&params.gltf_asset_path, params.scene_index) {
+            warn!(
+                "Ignoring invalid glTF update for entity {:?}: {error}",
+                entity
+            );
+            return;
+        }
+
+        let (scene_handle, gltf_handle) = {
+            let server = world.resource::<AssetServer>();
+            let relative_path = super::gltf::relativize_asset_path(&params.gltf_asset_path);
+            let path = build_scene_asset_path(&params.gltf_asset_path, params.scene_index);
+            let scene = server.load::<Scene>(path);
+            let gltf = server.load::<bevy::gltf::Gltf>(relative_path);
+            (scene, gltf)
+        };
+        world.entity_mut(entity).insert((
+            SceneRoot(scene_handle),
+            XrdsStoredGltfHandle(gltf_handle),
+            GlobalTransform::default(),
+            build_visibility_hierarchy_components(true),
+        ));
+        let _ = with_stored_descriptor_mut::<XrdsGltfAsset, _>(world, entity, |descriptor| {
+            descriptor.gltf_asset_path = params.gltf_asset_path.clone();
+            descriptor.scene_index = params.scene_index;
+        });
+    });
+}

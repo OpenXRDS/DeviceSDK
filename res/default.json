@@ -1,0 +1,233 @@
+{
+  "version": 1,
+  "metadata": {
+    "name": "Untitled Scene",
+    "authored_by": null,
+    "default_scene_label": null,
+    "extras": {}
+  },
+  "assets": [],
+  "nodes": [
+    {
+      "id": 1,
+      "parent_id": null,
+      "name": "Ambient Light",
+      "enabled": true,
+      "visible": true,
+      "transform": {
+        "translation": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rotation_quat_xyzw": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "payload": {
+        "AmbientLight": {
+          "color": [
+            1.0,
+            0.95,
+            0.9,
+            1.0
+          ],
+          "brightness": 200.0,
+          "affects_baked_lighting": false
+        }
+      },
+      "editor": {
+        "tags": [],
+        "layer": null,
+        "locked": false,
+        "hidden_in_editor": false,
+        "user_properties": {},
+        "source": null
+      }
+    },
+    {
+      "id": 2,
+      "parent_id": null,
+      "name": "Sun",
+      "enabled": true,
+      "visible": true,
+      "transform": {
+        "translation": [
+          0.0,
+          5.0,
+          -3.0
+        ],
+        "rotation_quat_xyzw": [
+          -0.4226,
+          0.0,
+          0.0,
+          0.9063
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "payload": {
+        "DirectionalLight": {
+          "color": [
+            1.0,
+            0.98,
+            0.92,
+            1.0
+          ],
+          "illuminance": 10000.0,
+          "shadows": true
+        }
+      },
+      "editor": {
+        "tags": [],
+        "layer": null,
+        "locked": false,
+        "hidden_in_editor": false,
+        "user_properties": {},
+        "source": null
+      }
+    },
+    {
+      "id": 3,
+      "parent_id": null,
+      "name": "Ground",
+      "enabled": true,
+      "visible": true,
+      "transform": {
+        "translation": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rotation_quat_xyzw": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "payload": {
+        "Plane3D": {
+          "size": [
+            20.0,
+            20.0
+          ],
+          "material": {
+            "base_color": [
+              0.55,
+              0.55,
+              0.55,
+              1.0
+            ],
+            "emissive": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ],
+            "opacity": 1.0,
+            "unlit": false,
+            "pbr": {
+              "metallic": 0.0,
+              "roughness": 0.5,
+              "reflectance": 0.5,
+              "double_sided": false,
+              "alpha_mode": "Auto",
+              "alpha_cutoff": 0.5
+            }
+          }
+        }
+      },
+      "editor": {
+        "tags": [],
+        "layer": null,
+        "locked": false,
+        "hidden_in_editor": false,
+        "user_properties": {},
+        "source": null
+      }
+    },
+    {
+      "id": 4,
+      "parent_id": null,
+      "name": "Cube",
+      "enabled": true,
+      "visible": true,
+      "transform": {
+        "translation": [
+          0.0,
+          0.5,
+          4.0
+        ],
+        "rotation_quat_xyzw": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "payload": {
+        "Cube": {
+          "size": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "material": {
+            "base_color": [
+              0.0,
+              1.0,
+              0.0,
+              1.0
+            ],
+            "emissive": [
+              0.0,
+              2.0,
+              0.0,
+              1.0
+            ],
+            "opacity": 1.0,
+            "unlit": true,
+            "pbr": {
+              "metallic": 0.0,
+              "roughness": 0.5,
+              "reflectance": 0.5,
+              "double_sided": false,
+              "alpha_mode": "Auto",
+              "alpha_cutoff": 0.5
+            }
+          }
+        }
+      },
+      "editor": {
+        "tags": [],
+        "layer": null,
+        "locked": false,
+        "hidden_in_editor": false,
+        "user_properties": {},
+        "source": null
+      }
+    }
+  ]
+}

@@ -19,34 +19,36 @@ impl Plugin for OpenXrReferenceSpacePlugin {
 
 fn create_reference_space(world: &mut World) {
     debug_span!("OpenXrReferenceSpacePlugin");
+    log::info!("XR: create_reference_space start");
 
     let mut primary_space_type = openxr::ReferenceSpaceType::STAGE;
 
     let session = world.resource::<OpenXrSession>();
-    let reference_space_types = session
-        .enumerate_reference_space_types()
-        .expect("Could not enumerate reference space types");
+    let reference_space_types = match session.enumerate_reference_space_types() {
+        Ok(v) => v,
+        Err(e) => {
+            log::error!("XR: enumerate_reference_space_types failed: {e:?}");
+            return;
+        }
+    };
 
     if reference_space_types.contains(&primary_space_type) {
-        info!("Reference space type 'stage' supported");
+        log::info!("XR: reference space STAGE supported");
     } else {
-        info!("Reference space type 'stage' not supported. Use floor instead");
+        log::info!("XR: reference space STAGE not supported, using LOCAL_FLOOR");
         primary_space_type = openxr::ReferenceSpaceType::LOCAL_FLOOR;
     }
 
-    let primary_space = session
+    let primary_space = match session
         .create_reference_space(primary_space_type, openxr::Posef::IDENTITY)
-        .expect("Could not create primary reference space");
+    {
+        Ok(s) => s,
+        Err(e) => {
+            log::error!("XR: create_reference_space failed: {e:?}");
+            return;
+        }
+    };
 
     world.insert_resource(OpenXrPrimaryReferenceSpace(primary_space));
-    info!(
-        "OpenXR primary reference space({:?}) and bounds rect created",
-        primary_space_type
-    );
-
-    // Enumerate actions sets and get space and bound rect for each action set
-    // let action_sets = world.get_resource::<ActionSets>();
-    // action_sets.sets.iter()~~~
-
-    info!("OpenXR reference space and bounds rect created");
+    log::info!("XR: primary reference space({:?}) created", primary_space_type);
 }

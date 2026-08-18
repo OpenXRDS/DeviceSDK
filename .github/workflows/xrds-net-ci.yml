@@ -1,0 +1,115 @@
+name: xrds-net CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - "crates/xrds-net/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/xrds-net-ci.yml"
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: cargo check (workspace)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      # This job compiles the *whole* workspace, and `apps/xrds-editor/src-tauri` is a
+      # member, so the dependency set is much wider than xrds-net's own:
+      #
+      #   cmake, perl                  quiche's vendored BoringSSL
+      #   libasound2-dev, libudev-dev  Bevy audio (alsa-sys via rodio/cpal) and input
+      #   libav*-dev, libpostproc-dev  xrds-media transcoding (ffmpeg)
+      #   libgtk-3-dev                 rfd file dialogs; covers glib/gio/gdk/atk/cairo/pango
+      #   libwebkit2gtk-4.1-dev        wry's webview; covers javascriptcore + soup3
+      #   clang, libssl-dev, libxcb-glx0-dev   per the README's documented list
+      #
+      # Every one of these is a pkg-config lookup inside a *build script*, so a missing
+      # header fails the build long before any of our code is type-checked — the first two
+      # attempts at this job died in `alsa-sys` and then `glib-sys` respectively.
+      - name: Install native build deps (quiche, Bevy, ffmpeg, GTK/WebKit)
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          # Bounded and non-interactive on purpose. The unhardened form of this step hung
+          # for 70 minutes on a runner: apt has no default network timeout, so a stalled
+          # mirror waits forever, and any debconf prompt blocks on stdin that never comes.
+          sudo -E apt-get update -o Acquire::Retries=3 -o Acquire::http::Timeout=30
+          sudo -E apt-get install -y --no-install-recommends -o Acquire::Retries=3 -o Acquire::http::Timeout=30 cmake perl clang libssl-dev libasound2-dev libudev-dev libxcb-glx0-dev libavcodec-dev libavformat-dev libavutil-dev libavdevice-dev libavfilter-dev libswresample-dev libswscale-dev libpostproc-dev libgtk-3-dev libwebkit2gtk-4.1-dev
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.95.0" # keep in sync with the repo's actual toolchain
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --workspace --tests
+
+  clippy:
+    name: clippy (xrds-net)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install native build deps (quiche/BoringSSL)
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo -E apt-get update -o Acquire::Retries=3 -o Acquire::http::Timeout=30
+          sudo -E apt-get install -y --no-install-recommends -o Acquire::Retries=3 -o Acquire::http::Timeout=30 cmake perl
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.95.0"
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy -p xrds-net --all-targets -- -D warnings
+
+  test-unit:
+    name: test (xrds-net --lib)
+    runs-on: ubuntu-latest
+    # `continue-on-error` below ignores a *failure*; it does nothing about a *hang*,
+    # which would otherwise sit on a runner for the 360-minute default. This suite
+    # already talks to live public servers, so bound it.
+    timeout-minutes: 20
+    # Stopgap, not a fix: a large fraction of this suite hits live public
+    # servers (mosquitto/rebex/coap.me/echo.websocket.org) and isn't tagged
+    # #[ignore] the way the WebRTC slow test is, so it can't be cleanly
+    # split into blocking/non-blocking today. See docs/done/xrds-net-release-readiness.md
+    # Phase 5 — tagging those tests is the real fix, tracked as a follow-up.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install native build deps (quiche/BoringSSL)
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo -E apt-get update -o Acquire::Retries=3 -o Acquire::http::Timeout=30
+          sudo -E apt-get install -y --no-install-recommends -o Acquire::Retries=3 -o Acquire::http::Timeout=30 cmake perl
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.95.0"
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test -p xrds-net --lib
+
+  test-webrtc-integration:
+    name: test (xrds-net webrtc_integration)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install native build deps (quiche/BoringSSL)
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo -E apt-get update -o Acquire::Retries=3 -o Acquire::http::Timeout=30
+          sudo -E apt-get install -y --no-install-recommends -o Acquire::Retries=3 -o Acquire::http::Timeout=30 cmake perl
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.95.0"
+      - uses: Swatinem/rust-cache@v2
+      # `#[serial(webrtc)]`-serialized within the file — must run
+      # single-threaded, same as every manual run this session.
+      - run: cargo test -p xrds-net --test webrtc_integration -- --test-threads=1

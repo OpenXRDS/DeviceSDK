@@ -1,5 +1,24 @@
 target
 build
-crates/xrds-net/test_output/
-.VSCodeCounter/
+.cargo
 .vscode
+.claude
+.VSCodeCounter
+games/*
+CLAUDE.md
+SHORTTERM_GOAL.md
+apps/xrds-editor/node_modules/*
+apps/xrds-editor/dist/*
+test_output
+
+# cargo artifacts in patched crates
+patches/**/.cargo-ok
+patches/**/.cargo_vcs_info.json
+patches/**/Cargo.toml.orig
+patches/**/Cargo.lock
+
+# android/quest build outputs and fetched binaries
+android/quest/build/
+android/quest/jni/
+android/quest/libs/**/*.so
+

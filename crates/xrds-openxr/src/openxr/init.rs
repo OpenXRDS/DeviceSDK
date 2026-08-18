@@ -11,7 +11,7 @@ use bevy::{
         RenderApp, RenderPlugin,
     },
 };
-use openxr::{ApplicationInfo, Entry, ExtensionSet, FormFactor};
+use openxr::{ApplicationInfo, Entry, ExtensionSet, FormFactor, SystemId};
 
 #[cfg(target_os = "windows")]
 use crate::windows::try_load_windows_oxr_runtime;
@@ -38,34 +38,42 @@ impl Plugin for OpenXrInitPlugin {
         build_states(app);
         build_system_sets(app);
 
-        // Initialize OpenXR system and graphics backend
-        let (openxr_instance, graphics_backends) = self
-            .initialize(&self.app_name)
-            .expect("Could not initialize OpenXR and WGPU instance");
+        // Initialize OpenXR system and graphics backend; fall back to desktop if unavailable.
+        match self.initialize(&self.app_name) {
+            Ok((openxr_instance, graphics_backends)) => {
+                let render_resources = graphics_backends
+                    .get_render_resources()
+                    .expect("Could not get render resources");
 
-        let render_resources = graphics_backends
-            .get_render_resources()
-            .expect("Could not get render resources");
+                app.insert_resource(openxr_instance.clone())
+                    .insert_resource(graphics_backends)
+                    .add_plugins(RenderPlugin {
+                        render_creation: RenderCreation::Manual(render_resources),
+                        ..Default::default()
+                    });
 
-        app.insert_resource(openxr_instance.clone())
-            .insert_resource(graphics_backends)
-            .add_plugins(RenderPlugin {
-                render_creation: RenderCreation::Manual(render_resources),
-                ..Default::default()
-            });
+                app.insert_resource(WinitSettings {
+                    focused_mode: UpdateMode::Continuous,
+                    unfocused_mode: UpdateMode::Continuous,
+                });
 
-        #[cfg(feature = "preview_window")]
-        app.insert_resource(WinitSettings {
-            focused_mode: UpdateMode::Continuous,
-            unfocused_mode: UpdateMode::Continuous,
-        });
+                let render_app = app.sub_app_mut(RenderApp);
+                render_app.insert_resource(openxr_instance);
 
-        let render_app = app.sub_app_mut(RenderApp);
-        render_app.insert_resource(openxr_instance);
-
-        let world = app.world_mut();
-        world.insert_resource(OpenXrSystemState::Available);
-        world.write_message(OpenXrMessageCreateSession);
+                let world = app.world_mut();
+                world.insert_resource(OpenXrSystemState::Available);
+                world.write_message(OpenXrMessageCreateSession);
+            }
+            Err(e) => {
+                // Use log:: directly — tracing subscriber not yet initialized at build() time,
+                // so tracing::warn!() would be silently dropped.
+                log::warn!("OpenXR unavailable, falling back to desktop rendering: {e}");
+                log::error!("OpenXR init failure detail: {e:?}");
+                app.add_plugins(RenderPlugin::default());
+                // OpenXrSystemState stays Unavailable (the default from init_resource),
+                // so all XR session and frame-loop systems are skipped automatically.
+            }
+        }
     }
 
     fn finish(&self, _app: &mut App) {}
@@ -137,7 +145,10 @@ impl OpenXrInitPlugin {
         #[cfg(not(target_os = "windows"))]
         let result = unsafe { openxr::Entry::load() };
 
-        let (entry, _lib) = result.unwrap();
+        #[cfg(target_os = "windows")]
+        let (entry, _lib) = result.map_err(|e| anyhow::anyhow!("Could not load OpenXR runtime: {e}"))?;
+        #[cfg(not(target_os = "windows"))]
+        let entry = result.map_err(|e| anyhow::anyhow!("Could not load OpenXR runtime: {e}"))?;
 
         let default_settings = self.wgpu_settings.clone().unwrap_or_default();
         let wgpu_backends = default_settings.backends.unwrap_or(wgpu::Backends::VULKAN);
@@ -164,8 +175,10 @@ impl OpenXrInitPlugin {
                 // oxr_extension.oculus_android_session_state_enable = true;
             }
         } else {
-            panic!("Unsupported backend");
+            anyhow::bail!("Unsupported wgpu backend for OpenXR");
         };
+        openxr_extensions.fb_render_model = true;
+        openxr_extensions.ext_hand_tracking = true;
         openxr_extensions = intersects_extensions(&entry, openxr_extensions)?;
 
         let application_info = ApplicationInfo {
@@ -173,24 +186,17 @@ impl OpenXrInitPlugin {
             application_version: 1,
             engine_name: "bevy",
             engine_version: 17,
-            api_version: openxr::Version::new(1, 1, 49),
+            api_version: openxr::Version::new(1, 1, 0),
         };
         let instance = entry
             .create_instance(&application_info, &openxr_extensions, &[])
-            .expect("Could not create OpenXR instance");
-        let system_id_res = (
-            instance.system(FormFactor::HEAD_MOUNTED_DISPLAY),
-            instance.system(FormFactor::HANDHELD_DISPLAY),
-        );
-        let system_id = match system_id_res {
-            (Ok(hmd_system_id), Ok(_)) | (Ok(hmd_system_id), Err(_)) => hmd_system_id,
-            (Err(_), Ok(handheld_system_id)) => handheld_system_id,
-            (Err(_), Err(_)) => panic!("No xr system found"),
-        };
+            .map_err(|e| anyhow::anyhow!("Could not create OpenXR instance: {e}"))?;
+        let system_id = Self::get_hmd_or_handheld_system(&instance)?;
 
         let system_properties = instance.system_properties(system_id)?;
         let instance_properties = instance.properties()?;
-        info!(
+        // Use log:: — this runs before LogPlugin initializes tracing.
+        log::info!(
             "OpenXR system: {}, runtime: {}-{}",
             system_properties.system_name,
             instance_properties.runtime_name,
@@ -204,13 +210,18 @@ impl OpenXrInitPlugin {
                 &application_info,
                 default_settings,
             )?
-        } else if cfg!(target_os = "windows") && wgpu_backends.intersects(wgpu::Backends::DX12) {
-            GraphicsInner::<openxr::D3D12>::initialize(
-                &instance,
-                system_id,
-                &application_info,
-                default_settings,
-            )?
+        } else if wgpu_backends.intersects(wgpu::Backends::DX12) {
+            {
+                #[cfg(not(target_os = "windows"))]
+                { anyhow::bail!("D3D12 backend is only supported on Windows") }
+                #[cfg(target_os = "windows")]
+                { GraphicsInner::<openxr::D3D12>::initialize(
+                    &instance,
+                    system_id,
+                    &application_info,
+                    default_settings,
+                )? }
+            }
         } else if wgpu_backends.intersects(wgpu::Backends::GL) {
             GraphicsInner::<openxr::OpenGL>::initialize(
                 &instance,
@@ -219,7 +230,7 @@ impl OpenXrInitPlugin {
                 default_settings,
             )?
         } else {
-            panic!("Unsupported backend");
+            anyhow::bail!("Unsupported wgpu backend for OpenXR");
         };
 
         let openxr_instance = OpenXrInstance {
@@ -228,6 +239,59 @@ impl OpenXrInitPlugin {
         };
 
         Ok((openxr_instance, graphics_backends))
+    }
+
+    /// Resolve an HMD or handheld system, retrying on `ERROR_FORM_FACTOR_UNAVAILABLE`.
+    ///
+    /// That specific error is spec-documented as transient — "the specified form
+    /// factor is supported, but the device is currently not available" — as
+    /// opposed to `ERROR_FORM_FACTOR_UNSUPPORTED`, which means the runtime never
+    /// supports it and retrying cannot help. A single unretried call is known to
+    /// race Quest Link's own session negotiation: the runtime can be genuinely
+    /// present and the headset genuinely worn, and still momentarily report
+    /// "unavailable" if this process's `xrGetSystem` lands before Link has
+    /// finished handing the compositor an active session. Confirmed by reading
+    /// the actual OpenXR error out of a real "wearing the headset, Link running"
+    /// failure — the previous code discarded that error before this distinction
+    /// could even be checked.
+    fn get_hmd_or_handheld_system(instance: &openxr::Instance) -> anyhow::Result<SystemId> {
+        use std::time::{Duration, Instant};
+
+        const RETRY_TIMEOUT: Duration = Duration::from_secs(5);
+        const RETRY_INTERVAL: Duration = Duration::from_millis(200);
+
+        let deadline = Instant::now() + RETRY_TIMEOUT;
+        let mut last_hmd_err = None;
+        let mut last_handheld_err = None;
+
+        loop {
+            let hmd_res = instance.system(FormFactor::HEAD_MOUNTED_DISPLAY);
+            let handheld_res = instance.system(FormFactor::HANDHELD_DISPLAY);
+
+            match (&hmd_res, &handheld_res) {
+                (Ok(hmd_system_id), _) => return Ok(*hmd_system_id),
+                (Err(_), Ok(handheld_system_id)) => return Ok(*handheld_system_id),
+                (Err(hmd_err), Err(handheld_err)) => {
+                    let retryable = *hmd_err == openxr::sys::Result::ERROR_FORM_FACTOR_UNAVAILABLE
+                        || *handheld_err == openxr::sys::Result::ERROR_FORM_FACTOR_UNAVAILABLE;
+                    last_hmd_err = Some(*hmd_err);
+                    last_handheld_err = Some(*handheld_err);
+                    if !retryable || Instant::now() >= deadline {
+                        break;
+                    }
+                    std::thread::sleep(RETRY_INTERVAL);
+                }
+            }
+        }
+
+        anyhow::bail!(
+            "No XR system found (no HMD or handheld device detected) after retrying for \
+             {RETRY_TIMEOUT:?}. HMD form factor error: {last_hmd_err:?}. Handheld form \
+             factor error: {last_handheld_err:?}. If using Quest Link: confirm Link (or \
+             Air Link) shows as actively connected in the Oculus app — not just \
+             USB-connected/charging — and that the headset is awake, *before* launching \
+             this app."
+        );
     }
 }
 

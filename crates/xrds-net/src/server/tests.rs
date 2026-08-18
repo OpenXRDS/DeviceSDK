@@ -18,13 +18,19 @@ limitations under the License.
  * Server testings by running integration test with client
  * No mocking is done here
  */
-
+// This file is already `server::tests` (via `mod tests;` in server/mod.rs);
+// the inner `mod tests` below nests it one level further rather than
+// actually renaming anything — harmless, not worth re-indenting the whole
+// file to flatten.
+#[allow(clippy::module_inception)]
 mod tests {
-    use crate::client::webrtc_client::WebRTCClient;
     use crate::client::{Client, ClientBuilder};
+    #[cfg(feature = "ftp-server")]
     use crate::common::data_structure::FtpPayload;
-    use crate::common::enums::{FtpCommands, PROTOCOLS};
-    use crate::common::{append_to_path, payload_str_to_vector_str};
+    #[cfg(feature = "ftp-server")]
+    use crate::common::enums::FtpCommands;
+    use crate::common::enums::PROTOCOLS;
+    use crate::common::append_to_path;
     use crate::server::XRNetServer;
     use tokio::time::{sleep, Duration};
 
@@ -37,22 +43,20 @@ mod tests {
     /**
      * Since this function is blocking, must be called with tokio::task::spawn_blocking
      */
-    async fn connect_ws_client(port: u32) -> Client {
+    fn connect_ws_client(port: u32) -> Client {
         let client = ClientBuilder::new().set_protocol(PROTOCOLS::WS).build();
 
         let addr = "ws://127.0.0.1".to_string() + ":" + &port.to_string() + "/";
         println!("Connecting to {}", addr.clone());
 
-        let ws = client.set_url(addr.as_str()).connect().await;
-        if ws.is_err() {
-            println!("{}", ws.err().unwrap());
-            panic!("ws.Connection failed");
-        } else {
-            ws.unwrap()
+        match client.set_url(addr.as_str()).connect() {
+            Ok(client) => client,
+            Err(e) => panic!("ws.Connection failed: {e}"),
         }
     }
 
-    async fn connect_ftp_client(port: u32) -> Client {
+    #[cfg(feature = "ftp-server")]
+    fn connect_ftp_client(port: u32) -> Client {
         let client = ClientBuilder::new()
             .set_protocol(PROTOCOLS::FTP)
             .set_user("admin")
@@ -61,27 +65,25 @@ mod tests {
 
         let addr = ["127.0.0.1", port.to_string().as_str()].join(":");
 
-        let ftp = client.set_url(addr.as_str()).connect().await;
-        if ftp.is_err() {
-            println!("{}", ftp.err().unwrap());
-            panic!("ftp.Connection failed");
-        } else {
-            ftp.unwrap()
+        match client.set_url(addr.as_str()).connect() {
+            Ok(client) => client,
+            Err(e) => panic!("ftp.Connection failed: {e}"),
         }
     }
 
+    #[cfg(feature = "ftp-server")]
     fn run_ftp_server(port: u32) -> tokio::task::JoinHandle<()> {
         let protocols = vec![PROTOCOLS::FTP];
         let ports = vec![port];
         let crnt_dir = std::env::current_dir().unwrap();
         let target_dir = append_to_path(crnt_dir, "/test_root_dir");
-        let root_dir = Some(target_dir.as_path().to_str().unwrap().to_string());
+        let root_dir = target_dir.as_path().to_str().unwrap().to_string();
 
         let server = XRNetServer::new(protocols, ports);
         let server_handle = tokio::spawn(async move {
             println!("Starting server");
             server
-                .set_root_dir(root_dir.unwrap().as_str())
+                .set_root_dir(root_dir.as_str())
                 .start()
                 .await;
         });
@@ -91,18 +93,19 @@ mod tests {
     fn run_server(protocol: PROTOCOLS, port: u32) -> tokio::task::JoinHandle<()> {
         let crnt_dir = std::env::current_dir().unwrap();
         let target_dir = append_to_path(crnt_dir, "/test_root_dir");
-        let root_dir = Some(target_dir.as_path().to_str().unwrap().to_string());
+        let root_dir = target_dir.as_path().to_str().unwrap().to_string();
 
         let server = XRNetServer::new(vec![protocol], vec![port]);
         let server_handle = tokio::spawn(async move {
             server
-                .set_root_dir(root_dir.unwrap().as_str())
+                .set_root_dir(root_dir.as_str())
                 .start()
                 .await;
         });
         server_handle
     }
 
+    #[cfg(feature = "ftp-server")]
     #[tokio::test]
     async fn test_server_run_multiple() {
         let current_line = line!();
@@ -122,6 +125,7 @@ mod tests {
         server_handle.await.unwrap();
     }
 
+    #[cfg(feature = "ftp-server")]
     #[tokio::test]
     async fn test_server_ftp_connection() {
         let current_line = line!() + 8000;
@@ -134,54 +138,61 @@ mod tests {
 
         client_handle.await.unwrap();
         server_handle.abort();
-
-        assert!(true);
     }
 
+    #[cfg(feature = "ftp-server")]
     #[tokio::test]
     async fn test_server_ftp_list() {
         let current_line = line!() + 8000; // To avoid duplicate port number for each test
         let server_handle = run_ftp_server(current_line);
         sleep(Duration::from_secs(2)).await;
 
-        let ftp_payload = FtpPayload {
-            command: FtpCommands::LIST,
-            payload_name: "".to_string(),
-            payload: None,
-        };
+        let client_handle = tokio::task::spawn_blocking(move || {
+            let client = connect_ftp_client(current_line);
 
-        let client = connect_ftp_client(current_line).await;
-        let ftp_response = client.run_ftp_command(ftp_payload).await;
+            let ftp_payload = FtpPayload {
+                command: FtpCommands::LIST,
+                payload_name: "".to_string(),
+                payload: None,
+            };
 
-        if ftp_response.error.is_some() {
-            println!(
-                "FTP LIST command error: {}",
-                ftp_response.error.clone().unwrap()
-            );
-        } else {
-            let res_body = ftp_response.payload.clone().unwrap();
-            let res_str = String::from_utf8(res_body).unwrap();
-            println!("FTP LIST command response: {:?}", res_str);
-        }
+            let ftp_response = client.run_ftp_command(ftp_payload);
+            if let Some(error) = ftp_response.error {
+                panic!("{error}");
+            } else {
+                let res_body = ftp_response.payload.clone().unwrap();
 
+                let res_str = String::from_utf8(res_body).unwrap();
+                println!("{}", res_str);
+                assert!(!res_str.is_empty());
+            }
+        });
+
+        client_handle.await.unwrap();
         server_handle.abort();
     }
 
+    #[cfg(feature = "ftp-server")]
     #[tokio::test]
     async fn test_server_ftp_noop() {
         let current_line = line!() + 8000; // To avoid duplicate port number for each test
         let server_handle = run_ftp_server(current_line);
         sleep(Duration::from_secs(2)).await;
 
-        let ftp_payload = FtpPayload {
-            command: FtpCommands::NOOP,
-            payload_name: "".to_string(),
-            payload: None,
-        };
+        let client_handle = tokio::task::spawn_blocking(move || {
+            let client = connect_ftp_client(current_line);
 
-        let client = connect_ftp_client(current_line).await;
-        let ftp_response = client.run_ftp_command(ftp_payload).await;
+            let ftp_payload = FtpPayload {
+                command: FtpCommands::NOOP,
+                payload_name: "".to_string(),
+                payload: None,
+            };
 
+            
+            client.run_ftp_command(ftp_payload)
+        });
+
+        let ftp_response = client_handle.await.unwrap();
         server_handle.abort();
 
         assert!(ftp_response.payload.is_none());
@@ -199,6 +210,7 @@ mod tests {
      * - CDUP
      * - RMD: can remove empty directory only
      */
+    #[cfg(feature = "ftp-server")]
     #[tokio::test]
     async fn test_server_ftp_crud() {
         let current_line = line!(); // To avoid duplicate port number for each test
@@ -262,55 +274,59 @@ mod tests {
             payload: None,
         };
 
-        let client = connect_ftp_client(current_line).await;
+        let client_handle = tokio::task::spawn_blocking(move || {
+            let client = connect_ftp_client(current_line);
 
-        let ftp_response_mkd = client.run_ftp_command(ftp_payload_mkd).await;
-        assert!(ftp_response_mkd.error.is_none());
+            let ftp_response_mkd = client.run_ftp_command(ftp_payload_mkd);
+            assert!(ftp_response_mkd.error.is_none());
 
-        let ftp_response_cwd = client.run_ftp_command(ftp_payload_cwd).await;
-        assert!(ftp_response_cwd.error.is_none());
+            let ftp_response_cwd = client.run_ftp_command(ftp_payload_cwd);
+            println!("{:?}", ftp_response_cwd.payload);
+            assert!(ftp_response_cwd.error.is_none());
 
-        let ftp_response_pwd = client.run_ftp_command(ftp_payload_pwd).await;
-        let res_body_str = String::from_utf8(ftp_response_pwd.payload.clone().unwrap());
-        println!("pwd: {:?}", res_body_str);
-        assert!(ftp_response_pwd.error.is_none());
+            let ftp_response_pwd = client.run_ftp_command(ftp_payload_pwd);
+            let res_body_str =
+                String::from_utf8(ftp_response_pwd.payload.clone().unwrap()).unwrap();
+            println!("pwd: {:?}", res_body_str);
 
-        let ftp_response_stor1 = client.run_ftp_command(ftp_payload_stor1).await;
-        assert!(ftp_response_stor1.error.is_none());
+            let ftp_response_stor1 = client.run_ftp_command(ftp_payload_stor1);
+            assert!(ftp_response_stor1.error.is_none());
 
-        let ftp_response_stor2 = client.run_ftp_command(ftp_payload_stor2).await;
-        assert!(ftp_response_stor2.error.is_none());
+            let ftp_response_stor2 = client.run_ftp_command(ftp_payload_stor2);
+            assert!(ftp_response_stor2.error.is_none());
 
-        let ftp_response_list = client.run_ftp_command(ftp_payload_list.clone()).await;
-        let res_body = ftp_response_list.payload.clone().unwrap();
-        let res_str = String::from_utf8(res_body).unwrap();
-        println!("list: {:?}", res_str);
+            let ftp_response_list = client.run_ftp_command(ftp_payload_list.clone());
+            let res_body = ftp_response_list.payload.clone().unwrap();
+            let res_str = String::from_utf8(res_body).unwrap();
+            println!("list: {:?}", res_str);
 
-        let ftp_response_retr = client.run_ftp_command(ftp_payload_retr).await;
-        let res_body = ftp_response_retr.payload.clone().unwrap();
-        let res_str = String::from_utf8(res_body).unwrap();
-        println!("retr: {:?}", res_str);
+            let ftp_response_retr = client.run_ftp_command(ftp_payload_retr);
+            let res_body = ftp_response_retr.payload.clone().unwrap();
+            let res_str = String::from_utf8(res_body).unwrap();
+            println!("retr: {:?}", res_str);
 
-        let ftp_response_dele1 = client.run_ftp_command(ftp_payload_dele1).await;
-        assert!(ftp_response_dele1.error.is_none());
+            let ftp_response_dele1 = client.run_ftp_command(ftp_payload_dele1);
+            assert!(ftp_response_dele1.error.is_none());
 
-        let ftp_response_dele2 = client.run_ftp_command(ftp_payload_dele2).await;
-        assert!(ftp_response_dele2.error.is_none());
+            let ftp_response_dele2 = client.run_ftp_command(ftp_payload_dele2);
+            assert!(ftp_response_dele2.error.is_none());
 
-        let ftp_response_cdup = client.run_ftp_command(ftp_payload_cdup).await;
-        assert!(ftp_response_cdup.error.is_none());
+            let ftp_response_cdup = client.run_ftp_command(ftp_payload_cdup);
+            assert!(ftp_response_cdup.error.is_none());
 
-        let ftp_response_rmd = client.run_ftp_command(ftp_payload_rmd).await;
-        if ftp_response_rmd.error.is_some() {
-            println!("{}", ftp_response_rmd.clone().error.unwrap());
-        }
-        assert!(ftp_response_rmd.error.is_none());
+            let ftp_response_rmd = client.run_ftp_command(ftp_payload_rmd);
+            if ftp_response_rmd.error.is_some() {
+                println!("{}", ftp_response_rmd.clone().error.unwrap());
+            }
+            assert!(ftp_response_rmd.error.is_none());
 
-        let ftp_response_list = client.run_ftp_command(ftp_payload_list).await;
-        let res_body = ftp_response_list.payload.clone().unwrap();
-        let res_str = String::from_utf8(res_body).unwrap();
-        println!("list: {:?}", res_str);
+            let ftp_response_list = client.run_ftp_command(ftp_payload_list);
+            let res_body = ftp_response_list.payload.clone().unwrap();
+            let res_str = String::from_utf8(res_body).unwrap();
+            println!("list: {:?}", res_str);
+        });
 
+        client_handle.await.unwrap();
         server_handle.abort();
     }
 
@@ -319,8 +335,6 @@ mod tests {
         let mut server = XRNetServer::new(vec![PROTOCOLS::WS], vec![line!()]);
 
         server.register_handler("test", |msg| Box::pin(echo_handler(msg)));
-
-        assert!(true);
     }
 
     #[tokio::test]
@@ -346,7 +360,6 @@ mod tests {
         ws_client_handle.await.unwrap();
         server_handle.abort();
         // ws_server_handle.await.unwrap();
-        assert!(true);
     }
 
     #[tokio::test]
@@ -356,19 +369,53 @@ mod tests {
 
         sleep(Duration::from_secs(2)).await;
 
-        let client = connect_ws_client(current_line).await;
+        let ws_client_handle = tokio::task::spawn_blocking(move || {
+            let client = connect_ws_client(current_line);
 
-        let msg = "test".as_bytes().to_vec();
-        let result = client.send(msg, None).await;
-        println!("client send result: {:?}", result.clone());
-        assert_eq!(result.is_ok(), true);
+            let msg = "test".as_bytes().to_vec();
+            let result = client.send(msg, None);
+            println!("client send result: {:?}", result.is_ok());
+            assert!(result.is_ok());
 
-        let close_result = result.unwrap().close().await;
-        println!("client close result {:?}", close_result.clone());
-        assert_eq!(close_result.is_ok(), true);
+            let close_result = result.unwrap().close();
+            println!("client close result {:?}", close_result.clone());
+            assert!(close_result.is_ok());
+        });
 
+        ws_client_handle.await.unwrap();
         // ws_server_handle.await.unwrap();
         server_handle.abort();
+    }
+
+    // Bidirectional WS *session* via the public `XrdsNet::open` / `NetChannel`
+    // — send and receive the reply on the SAME connection, round-tripped
+    // against the built-in WS echo server. This exercises the tokio-tungstenite
+    // session backend end to end. `multi_thread` so the blocking client work
+    // (run on a blocking thread) doesn't starve the server task.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_ws_session_round_trip_open() {
+        use crate::client::XrdsNet;
+
+        let current_line = line!() + 8000;
+        let server_handle = run_server(PROTOCOLS::WS, current_line);
+        sleep(Duration::from_secs(2)).await; // let the server bind
+
+        let url = format!("ws://127.0.0.1:{}/", current_line);
+        let outcome = tokio::task::spawn_blocking(move || {
+            // `XrdsNet::open` is blocking (WS handshake) — run it off the async
+            // test thread.
+            let mut chan = XrdsNet::open(&url).expect("ws session open should succeed");
+            chan.send(b"hello ws session".to_vec()).expect("send on the session");
+            let echoed = chan
+                .recv_timeout(Duration::from_secs(5))
+                .expect("should receive the echo back on the same connection");
+            assert_eq!(echoed.payload, b"hello ws session".to_vec());
+            let _ = chan.close();
+        })
+        .await;
+
+        server_handle.abort();
+        outcome.expect("client session task panicked");
     }
 
     #[tokio::test]
@@ -376,491 +423,36 @@ mod tests {
         let current_line = line!() + 8000;
         let crnt_dir = std::env::current_dir().unwrap();
         let target_dir = append_to_path(crnt_dir, "/test_root_dir");
-        let root_dir = Some(target_dir.as_path().to_str().unwrap().to_string());
+        let root_dir = target_dir.as_path().to_str().unwrap().to_string();
 
         let mut server = XRNetServer::new(vec![PROTOCOLS::WS], vec![current_line]);
         server.register_handler("text", |msg| Box::pin(echo_handler(msg)));
         let server_handle = tokio::spawn(async move {
             server
-                .set_root_dir(root_dir.unwrap().as_str())
+                .set_root_dir(root_dir.as_str())
                 .start()
                 .await;
         });
 
         sleep(Duration::from_secs(2)).await;
 
-        let client = connect_ws_client(current_line).await;
+        let ws_client_handle = tokio::task::spawn_blocking(move || {
+            let client = connect_ws_client(current_line);
 
-        let msg = "hello world".as_bytes().to_vec();
-        let mut result = client.send(msg, Some("text")).await;
+            let msg = "hello world".as_bytes().to_vec();
+            let mut result = client.send(msg, Some("text"));
 
-        assert_eq!(result.is_ok(), true);
+            assert!(result.is_ok());
 
-        let rcv_result = result.as_mut().unwrap().rcv().await;
-        println!("client received {:?}", rcv_result.clone());
+            let rcv_result = result.as_mut().unwrap().rcv();
+            println!("client received {:?}", rcv_result.clone());
 
-        let close_result = result.unwrap().close().await;
-        assert_eq!(close_result.is_ok(), true);
+            let close_result = result.unwrap().close();
+            assert!(close_result.is_ok());
+        });
 
+        ws_client_handle.await.unwrap();
         server_handle.abort();
     }
 
-    #[tokio::test]
-    async fn test_server_webrtc_run() {
-        let current_line = line!() + 8000;
-        let server_handle = run_server(PROTOCOLS::WEBRTC, current_line);
-
-        sleep(Duration::from_secs(15)).await;
-
-        assert!(true);
-        server_handle.await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn test_server_webrtc_connect_signal() {
-        let current_line = line!() + 8000;
-        let server_handle = run_server(PROTOCOLS::WEBRTC, current_line);
-
-        sleep(Duration::from_secs(2)).await;
-
-        let mut webrtc_client = WebRTCClient::new();
-        let addr_str = "ws://127.0.0.1".to_owned() + ":" + &current_line.to_string() + "/";
-
-        webrtc_client
-            .connect_to_signaling_server(addr_str.as_str())
-            .await
-            .expect("Failed to connect");
-
-        println!(
-            "Test: client_id received: {:?}",
-            webrtc_client.get_client_id()
-        );
-
-        server_handle.abort();
-    }
-
-    #[tokio::test]
-    async fn test_server_webrtc_multiuser() {
-        let current_line = line!() + 8000;
-        let server_handle = run_server(PROTOCOLS::WEBRTC, current_line);
-
-        let addr_str = "ws://127.0.0.1".to_owned() + ":" + &current_line.to_string() + "/";
-
-        sleep(Duration::from_secs(2)).await;
-
-        let mut webrtc_client = WebRTCClient::new();
-        webrtc_client
-            .connect_to_signaling_server(addr_str.as_str())
-            .await
-            .expect("Failed to connect");
-
-        println!("Starting second client");
-        let mut webrtc_client2 = WebRTCClient::new();
-        webrtc_client2
-            .connect_to_signaling_server(addr_str.as_str())
-            .await
-            .expect("Failed to connect");
-
-        println!(
-            "Test: client_id received: {:?}",
-            webrtc_client.get_client_id()
-        );
-        println!(
-            "Test: client_id2 received: {:?}",
-            webrtc_client2.get_client_id()
-        );
-
-        server_handle.abort();
-    }
-
-    #[tokio::test]
-    async fn test_server_webrtc_session_create() {
-        let current_line = line!() + 8000;
-        let server_handle = run_server(PROTOCOLS::WEBRTC, current_line);
-
-        sleep(Duration::from_secs(2)).await;
-
-        let mut webrtc_client = WebRTCClient::new();
-        let addr_str = "ws://127.0.0.1".to_owned() + ":" + &current_line.to_string() + "/";
-
-        webrtc_client
-            .connect_to_signaling_server(addr_str.as_str())
-            .await
-            .expect("Failed to connect");
-        println!(
-            "Test: client_id received: {:?}",
-            webrtc_client.get_client_id()
-        );
-
-        let session_id = webrtc_client
-            .create_session()
-            .await
-            .expect("Failed to create session");
-
-        println!("Test: session_id received: {:?}", session_id);
-
-        server_handle.abort();
-    }
-
-    #[tokio::test]
-    async fn test_server_webrtc_session_list() {
-        let current_line = line!() + 8000;
-        let server_handle = run_server(PROTOCOLS::WEBRTC, current_line);
-
-        sleep(Duration::from_secs(2)).await;
-
-        let mut webrtc_client = WebRTCClient::new();
-        let addr_str = "ws://127.0.0.1".to_owned() + ":" + &current_line.to_string() + "/";
-
-        webrtc_client
-            .connect_to_signaling_server(addr_str.as_str())
-            .await
-            .expect("Failed to connect");
-        println!(
-            "Test: client_id received: {:?}",
-            webrtc_client.get_client_id()
-        );
-
-        let _session_id = webrtc_client
-            .create_session()
-            .await
-            .expect("Failed to create session");
-
-        let session_ids = webrtc_client
-            .list_sessions()
-            .await
-            .expect("Failed to list sessions");
-        println!("Test: session_list received: {:?}", session_ids);
-
-        server_handle.abort();
-    }
-
-    #[tokio::test]
-    async fn test_server_webrtc_session_multiple() {
-        let current_line = line!() + 8000;
-        let server_handle = run_server(PROTOCOLS::WEBRTC, current_line);
-
-        sleep(Duration::from_secs(2)).await;
-
-        let mut webrtc_client = WebRTCClient::new();
-        let addr_str = "ws://127.0.0.1".to_owned() + ":" + &current_line.to_string() + "/";
-
-        webrtc_client
-            .connect_to_signaling_server(addr_str.as_str())
-            .await
-            .expect("Failed to connect");
-        println!(
-            "Test: client_id received: {:?}",
-            webrtc_client.get_client_id()
-        );
-
-        let _ = webrtc_client
-            .create_session()
-            .await
-            .expect("Failed to create session");
-        let _ = webrtc_client
-            .create_session()
-            .await
-            .expect("Failed to create session");
-        let session_ids = webrtc_client
-            .list_sessions()
-            .await
-            .expect("Failed to list sessions");
-        println!("Test: session_list received: {:?}", session_ids);
-
-        server_handle.abort();
-    }
-
-    #[tokio::test]
-    async fn test_server_webrtc_session_close() {
-        let current_line = line!() + 8000;
-        let server_handle = run_server(PROTOCOLS::WEBRTC, current_line);
-
-        sleep(Duration::from_secs(2)).await;
-
-        let mut webrtc_client = WebRTCClient::new();
-        let addr_str = "ws://127.0.0.1".to_owned() + ":" + &current_line.to_string() + "/";
-
-        webrtc_client
-            .connect_to_signaling_server(addr_str.as_str())
-            .await
-            .expect("Failed to connect");
-
-        let _ = webrtc_client
-            .create_session()
-            .await
-            .expect("Failed to create session");
-
-        let session_ids = webrtc_client
-            .list_sessions()
-            .await
-            .expect("Failed to list sessions");
-        let session_list = session_ids.clone();
-        let session_list = payload_str_to_vector_str(&session_list.session_id);
-
-        let session_id = session_list[0].clone();
-        println!("Test: session_id received: {}", session_id);
-
-        webrtc_client
-            .close_session(session_id.as_str())
-            .await
-            .expect("Failed to close session");
-
-        let lists = webrtc_client
-            .list_sessions()
-            .await
-            .expect("Failed to list sessions");
-        let session_list = payload_str_to_vector_str(&lists.session_id.as_str());
-        println!("Test: session_list received: {:?}", session_list);
-
-        server_handle.abort();
-    }
-
-    #[tokio::test]
-    async fn test_server_webrtc_session_join() {
-        let current_line = line!() + 8000;
-        let server_handle = run_server(PROTOCOLS::WEBRTC, current_line);
-
-        sleep(Duration::from_secs(2)).await;
-
-        let mut webrtc_publisher = WebRTCClient::new();
-        let addr_str = "ws://127.0.0.1".to_owned() + ":" + &current_line.to_string() + "/";
-
-        let mut webrtc_subscriber = WebRTCClient::new();
-
-        webrtc_publisher
-            .connect_to_signaling_server(addr_str.as_str())
-            .await
-            .expect("Failed to connect");
-
-        let crt_session_id = webrtc_publisher
-            .create_session()
-            .await
-            .expect("Failed to create session");
-        let _msg = webrtc_publisher
-            .publish(&crt_session_id)
-            .await
-            .expect("Failed to publish");
-
-        webrtc_subscriber
-            .connect_to_signaling_server(addr_str.as_str())
-            .await
-            .expect("Failed to connect");
-
-        let session_ids = webrtc_subscriber
-            .list_sessions()
-            .await
-            .expect("Failed to list sessions");
-
-        let session_id = payload_str_to_vector_str(session_ids.session_id.as_str());
-        let session_id = session_id[0].clone();
-        println!("Test: session_id received: {}", session_id);
-
-        let join_result = webrtc_subscriber
-            .join_session(session_id.as_str())
-            .await
-            .map_err(|e| e.to_string());
-        if join_result.is_err() {
-            println!("Join session error: {}", join_result.clone().err().unwrap());
-        }
-        assert!(join_result.is_ok());
-        server_handle.abort();
-    }
-
-    #[tokio::test]
-    async fn test_server_webrtc_session_list_participants() {
-        let port = line!() + 8000;
-        let server_handle = run_server(PROTOCOLS::WEBRTC, port);
-        sleep(Duration::from_secs(2)).await;
-
-        let addr_str = "ws://127.0.0.1".to_owned() + ":" + port.to_string().as_str() + "/";
-
-        let mut client = WebRTCClient::new();
-        client
-            .connect_to_signaling_server(addr_str.as_str())
-            .await
-            .expect("Failed to connect");
-
-        let session_id = client
-            .create_session()
-            .await
-            .expect("Failed to create session");
-        client
-            .publish(&session_id)
-            .await
-            .expect("Failed to publish");
-
-        let session_ids = client
-            .list_sessions()
-            .await
-            .expect("Failed to list sessions");
-        let session_list = payload_str_to_vector_str(&session_ids.session_id);
-        println!("Test: session_list received: {:?}", session_list);
-
-        let session_id = session_list[0].clone();
-        println!("Test: session_id received: {}", session_id);
-
-        let session_id = session_list[0].clone();
-        client
-            .join_session(&session_id)
-            .await
-            .expect("Failed to join session");
-
-        let participants_msg = client
-            .list_participants(&session_id)
-            .await
-            .expect("Failed to list participants");
-        let participants =
-            payload_str_to_vector_str(participants_msg.ice_candidates.unwrap().as_str());
-        println!("Test: participants received: {:?}", participants);
-
-        let client_id = client.get_client_id().unwrap();
-        // assert if participants include client_id
-        assert!(participants.contains(&client_id));
-
-        server_handle.abort();
-    }
-
-    #[tokio::test]
-    async fn test_server_webrtc_session_leave() {
-        let port = line!() + 8000;
-        let server_handle = run_server(PROTOCOLS::WEBRTC, port);
-        sleep(Duration::from_secs(2)).await;
-
-        let addr_str = "ws://127.0.0.1".to_owned() + ":" + port.to_string().as_str() + "/";
-
-        let mut client = WebRTCClient::new();
-        client
-            .connect_to_signaling_server(addr_str.as_str())
-            .await
-            .expect("Failed to connect");
-
-        let session_id = client
-            .create_session()
-            .await
-            .expect("Failed to create session");
-        client
-            .publish(&session_id)
-            .await
-            .expect("Failed to publish");
-
-        let session_list_msg = client
-            .list_sessions()
-            .await
-            .expect("Failed to list sessions");
-        let session_list = payload_str_to_vector_str(&session_list_msg.session_id);
-        println!("Test: session_list received: {:?}", session_list);
-
-        let session_id = session_list[0].clone();
-        client
-            .join_session(session_id.as_str())
-            .await
-            .expect("Failed to join session");
-
-        let participants = client
-            .list_participants(&session_id)
-            .await
-            .expect("Failed to list participants");
-        let participants_vec =
-            payload_str_to_vector_str(participants.ice_candidates.unwrap().as_str());
-
-        assert_eq!(participants_vec.len(), 1);
-
-        client
-            .leave_session(&session_id)
-            .await
-            .expect("Failed to leave session");
-
-        let participants = client
-            .list_participants(&session_id)
-            .await
-            .expect("Failed to list participants");
-        let participants_vec =
-            payload_str_to_vector_str(participants.ice_candidates.unwrap().as_str());
-        println!("Test: participants received: {:?}", participants_vec);
-
-        assert_eq!(participants_vec.len(), 0);
-
-        server_handle.abort();
-    }
-
-    #[tokio::test]
-    async fn test_server_webrtc_offer() {
-        let port = line!() + 8000;
-        let server_handle = run_server(PROTOCOLS::WEBRTC, port);
-        sleep(Duration::from_secs(2)).await;
-
-        let addr_str = "ws://127.0.0.1".to_owned() + ":" + port.to_string().as_str() + "/";
-
-        let mut client = WebRTCClient::new();
-        client
-            .connect_to_signaling_server(addr_str.as_str())
-            .await
-            .expect("Failed to connect");
-
-        // create session
-        let session_id = client
-            .create_session()
-            .await
-            .expect("Failed to create session");
-        println!("Test: session_id created: {}", session_id);
-        client
-            .publish(&session_id)
-            .await
-            .expect("Failed to publish");
-        let offer = &client.get_offer().unwrap().sdp; // this is returned offer SDP for just checking
-        assert!(offer.len() > 0);
-
-        server_handle.abort();
-    }
-
-    #[tokio::test]
-    async fn test_server_webrtc_answer() {
-        let port = line!() + 8000;
-        let server_handle = run_server(PROTOCOLS::WEBRTC, port);
-        sleep(Duration::from_secs(2)).await;
-
-        let addr_str = "ws://127.0.0.1".to_owned() + ":" + port.to_string().as_str() + "/";
-
-        let mut publisher = WebRTCClient::new();
-        publisher
-            .connect_to_signaling_server(addr_str.as_str())
-            .await
-            .expect("Failed to connect");
-
-        let session_id = publisher
-            .create_session()
-            .await
-            .expect("Failed to create session");
-
-        publisher
-            .publish(&session_id)
-            .await
-            .expect("Failed to publish");
-
-        // subscriber joins the session
-        let mut subscriber = WebRTCClient::new();
-        subscriber
-            .connect_to_signaling_server(addr_str.as_str())
-            .await
-            .expect("Failed to connect");
-
-        subscriber
-            .join_session(session_id.as_str())
-            .await
-            .expect("Failed to join session");
-
-        publisher
-            .wait_for_subscriber(10)
-            .await
-            .expect("Failed to wait for subscriber");
-
-        let pub_answer = &publisher.get_answer().unwrap().sdp;
-        let sub_answer = &subscriber.get_answer().unwrap().sdp;
-
-        // Compare the ANSWER publisher got from what SUBSCRIBER created.
-        assert_eq!(pub_answer, sub_answer);
-
-        server_handle.abort();
-    }
 }

@@ -1,0 +1,5 @@
+# npm dependencies — run `npm install` to restore
+node_modules/
+
+# Vite build output — run `npm run build` to regenerate
+dist/

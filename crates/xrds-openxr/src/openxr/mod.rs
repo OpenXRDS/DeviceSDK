@@ -1,3 +1,6 @@
+pub(crate) mod blit;
+pub(crate) mod render_model;
+pub(crate) mod input;
 pub(crate) mod camera;
 pub(crate) mod frame;
 pub(crate) mod graphics;
@@ -12,4 +15,3 @@ pub(crate) mod schedule;
 pub(crate) mod session;
 pub(crate) mod swapchain;
 
-pub use camera::OpenXrCamera;

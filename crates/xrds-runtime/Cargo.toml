@@ -6,12 +6,24 @@ edition = "2021"
 [lib]
 crate-type = ["lib"]
 
+[features]
+default = ["ftp-server"]
+# Forwards to xrds-net's FTP *server* (never needed by an XR client app, and
+# the only reason to ever turn it off — see crates/xrds-net/Cargo.toml).
+# Cargo unifies a shared dependency's features workspace-wide, so this can't
+# be varied per platform via `[target.'cfg(...)'.dependencies]` alone — the
+# Android build explicitly passes `--no-default-features` at the xrds-app
+# level (see android/quest/build.sh) instead. See
+# docs/done/xrds-net-android-shipping.md Phase 3.
+ftp-server = ["xrds-net/ftp-server"]
+
 [dependencies]
 log.workspace = true
 env_logger.workspace = true
 anyhow.workspace = true
 tokio.workspace = true
 
+petgraph="0.8.3"
 mint = "0.5.9"
 winit = { version = "0.30.5", default-features = false, features = [
     "ahash",
@@ -23,13 +35,25 @@ winit = { version = "0.30.5", default-features = false, features = [
     "sctk-adwaita",
     "mint",
 ] }
-xrds-core = { workspace = true }
-xrds-net = { workspace = true }
 xrds-audio = { workspace = true }
-xrds-graphics = { workspace = true }
 xrds-components = { workspace = true }
 xrds-openxr = { workspace = true }
+xrds-scene-graph = { workspace = true }
 bevy = { workspace = true }
+bevy-sequential-actions = { workspace = true }
+bevy_firework = { workspace = true }
+avian3d = { workspace = true }
+bevy_rich_text3d = { workspace = true }
+bevy_fontmesh = { workspace = true }
+bevy_mod_outline = "0.11.0"
+gltf = "1.4.1"
+
+# xrds-net's client networking (http/https, ws/wss, quic, mqtt, ftp/sftp
+# client, coap) cross-compiles for Android — see
+# docs/done/xrds-net-android-shipping.md. `default-features = false` here (the
+# `ftp-server` feature above forwards it back on for the default/desktop
+# case); WebRTC stays out of this path entirely regardless of platform.
+xrds-net = { workspace = true, default-features = false }
 
 [build-dependencies]
 cbindgen = "0.27.0"
@@ -37,5 +61,5 @@ cbindgen = "0.27.0"
 [target.'cfg(unix)'.dependencies]
 winit = { version = "0.30.5" }
 
-[target.'cfg(android)'.dependencies]
-winit = { version = "0.30.5", features = ["android-game-activity"] }
+[target.'cfg(target_os = "android")'.dependencies]
+winit = { version = "0.30.5", features = ["android-native-activity"] }

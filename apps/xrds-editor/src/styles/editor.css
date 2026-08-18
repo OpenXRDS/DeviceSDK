@@ -1,0 +1,1146 @@
+/* Editor palette — a cool slate/blue scheme taken from
+ * docs/Sequencer_Editor.dc.html, which replaced the earlier Catppuccin
+ * Mocha (purple-tinted) palette. Token *names* are unchanged on purpose:
+ * every component's CSS and tailwind.config.js both resolve against these
+ * custom properties, so this block is the single place the whole editor's
+ * colour scheme is defined. Changing a value here restyles the app. */
+:root {
+  /* Surfaces, darkest → lightest */
+  --crust:    #0c0e11;  /* window backdrop, menubar, status bars */
+  --mantle:   #12151a;  /* panel header strips */
+  --base:     #14171c;  /* panel bodies */
+  --elevated: #161a20;  /* column headers inside a panel */
+  --well:     #0f1216;  /* recessed field/input background */
+  --sel:      #26303d;  /* selected row / active segment background */
+
+  /* Borders & muted fills. --surface0 is the everyday border; --surface1
+   * is the stronger one (popovers, hover, dividers that must read). */
+  --surface0: #262c34; --surface1: #363d47;
+
+  /* Text, dimmest → brightest. --text is body copy; --bright is for
+   * titles and the selected/active item, matching the mockup's contrast
+   * step between the two. */
+  /* --overlay0 was #6e7681 — ~3.9:1 against --base, under WCAG AA's 4.5:1
+   * for normal text, which is why the dimmest labels/hints read as hard to
+   * read rather than just "deliberately quiet". #838b96 lands at ~5:1. */
+  --overlay0: #838b96; --subtext0: #9aa1ab; --subtext1: #c3c9d1;
+  --text:     #ced3db; --bright:   #e6eaf0;
+
+  /* Accents. The mockup has no purple, so --mauve (used for a few
+   * accent labels) resolves to the light blue instead of inventing a hue
+   * the design doesn't contain. */
+  --blue:    #4c9df0; --blue-l:  #9fcaf7;
+  --green:   #6cc48f; --red:     #e2685f;
+  --peach:   #e88c85; --yellow:  #f0c04a;
+  --teal:    #45b6d6; --mauve:   #9fcaf7;
+  --flamingo:#e3d3a8;
+
+  /* Type/shape tokens. Sans for UI text; mono reserved for
+   * numbers/paths/code. The mockup specifies IBM Plex Sans/Mono, which
+   * isn't bundled (and the wry webview loads offline from xrds://, so a
+   * Google Fonts link would just fail) — these stacks are the closest
+   * locally-available humanist sans / UI mono on each platform. */
+  --font-sans: "Segoe UI Variable Text", "Segoe UI", -apple-system, BlinkMacSystemFont,
+               "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "Cascadia Mono", "Cascadia Code", ui-monospace, "SF Mono", Consolas, monospace;
+
+  /* Tighter than the previous 6/8px — the mockup's controls are 3–5px. */
+  --radius-sm: 3px;
+  --radius: 5px;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+/* Global readability bump for Tailwind's arbitrary `text-[Npx]` utilities.
+ * The mockup this editor was styled after used a dense, ~9-12px scale
+ * throughout; in practice that reads as too small, especially combined
+ * with the muted (--overlay0/--subtext0) colors used for hints and labels.
+ * Rather than hand-edit the ~60 call sites across every component, every
+ * observed size is bumped once here — one place to retune later. `!important`
+ * is required, not decorative: `main.tsx` imports this file *before*
+ * tailwind.css so Tailwind's own utilities can override editor.css elsewhere,
+ * which means the reverse — this file beating a same-specificity Tailwind
+ * class — needs it explicitly. */
+.text-\[9px\]    { font-size: 10.5px !important; }
+.text-\[9\.5px\] { font-size: 11px   !important; }
+.text-\[10px\]   { font-size: 11.5px !important; }
+.text-\[10\.5px\] { font-size: 12px   !important; }
+.text-\[11px\]   { font-size: 12.5px !important; }
+.text-\[11\.5px\] { font-size: 13px   !important; }
+.text-\[12px\]   { font-size: 13.5px !important; }
+.text-\[12\.5px\] { font-size: 14px   !important; }
+
+body { font-family: var(--font-sans); background: var(--crust); color: var(--text);
+       overflow: hidden; height: 100vh;
+       -webkit-font-smoothing: antialiased; }
+
+/* Applied to body only while a DragNumber (Sequencer inspector's Position/
+ * Rotation/Scale fields) is being scrubbed, so the cursor and "no text
+ * selection" apply globally — the pointer can leave the input's own bounds
+ * mid-drag once it has pointer capture, and without this the drag would
+ * otherwise start highlighting whatever text it passes over. */
+body.seq-dragging-number { cursor: ew-resize !important; user-select: none !important; }
+body.seq-dragging-number * { cursor: ew-resize !important; }
+
+/* Controls don't inherit font-family from body by default in the UA
+ * stylesheet — force it, so switching body's font actually reaches every
+ * button/input/select without touching each component. */
+button, input, select, textarea { font-family: inherit; }
+
+/* Escape hatch back to the numeric/code face — scrub fields, transform
+ * values, hex paths, log output. */
+.mono { font-family: var(--font-mono); }
+
+/* Baseline for any bare <select>/<input> that isn't inside a container with
+ * its own rule (.tb-select, .insp-row select, .scrub-wrap input, …). Wrapped
+ * in :where() so it contributes zero specificity — any single-class rule
+ * (.tree-rename, .hud-library-name-input, …) still wins regardless of source
+ * order. Without this, an unclassed control (several of the HUD/World-Panel
+ * overlay bars) silently renders as an unstyled light-mode OS widget on top
+ * of the dark theme. */
+:where(select, input[type="text"], input[type="number"], input[type="password"]) {
+  background: var(--well); color: var(--bright);
+  border: 1px solid var(--surface0); border-radius: var(--radius);
+  padding: 5px 8px; font-size: 13px;
+}
+:where(select, input[type="text"], input[type="number"]):focus {
+  outline: 1px solid var(--blue);
+}
+:where(input[type="range"]) { accent-color: var(--blue); }
+:where(input[type="color"]) {
+  border: 1px solid var(--surface1); border-radius: var(--radius-sm);
+  cursor: pointer; background: none;
+}
+:where(input[type="checkbox"]) { accent-color: var(--blue); cursor: pointer; }
+
+/* ── Root layout ─────────────────────────────────────────────────────────── */
+.editor-root { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+
+.editor-panels { display: flex; flex: 1; overflow: hidden; }
+
+/* Centre column — viewport, plus the Sequencer docked beneath it in
+ * Sequencer mode. The Sequencer deliberately does NOT span the window:
+ * keeping it inside this column is what leaves the left sidebar and the
+ * Inspector at full window height, so the Inspector stops needing to
+ * scroll. `flex-basis` on the viewport rather than a fixed height so the
+ * split still adapts to the window. */
+.editor-column { flex: 1; min-width: 0; display: flex; flex-direction: column;
+                 overflow: hidden; }
+.editor-column > .editor-center { flex: 1; min-height: 0; }
+.editor-column--seq > .editor-center { flex: 0 0 46%; }
+
+/* ── Sequencers list panel (left column in Sequencer mode) ──────────────── */
+.seq-list-panel { flex: 1; min-height: 0; display: flex; flex-direction: column;
+                  background: var(--base); overflow: hidden; }
+
+.seq-list-tabs { display: flex; flex-shrink: 0; background: var(--mantle);
+                 border-bottom: 1px solid var(--surface0); }
+.seq-list-tab { flex: 1; display: flex; align-items: center; justify-content: center; gap: 6px;
+                padding: 7px 8px; font-size: 12px; font-weight: 500; cursor: pointer;
+                background: transparent; border: none; border-top: 2px solid transparent;
+                color: var(--overlay0); white-space: nowrap; overflow: hidden; }
+.seq-list-tab:hover { color: var(--subtext1); }
+.seq-list-tab.active { color: var(--bright); background: var(--base);
+                       border-top-color: var(--blue); }
+.seq-list-tab-count { font-family: var(--font-mono); font-size: 10.5px; padding: 1px 4px;
+                      border: 1px solid var(--surface0); border-radius: 3px; }
+
+.seq-list-toolbar { flex-shrink: 0; display: flex; align-items: center; gap: 6px;
+                    padding: 6px 8px; border-bottom: 1px solid var(--surface0); }
+
+.seq-list-empty { padding: 12px; font-size: 12px; color: var(--subtext0); line-height: 1.5; }
+.seq-list-items { flex: 1; min-height: 0; overflow-y: auto; }
+
+.seq-list-row { display: flex; align-items: center; gap: 7px; padding: 0 8px;
+                min-height: 30px; font-size: 13px; cursor: pointer;
+                color: var(--subtext1); border-bottom: 1px solid var(--surface0); }
+.seq-list-row:hover { background: var(--mantle); }
+/* The entry currently loaded in the Sequencer below. */
+.seq-list-row.open { background: var(--sel); color: var(--bright);
+                     box-shadow: inset 2px 0 0 var(--blue); }
+.seq-list-row-icon { font-size: 11.5px; color: var(--overlay0); flex-shrink: 0; }
+.seq-list-row-name { flex: 1; min-width: 0; overflow: hidden;
+                     text-overflow: ellipsis; white-space: nowrap; }
+.seq-list-row-meta { font-family: var(--font-mono); font-size: 10.5px; color: var(--overlay0);
+                     flex-shrink: 0; }
+.seq-list-row-del { background: none; border: none; color: var(--overlay0); cursor: pointer;
+                    font-size: 11.5px; padding: 2px 4px; border-radius: var(--radius-sm);
+                    flex-shrink: 0; opacity: 0; }
+.seq-list-row:hover .seq-list-row-del { opacity: 1; }
+.seq-list-row-del:hover { background: var(--surface0); color: var(--red); }
+
+.editor-center { flex: 1; display: flex; align-items: center; justify-content: center;
+                 overflow: hidden; background: #0a0a0a; }
+
+/* Scale the Bevy canvas to fill the available space while preserving 16:9.
+   max-width/max-height + aspect-ratio gives "object-fit: contain" for canvas. */
+.viewport-canvas {
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+  width: auto;
+  height: auto;
+  aspect-ratio: 16 / 9;
+}
+
+.viewport-placeholder { flex: 1; display: flex; align-items: center;
+                         justify-content: center; color: var(--surface1); font-size: 14.5px; }
+
+/* ── Menubar ─────────────────────────────────────────────────────────────── */
+.menubar { background: var(--mantle); border-bottom: 1px solid var(--surface0);
+           display: flex; align-items: center; flex-shrink: 0; height: 36px;
+           padding: 0 12px; gap: 1px;
+           font-size: 14px; user-select: none; position: relative; z-index: 100; }
+
+.mb-item { padding: 5px 9px; margin: 0 1px; border-radius: var(--radius-sm);
+           cursor: pointer; color: var(--subtext0); position: relative; }
+.mb-item:hover, .mb-item.open { background: var(--sel); color: var(--bright); }
+
+.mb-dropdown { display: none; position: absolute; top: 100%; left: 0;
+               background: var(--mantle); border: 1px solid var(--surface1);
+               border-radius: var(--radius-sm); margin-top: 2px;
+               min-width: 190px; box-shadow: 0 8px 20px rgba(0,0,0,.45); z-index: 200;
+               overflow: hidden; }
+.mb-item.open .mb-dropdown { display: block; }
+
+.mb-action { padding: 8px 14px; cursor: pointer; color: var(--text);
+             display: flex; justify-content: space-between; align-items: center;
+             gap: 12px; font-size: 13.5px; }
+.mb-action:hover { background: var(--sel); color: var(--bright); }
+.mb-action.disabled { color: var(--surface1); cursor: default; }
+.mb-action.disabled:hover { background: transparent; }
+.mb-sep { height: 1px; background: var(--surface0); margin: 4px 0; }
+.mb-shortcut { color: var(--overlay0); font-size: 11.5px; font-family: var(--font-mono); }
+
+/* ── Keyboard shortcuts overlay ──────────────────────────────────────────── */
+.kb-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.55);
+              display: flex; align-items: center; justify-content: center; z-index: 1000; }
+
+.kb-modal { background: var(--mantle); border: 1px solid var(--surface1);
+            border-radius: 12px; box-shadow: 0 8px 32px rgba(0,0,0,.6);
+            width: 560px; max-height: 80vh; display: flex; flex-direction: column;
+            overflow: hidden; }
+
+.kb-header { display: flex; align-items: center; justify-content: space-between;
+             padding: 13px 18px; border-bottom: 1px solid var(--surface0);
+             font-size: 15px; font-weight: 600; color: var(--text); flex-shrink: 0; }
+
+.kb-close { background: none; border: none; color: var(--subtext0); cursor: pointer;
+            font-size: 15.5px; line-height: 1; padding: 4px 6px; border-radius: var(--radius-sm); }
+.kb-close:hover { background: var(--surface0); color: var(--text); }
+
+.kb-body { overflow-y: auto; padding: 14px 18px;
+           display: grid; grid-template-columns: 1fr 1fr; gap: 0 24px; }
+
+.kb-section { margin-bottom: 14px; }
+
+.kb-section-title { font-size: 12px; text-transform: uppercase; letter-spacing: .07em;
+                    color: var(--blue); font-weight: 600; margin-bottom: 6px; }
+
+.kb-row { display: flex; justify-content: space-between; align-items: baseline;
+          padding: 3px 0; font-size: 13.5px; }
+
+.kb-key  { color: var(--yellow); font-family: var(--font-mono); white-space: nowrap; }
+.kb-desc { color: var(--subtext0); text-align: right; margin-left: 8px; }
+
+/* ── Toolbar ─────────────────────────────────────────────────────────────── */
+.toolbar { background: var(--base); border-bottom: 1px solid var(--surface0);
+           padding: 0 12px; min-height: 44px; display: flex; align-items: center; gap: 8px;
+           flex-shrink: 0; font-size: 14px; flex-wrap: wrap; }
+
+.toolbar .scene-name { color: var(--bright); font-weight: 600; }
+.toolbar .dirty { color: var(--red); }
+.toolbar .meta  { color: var(--overlay0); font-size: 12px; font-family: var(--font-mono); }
+.toolbar .status-msg { color: var(--green); font-size: 13px; margin-left: auto; }
+
+/* Segmented control — one bordered well with 1px-divided items, per the
+ * mockup's Select/Move/Rotate/Scale and Layout groups. Buttons inside a
+ * group drop their own border/radius so the group owns the outline. */
+.tb-group { display: flex; background: var(--well);
+            border: 1px solid var(--surface0); border-radius: var(--radius);
+            overflow: hidden; }
+.tb-group > .tb-btn { background: transparent; border: none; border-radius: 0;
+                      border-right: 1px solid var(--surface0); }
+.tb-group > .tb-btn:last-child { border-right: none; }
+.tb-group > .tb-btn.active { background: var(--sel); color: var(--blue-l); }
+
+.tb-btn { background: var(--well); color: var(--subtext0);
+          border: 1px solid var(--surface0); padding: 5px 11px;
+          font-size: 13px; font-weight: 500; border-radius: var(--radius); cursor: pointer;
+          transition: background .12s ease, color .12s ease, border-color .12s ease; }
+.tb-btn:hover { background: var(--sel); color: var(--bright); }
+.tb-btn.active { background: var(--sel); color: var(--blue-l);
+                 border-color: color-mix(in srgb, var(--blue) 40%, transparent); }
+.tb-btn:disabled { color: var(--surface1); cursor: default; background: var(--well); }
+.tb-btn:disabled:hover { background: var(--well); color: var(--surface1); }
+/* Tinted pill rather than a solid fill — matches the mockup's Auto-Key
+ * treatment for a "live/armed" state. */
+.tb-btn.play-active {
+  background: color-mix(in srgb, var(--green) 14%, transparent);
+  border-color: color-mix(in srgb, var(--green) 42%, transparent);
+  color: var(--green); font-weight: 600;
+}
+.tb-select { background: var(--well); color: var(--text);
+             border: 1px solid var(--surface0); padding: 5px 8px;
+             font-size: 13px; border-radius: var(--radius); cursor: pointer; }
+
+/* ── Resize handles (left-sidebar, inspector-wrap, and the stacked panels
+ *    inside left-sidebar all use these — see src/hooks/useResizable.ts) ──── */
+.panel-resize-handle--v { position: absolute; top: 0; bottom: 0; width: 8px;
+                          cursor: col-resize; z-index: 10; touch-action: none; }
+.panel-resize-handle--v::after { content: ""; display: block; margin: auto; height: 36px; width: 3px;
+                                 border-radius: 2px; background: transparent; transition: background .12s ease; }
+.panel-resize-handle--v:hover::after, .panel-resize-handle--v.dragging::after { background: var(--blue); }
+
+.panel-resize-handle--h { position: absolute; top: -4px; left: 0; right: 0; height: 8px;
+                          cursor: row-resize; z-index: 10; touch-action: none; }
+.panel-resize-handle--h::after { content: ""; display: block; margin: 3px auto 0; width: 36px; height: 3px;
+                                 border-radius: 2px; background: var(--surface1); transition: background .12s ease; }
+.panel-resize-handle--h:hover::after, .panel-resize-handle--h.dragging::after { background: var(--blue); }
+
+/* Locked state — the handle stops being draggable (see useResizable's
+ * onPointerDown early-return), so it stops looking like one too. */
+.panel-resize-handle--v.locked, .panel-resize-handle--h.locked { cursor: default; }
+.panel-resize-handle--v.locked::after, .panel-resize-handle--h.locked::after { background: transparent !important; }
+
+/* Lock toggle — the 3 main panels only (left-sidebar, inspector, palette).
+ * Sits in a fixed corner near that panel's resize handle rather than on
+ * the handle's own drag strip, so clicking it never fights a drag. */
+.panel-lock-btn { position: absolute; z-index: 11; background: none; border: none;
+                  color: var(--overlay0); cursor: pointer; font-size: 12.5px;
+                  padding: 3px 5px; border-radius: var(--radius-sm); line-height: 1; }
+.panel-lock-btn:hover { background: var(--surface0); color: var(--text); }
+.panel-lock-btn.locked { color: var(--yellow); }
+/* The lock button is absolutely positioned in its panel's top corner, which
+ * lands it on top of the header title now that .panel-header is a flush
+ * 12px-padded strip. Reserve room on whichever side the button sits. */
+.inspector-wrap > .inspector > .panel-header,
+.inspector-wrap .seq-list-panel > .panel-header { padding-left: 30px; }
+.left-sidebar .hierarchy > .panel-header,
+.left-sidebar .seq-list-panel > .panel-header { padding-right: 30px; }
+
+/* ── Hierarchy ───────────────────────────────────────────────────────────── */
+.left-sidebar { position: relative; width: 240px; border-right: 1px solid var(--surface0);
+                display: flex; flex-direction: column; flex-shrink: 0; }
+.hierarchy { background: var(--mantle); display: flex; flex-direction: column;
+             flex: 1; min-height: 60px; }
+/* Quiet sentence-case title on its own strip — the mockup's panel headers
+ * ("Scene / Node Hierarchy"), not an uppercase label with an accent dot. */
+.panel-header { height: 31px; padding: 0 12px; font-size: 13px; color: var(--bright);
+                font-weight: 600; background: var(--mantle);
+                border-bottom: 1px solid var(--surface0);
+                display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.tree { flex: 1; overflow-y: auto; padding: 4px 0; }
+
+/* Flat full-width 26px rows (mockup) rather than inset rounded pills — the
+ * inline paddingLeft Hierarchy.tsx sets for depth still overrides the left
+ * value here. */
+.tree-node { display: flex; align-items: center; gap: 7px; height: 26px; padding: 0 12px;
+             cursor: pointer; font-size: 13px; white-space: nowrap;
+             user-select: none; color: var(--subtext1); }
+.tree-node:hover { background: var(--base); }
+.tree-node.selected { background: var(--sel); color: var(--bright);
+                       box-shadow: inset 2px 0 0 var(--blue); }
+.tree-node .icon { font-size: 11.5px; color: var(--overlay0); width: 14px; text-align: center; }
+.tree-node .kind { font-size: 10.5px; color: var(--overlay0); margin-left: auto;
+                   font-family: var(--font-mono); }
+.tree-node .hidden { opacity: 0.4; }
+
+/* Hierarchy — expand arrow */
+.tree-expand { width: 14px; flex-shrink: 0; font-size: 10.5px; color: var(--overlay0);
+               cursor: pointer; text-align: center; user-select: none; }
+.tree-expand:hover { color: var(--text); }
+
+/* Hierarchy — inline rename input */
+.tree-rename { flex: 1; background: var(--base); color: var(--text);
+               border: 1px solid var(--blue); padding: 2px 6px;
+               font-size: 14px; border-radius: var(--radius-sm);
+               outline: none; min-width: 0; }
+
+/* Hierarchy — drag-over indicator */
+.tree-node.drag-over { background: var(--blue) !important; color: var(--mantle) !important; }
+.tree-drop-root { height: 6px; margin: 0 6px; border-radius: var(--radius-sm); transition: background 0.1s; }
+.tree-drop-root.drag-over { background: var(--blue); }
+
+/* Context menu */
+.ctx-menu { position: fixed; background: var(--mantle); border: 1px solid var(--surface1);
+            border-radius: var(--radius); box-shadow: 0 8px 24px rgba(0,0,0,.5);
+            z-index: 500; min-width: 170px; padding: 4px; font-size: 14px; overflow: hidden; }
+.ctx-item { padding: 7px 12px; cursor: pointer; color: var(--text); white-space: nowrap;
+            border-radius: var(--radius-sm); }
+.ctx-item:hover { background: var(--sel); color: var(--bright); }
+.ctx-item.danger { color: var(--red); }
+.ctx-sep { height: 1px; background: var(--surface0); margin: 4px 2px; }
+
+/* ── Inspector ───────────────────────────────────────────────────────────── */
+/* .inspector-wrap carries the resizable width (set via inline style, see
+ * useResizable in App.tsx) and hosts the drag handle; .inspector itself
+ * just fills it, same pattern as .left-sidebar/.panel-resize-handle. */
+.inspector-wrap { position: relative; flex-shrink: 0; border-left: 1px solid var(--surface0); }
+.inspector { width: 100%; height: 100%;
+             background: var(--mantle); display: flex; flex-direction: column;
+             overflow-y: auto; }
+
+/* ── Sequencer (bottom-docked, single unified panel — see
+   docs/done/xrds-sequencer-v2-implementation-plan.md Phase D, redesigned to
+   match docs/Sequencer Editor.dc.html's one-panel layout: a transport/
+   header strip, then three columns — track list | ruler+lanes |
+   inspector-for-the-selected-item — instead of a separate docked
+   Action Sequence Editor column). Full-width, always docked above
+   .palette (not just while something is open — same "always-present,
+   shows its own empty state" convention as .inspector). Fixed height for
+   now — resizing can reuse useResizable later if wanted, not added
+   speculatively here. */
+/* `position: relative` on the shell is load-bearing, not cosmetic: any
+ * `position: absolute; inset: 0` descendant would otherwise resolve
+ * against the initial containing block and cover the whole window with an
+ * invisible click-swallowing layer (this exact bug shipped once). */
+.seq-ws {
+  position: relative;
+  flex: 1; min-height: 0;
+  display: flex; flex-direction: column;
+  background: var(--base);
+  border-top: 1px solid var(--surface0);
+  overflow: hidden;
+}
+
+/* ── Header / transport ─────────────────────────────────────────────────── */
+.seq-ws-header {
+  flex-shrink: 0; display: flex; align-items: center; gap: 8px;
+  padding: 7px 12px; background: var(--mantle);
+  border-bottom: 1px solid var(--surface0); flex-wrap: wrap;
+}
+.seq-ws-divider { width: 1px; height: 18px; background: var(--surface0); }
+
+.seq-target-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 3px 9px; font-size: 13px; color: var(--blue);
+  background: color-mix(in srgb, var(--blue) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--blue) 40%, transparent);
+  border-radius: var(--radius-sm);
+}
+.seq-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.seq-bar { width: 3px; height: 14px; border-radius: 2px; flex-shrink: 0; }
+
+.seq-transport-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 30px; height: 24px; border-radius: var(--radius-sm);
+  background: var(--well); color: var(--text); border: 1px solid var(--surface0);
+  font-size: 12.5px; cursor: pointer;
+}
+.seq-transport-btn:hover { background: var(--surface1); }
+.seq-transport-btn.active { background: var(--blue); color: var(--crust); }
+
+.seq-timecode {
+  display: inline-flex; align-items: baseline; gap: 6px;
+  font-family: var(--font-mono); font-size: 15.5px; color: var(--bright);
+}
+.seq-timecode-sub { font-size: 11.5px; color: var(--overlay0); }
+
+.seq-startmode {
+  display: inline-flex; align-items: center; gap: 10px;
+  padding: 3px 9px; background: var(--well);
+  border: 1px solid var(--surface0); border-radius: var(--radius-sm);
+  font-size: 12px; color: var(--overlay0);
+}
+.seq-startmode > span { display: inline-flex; align-items: center; gap: 5px; }
+.seq-startmode > span.active { color: var(--text); }
+.seq-radio {
+  width: 9px; height: 9px; border-radius: 50%;
+  border: 1.4px solid var(--surface1);
+}
+.seq-startmode > span.active .seq-radio {
+  border-color: var(--blue);
+  background: radial-gradient(circle, var(--blue) 0 45%, transparent 46%);
+}
+
+/* ── Body: three columns ────────────────────────────────────────────────── */
+.seq-ws-body { flex: 1; min-height: 0; display: flex; }
+
+.seq-ws-col-head {
+  flex-shrink: 0; height: 30px; display: flex; align-items: center; gap: 8px;
+  padding: 0 10px; background: var(--elevated);
+  border-bottom: 1px solid var(--surface0);
+}
+.seq-caption {
+  font-family: var(--font-mono); font-size: 10.5px; letter-spacing: .09em;
+  color: var(--overlay0); text-transform: uppercase;
+}
+.seq-tag {
+  font-family: var(--font-mono); font-size: 10.5px; padding: 1px 5px;
+  border: 1px solid var(--surface0); border-radius: 3px; color: var(--overlay0);
+}
+
+.seq-ws-tracks {
+  width: 260px; flex-shrink: 0; display: flex; flex-direction: column;
+  border-right: 1px solid var(--surface0); overflow: hidden;
+}
+.seq-ws-track-list { flex: 1; min-height: 0; overflow-y: auto; }
+.seq-ws-track-parent {
+  height: 32px; display: flex; align-items: center; gap: 7px; padding: 0 10px;
+  background: var(--elevated); border-bottom: 1px solid var(--surface0);
+}
+.seq-ws-track-row {
+  display: flex; align-items: center; gap: 7px; padding: 0 10px 0 20px;
+  border-bottom: 1px solid var(--surface0);
+  cursor: pointer;
+  /* Room for the .active accent bar, which is drawn inside this padding rather
+   * than as a border so selecting a row does not shift its contents. */
+  position: relative;
+}
+.seq-ws-track-row:hover { background: color-mix(in srgb, var(--surface0) 40%, transparent); }
+
+/* Selected row. The `active` class was already being applied in
+ * SequencerWorkspace.tsx but had no rule at all, so clicking a nameplate gave no
+ * feedback whatsoever and read as "not clickable". The lane rule below is the
+ * matching half: nameplate and timeline row highlight together, so it is obvious
+ * which lane an added event will land on. */
+.seq-ws-track-row.active {
+  background: color-mix(in srgb, var(--mauve) 14%, transparent);
+}
+.seq-ws-track-row.active::before {
+  content: ""; position: absolute; left: 0; top: 0; bottom: 0;
+  width: 3px; background: var(--mauve);
+}
+.seq-ws-lane.active { background-color: color-mix(in srgb, var(--mauve) 8%, transparent); }
+
+.seq-ws-track-row.dimmed, .seq-ws-lane.dimmed { opacity: .4; }
+
+.seq-msl { display: inline-flex; gap: 3px; }
+.seq-msl button {
+  font-family: var(--font-mono); font-size: 10.5px; line-height: 1;
+  padding: 3px 4px; border-radius: 3px; cursor: pointer;
+  background: transparent; border: 1px solid var(--surface0); color: var(--overlay0);
+}
+.seq-msl button:hover { border-color: var(--surface1); color: var(--text); }
+.seq-msl button.active-m { background: var(--red);   border-color: var(--red);   color: var(--crust); }
+.seq-msl button.active-s { background: var(--yellow);border-color: var(--yellow);color: var(--crust); }
+.seq-msl button.active-l { background: var(--blue);  border-color: var(--blue);  color: var(--crust); }
+
+/* ── Ruler + lanes ──────────────────────────────────────────────────────── */
+.seq-ws-lanes {
+  flex: 1; min-width: 0; display: flex; flex-direction: column;
+  background: var(--crust); overflow: hidden;
+}
+.seq-ruler {
+  position: relative; flex-shrink: 0; height: 30px;
+  background: var(--elevated); border-bottom: 1px solid var(--surface0);
+  overflow: hidden;
+}
+.seq-ruler-major { position: absolute; top: 0; bottom: 0; border-left: 1px solid var(--surface1); }
+.seq-ruler-minor { position: absolute; bottom: 0; height: 7px; border-left: 1px solid var(--surface0); }
+.seq-ruler-label {
+  position: absolute; left: 4px; top: 5px; white-space: nowrap;
+  font-family: var(--font-mono); font-size: 11px; color: var(--subtext0);
+}
+.seq-ruler-note {
+  position: absolute; right: 8px; top: 8px;
+  font-family: var(--font-mono); font-size: 10.5px; color: var(--surface1);
+}
+
+/* `position: relative` is load-bearing: the playhead and insert marker are
+ * absolutely positioned with `left: <percent>`, which needs this element to be
+ * their containing block. Without it they resolve against some further ancestor
+ * and land in the wrong place. */
+.seq-ws-lane-list { flex: 1; min-height: 0; overflow-y: auto; position: relative; }
+/* Mirrors .seq-ws-track-parent's height so lane rows line up with their
+ * track labels — the two columns scroll independently and nothing else
+ * enforces the alignment. */
+.seq-ws-lane-parent { height: 32px; border-bottom: 1px solid var(--surface0); background: var(--elevated); }
+
+.seq-ws-lane {
+  position: relative; border-bottom: 1px solid var(--surface0);
+  background-image: linear-gradient(90deg, color-mix(in srgb, var(--surface0) 55%, transparent) 1px, transparent 1px);
+  background-size: 12.5% 100%;
+}
+
+/* Duration was a dim label plus an unstyled box and read as decoration. It is
+ * the control an author reaches for when a Track behaves oddly, so it now looks
+ * like a control. */
+.seq-duration-label {
+  font-size: 10px; letter-spacing: .04em; text-transform: uppercase;
+  color: var(--subtext0);
+}
+.seq-duration-input {
+  width: 78px; font-size: 11px; padding: 3px 6px;
+  color: var(--text); background: var(--well);
+  border: 1px solid var(--surface1); border-radius: 3px;
+}
+.seq-duration-input::placeholder { color: var(--overlay0); font-style: italic; }
+.seq-duration-input:hover { border-color: var(--overlay0); }
+.seq-duration-input:focus { outline: 1px solid var(--blue); border-color: var(--blue); }
+
+/* Per-row "When Finished" toggle. Deliberately quiet by default (Restore is the
+ * common case) and clearly marked when set to Keep, since a Keep row is the one
+ * that leaves state behind after a Track ends. */
+.seq-wf-btn {
+  font-family: var(--font-mono); font-size: 9.5px; line-height: 1;
+  letter-spacing: .02em; white-space: nowrap;
+  padding: 3px 6px; border-radius: 3px; cursor: pointer;
+  /* A filled chip rather than a bare glyph: the first version was too quiet to
+   * find at all, which defeated the point of exposing the setting. */
+  background: var(--surface0); border: 1px solid var(--surface1); color: var(--subtext0);
+}
+.seq-wf-btn:hover {
+  border-color: var(--mauve); color: var(--text);
+  background: color-mix(in srgb, var(--mauve) 18%, var(--surface0));
+}
+.seq-wf-btn.keep {
+  border-color: var(--yellow);
+  color: var(--yellow);
+  background: color-mix(in srgb, var(--yellow) 12%, transparent);
+}
+
+/* Live playback position during a Track preview. Solid and bright, versus the
+ * dashed .seq-insert-marker below: one is where playback *is*, the other is
+ * where the next event *would go*. */
+.seq-playhead {
+  position: absolute; top: 0; bottom: 0; width: 0;
+  border-left: 2px solid var(--red);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--red) 60%, transparent);
+  pointer-events: none;
+  z-index: 3;
+}
+
+/* Where a lane click landed — the insert point for the next added event.
+ * Dashed and dimmer than .seq-playhead so the two are not confused: the
+ * playhead is live playback position, this is an authoring intent. */
+.seq-insert-marker {
+  position: absolute; top: 0; bottom: 0; width: 0;
+  border-left: 1px dashed color-mix(in srgb, var(--mauve) 70%, transparent);
+  pointer-events: none;
+}
+
+/* A key: instant actions are a dot, timed ones (AnimateTransform) stretch
+ * into a bar spanning their duration — the mockup's dot-vs-bar language. */
+.seq-key {
+  position: absolute; top: 50%; transform: translate(-50%, -50%);
+  width: 12px; height: 12px; border-radius: 50%; padding: 0;
+  background: var(--k, var(--surface1));
+  border: 1px solid color-mix(in srgb, var(--k, var(--surface1)) 55%, black);
+  /* grab, not pointer: a key is draggable along its lane to retime the event. */
+  cursor: grab;
+}
+.seq-key:hover { filter: brightness(1.25); }
+.seq-key:active, .seq-key.dragging { cursor: grabbing; }
+.seq-key.dragging {
+  filter: brightness(1.4);
+  /* Above its neighbours while moving, so it is never hidden behind a key it is
+   * being dragged past. */
+  z-index: 2;
+}
+.seq-key.seq-key-bar {
+  border-radius: 6px; min-width: 12px; transform: translate(0, -50%);
+  background: linear-gradient(90deg,
+    color-mix(in srgb, var(--k) 85%, black),
+    var(--k));
+}
+.seq-key.selected {
+  outline: 2px solid var(--text); outline-offset: 1px;
+  box-shadow: 0 0 10px color-mix(in srgb, var(--k) 60%, transparent);
+}
+
+/* ── Inspector column ───────────────────────────────────────────────────── */
+.seq-ws-inspector {
+  width: 400px; flex-shrink: 0; display: flex; flex-direction: column;
+  border-left: 1px solid var(--surface0); background: var(--base); overflow: hidden;
+}
+.seq-ws-inspector-hint {
+  flex: 1; display: flex; align-items: center; justify-content: center;
+  padding: 0 20px; text-align: center;
+  color: var(--overlay0); font-size: 12.5px; font-style: italic;
+}
+.seq-ws-sel-head {
+  display: flex; align-items: center; gap: 8px; padding: 8px 10px;
+  background: var(--well); border: 1px solid var(--surface0);
+  border-radius: var(--radius-sm);
+}
+.seq-field-label {
+  font-family: var(--font-mono); font-size: 10.5px; letter-spacing: .1em;
+  color: var(--overlay0); text-transform: uppercase;
+}
+.seq-field-hint { color: var(--surface1); }
+
+/* ── Panel element heading ─────────────────────────────────────────────────────
+ * An element *name* is authored text, so it gets none of `.seq-field-label`'s
+ * treatment: no uppercasing (which destroys the author's casing and does nothing
+ * at all for Korean), no letter-spacing, and full-contrast text at a readable
+ * size. That style is for fixed field captions like "POSITION (M)", where
+ * shouting is a deliberate de-emphasis; a name has to be scannable. */
+.panel-el-heading {
+  display: flex; align-items: baseline; gap: 6px;
+  padding-bottom: 2px; border-bottom: 1px solid var(--surface0);
+}
+.panel-el-heading-name {
+  font-size: 12.5px; font-weight: 600; color: var(--bright);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* The kind as a chip rather than parenthetical prose: it is a fixed vocabulary of
+   five, so it reads faster as a tag and cannot be mistaken for part of the name. */
+.panel-el-heading-kind {
+  flex-shrink: 0; font-family: var(--font-mono); font-size: 9.5px;
+  letter-spacing: .06em; text-transform: uppercase;
+  color: var(--subtext0); background: var(--surface0);
+  padding: 1px 5px; border-radius: 3px;
+}
+.panel-el-heading-note { flex-shrink: 0; font-size: 10.5px; color: var(--overlay0); }
+.seq-fires-when {
+  display: flex; align-items: center; gap: 8px; padding: 6px 9px;
+  font-size: 12.5px; color: var(--yellow);
+  background: color-mix(in srgb, var(--yellow) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--yellow) 30%, transparent);
+  border-radius: var(--radius-sm);
+}
+
+/* ── Empty state / status bar ───────────────────────────────────────────── */
+/* Flow-positioned, deliberately NOT .hud-canvas-no-panel (absolute/inset-0,
+ * which belongs to a positioned modal shell). */
+.seq-ws-empty {
+  flex: 1; display: flex; flex-direction: column; gap: 5px;
+  align-items: center; justify-content: center;
+  text-align: center; padding: 0 24px;
+}
+.seq-ws-status {
+  flex-shrink: 0; display: flex; align-items: center; gap: 12px;
+  height: 24px; padding: 0 12px; background: var(--mantle);
+  border-top: 1px solid var(--surface0);
+  font-family: var(--font-mono); font-size: 11.5px; color: var(--overlay0);
+}
+
+.insp-empty { padding: 16px 14px; color: var(--overlay0); font-size: 13px; }
+
+.insp-section { border-bottom: 1px solid var(--surface0); padding: 14px 16px; }
+.insp-section h4 { font-size: 10.5px; color: var(--overlay0); font-weight: 600;
+                   font-family: var(--font-mono);
+                   text-transform: uppercase; letter-spacing: .06em; margin-bottom: 10px; }
+
+.insp-name-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.insp-name-row input { flex: 1; background: var(--surface0); color: var(--text);
+                        border: 1px solid transparent; padding: 6px 8px;
+                        font-size: 14px; border-radius: var(--radius); }
+.insp-name-row input:focus { outline: 1px solid var(--blue); }
+.insp-kind { font-size: 12.5px; color: var(--overlay1, var(--overlay0)); margin-bottom: 6px; font-family: var(--font-mono); }
+
+/* Transform T/R/S rows */
+.tf-row { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+.tf-lbl { width: 16px; font-size: 12.5px; font-weight: 700; flex-shrink: 0;
+          text-align: center; }
+.tf-t { color: var(--peach); } .tf-r { color: var(--mauve); } .tf-s { color: var(--teal); }
+
+/* Scrub field */
+.scrub-wrap { flex: 1; min-width: 0; position: relative; cursor: ew-resize; }
+.scrub-wrap input { width: 100%; background: var(--surface0); color: var(--text);
+                    border: 1px solid transparent; padding: 5px 5px 5px 18px;
+                    font-size: 13px; font-family: var(--font-mono); border-radius: var(--radius);
+                    cursor: inherit; }
+.scrub-wrap input:focus { outline: 1px solid var(--blue); background: var(--base);
+                           cursor: text; }
+.scrub-axis { position: absolute; left: 5px; top: 50%; transform: translateY(-50%);
+              font-size: 10.5px; font-weight: 700; pointer-events: none; }
+.ax-x { color: var(--red); } .ax-y { color: var(--green); } .ax-z { color: var(--blue); }
+
+/* Generic label+control row */
+.insp-row { display: flex; align-items: center; gap: 8px;
+            margin-bottom: 6px; font-size: 13px; }
+.insp-row > label { width: 60px; color: var(--subtext0); flex-shrink: 0; font-size: 13px; }
+.insp-row input[type=color] { width: 44px; height: 26px; padding: 0;
+                               border: 1px solid var(--surface1); border-radius: var(--radius-sm);
+                               cursor: pointer; background: none; flex-shrink: 0; }
+.insp-row input[type=range] { flex: 1; min-width: 0; accent-color: var(--blue); height: 18px; }
+.insp-row select { flex: 1; background: var(--surface0); color: var(--text);
+                   border: 1px solid transparent; padding: 5px 8px;
+                   font-size: 13px; border-radius: var(--radius); }
+.insp-row input[type=text] { flex: 1; background: var(--surface0); color: var(--text);
+                              border: 1px solid transparent; padding: 5px 8px;
+                              font-size: 13px; border-radius: var(--radius); }
+.insp-row input[type=text]:focus { outline: 1px solid var(--blue); }
+.val-display { width: 40px; color: var(--green); font-size: 13px;
+               text-align: right; flex-shrink: 0; font-family: var(--font-mono); }
+.insp-note { font-size: 13px; color: var(--overlay1, var(--overlay0)); padding: 6px 0 0; }
+
+/* ── Palette ─────────────────────────────────────────────────────────────── */
+/* Height is user-controlled via .panel-resize-handle--h (React sets it as
+ * an inline style, see src/hooks/useResizable.ts) rather than a fixed
+ * max-height — categorizing primitives into sub-tabs (.pal-cat-tabs) means
+ * one category's items now fit a single row at the default height, but
+ * resizing stays available for long asset lists or a lot of categories. */
+.palette { position: relative; border-top: 1px solid var(--surface0); background: var(--base);
+           flex-shrink: 0; display: flex; flex-direction: column; min-height: 70px; }
+
+.pal-tabs { display: flex; border-bottom: 1px solid var(--surface0); flex-shrink: 0; }
+.pal-tabs { background: var(--mantle); }
+.pal-tab { padding: 8px 14px; font-size: 13px; font-weight: 500; cursor: pointer;
+           color: var(--overlay0); border-top: 2px solid transparent; }
+.pal-tab:hover { color: var(--subtext1); }
+/* Top-edge accent + panel-coloured fill, i.e. the mockup's viewport tabs. */
+.pal-tab.active { color: var(--bright); border-top-color: var(--blue); background: var(--base); }
+
+.pal-cat-tabs { display: flex; flex-wrap: wrap; gap: 4px; padding: 7px 10px 0;
+               flex-shrink: 0; }
+.pal-cat-tab { padding: 4px 11px; font-size: 12px; font-weight: 500; cursor: pointer;
+              color: var(--subtext0); background: var(--well);
+              border: 1px solid var(--surface0); border-radius: var(--radius-sm); }
+.pal-cat-tab:hover { color: var(--bright); }
+.pal-cat-tab.active { color: var(--blue-l); background: var(--sel);
+                      border-color: color-mix(in srgb, var(--blue) 40%, transparent); }
+
+.pal-content { padding: 10px 12px; display: flex; flex-wrap: wrap; gap: 6px;
+               align-content: flex-start; overflow-y: auto; flex: 1; min-height: 0; }
+
+.pal-btn { background: var(--well); color: var(--subtext1);
+           border: 1px solid var(--surface0); padding: 6px 12px;
+           font-size: 13px; border-radius: var(--radius); cursor: pointer;
+           display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+.pal-btn:hover { background: var(--sel); color: var(--bright);
+                 border-color: var(--surface1); }
+
+.asset-row { width: 100%; display: flex; align-items: center; gap: 8px;
+             padding: 4px 6px; font-size: 13px; cursor: pointer; border-radius: var(--radius); }
+.asset-row:hover { background: var(--sel); }
+.asset-kind { color: var(--overlay0); font-size: 11.5px; }
+.pal-empty { color: var(--subtext0); font-size: 13px; padding: 6px; }
+
+/* ── Export progress bar ─────────────────────────────────────────────────── */
+.export-bar {
+  background: var(--surface0);
+  border-bottom: 1px solid var(--blue);
+  padding: 8px 16px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 14px;
+  color: var(--blue);
+  flex-shrink: 0;
+}
+.export-spinner {
+  width: 14px; height: 14px;
+  border: 2px solid var(--surface1);
+  border-top-color: var(--blue);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  flex-shrink: 0;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── Status toast ────────────────────────────────────────────────────────── */
+.status-toast { position: fixed; bottom: 170px; left: 50%; transform: translateX(-50%);
+                background: var(--mantle); border: 1px solid var(--surface1);
+                color: var(--green); padding: 8px 18px; border-radius: var(--radius);
+                font-size: 14px; z-index: 500; pointer-events: none;
+                box-shadow: 0 8px 20px rgba(0,0,0,.35);
+                animation: fadeout 3s forwards; }
+@keyframes fadeout { 0%,80%{opacity:1} 100%{opacity:0} }
+
+/* ── Player Panel ─────────────────────────────────────────────────────────── */
+/* Height is user-controlled (see .panel-resize-handle--h / useResizable in
+ * PlayerPanel.tsx) rather than a fixed max-height. */
+.player-panel { position: relative; background: var(--mantle); border-top: 1px solid var(--surface0);
+                flex-shrink: 0; display: flex; flex-direction: column; }
+.player-panel-header { display: flex; align-items: center; justify-content: space-between;
+                       padding: 8px 14px 7px; font-size: 12px; color: var(--subtext0);
+                       text-transform: uppercase; letter-spacing: .07em; font-weight: 600;
+                       flex-shrink: 0; }
+.player-panel-clear { background: none; border: none; color: var(--overlay1, var(--overlay0)); cursor: pointer;
+                      font-size: 13px; padding: 2px 4px; line-height: 1; border-radius: var(--radius-sm); }
+.player-panel-clear:hover { color: var(--red); }
+.player-panel-list { flex: 1; min-height: 0; overflow-y: auto; padding: 4px 6px; }
+.player-anchor-item { display: flex; align-items: center; width: 100%;
+                      color: var(--text); font-size: 14px; border-radius: var(--radius); }
+.player-anchor-item:hover { background: var(--surface0); }
+.player-anchor-item.active { background: var(--surface0); color: var(--blue);
+                              box-shadow: inset 2px 0 0 var(--blue); }
+.anchor-select-btn { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0;
+                     background: none; border: none; color: inherit; cursor: pointer;
+                     padding: 6px 8px; font-size: 14px; text-align: left; }
+.anchor-preview-btn { background: none; border: none; color: var(--overlay1, var(--overlay0)); cursor: pointer;
+                      padding: 6px 8px; font-size: 14px; flex-shrink: 0; line-height: 1;
+                      border-radius: var(--radius-sm); }
+.anchor-preview-btn:hover { color: var(--text); background: var(--surface1); }
+.anchor-icon { font-size: 12.5px; width: 14px; text-align: center; flex-shrink: 0; }
+.anchor-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.anchor-parent { font-size: 11.5px; color: var(--overlay1, var(--overlay0)); flex-shrink: 0; font-family: var(--font-mono); }
+.anchor-badge { font-size: 10px; color: var(--blue); flex-shrink: 0; }
+
+/* Scrollbars */
+::-webkit-scrollbar { width: 6px; } ::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--surface1); border-radius: 3px; }
+
+/* ── HUD Canvas Overlay ───────────────────────────────────────────────────── */
+.hud-canvas-overlay { position: fixed; inset: 0; z-index: 1000;
+                      background: rgba(0,0,0,.82);
+                      display: flex; flex-direction: column; user-select: none; }
+
+.hud-canvas-header { display: flex; align-items: center; justify-content: space-between;
+                     padding: 11px 18px; border-bottom: 1px solid var(--surface0);
+                     background: var(--mantle); flex-shrink: 0; }
+
+.hud-canvas-title { font-size: 14px; font-weight: 600; color: var(--bright); margin-right: 10px; }
+
+.hud-canvas-subtitle { font-size: 12px; color: var(--overlay0); }
+
+.hud-canvas-done { background: var(--surface0); border: 1px solid transparent;
+                   color: var(--text); padding: 5px 14px; cursor: pointer;
+                   border-radius: var(--radius); font-size: 14px; font-weight: 500; }
+.hud-canvas-done:hover { background: var(--surface1); }
+
+.hud-canvas-outer { flex: 1; display: flex; align-items: center; justify-content: center;
+                    overflow: hidden; min-height: 0; }
+
+.hud-canvas-inner { position: relative; background: #07071a;
+                    border: 1px solid var(--surface1); overflow: hidden;
+                    flex-shrink: 0; }
+
+.hud-canvas-fov-label { position: absolute; top: 6px; left: 8px;
+                        font-size: 10.5px; color: rgba(137,180,250,.4);
+                        pointer-events: none; font-family: var(--font-mono); }
+
+.hud-crosshair-h { position: absolute; left: 0; right: 0; top: 50%;
+                   height: 1px; background: rgba(137,180,250,.18); pointer-events: none; }
+.hud-crosshair-v { position: absolute; top: 0; bottom: 0; left: 50%;
+                   width: 1px; background: rgba(137,180,250,.18); pointer-events: none; }
+
+.hud-canvas-no-panel { position: absolute; inset: 0; display: flex;
+                       align-items: center; justify-content: center;
+                       color: var(--overlay0); font-size: 14px; }
+
+.hud-card { position: absolute; transform: translate(-50%, -50%);
+            background: rgba(24,24,40,.93); border: 1px solid var(--blue);
+            border-radius: var(--radius); min-width: 140px; cursor: default;
+            box-shadow: 0 4px 16px rgba(0,0,0,.6); overflow: hidden; }
+
+.hud-card-grip { padding: 6px 10px; color: var(--subtext0); font-size: 13px;
+                 border-bottom: 1px solid var(--surface0); background: rgba(137,180,250,.08);
+                 cursor: grab; touch-action: none; user-select: none; }
+.hud-card-grip:active { cursor: grabbing; }
+
+.hud-card-row { padding: 5px 10px; display: flex; gap: 10px; align-items: center;
+                cursor: pointer; font-size: 13px; }
+.hud-card-row:hover { background: var(--surface0); }
+.hud-card-row.selected { background: rgba(137,180,250,.16); }
+
+.hud-card-slot-name { color: var(--mauve); font-family: var(--font-mono); font-size: 11.5px; min-width: 44px; }
+.hud-card-slot-text { color: var(--text); font-size: 13px; }
+.hud-card-empty { padding: 6px 10px; color: var(--overlay0); font-size: 12px; }
+
+.hud-card-add { padding: 5px 10px; border-top: 1px solid var(--surface0); display: flex; justify-content: center; }
+.hud-card-add button { background: none; border: none; color: var(--blue); cursor: pointer;
+                       font-size: 12px; padding: 3px 8px; border-radius: var(--radius-sm); }
+.hud-card-add button:hover { background: var(--surface0); }
+
+.hud-slot-editor { display: flex; align-items: center; gap: 10px;
+                   padding: 8px 16px; background: var(--mantle);
+                   border-top: 1px solid var(--surface0); flex-shrink: 0; font-size: 13px; }
+.hud-slot-editor-label { color: var(--mauve); font-family: var(--font-mono); font-size: 11.5px;
+                         min-width: 48px; font-weight: 700; }
+.hud-slot-editor--hint { color: var(--overlay0); font-style: italic; font-size: 12px;
+                         justify-content: center; }
+.hud-slot-editor input[type="text"] { flex: 1; }
+.hud-slot-editor input[type="number"] { background: var(--well); border: 1px solid var(--surface0);
+                                        color: var(--text); border-radius: var(--radius); padding: 3px 6px;
+                                        font-size: 13px; font-family: var(--font-mono); }
+
+.hud-canvas-bottom { display: flex; align-items: center; gap: 10px;
+                     padding: 9px 16px; background: var(--mantle);
+                     border-top: 1px solid var(--surface0); flex-shrink: 0;
+                     font-size: 13px; color: var(--subtext0); }
+
+/* HUD item cards (multiple independent draggable cards in the canvas) */
+.hud-item-card { position: absolute; transform: translate(-50%, -50%);
+                 background: rgba(24,24,40,.93); border: 1px solid var(--surface1);
+                 border-radius: var(--radius-sm); padding: 5px 10px; min-width: 80px;
+                 cursor: grab; touch-action: none; user-select: none; font-size: 13px;
+                 box-shadow: 0 2px 8px rgba(0,0,0,.5); }
+.hud-item-card:active { cursor: grabbing; }
+.hud-item-card.selected { border-color: var(--blue);
+                           box-shadow: 0 0 0 1px var(--blue), 0 2px 8px rgba(0,0,0,.5); }
+.hud-item-card-name { font-size: 10.5px; color: var(--mauve); font-family: var(--font-mono); margin-bottom: 3px; }
+.hud-item-card-text { color: var(--text); font-size: 13px; }
+
+/* ── List rows, inherited from the deleted HudLibraryPanel ─────────────────────
+ * Eight sibling rules (-panel, -header, -title, -list, -name, -name-input,
+ * -meta, -actions) went with that component. These two are still used by the
+ * Inspector's binding lists and the Panels workspace, so they keep the old class
+ * names rather than being renamed for tidiness — a rename here is a silent
+ * unstyling if one call site is missed. */
+.hud-library-empty { font-size: 12px; color: var(--overlay0); padding: 10px 14px;
+                     font-style: italic; line-height: 1.5; }
+.hud-library-row { display: flex; align-items: center; gap: 8px; padding: 8px 10px;
+                   font-size: 13px; min-height: 34px; border-radius: var(--radius); }
+.hud-library-row:hover { background: var(--sel); }
+
+/* ── APK Export Dialog ────────────────────────────────────────────────────── */
+.apk-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.55);
+               display: flex; align-items: center; justify-content: center; z-index: 1000; }
+
+.apk-modal { background: var(--mantle); border: 1px solid var(--surface1);
+             border-radius: 12px; box-shadow: 0 8px 32px rgba(0,0,0,.6);
+             width: 480px; max-height: 85vh; display: flex; flex-direction: column;
+             overflow: hidden; }
+
+.apk-header { display: flex; align-items: center; justify-content: space-between;
+              padding: 13px 18px; border-bottom: 1px solid var(--surface0);
+              font-size: 15px; font-weight: 600; color: var(--text); flex-shrink: 0; }
+
+.apk-close { background: none; border: none; color: var(--subtext0); cursor: pointer;
+             font-size: 15.5px; line-height: 1; padding: 4px 6px; border-radius: var(--radius-sm); }
+.apk-close:hover { background: var(--surface0); color: var(--text); }
+
+.apk-body { padding: 18px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
+
+.apk-warn { background: rgba(243,139,168,.12); border: 1px solid var(--red);
+            color: var(--red); border-radius: var(--radius); padding: 8px 12px; font-size: 13px; }
+
+.apk-section-title { font-size: 12px; text-transform: uppercase; letter-spacing: .07em;
+                     color: var(--blue); font-weight: 600; }
+.apk-section-gap { margin-top: 10px; }
+
+.apk-checking { color: var(--subtext0); font-size: 13px; font-style: italic; padding: 4px 0; }
+
+.apk-prereq-list { list-style: none; margin: 6px 0 0; padding: 0;
+                   display: flex; flex-direction: column; gap: 6px; }
+
+.apk-prereq { display: flex; align-items: flex-start; gap: 8px; font-size: 13px; }
+.apk-prereq-icon { font-size: 14.5px; line-height: 1.2; flex-shrink: 0; }
+.apk-prereq.ok  .apk-prereq-icon { color: var(--green); }
+.apk-prereq.fail .apk-prereq-icon { color: var(--red); }
+.apk-prereq-info { display: flex; flex-direction: column; gap: 2px; }
+.apk-prereq-name { color: var(--text); }
+.apk-prereq-hint { color: var(--subtext0); font-size: 12px; font-style: italic; }
+
+.apk-dir-row { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+.apk-dir-path { flex: 1; color: var(--subtext0); font-size: 13px; font-family: var(--font-mono);
+                overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+                background: var(--base); border: 1px solid var(--surface0);
+                border-radius: var(--radius); padding: 5px 9px; }
+
+.apk-log { background: var(--base); border: 1px solid var(--surface0); border-radius: var(--radius);
+           font-family: var(--font-mono); font-size: 12px; line-height: 1.5;
+           height: 180px; overflow-y: auto; padding: 8px 10px; margin-top: 6px;
+           color: var(--subtext0); }
+.apk-log-line     { color: var(--subtext0); }
+.apk-log-line.err { color: var(--red); }
+.apk-log-empty    { color: var(--overlay0); font-style: italic; }
+
+.apk-done-msg { border-radius: var(--radius); padding: 9px 12px; font-size: 14px; margin-top: 8px; }
+.apk-done-msg.ok   { background: rgba(166,227,161,.12); border: 1px solid var(--green); color: var(--green); }
+.apk-done-msg.fail { background: rgba(243,139,168,.12); border: 1px solid var(--red);   color: var(--red); }
+
+.apk-footer { display: flex; justify-content: flex-end; gap: 8px;
+              padding: 13px 18px; border-top: 1px solid var(--surface0); flex-shrink: 0; }
+
+.apk-btn { background: var(--surface0); border: 1px solid transparent;
+           color: var(--text); padding: 6px 16px; border-radius: var(--radius);
+           cursor: pointer; font-size: 14px; font-weight: 500; display: flex; align-items: center; gap: 6px; }
+.apk-btn:hover:not(:disabled) { background: var(--surface1); }
+.apk-btn:disabled { opacity: 0.45; cursor: default; }
+.apk-btn.primary { background: var(--blue); border-color: var(--blue); color: var(--mantle); font-weight: 600; }
+.apk-btn.primary:hover:not(:disabled) { filter: brightness(1.1); }
+
+.apk-spin { display: inline-block; width: 11px; height: 11px;
+            border: 2px solid rgba(30,30,46,.4); border-top-color: var(--mantle);
+            border-radius: 50%; animation: spin 0.8s linear infinite; flex-shrink: 0; }
+
+/* ── Bridge mismatch banner ─────────────────────────────────────────────── */
+/* Deliberately loud and `position: fixed` at the top of the stacking order:
+ * this appears when the Rust/TS DTO mirrors have drifted, which means panels
+ * reading the snapshot may fail to render at all. The message has to be
+ * readable even when nothing behind it mounted. */
+.bridge-mismatch {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 10000;
+  display: flex; flex-direction: column; gap: 4px;
+  padding: 10px 16px;
+  background: color-mix(in srgb, var(--red) 22%, var(--crust));
+  border-bottom: 1px solid var(--red);
+  color: var(--bright); font-size: 13px; line-height: 1.5;
+}
+.bridge-mismatch strong { color: var(--red); font-size: 14px; }
+.bridge-mismatch code {
+  font-family: var(--font-mono); font-size: 12px;
+  background: var(--well); padding: 1px 4px; border-radius: var(--radius-sm);
+}
+.bridge-mismatch-fix { color: var(--subtext0); }
+
+/* ── Panels workspace ─────────────────────────────────────────────────────── */
+/* A focused 2D layout for designing panel templates: library | elements |
+ * canvas | inspector. Replaces the whole editor body rather than sharing it,
+ * because none of the scene chrome applies — and because leaving the viewport
+ * mounted would keep its click-through hole open beneath this UI. */
+.panel-ws { display: flex; flex: 1; min-height: 0; overflow: hidden;
+            background: var(--crust); }
+
+.panel-ws-library {
+  width: 240px; flex-shrink: 0; display: flex; flex-direction: column;
+  background: var(--base); border-right: 1px solid var(--surface0); overflow: hidden;
+}
+.panel-ws-library-list { flex: 1; min-height: 0; overflow-y: auto; }
+
+.panel-ws-elements {
+  width: 240px; flex-shrink: 0; display: flex; flex-direction: column;
+  background: var(--base); border-right: 1px solid var(--surface0); overflow: hidden;
+}
+.panel-ws-element-list { flex: 1; min-height: 0; overflow-y: auto; }
+
+.panel-ws-canvas {
+  flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden;
+}
+/* Scrolls in both axes: a panel authored larger than the window must stay
+ * reachable rather than being clipped away. */
+.panel-ws-canvas-area {
+  flex: 1; min-height: 0; overflow: auto; display: grid; place-items: center;
+  padding: 24px;
+  /* Faint grid, so an element's offset from centre is readable without
+   * measuring. */
+  background-image:
+    linear-gradient(90deg, color-mix(in srgb, var(--surface0) 45%, transparent) 1px, transparent 1px),
+    linear-gradient(color-mix(in srgb, var(--surface0) 45%, transparent) 1px, transparent 1px);
+  background-size: 26px 26px;
+}
+.panel-ws-canvas-plane {
+  position: relative; flex-shrink: 0;
+  border: 1px solid var(--surface1);
+  box-shadow: 0 6px 28px rgb(0 0 0 / 45%);
+}
+
+/* Centre crosshair — `local_position` is measured from here, so the origin has
+ * to be visible or the numbers in the inspector have no anchor. */
+.panel-ws-axis { position: absolute; pointer-events: none;
+                 background: color-mix(in srgb, var(--blue) 40%, transparent); }
+.panel-ws-axis-x { left: 0; right: 0; top: 50%; height: 1px; }
+.panel-ws-axis-y { top: 0; bottom: 0; left: 50%; width: 1px; }
+
+.panel-ws-el {
+  position: absolute; transform: translate(-50%, -50%);
+  display: flex; align-items: center; justify-content: center;
+  padding: 0; cursor: grab; overflow: hidden;
+  /* Draggable: the pointer stream must not be stolen by scroll/gesture handling,
+     and the label must not turn into a text selection mid-drag. */
+  touch-action: none; user-select: none;
+  background: color-mix(in srgb, var(--k, var(--blue)) 30%, transparent);
+  border: 1px solid var(--k, var(--blue));
+  border-radius: 3px;
+}
+.panel-ws-el:hover { filter: brightness(1.3); }
+.panel-ws-el.selected {
+  outline: 2px solid var(--text); outline-offset: 1px;
+  box-shadow: 0 0 12px color-mix(in srgb, var(--k, var(--blue)) 60%, transparent);
+}
+.panel-ws-el-label {
+  font-size: 10.5px; color: var(--bright); white-space: nowrap;
+  text-overflow: ellipsis; overflow: hidden; padding: 0 4px;
+  text-shadow: 0 1px 2px rgb(0 0 0 / 70%);
+}
+
+.panel-ws-inspector {
+  width: 340px; flex-shrink: 0; display: flex; flex-direction: column;
+  background: var(--base); border-left: 1px solid var(--surface0); overflow: hidden;
+}
+.panel-ws-inspector-body {
+  flex: 1; min-height: 0; overflow-y: auto;
+  display: flex; flex-direction: column; gap: 14px; padding: 12px;
+}
+
+.panel-ws-empty {
+  flex: 1; display: flex; flex-direction: column; align-items: center;
+  justify-content: center; gap: 8px; text-align: center; padding: 32px;
+  max-width: 460px; margin: 0 auto;
+}

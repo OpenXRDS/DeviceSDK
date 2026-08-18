@@ -1,0 +1,40 @@
+[package]
+name = "xrds-app"
+version = "0.1.0"
+edition = "2021"
+description = "Standalone XR application runtime — loads scene.json from the executable directory."
+
+[[bin]]
+name = "xrds-app"
+path = "src/main.rs"
+
+# Android: GameActivity loads this as a shared library and calls android_main().
+# cargo-ndk picks this up automatically when cross-compiling for aarch64-linux-android.
+[lib]
+name = "xrds_app"
+crate-type = ["cdylib"]
+path = "src/main.rs"
+
+[features]
+default = ["ftp-server"]
+# Forwards to xrds-net's FTP *server* (via xrds-runtime). The Android build
+# (android/quest/build.sh) passes `--no-default-features` to drop it — an XR
+# client app never needs to host FTP, and its dependency chain (libunftp ->
+# aws-lc-sys) isn't cross-compile-proven for Android. See
+# docs/done/xrds-net-android-shipping.md Phase 3.
+ftp-server = ["xrds-runtime/ftp-server"]
+[dependencies]
+xrds-runtime     = { workspace = true, default-features = false }
+xrds-scene-graph = { workspace = true }
+xrds-openxr      = { workspace = true }
+bevy             = { workspace = true }
+log              = { workspace = true }
+
+[target.'cfg(target_os = "android")'.dependencies]
+winit          = { version = "0.30.5", features = ["android-native-activity"] }
+bevy_winit     = { version = "0.17.2", features = ["android-native-activity"] }
+bevy_android   = { version = "0.17.2" }
+android_logger = "0.14"
+# ndk 0.9 matches android-activity 0.6 (transitive via winit). Declared explicitly
+# so asset_manager() types are unambiguous in android_main.
+ndk            = { version = "0.9", default-features = false }

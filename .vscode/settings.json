@@ -2,9 +2,38 @@
     "[rust]": {
         "editor.defaultFormatter": "rust-lang.rust-analyzer",
         "editor.formatOnSave": true,
-        "editor.formatOnPaste": true,
-
+        "editor.formatOnPaste": true
     },
-    "debug.allowBreakpointsEverywhere": true,
-    "lldb.displayFormat": "auto",
+    "VSCodeCounter.exclude": [
+        "**/.gitignore",
+        "**/.vscode/**",
+        "**/node_modules/**",
+        "**/Cargo.lock"
+    ],
+
+    // ── rust-analyzer memory/CPU limits ─────────────────────────────────────
+    // This workspace has ~59 [[example]] targets plus several crates/apps;
+    // indexing all of them (with proc-macro expansion for bevy's derives)
+    // is what drives rust-analyzer's memory up. These settings scope it down
+    // to "the lib/bin targets actually being edited" instead of everything.
+    "rust-analyzer.cargo.allTargets": false,
+    "rust-analyzer.cachePriming.enable": false,
+    "rust-analyzer.checkOnSave": false,
+    "rust-analyzer.numThreads": 4,
+    "rust-analyzer.lru.capacity": 64,
+    // Skip watching/indexing large non-source directories — assets/ alone is
+    // ~250MB of binary GLB/texture data, and target/ is the build output.
+    "rust-analyzer.files.excludeDirs": [
+        "assets",
+        "target",
+        "docs"
+    ],
+    "files.watcherExclude": {
+        "**/target/**": true,
+        "**/assets/**": true
+    },
+    "search.exclude": {
+        "**/target": true,
+        "**/assets": true
+    }
 }

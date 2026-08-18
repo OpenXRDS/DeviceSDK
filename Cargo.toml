@@ -9,8 +9,15 @@ homepage = "https://github.com/OpenXRDS"
 authors = ["OpenXRDS developers"]
 
 [workspace]
-members = ["crates/*"]
-resolver = "2"
+members = ["crates/*", "apps/xrds-editor/src-tauri", "apps/xrds-app"]
+
+# Debug info at the default level (2) generates enormous PDBs across this
+# many crates/examples with Bevy in the dependency graph — that's most of
+# what makes link.exe's memory spike on every build. Level 1 (line tables
+# only) still gives usable backtraces at a fraction of the size. Applies
+# workspace-wide since [profile.*] can only be set at the workspace root.
+[profile.dev]
+debug = 1
 
 [workspace.dependencies.xrds-audio]
 package = "xrds-audio"
@@ -20,17 +27,27 @@ path = "./crates/xrds-audio"
 package = "xrds-components"
 path = "./crates/xrds-components"
 
-[workspace.dependencies.xrds-core]
-package = "xrds-core"
-path = "./crates/xrds-core"
-
-[workspace.dependencies.xrds-graphics]
-package = "xrds-graphics"
-path = "./crates/xrds-graphics"
+# [workspace.dependencies.xrds-graphics]
+# package = "xrds-graphics"
+# path = "./crates/xrds-graphics"
 
 [workspace.dependencies.xrds-net]
 package = "xrds-net"
 path = "./crates/xrds-net"
+# Explicit `false` (not omitted, and not `true`) so member crates can opt
+# back IN to specific features (e.g. `xrds-net/ftp-server`) without hitting
+# Cargo's silent-ignore rule: a member's `default-features = false` override
+# is ignored unless the workspace dependency's own default-features is
+# ALSO false — Cargo only allows members to be MORE restrictive than (or
+# equal to) the workspace baseline, never less. Named-feature activation
+# (`workspace-dep/feature-name`) still works regardless of this flag; each
+# consumer re-enables what it needs via its own [features] forwarding. See
+# docs/done/xrds-net-android-shipping.md Phase 3.
+default-features = false
+
+[workspace.dependencies.xrds-media]
+package = "xrds-media"
+path = "./crates/xrds-media"
 
 [workspace.dependencies.xrds-openxr]
 package = "xrds-openxr"
@@ -39,24 +56,355 @@ path = "./crates/xrds-openxr"
 [workspace.dependencies.xrds-runtime]
 package = "xrds-runtime"
 path = "./crates/xrds-runtime"
+# See the xrds-net entry above for why this must be `false`, not omitted/true.
+default-features = false
 
-[workspace.dependencies.xrds-internal]
-package = "xrds-internal"
-path = "./crates/xrds-internal"
+[workspace.dependencies.xrds-scene-graph]
+package = "xrds-scene-graph"
+path = "./crates/xrds-scene-graph"
 
 [workspace.dependencies]
 tokio = { version = "1.43.0", features = ["rt-multi-thread", "sync", "macros"] }
 anyhow = "1.0.95"
 env_logger = "0.11.6"
 log = "0.4.25"
-bevy = { version = "0.17.2" }
-wgpu = { version = "26.0.1", default-features = false, features = ["wgsl"] }
-wgpu-hal = { version = "26.0.1" }
+unicode-normalization = "0.1"
+bevy = { version = "0.17.2", default-features = false, features = [
+  # All of bevy's defaults except "android-game-activity" — replaced with
+  # "android-native-activity" so the build works without bundling a Java DEX.
+  "std", "async_executor", "android-native-activity", "android_shared_stdcxx",
+  "animation", "bevy_asset", "bevy_audio", "bevy_color", "bevy_core_pipeline",
+  "bevy_post_process", "bevy_anti_alias", "bevy_gilrs", "bevy_gizmos", "bevy_gltf",
+  "bevy_input_focus", "bevy_log", "bevy_mesh_picking_backend", "bevy_pbr",
+  "bevy_picking", "bevy_render", "bevy_scene", "bevy_image", "bevy_mesh",
+  "bevy_camera", "bevy_light", "bevy_shader", "bevy_sprite",
+  "bevy_sprite_picking_backend", "bevy_sprite_render", "bevy_state", "bevy_text",
+  "bevy_ui", "bevy_ui_picking_backend", "bevy_ui_render", "bevy_window",
+  "bevy_winit", "custom_cursor", "default_font", "hdr", "ktx2", "multi_threaded",
+  "png", "reflect_auto_register", "smaa_luts", "sysinfo_plugin", "tonemapping_luts",
+  "vorbis", "webgl2", "x11", "wayland", "debug", "zstd_rust",
+  "jpeg", "mp3", "wav",
+] }
+avian3d = { version = "0.4", features = ["3d", "parry-f32"] }
+# The adopted VFX backend (docs/vfx-particle-effects-plan.md). CPU-simulated and
+# batch-rendered rather than compute+indirect-draw, which is the specific GPU
+# path that renders nothing on Quest's Adreno 740 (bevy_hanabi#548). 0.8 is the
+# last release tracking Bevy 0.17 (0.9 -> 0.18, 0.10 -> 0.19).
+# default-features = false drops `physics_avian`: particle collision is out of
+# scope for now, and its avian3d dep would be pulled in for nothing. Re-enable
+# it if XrdsEffect ever exposes collision -- the feature wants avian3d ^0.4,
+# which is already this workspace's version.
+bevy_firework = { version = "0.8", default-features = false }
+bevy-sequential-actions = "0.14"
+wgpu = { version = "26.0.1", default-features = false, features = ["wgsl", "vulkan", "vulkan-portability"] }
+wgpu-hal = { version = "26.0.1", features = ["vulkan"] }
 ash = "0.38.0"
 glam = { version = "0.29.2", features = ["bytemuck"] }
+bevy_rich_text3d = "0.5.0"
+bevy_fontmesh = "0.1.1"
+bevy_svg = "0.17.0"
 
 [target.'cfg(windows)'.dependencies]
 winreg = { version = "0.55.0" }
 
+[patch.crates-io]
+bevy_winit = { path = "patches/bevy_winit" }
+# Fixes quiche's build.rs BoringSSL output-dir detection: it guesses a
+# Visual-Studio-style "build/<Config>" subdir whenever the HOST is MSVC,
+# regardless of which CMake generator is actually used for the (Android)
+# TARGET build. Forcing CMAKE_GENERATOR=Ninja for Android cross-compiles
+# (needed to avoid a stale VS "Android Application" toolset hijacking the
+# default generator) leaves libssl.a/libcrypto.a directly under "build/" with
+# no subfolder, which this patch adds as a fallback.
+#
+# Considered upgrading to quiche 0.29.3 (which drops this vendored-cmake path
+# entirely for the `boring` crate) instead of patching 0.24.6, but boring-sys
+# hits a different, OPEN upstream Windows/CMake bug on this same host/target
+# combo (cargo-ndk's CC/CXX env vars lack the .exe suffix CMake's compiler
+# validation requires; no fix as of cloudflare/quiche#2020). Staying on
+# 0.24.6 + this patch, which is fully verified working end-to-end.
+# See docs/done/xrds-net-android-shipping.md §2c.
+quiche = { path = "patches/quiche" }
+
+[features]
+default = ["xrds-runtime/ftp-server"]
+
 [dependencies]
-xrds-internal = { workspace = true }
+# default-features = false + the forward above: this root package (desktop
+# sample binaries/examples) keeps ftp-server, but an un-gated default-featured
+# edge here would leak into Android's shared feature resolution for
+# xrds-runtime/xrds-net even though this package never targets Android — see
+# docs/done/xrds-net-android-shipping.md Phase 3.
+xrds-runtime = { workspace = true, default-features = false }
+xrds-openxr = { workspace = true }
+xrds-scene-graph = { workspace = true }
+
+[dev-dependencies]
+bevy = { workspace = true }
+bevy-sequential-actions = { workspace = true }
+wgpu = { workspace = true }
+rand = { version = "0.9.2" }
+xrds-media = { workspace = true, features = ["transcoding"] }
+rustls = { version = "0.23.10", default-features = false, features = ["std", "ring"] }
+env_logger = { workspace = true }
+tokio = { workspace = true, features = ["time", "signal"] }
+
+# xrds-net examples (net.rs, net_app.rs, ...) are desktop-only dev tooling and
+# never built for Android. Gated by target (rather than left unconditioned)
+# because Cargo's feature resolver unifies features for a shared dependency
+# across ALL workspace members' manifests for a given target — even when
+# building a single crate with `-p` — so an un-gated default-featured
+# xrds-net here was pulling `ftp-server` (and its libunftp -> aws-lc-sys
+# chain, which doesn't cross-compile) into `xrds-runtime`'s Android build
+# despite xrds-runtime's own Android-specific `default-features = false`.
+# See docs/done/xrds-net-android-shipping.md Phase 3.
+[target.'cfg(not(target_os = "android"))'.dev-dependencies]
+xrds-net = { workspace = true }
+
+# Explicit [[example]] entries below: Cargo's example autodiscovery only
+# finds examples/*.rs (flat) or examples/*/main.rs (one level, must be
+# named main.rs) -- it does not recurse into examples/<category>/<name>.rs,
+# which is how these are now organized (see examples/README.md).
+[[example]]
+name = "simple_api"
+path = "examples/xrds_first/simple_api.rs"
+
+[[example]]
+name = "runtime_scene_environment"
+path = "examples/xrds_first/runtime_scene_environment.rs"
+
+[[example]]
+name = "environment_map_visual_check"
+path = "examples/xrds_first/environment_map_visual_check.rs"
+
+[[example]]
+name = "simple_scene"
+path = "examples/xrds_first/simple_scene.rs"
+
+[[example]]
+name = "simple_update"
+path = "examples/xrds_first/simple_update.rs"
+
+[[example]]
+name = "parent_child"
+path = "examples/xrds_first/parent_child.rs"
+
+[[example]]
+name = "parent_child_queued"
+path = "examples/xrds_first/parent_child_queued.rs"
+
+[[example]]
+name = "edit_material"
+path = "examples/xrds_first/edit_material.rs"
+
+[[example]]
+name = "active_compo_control"
+path = "examples/xrds_first/active_compo_control.rs"
+
+[[example]]
+name = "load_gltf"
+path = "examples/xrds_first/load_gltf.rs"
+
+[[example]]
+name = "load_gltf_fail_case"
+path = "examples/xrds_first/load_gltf_fail_case.rs"
+
+[[example]]
+name = "load_gltf_animated"
+path = "examples/xrds_first/load_gltf_animated.rs"
+
+[[example]]
+name = "scene_document_import"
+path = "examples/xrds_first/scene_document_import.rs"
+
+[[example]]
+name = "trigger_action_track"
+path = "examples/xrds_first/trigger_action_track.rs"
+
+[[example]]
+name = "scene_document_environment_import"
+path = "examples/xrds_first/scene_document_environment_import.rs"
+
+[[example]]
+name = "scene_document_texture_uv_rotation_only"
+path = "examples/xrds_first/scene_document_texture_uv_rotation_only.rs"
+
+[[example]]
+name = "scene_document_texture_uv_validation"
+path = "examples/xrds_first/scene_document_texture_uv_validation.rs"
+
+[[example]]
+name = "editor_basement_flow"
+path = "examples/xrds_first/editor_basement_flow.rs"
+
+[[example]]
+name = "scene_document_export"
+path = "examples/xrds_first/scene_document_export.rs"
+
+[[example]]
+name = "scene_document_session_save_load"
+path = "examples/xrds_first/scene_document_session_save_load.rs"
+
+[[example]]
+name = "descriptor_gen"
+path = "examples/xrds_first/descriptor_gen.rs"
+
+[[example]]
+name = "glb_runtime_add"
+path = "examples/xrds_first/glb_runtime_add.rs"
+
+[[example]]
+name = "scene_document_audio_workflow"
+path = "examples/xrds_first/scene_document_audio_workflow.rs"
+
+[[example]]
+name = "scene_document_material_workflow"
+path = "examples/xrds_first/scene_document_material_workflow.rs"
+
+[[example]]
+name = "generic_update"
+path = "examples/extensions/generic_update.rs"
+
+[[example]]
+name = "net"
+path = "examples/networking/net.rs"
+
+[[example]]
+name = "net_app"
+path = "examples/networking/net_app.rs"
+
+[[example]]
+name = "net_app_publisher"
+path = "examples/networking/net_app_publisher.rs"
+
+[[example]]
+name = "net_intent"
+path = "examples/networking/net_intent.rs"
+
+[[example]]
+name = "net_protocols"
+path = "examples/networking/net_protocols.rs"
+
+[[example]]
+name = "net_errors"
+path = "examples/networking/net_errors.rs"
+
+[[example]]
+name = "net_backpressure"
+path = "examples/networking/net_backpressure.rs"
+
+[[example]]
+name = "webrtc_webcam_stream"
+path = "examples/webrtc/webrtc_webcam_stream.rs"
+
+[[example]]
+name = "webrtc_file_stream"
+path = "examples/webrtc/webrtc_file_stream.rs"
+
+# Standalone real-network verification binaries — see
+# docs/done/xrds-net-webrtc-realnet-binaries.md. examples/webrtc/realnet_common.rs
+# is shared support code (no `main`), included via `#[path]` in each of
+# these rather than registered as its own example.
+[[example]]
+name = "webrtc_realnet_signaling_server"
+path = "examples/webrtc/webrtc_realnet_signaling_server.rs"
+
+[[example]]
+name = "webrtc_realnet_publisher"
+path = "examples/webrtc/webrtc_realnet_publisher.rs"
+
+[[example]]
+name = "webrtc_realnet_subscriber"
+path = "examples/webrtc/webrtc_realnet_subscriber.rs"
+
+[[example]]
+name = "direct_bevy"
+path = "examples/expert/direct_bevy.rs"
+
+[[example]]
+name = "sequential_actions_spike"
+path = "examples/expert/sequential_actions_spike.rs"
+
+[[example]]
+name = "2d_bloom"
+path = "examples/rendering/2d_bloom.rs"
+
+[[example]]
+name = "2d_shapes"
+path = "examples/rendering/2d_shapes.rs"
+
+[[example]]
+name = "3d_bloom"
+path = "examples/rendering/3d_bloom.rs"
+
+[[example]]
+name = "particle_effect"
+path = "examples/rendering/particle_effect.rs"
+
+[[example]]
+name = "3d_shapes"
+path = "examples/rendering/3d_shapes.rs"
+
+[[example]]
+name = "atmospheric_fog"
+path = "examples/rendering/atmospheric_fog.rs"
+
+[[example]]
+name = "custom_skinned_mesh"
+path = "examples/rendering/custom_skinned_mesh.rs"
+
+[[example]]
+name = "light_transmission"
+path = "examples/rendering/light_transmission.rs"
+
+[[example]]
+name = "morph_targets"
+path = "examples/rendering/morph_targets.rs"
+
+[[example]]
+name = "physical_based_rendering"
+path = "examples/rendering/physical_based_rendering.rs"
+
+[[example]]
+name = "postprocessing_builtin"
+path = "examples/rendering/postprocessing_builtin.rs"
+
+[[example]]
+name = "simple_xr_scene"
+path = "examples/rendering/simple_xr_scene.rs"
+
+[[example]]
+name = "skybox"
+path = "examples/rendering/skybox.rs"
+
+[[example]]
+name = "spherical_area_lights"
+path = "examples/rendering/spherical_area_lights.rs"
+
+[[example]]
+name = "split_screen"
+path = "examples/rendering/split_screen.rs"
+
+[[example]]
+name = "two_pass"
+path = "examples/rendering/two_pass.rs"
+
+[[example]]
+name = "vertex_color"
+path = "examples/rendering/vertex_color.rs"
+
+[[example]]
+name = "3d_text"
+path = "examples/rendering/3d_text.rs"
+
+[[example]]
+name = "extruded_text"
+path = "examples/rendering/extruded_text.rs"
+
+[[example]]
+name = "gltf_samples_check"
+path = "examples/rendering/gltf_samples_check.rs"
+
+[[example]]
+name = "original_morph"
+path = "examples/rendering/original_morph.rs"

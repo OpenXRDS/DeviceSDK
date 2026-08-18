@@ -1,22 +1,28 @@
+#[cfg(feature = "ftp-server")]
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::common::enums::PROTOCOLS;
 use crate::common::{validate_path, validate_path_write_permission};
 
-use crate::server::ws_server::WebSocketServer;
 use crate::server::webrtc_server::WebRTCServer;
+use crate::server::ws_server::WebSocketServer;
 
-use std::pin::Pin;
-use std::future::Future;
 use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
 
+#[cfg(feature = "ftp-server")]
 use unftp_sbe_fs::ServerExt;
-
 
 // const MAX_DATAGRAM_SIZE: usize = 1350;
 
-type WsHandler = Arc<dyn Fn(Vec<u8>) -> Pin<Box<dyn Future<Output = Option<Vec<u8>>> + Send + Sync + 'static>> + Send + Sync + 'static>;
+type WsHandler = Arc<
+    dyn Fn(Vec<u8>) -> Pin<Box<dyn Future<Output = Option<Vec<u8>>> + Send + Sync + 'static>>
+        + Send
+        + Sync
+        + 'static,
+>;
 type WsHandlers = HashMap<String, WsHandler>;
 
 #[derive(Clone)]
@@ -28,7 +34,7 @@ pub struct XRNetServer {
     pub greeting: Option<String>,
     pub root_dir: Option<String>,
 
-    ws_handlers: WsHandlers,   //TODO: will be changed for generic handlers
+    ws_handlers: WsHandlers, //TODO: will be changed for generic handlers
 }
 
 impl XRNetServer {
@@ -57,12 +63,12 @@ impl XRNetServer {
         F: Fn(Vec<u8>) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Option<Vec<u8>>> + Send + Sync + 'static,
     {
-        let handler_arc: WsHandler =
-            Arc::new(move |data| {
-                let fut: Fut = handler(data);
-                Box::pin(fut) as Pin<Box<dyn Future<Output = Option<Vec<u8>>> + Send + Sync + 'static>>
-            });
-        self.ws_handlers.insert(msg_type.to_lowercase(), handler_arc);
+        let handler_arc: WsHandler = Arc::new(move |data| {
+            let fut: Fut = handler(data);
+            Box::pin(fut) as Pin<Box<dyn Future<Output = Option<Vec<u8>>> + Send + Sync + 'static>>
+        });
+        self.ws_handlers
+            .insert(msg_type.to_lowercase(), handler_arc);
     }
 
     pub async fn start(&self) {
@@ -88,16 +94,23 @@ impl XRNetServer {
 
         if validate_path_write_permission(self.root_dir.clone().unwrap().as_str()).is_err() {
             panic!("No write permission to the root directory");
-        }   
+        }
 
         for i in 0..self.protocol.len() {
             match self.protocol[i] {
+                #[cfg(feature = "ftp-server")]
                 PROTOCOLS::FTP | PROTOCOLS::SFTP => {
                     let server = Arc::clone(&server);
                     let port = self.port[i];
                     tokio::spawn(async move {
                         server.run_ftp_server(port).await;
                     });
+                }
+                #[cfg(not(feature = "ftp-server"))]
+                PROTOCOLS::FTP | PROTOCOLS::SFTP => {
+                    log::warn!(
+                        "FTP server requested but not built in (feature `ftp-server` disabled)"
+                    );
                 }
                 PROTOCOLS::HTTP | PROTOCOLS::HTTPS => {
                     // self.run_http_server();
@@ -139,24 +152,138 @@ impl XRNetServer {
         }
     }
 
+    /// Same as `start`, but for `WS`/`WSS`/`WEBRTC` entries, binds the
+    /// listener before returning and reports back the actual bound port
+    /// (pass `0` as that entry's port to let the OS assign one — avoids
+    /// fixed/derived port numbers colliding across concurrently-run tests).
+    /// Other protocols behave as in `start` and echo back their configured
+    /// port unchanged.
+    pub async fn start_dynamic(&self) -> Vec<u32> {
+        let server = Arc::new(self.clone());
+
+        if self.protocol.is_empty() {
+            panic!("No protocol is specified");
+        }
+        if self.port.is_empty() {
+            panic!("No port is specified");
+        }
+        if self.protocol.len() != self.port.len() {
+            panic!("Protocol and Port size mismatch");
+        }
+        if validate_path(self.root_dir.clone().unwrap().as_str()).is_err() {
+            panic!("Invalid root directory");
+        }
+        if validate_path_write_permission(self.root_dir.clone().unwrap().as_str()).is_err() {
+            panic!("No write permission to the root directory");
+        }
+
+        let mut actual_ports = Vec::with_capacity(self.protocol.len());
+
+        for i in 0..self.protocol.len() {
+            let configured_port = self.port[i];
+            match self.protocol[i] {
+                PROTOCOLS::WS | PROTOCOLS::WSS => {
+                    let server = Arc::clone(&server);
+                    let (tx, rx) = tokio::sync::oneshot::channel();
+                    tokio::spawn(async move {
+                        server.run_ws_server_reporting(configured_port, tx).await;
+                    });
+                    let bound = rx.await.unwrap_or(configured_port as u16);
+                    actual_ports.push(bound as u32);
+                }
+                PROTOCOLS::WEBRTC => {
+                    let server = Arc::clone(&server);
+                    let (tx, rx) = tokio::sync::oneshot::channel();
+                    tokio::spawn(async move {
+                        server
+                            .run_webrtc_server_reporting(configured_port, tx)
+                            .await;
+                    });
+                    let bound = rx.await.unwrap_or(configured_port as u16);
+                    actual_ports.push(bound as u32);
+                }
+                #[cfg(feature = "ftp-server")]
+                PROTOCOLS::FTP | PROTOCOLS::SFTP => {
+                    let server = Arc::clone(&server);
+                    tokio::spawn(async move {
+                        server.run_ftp_server(configured_port).await;
+                    });
+                    actual_ports.push(configured_port);
+                }
+                #[cfg(not(feature = "ftp-server"))]
+                PROTOCOLS::FTP | PROTOCOLS::SFTP => {
+                    log::warn!(
+                        "FTP server requested but not built in (feature `ftp-server` disabled)"
+                    );
+                    actual_ports.push(configured_port);
+                }
+                PROTOCOLS::QUIC => {
+                    let server = Arc::clone(&server);
+                    tokio::spawn(async move {
+                        server.run_quic_server(configured_port).await;
+                    });
+                    actual_ports.push(configured_port);
+                }
+                PROTOCOLS::HTTP
+                | PROTOCOLS::HTTPS
+                | PROTOCOLS::MQTT
+                | PROTOCOLS::COAP
+                | PROTOCOLS::FILE
+                | PROTOCOLS::HTTP3 => {
+                    actual_ports.push(configured_port);
+                }
+            }
+        }
+
+        actual_ports
+    }
+
+    async fn run_ws_server_reporting(&self, port: u32, port_tx: tokio::sync::oneshot::Sender<u16>) {
+        println!("WebSocket server started");
+
+        let mut ws_server = WebSocketServer::new();
+        for (msg_type, handler) in self.ws_handlers.iter() {
+            println!("Registering handler for {}", msg_type);
+            ws_server.register_handler_arc(msg_type, Arc::clone(handler));
+        }
+
+        let run_result = Arc::new(ws_server).run_reporting_port(port, Some(port_tx)).await;
+        if let Err(e) = run_result {
+            println!("Error starting WebSocket server: {}", e);
+        }
+    }
+
+    async fn run_webrtc_server_reporting(
+        &self,
+        port: u32,
+        port_tx: tokio::sync::oneshot::Sender<u16>,
+    ) {
+        println!("WebRTC server started");
+
+        let webrtc_signaling_server = WebRTCServer::new();
+        let run_result = Arc::new(webrtc_signaling_server)
+            .run_reporting_port(port, Some(port_tx))
+            .await;
+        if let Err(e) = run_result {
+            println!("Error starting WebRTC server: {}", e);
+        }
+    }
+
+    #[cfg(feature = "ftp-server")]
     async fn run_ftp_server(&self, port: u32) {
         println!("FTP server started");
-        
+
         // set root directory as designated dir if the given directory is invalid or not provided
-        let root_dir_val_result = validate_path(self.root_dir.as_ref().unwrap());
-        let ftp_home = if (self.root_dir.is_none()) || (root_dir_val_result.is_err()) {
-            println!("Given root directory is invalid. Setting to default test directory");
-            std::env::temp_dir()
-            
-        } else {
-            let target_dir = self.root_dir.as_ref().unwrap();
-            PathBuf::from(target_dir.as_str())
+        let ftp_home = match self.root_dir.as_deref() {
+            Some(dir) if validate_path(dir).is_ok() => PathBuf::from(dir),
+            _ => {
+                println!("Given root directory is invalid. Setting to default test directory");
+                std::env::temp_dir()
+            }
         };
         println!("ftp server home: {:?}", ftp_home);
 
-        let server = libunftp::Server::with_fs(ftp_home)
-        .build()
-        .unwrap();
+        let server = libunftp::Server::with_fs(ftp_home).build().unwrap();
 
         let host_addr = ["127.0.0.1", port.to_string().as_str()].join(":");
         let listen_result = server.listen(host_addr.as_str()).await;
@@ -169,11 +296,10 @@ impl XRNetServer {
     }
 
     async fn run_quic_server(&self, port: u32) {
-        println!("QUIC server started {:?}" , port);
+        println!("QUIC server started {:?}", port);
 
         // quic server starts from udp socket
         // server requires certificate and private key
-        
     }
 
     /**
@@ -204,7 +330,6 @@ impl XRNetServer {
      * This is an websocket-based WebRTC Signaling server
      */
     async fn run_webrtc_server(&self, port: u32) {
-        
         println!("WebRTC server started");
 
         let webrtc_signaling_server = WebRTCServer::new();

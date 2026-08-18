@@ -41,6 +41,19 @@ pub fn try_load_windows_oxr_runtime() -> anyhow::Result<(Entry, Arc<Library>)> {
     Ok(entry)
 }
 
+/// Returns true if an OpenXR runtime is registered in the Windows registry.
+/// This is a lightweight check — it reads the manifest path without loading the DLL.
+pub fn is_runtime_registered() -> bool {
+    let key_path = "SOFTWARE\\Khronos\\OpenXR\\1";
+    let value_name = "ActiveRuntime";
+    matches!(
+        RegKey::predef(HKEY_LOCAL_MACHINE)
+            .open_subkey(key_path)
+            .and_then(|key| key.get_value::<String, _>(value_name)),
+        Ok(_)
+    )
+}
+
 fn runtime_library_path_from_registry() -> anyhow::Result<PathBuf> {
     let _span = info_span!("xrds-openxr::find_runtime_from_registry");
     info!("Finding OpenXR runtime from registry");
@@ -97,7 +110,7 @@ fn load_openxr_entry(path: &Path) -> anyhow::Result<(Entry, Arc<Library>)> {
             min_interface_version: 0,
             max_interface_version: openxr::sys::CURRENT_LOADER_RUNTIME_VERSION as u32,
             min_api_version: Version::new(0, 0, 0),
-            max_api_version: Version::new(1, 1, 49), // openxr::sys::CURRENT_API_VERSION,
+            max_api_version: Version::new(1, 2, 0), // stay ahead of runtime ICD versions
         };
 
         let mut negotiate_runtime_request = XrNegotiateRuntimeRequest {
