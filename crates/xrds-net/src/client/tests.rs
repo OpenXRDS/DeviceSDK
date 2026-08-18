@@ -103,6 +103,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "live network: hits www.rust-lang.org; run with --ignored"]
     fn test_http_request_get_with_redirection() {
         let client_builder = ClientBuilder::new();
         let client = client_builder.set_protocol(PROTOCOLS::HTTP).build();
@@ -121,6 +122,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "live network: hits www.rust-lang.org; run with --ignored"]
     fn test_http_request_get_without_redirection() {
         let client_builder = ClientBuilder::new();
         let client = client_builder.set_protocol(PROTOCOLS::HTTP).build();
@@ -138,6 +140,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "live network: hits www.rust-lang.org; run with --ignored"]
     fn test_http_request_post_no_post_allowed() {
         let client_builder = ClientBuilder::new();
         let client = client_builder.set_protocol(PROTOCOLS::HTTP).build();
@@ -175,6 +178,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "live network: hits an external HTTP endpoint; run with --ignored"]
     fn test_http_request_post_1() {
         let client_builder = ClientBuilder::new();
         let client = client_builder.set_protocol(PROTOCOLS::HTTP).build();
@@ -197,6 +201,7 @@ mod tests {
 
     /* start of HTTPS tests */
     #[test]
+    #[ignore = "live network: hits test.rebex.net; run with --ignored"]
     fn test_https_request_get() {
         let client_builder = ClientBuilder::new();
         let client = client_builder.set_protocol(PROTOCOLS::HTTPS).build();
@@ -217,6 +222,7 @@ mod tests {
     // was never going to work again regardless. Switched to FTP against the
     // same public test.rebex.net target the other FTP tests already use.
     #[test]
+    #[ignore = "live network: hits test.rebex.net; run with --ignored"]
     fn test_file_download1() {
         let client_builder = ClientBuilder::new();
         let client = client_builder
@@ -239,6 +245,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "live network: hits coap.me; run with --ignored"]
     fn test_coap_request_get() {
         let client_builder = ClientBuilder::new();
         let client = client_builder.set_protocol(PROTOCOLS::COAP).build();
@@ -250,6 +257,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "live network: hits coap.me; run with --ignored"]
     fn test_coap_request_post() {
         let client_builder = ClientBuilder::new();
         let client = client_builder.set_protocol(PROTOCOLS::COAP).build();
@@ -277,6 +285,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "live network: hits echo.websocket.org; run with --ignored"]
     fn test_ws_connect() {
         let client_builder = ClientBuilder::new();
         let client = client_builder.set_protocol(PROTOCOLS::WS).build();
@@ -286,6 +295,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "live network: hits echo.websocket.org; run with --ignored"]
     fn test_ws_send() {
         let msg = "Hello, WS";
         let data = Vec::from(msg.as_bytes());
@@ -301,6 +311,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "live network: hits echo.websocket.org; run with --ignored"]
     fn test_ws_rcv() {
         let client_builder = ClientBuilder::new();
         let client = client_builder.set_protocol(PROTOCOLS::WS).build();
@@ -324,6 +335,7 @@ mod tests {
     // Public-server test → tolerant of the network being unavailable (this
     // sandbox often can't reach it), but asserts the echo when it connects.
     #[test]
+    #[ignore = "live network: hits echo.websocket.org; run with --ignored"]
     fn test_wss_session_round_trip() {
         use crate::client::XrdsNet;
 
@@ -354,6 +366,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "live network: hits test.rebex.net; run with --ignored"]
     fn test_ftp_connect() {
         let client_builder = ClientBuilder::new();
         let client = client_builder
@@ -367,6 +380,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "live network: hits test.rebex.net; run with --ignored"]
     fn test_ftp_quit() {
         let client_builder = ClientBuilder::new();
         let client = client_builder
@@ -387,6 +401,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "live network: hits test.rebex.net; run with --ignored"]
     fn test_ftp_cwd() {
         let client_builder = ClientBuilder::new();
         let client = client_builder
@@ -408,6 +423,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "live network: hits test.rebex.net; run with --ignored"]
     fn test_ftp_list() {
         let client_builder = ClientBuilder::new();
         let client = client_builder
@@ -429,6 +445,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "live network: hits test.rebex.net; run with --ignored"]
     fn test_ftp_download() {
         let client_builder = ClientBuilder::new();
         let client = client_builder
@@ -454,6 +471,7 @@ mod tests {
 
     /************************** MQTT Tests **************************/
     #[test]
+    #[ignore = "live network: hits test.mosquitto.org; run with --ignored"]
     fn test_client_mqtt_connect() {
         let client_builder = ClientBuilder::new();
         let client = client_builder.set_protocol(PROTOCOLS::MQTT).build();
@@ -463,6 +481,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "live network: hits test.mosquitto.org; run with --ignored"]
     fn test_client_mqtt_subscribe() {
         let client_builder = ClientBuilder::new();
         let subscriber = client_builder.set_protocol(PROTOCOLS::MQTT).build();
@@ -477,6 +496,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "live network: hits test.mosquitto.org; run with --ignored"]
     fn test_client_mqtt_publish() {
         let client_builder = ClientBuilder::new();
         let client = client_builder.set_protocol(PROTOCOLS::MQTT).build();
@@ -489,6 +509,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "live network: hits test.mosquitto.org; run with --ignored"]
     fn test_client_mqtt_sub_pub_rcv() {
         let publisher_builder = ClientBuilder::new();
         let publisher = publisher_builder.set_protocol(PROTOCOLS::MQTT).build();
@@ -536,6 +557,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "live network: hits quic.nginx.org; run with --ignored"]
     fn test_client_quic_connect() {
         let client_builder = ClientBuilder::new();
         let client = client_builder.set_protocol(PROTOCOLS::QUIC).build();
@@ -547,6 +569,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "live network: hits quic.nginx.org; run with --ignored"]
     fn test_client_quic_send() {
         let client_builder = ClientBuilder::new();
         let client: crate::client::Client = client_builder.set_protocol(PROTOCOLS::QUIC).build();
@@ -567,6 +590,7 @@ mod tests {
 
     #[test]
     #[serial]
+    #[ignore = "live network: hits litespeedtech.com; run with --ignored"]
     fn test_client_http3_request() {
         ensure_http3_test_spacing();
 
@@ -587,6 +611,7 @@ mod tests {
 
     #[test]
     #[serial]
+    #[ignore = "live network: hits litespeedtech.com; run with --ignored"]
     fn test_client_http3_request_custom_header() {
         ensure_http3_test_spacing();
 
@@ -618,6 +643,7 @@ mod tests {
 
     #[test]
     #[serial]
+    #[ignore = "live network: hits cloudflare-quic.com; run with --ignored"]
     fn test_http3_request_without_agent() {
         ensure_http3_test_spacing();
 

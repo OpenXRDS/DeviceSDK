@@ -108,7 +108,10 @@ mod tests {
     #[cfg(feature = "ftp-server")]
     #[tokio::test]
     async fn test_server_run_multiple() {
-        let current_line = line!();
+        // `+ 8000` is load-bearing, not decoration: a bare `line!()` yields a port below 1024,
+        // which Linux refuses to bind as a non-root user. Windows allows it, so a missing
+        // offset passes locally and fails only in CI.
+        let current_line = line!() + 8000;
         let protocol_vec: Vec<PROTOCOLS> = vec![PROTOCOLS::FTP, PROTOCOLS::QUIC];
         let ports: Vec<u32> = vec![current_line, current_line + 1];
         let crnt_dir = std::env::current_dir().unwrap();
@@ -213,7 +216,11 @@ mod tests {
     #[cfg(feature = "ftp-server")]
     #[tokio::test]
     async fn test_server_ftp_crud() {
-        let current_line = line!(); // To avoid duplicate port number for each test
+        // Unique per test (hence `line!()`) *and* unprivileged (hence `+ 8000`). Without the
+        // offset this bound port 216, which Linux rejects for a non-root user — the FTP server
+        // then failed to start with "io error" and every client call reported "Connection
+        // refused", which reads like a client bug rather than a port-permission one.
+        let current_line = line!() + 8000;
         let server_handle = run_ftp_server(current_line);
         sleep(Duration::from_secs(2)).await;
 
@@ -332,14 +339,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_server_websocket_register_handler() {
-        let mut server = XRNetServer::new(vec![PROTOCOLS::WS], vec![line!()]);
+        // See the note in `test_server_run_multiple` on why the offset matters.
+        let mut server = XRNetServer::new(vec![PROTOCOLS::WS], vec![line!() + 8000]);
 
         server.register_handler("test", |msg| Box::pin(echo_handler(msg)));
     }
 
     #[tokio::test]
     async fn test_server_websocket_run() {
-        let current_line = line!();
+        let current_line = line!() + 8000;
         let server_handle = run_server(PROTOCOLS::WS, current_line);
 
         sleep(Duration::from_secs(2)).await;
