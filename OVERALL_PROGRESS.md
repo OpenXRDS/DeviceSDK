@@ -193,20 +193,35 @@ Separately tracked, both with their own plans and both deliberately unfixed:
 
 ## Suggested Next Steps (Short Horizon)
 
-Both items previously listed here (Text3D rendering, texture-slot UI) are
-done. Next up:
+Four of the five items previously listed here are done: Text3D rendering, the
+texture-slot UI, `XrdsCapsule`, and particle systems/VFX — which was the only
+remaining **High** priority row in the Gap Analysis. There is no High-priority
+engine gap left open.
 
-1. **Documentation pass.** More overdue now than when this was first
-   suggested: the in-world UI/panel-template system, the physics/grab system,
-   and `xrds-net`'s hardening are all substantial, all shipped, and none are
-   covered by user-facing docs yet — only internal `docs/done/*` design
-   records.
-2. **`XrdsCapsule` primitive** — small, well-scoped, closes the one concrete
-   primitive-palette gap.
-3. **Pick one "High priority" item from the Gap Analysis table below.**
-   Particle systems/VFX is the most-requested-shape gap for interactive XR
-   apps and has no groundwork started, unlike animation/post-processing which
-   have partial coverage already (see the table).
+That leaves the documentation pass as the standing recommendation, and it is now
+the oldest surviving item on this list:
+
+1. **Documentation pass.** The in-world UI/panel-template system, the
+   physics/grab system, particle effects, and `xrds-net`'s hardening are all
+   substantial, all shipped, and none are covered by user-facing docs — only
+   internal `docs/done/*` design records, which are written for whoever
+   maintains the code rather than for someone building a scene.
+
+   Already scoped: `docs/manual/gui-user-manual-outline.md` and
+   `docs/manual/api-reference-outline.md` are complete tables of contents
+   marked "outline only", split by audience (editor author vs. SDK/expert
+   developer). The next step is writing against them, not deciding what to
+   write.
+
+2. **Small, well-scoped engine work**, if a break from prose is wanted. The
+   cheapest items with real value, all from §5 above: the passthrough
+   blend-mode toggle and the spatial-audio inspector UI are both *editor-only*
+   halves of finished SDK work, and a `debug!` line for zone events would make
+   the next device check self-verifying rather than dependent on someone
+   describing what they saw.
+
+3. **Pick a Medium-priority Gap Analysis row** for a larger piece — animation
+   state machine, post-processing depth, NavMesh, or LOD.
 
 ## Gap Analysis vs. Mature 3D Engines
 
@@ -214,13 +229,13 @@ Features present in engines like Unity, Godot, or Unreal that are not yet in Dev
 
 | Feature | Priority | Notes |
 | --- | --- | --- |
-| **Particle systems / VFX** | High | No emitter, trail, or burst effects; needed for almost all interactive XR apps. No groundwork started — highest-value gap with nothing to build on yet. |
+| ~~**Particle systems / VFX**~~ | **Done** | `XrdsEffect` with `Burst`/`Trail`, editor authoring, and Track-driven `PlayEffect`/`StopEffect`; device-verified on Quest 3. Backend is `bevy_firework` — `bevy_hanabi` was adopted and rejected after its GPU-compute path rendered nothing on Adreno. See `docs/done/vfx-particle-effects-plan.md`. Remaining: blend modes are a no-op upstream, and there is no curve editor. |
 | **Animation state machine** | Medium | Playback + morph sliders exist; no blend trees, transition graphs, or IK |
 | **Post-processing stack** | Medium | Bloom + tonemapping exist (`XrdsBloom`, `XrdsTonemapping`) and exposure is fully authorable; no DOF, SSAO, or color grading |
 | **NavMesh / pathfinding** | Medium | AI agent navigation; needed for NPC-driven XR experiences |
 | **LOD system** | Medium | Performance at scene scale; no automatic LOD generation or selection |
 | **Video playback** | Low | Deferred; pattern established via `Audio` / `EnvironmentMap` |
-| **Capsule primitive** | Low | Useful character/physics shape; `XrdsCapsule` not yet added |
+| ~~**Capsule primitive**~~ | **Done** | `XrdsCapsule` shipped; also now the shape of the player's physics body. |
 | **Networking / multiplayer** | Low | The transport layer (`xrds-net`) is itself hardened and internal-milestone-ready, including a real two-machine WebRTC handshake — see `docs/done/xrds-net-release-readiness.md`. What is still missing is the *game-level* feature: an `XrdsAction` that syncs trigger effects across clients, which needs an authority model decided first (see `docs/xrds-trigger-action-backlog.md`'s Networking entry). Large scope, deferred. |
 | **Terrain system** | Low | Heightmaps, large world; not a near-term XR target |
 
