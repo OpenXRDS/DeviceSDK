@@ -100,6 +100,11 @@ wgpu = { version = "26.0.1", default-features = false, features = ["wgsl", "vulk
 wgpu-hal = { version = "26.0.1", features = ["vulkan"] }
 ash = "0.38.0"
 glam = { version = "0.29.2", features = ["bytemuck"] }
+# Audio: `xrds-audio` hands a `cpal::Device` to rodio, so cpal MUST be the same version
+# rodio resolves to (0.20.1 -> cpal 0.15.3) or the types will not match. Note xrds-media
+# pins its own, older cpal 0.14 for capture; the two coexist deliberately.
+rodio = "0.20.1"
+cpal = "0.15.3"
 bevy_rich_text3d = "0.5.0"
 bevy_fontmesh = "0.1.1"
 bevy_svg = "0.17.0"

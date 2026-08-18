@@ -2488,6 +2488,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a1d728cc89cf3aee9ff92b05e62b19ee65a02b5702cff7d5a377e32c6ae29d8d"
 
 [[package]]
+name = "claxon"
+version = "0.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4bfbf56724aa9eca8afa4fcfadeb479e722935bb2a0900c2d37e0cc477af0688"
+
+[[package]]
 name = "cmake"
 version = "0.1.54"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7757,6 +7763,7 @@ version = "0.20.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e7ceb6607dd738c99bc8cb28eff249b7cd5c8ec88b9db96c0608c1480d140fb1"
 dependencies = [
+ "claxon",
  "cpal 0.15.3",
  "hound",
  "lewton",
@@ -11381,6 +11388,12 @@ dependencies = [
 [[package]]
 name = "xrds-audio"
 version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "cpal 0.15.3",
+ "log",
+ "rodio",
+]
 
 [[package]]
 name = "xrds-components"
