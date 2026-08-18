@@ -547,7 +547,7 @@ mod tests {
     fn listen_on_a_non_stream_handler_is_a_capability_error() {
         use crate::client::handler::UnsupportedHandler;
 
-        let handler: Box<dyn ProtocolHandler> = Box::new(UnsupportedHandler::new(PROTOCOLS::WEBRTC));
+        let handler: Box<dyn ProtocolHandler> = Box::new(UnsupportedHandler::dedicated_api(PROTOCOLS::WEBRTC, "WebRTCClient"));
         let err = EventStream::spawn(
             handler,
             ClientContext::new(PROTOCOLS::WEBRTC, "test-id".to_string()),
