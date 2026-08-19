@@ -245,6 +245,53 @@ impl XrdsSceneDocument {
         // for a condition that cannot occur is noise. `panel_instance_count`
         // survives because the editor still wants to say "used by N nodes".
 
+        // -- Head-locked interactive templates ---------------------------------
+        //
+        // Pointer capture is per-panel, not per-element — settled policy, matching
+        // how visionOS and Quest treat a window: a window is a window. A world
+        // panel only captures when you approach it, so the cost is bounded.
+        //
+        // Head-locked, it is not bounded. The panel is always in front of the
+        // wearer, so an interactive template captures the pointer wherever they
+        // look, permanently, and nothing about the scene says why. That is why
+        // this is an Error and not a Warning: the scene loads, the panel renders,
+        // the buttons work, and the wearer simply cannot point at anything else.
+        //
+        // Info-only templates are fine head-locked and are the intended use:
+        // `XrdsWorldSurface::enabled` is already false when a template has no
+        // interactive element, so such a panel never captures at all.
+        for node in &self.nodes {
+            let XrdsSceneNodePayload::Panel(instance) = &node.payload else { continue };
+            let Some(template) = self.panel_template(instance.template_id) else {
+                continue; // dangling template — reported in the attachment pass
+            };
+
+            if template.has_interactive_element() && self.is_head_locked(node.id) {
+                let interactive: Vec<&str> = template
+                    .elements
+                    .iter()
+                    .filter(|e| e.is_interactive())
+                    .map(|e| e.name.as_str())
+                    .collect();
+
+                out.push(XrdsSceneTriggerDiagnostic {
+                    node_id: Some(node.id),
+                    severity: Severity::Error,
+                    title: "Head-locked panel uses an interactive template".to_string(),
+                    detail: format!(
+                        "Node {:?} is parented under a PlayerAnchor, so it is head-locked, and \
+                         instances template {:?} whose element(s) {interactive:?} are \
+                         interactive. A panel captures the pointer across its whole face, so \
+                         head-locking this one captures it wherever the wearer looks, for as \
+                         long as the panel exists — they will not be able to point at anything \
+                         else in the scene. Head-locked panels should instance info-only \
+                         templates (Label/Image); put interactive ones in the world.",
+                        node.name, template.name
+                    ),
+                });
+            }
+        }
+
         // -- Attachments -------------------------------------------------------
         // Both halves of "attachment is the only difference" reference a
         // template by id, and a dangling reference means the panel silently does

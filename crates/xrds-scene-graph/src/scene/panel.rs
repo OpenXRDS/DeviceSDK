@@ -188,6 +188,15 @@ impl Default for XrdsPanelTemplate {
 }
 
 impl XrdsPanelTemplate {
+    /// Whether any element on this template emits anything.
+    ///
+    /// Drives two decisions: whether an instance gets a live `XrdsWorldSurface`
+    /// pointer target at all, and whether the template may be head-locked (it may
+    /// not — see `XrdsSceneDocument::panel_diagnostics`).
+    pub fn has_interactive_element(&self) -> bool {
+        self.elements.iter().any(|e| e.is_interactive())
+    }
+
     pub fn element(&self, name: &str) -> Option<&XrdsPanelElement> {
         self.elements.iter().find(|e| e.name == name)
     }

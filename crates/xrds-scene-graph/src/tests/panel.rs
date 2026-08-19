@@ -472,6 +472,121 @@ fn panel_problems_do_not_leak_into_track_diagnostics() {
 // Attachments
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Head-locked interactive templates
+// ---------------------------------------------------------------------------
+
+const HEAD_LOCKED_TITLE: &str = "Head-locked panel uses an interactive template";
+
+/// A document with one template and one Panel node instancing it, where the Panel
+/// sits `depth` levels below a `PlayerAnchor`. `depth == 0` leaves it in the world.
+fn doc_with_anchored_panel(elements: Vec<XrdsPanelElement>, depth: usize) -> XrdsSceneDocument {
+    let t = XrdsPanelTemplate { id: XrdsPanelTemplateId(1), ..template("P", elements) };
+    let mut d = doc(vec![t], vec![]);
+
+    let mut parent = None;
+    if depth > 0 {
+        d.nodes.push(XrdsSceneNode {
+            id: XrdsSceneNodeId(1),
+            parent_id: None,
+            name: "Anchor".to_string(),
+            payload: XrdsSceneNodePayload::PlayerAnchor(Default::default()),
+            ..panel_node(1, 1)
+        });
+        parent = Some(XrdsSceneNodeId(1));
+
+        // Plain grouping nodes between the anchor and the panel.
+        for level in 1..depth {
+            let id = XrdsSceneNodeId(1 + level as u64);
+            d.nodes.push(XrdsSceneNode {
+                id,
+                parent_id: parent,
+                name: format!("Group{level}"),
+                payload: XrdsSceneNodePayload::Empty,
+                ..panel_node(id.0, 1)
+            });
+            parent = Some(id);
+        }
+    }
+
+    d.nodes.push(XrdsSceneNode { parent_id: parent, ..panel_node(10, 1) });
+    d
+}
+
+fn interactive_elements() -> Vec<XrdsPanelElement> {
+    vec![
+        XrdsPanelElement::new("Info", label()),
+        XrdsPanelElement::new("Go", button([0.0, 0.0])),
+    ]
+}
+
+fn info_only_elements() -> Vec<XrdsPanelElement> {
+    vec![XrdsPanelElement::new("Info", label())]
+}
+
+#[test]
+fn head_locking_an_interactive_template_is_an_error() {
+    let d = doc_with_anchored_panel(interactive_elements(), 1);
+    assert!(has(&d, HEAD_LOCKED_TITLE), "{:?}", titles(&d));
+}
+
+#[test]
+fn head_locking_an_info_only_template_is_fine() {
+    // The intended use: a Label/Image HUD never captures the pointer, because
+    // `XrdsWorldSurface::enabled` is false for a template with nothing interactive.
+    let d = doc_with_anchored_panel(info_only_elements(), 1);
+    assert!(!has(&d, HEAD_LOCKED_TITLE), "{:?}", titles(&d));
+}
+
+#[test]
+fn an_interactive_world_panel_is_fine() {
+    // Not head-locked: capture is bounded because you have to approach it.
+    let d = doc_with_anchored_panel(interactive_elements(), 0);
+    assert!(!has(&d, HEAD_LOCKED_TITLE), "{:?}", titles(&d));
+}
+
+/// The case a parent-only check would wave through — and the arrangement an
+/// author is most likely to build, since grouping nodes under an anchor is
+/// ordinary scene organisation.
+#[test]
+fn head_lock_is_detected_through_intermediate_nodes() {
+    for depth in [2, 3, 5] {
+        let d = doc_with_anchored_panel(interactive_elements(), depth);
+        assert!(
+            has(&d, HEAD_LOCKED_TITLE),
+            "depth {depth} was not detected: {:?}",
+            titles(&d)
+        );
+    }
+}
+
+/// Diagnostics run on freshly-loaded documents, so a malformed parent chain must
+/// terminate rather than hang the editor.
+#[test]
+fn a_parent_cycle_does_not_hang() {
+    let mut d = doc_with_anchored_panel(interactive_elements(), 0);
+    let a = XrdsSceneNodeId(20);
+    let b = XrdsSceneNodeId(21);
+    d.nodes.push(XrdsSceneNode {
+        id: a,
+        parent_id: Some(b),
+        payload: XrdsSceneNodePayload::Empty,
+        ..panel_node(20, 1)
+    });
+    d.nodes.push(XrdsSceneNode {
+        id: b,
+        parent_id: Some(a),
+        payload: XrdsSceneNodePayload::Empty,
+        ..panel_node(21, 1)
+    });
+    if let Some(node) = d.nodes.iter_mut().find(|n| n.id == XrdsSceneNodeId(10)) {
+        node.parent_id = Some(a);
+    }
+
+    assert!(!d.is_head_locked(XrdsSceneNodeId(10)));
+    let _ = d.panel_diagnostics(); // must return, not spin
+}
+
 fn panel_node(id: u64, template: u64) -> XrdsSceneNode {
     XrdsSceneNode {
         id: XrdsSceneNodeId(id),

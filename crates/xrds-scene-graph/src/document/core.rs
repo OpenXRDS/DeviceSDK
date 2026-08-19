@@ -142,6 +142,39 @@ impl XrdsSceneDocument {
             .filter(move |node| node.parent_id == Some(parent_id))
     }
 
+    /// Whether `node_id`'s ancestor chain reaches a `PlayerAnchor` — i.e. whether
+    /// the node is head-locked rather than placed in the world.
+    ///
+    /// Head-locking is expressed by *parenting*, not by a flag (the older HUD
+    /// vocabulary was retired in favour of it), so this walk is the only way to
+    /// answer the question.
+    ///
+    /// **Ancestors, not the immediate parent.** A Panel nested under an ordinary
+    /// grouping node that is itself under a `PlayerAnchor` is still head-locked,
+    /// and that is the arrangement an author is most likely to build. A check
+    /// that only looked one level up would pass exactly the scenes that need
+    /// catching.
+    ///
+    /// A malformed document can contain a parent cycle, so the walk tracks what it
+    /// has seen and stops rather than hanging. Diagnostics run on documents that
+    /// have just been loaded from disk and are not yet trusted.
+    pub fn is_head_locked(&self, node_id: XrdsSceneNodeId) -> bool {
+        let mut seen = std::collections::HashSet::new();
+        let mut current = self.node(node_id).and_then(|n| n.parent_id);
+
+        while let Some(id) = current {
+            if !seen.insert(id) {
+                return false; // cycle
+            }
+            let Some(node) = self.node(id) else { return false };
+            if matches!(node.payload, XrdsSceneNodePayload::PlayerAnchor(_)) {
+                return true;
+            }
+            current = node.parent_id;
+        }
+        false
+    }
+
     pub fn next_available_node_id(&self) -> XrdsSceneNodeId {
         XrdsSceneNodeId(
             self.nodes
