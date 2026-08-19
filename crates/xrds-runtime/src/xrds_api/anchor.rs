@@ -393,6 +393,37 @@ fn pick_head_camera<'a>(
         .map(|(gt, _, _)| gt)
 }
 
+/// [`pick_head_camera`]'s priority, returning the entity instead of its transform.
+///
+/// Kept adjacent to it deliberately: the two must agree, and the failure mode when
+/// they disagree is silent. Spatial audio uses this to decide which entity carries
+/// `SpatialListener`, and if the listener lands on a different camera than the one
+/// anchors treat as the head, sound and HUD end up in two different places.
+///
+/// The XR branch returns the **first active eye camera**, so the listener sits half
+/// an IPD off centre. That is within the error of Bevy's 4.0-unit default ear gap
+/// and far below anything audible; what matters is that an eye camera is the only
+/// entity carrying HMD rotation (`render.rs:314` applies the head pose to eye
+/// cameras, not to the player root).
+pub(crate) fn pick_head_camera_entity(
+    camera_q: &Query<(Entity, &Projection, &Camera)>,
+    player_cam_hint: Option<Entity>,
+) -> Option<Entity> {
+    if let Some((entity, _, _)) = camera_q
+        .iter()
+        .find(|(_, p, c)| c.is_active && matches!(p, Projection::Custom(_)))
+    {
+        return Some(entity);
+    }
+    if let Some(entity) = player_cam_hint {
+        return Some(entity);
+    }
+    camera_q
+        .iter()
+        .find(|(_, _, c)| c.is_active)
+        .map(|(entity, _, _)| entity)
+}
+
 /// Horizontal billboard: local +Z faces toward `cam_pos` projected onto the XZ
 /// plane.  Stays upright (Vec3::Y up) regardless of vertical offset.
 /// Falls back to body-forward when text and camera share the same XZ position

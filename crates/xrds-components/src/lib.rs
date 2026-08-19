@@ -27,7 +27,7 @@ pub use core::{
 pub use light_params::{
     AmbientLightParams, DirectionalLightParams, LightKind, PointLightParams, SpotLightParams,
 };
-pub use world::audio::XrdsAudioClip;
+pub use world::audio::{XrdsAudioClip, XrdsAudioDistanceModel};
 pub use world_ui::{
     XrdsWorldButton, XrdsWorldButtonParams, XrdsWorldButtonState,
     XrdsWorldElementDisabled,

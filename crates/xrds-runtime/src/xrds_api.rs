@@ -6,6 +6,8 @@
 mod api;
 #[path = "xrds_api/player_body.rs"]
 mod player_body;
+#[path = "xrds_api/audio_falloff.rs"]
+pub(crate) mod audio_falloff;
 #[path = "xrds_api/context.rs"]
 mod context;
 #[path = "xrds_api/environment.rs"]

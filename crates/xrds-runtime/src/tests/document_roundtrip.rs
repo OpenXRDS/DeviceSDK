@@ -406,7 +406,16 @@ fn audio_clip_node_survives_import_export_round_trip() {
                 looped: true,
                 spatial: false,
                 autoplay: true,
-                ..Default::default()
+                // Deliberately non-default, and deliberately not all equal to each
+                // other: these four survived a round trip only from 2026-08-19.
+                // Before that both conversions dropped them — document->runtime
+                // omitted them outright, runtime->document reset them with
+                // `..Default::default()` — so a test that used defaults here would
+                // have passed against the broken code.
+                distance_model: XrdsAudioDistanceModel::Exponential,
+                min_distance: 2.5,
+                max_distance: 30.0,
+                rolloff_factor: 1.5,
             }),
             grabbable: false,
             editor: XrdsEditorMetadata::default(),
@@ -449,6 +458,10 @@ fn audio_clip_node_survives_import_export_round_trip() {
     assert!(clip.looped);
     assert!(!clip.spatial);
     assert!(clip.autoplay);
+    assert_eq!(clip.distance_model, XrdsAudioDistanceModel::Exponential);
+    assert_eq!(clip.min_distance, 2.5);
+    assert_eq!(clip.max_distance, 30.0);
+    assert_eq!(clip.rolloff_factor, 1.5);
 }
 
 #[test]

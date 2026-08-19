@@ -22,7 +22,8 @@ use xrds_components::{
 use xrds_scene_graph::{
     XrdsAction, XrdsActionTarget, XrdsActionValue, XrdsAxis, XrdsCrossing, XrdsEaseCurve, XrdsEditorMetadata,
     XrdsGltfAssetExportPolicy, XrdsObservable, XrdsThresholdWatcher, XrdsSceneAmbientLight,
-    XrdsSceneAnimationRepeatMode, XrdsSceneAsset, XrdsSceneAssetKind, XrdsSceneAudioClip,
+    XrdsAudioDistanceModel, XrdsSceneAnimationRepeatMode, XrdsSceneAsset, XrdsSceneAssetKind,
+    XrdsSceneAudioClip,
     XrdsSceneCamera, XrdsSceneCameraProjection, XrdsSceneCube, XrdsSceneDirectionalLight,
     XrdsSceneDocument, XrdsSceneEnvironment, XrdsSceneExposureEnvironment, XrdsSceneFogEnvironment,
     XrdsSceneGltfAnimationSelector, XrdsSceneGltfAsset, XrdsSceneGltfMorphTargetOverride,

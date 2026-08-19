@@ -1147,17 +1147,11 @@ impl Default for XrdsSceneSpotLight {
     }
 }
 
-/// Distance rolloff model for spatial audio.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub enum XrdsAudioDistanceModel {
-    /// Gain decreases linearly from `min_distance` to `max_distance`.
-    Linear,
-    /// Gain decreases by the inverse of distance (Web Audio default).
-    #[default]
-    Inverse,
-    /// Gain decreases exponentially with distance.
-    Exponential,
-}
+// `XrdsAudioDistanceModel` moved to xrds-components so the runtime can evaluate a
+// falloff curve without depending on the document layer — same reason
+// `XrdsGrabType` and `XrdsInteractionZoneShape` live there. Re-exported so the
+// document-facing path to it is unchanged.
+pub use xrds_components::XrdsAudioDistanceModel;
 
 /// Authored audio clip node referencing a catalog `Audio` asset.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1174,7 +1168,7 @@ pub struct XrdsSceneAudioClip {
     #[serde(default)]
     pub autoplay: bool,
     // ── Spatial audio parameters (only meaningful when `spatial` is true) ──
-    #[serde(default, skip_serializing_if = "XrdsAudioDistanceModel::is_default")]
+    #[serde(default, skip_serializing_if = "is_default_distance_model")]
     pub distance_model: XrdsAudioDistanceModel,
     #[serde(default = "default_audio_min_distance")]
     pub min_distance: f32,
@@ -1182,14 +1176,21 @@ pub struct XrdsSceneAudioClip {
     pub max_distance: f32,
     #[serde(default = "default_audio_rolloff")]
     pub rolloff_factor: f32,
-    #[serde(default)]
-    pub hrtf: bool,
+    // `hrtf: bool` lived here. Removed 2026-08-19: nothing ever read it, and
+    // nothing could — binaural rendering needs an HRTF-convolving audio path,
+    // which neither bevy_audio nor rodio has (rodio downmixes to mono and applies
+    // two per-ear gains; `grep -i hrtf` over its source finds nothing). Shipping a
+    // flag that silently does nothing is worse than not offering it. A verified
+    // route to real binaural, should it ever be wanted, is written up in
+    // `docs/spatial-audio-backend-spike.md`; re-adding the field is a one-liner
+    // once the capability behind it exists.
+    //
+    // Removal is document-compatible: the field was `#[serde(default)]`, so older
+    // scenes still load and simply drop a value that never had an effect.
 }
 
-impl XrdsAudioDistanceModel {
-    fn is_default(&self) -> bool {
-        *self == XrdsAudioDistanceModel::Inverse
-    }
+fn is_default_distance_model(model: &XrdsAudioDistanceModel) -> bool {
+    *model == XrdsAudioDistanceModel::Inverse
 }
 
 fn default_audio_volume() -> f32 {
@@ -1224,7 +1225,6 @@ impl Default for XrdsSceneAudioClip {
             min_distance: 1.0,
             max_distance: 50.0,
             rolloff_factor: 1.0,
-            hrtf: false,
         }
     }
 }
@@ -1674,13 +1674,22 @@ pub enum XrdsSceneWorldWidget {
 
 impl From<&XrdsAudioClip> for XrdsSceneAudioClip {
     fn from(value: &XrdsAudioClip) -> Self {
+        // Every field is listed explicitly, and `..Default::default()` is
+        // deliberately not used here. It was, until 2026-08-19, and it silently
+        // reset the falloff fields to defaults on the way from runtime to
+        // document — harmless only for as long as nothing read them. Listing the
+        // fields means a future addition fails to compile instead of being
+        // quietly dropped on save.
         Self {
             asset_id: value.audio_asset_id.clone(),
             volume: value.volume,
             looped: value.looped,
             spatial: value.spatial,
             autoplay: value.autoplay,
-            ..Default::default()
+            distance_model: value.distance_model,
+            min_distance: value.min_distance,
+            max_distance: value.max_distance,
+            rolloff_factor: value.rolloff_factor,
         }
     }
 }

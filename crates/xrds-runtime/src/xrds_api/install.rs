@@ -383,6 +383,19 @@ pub(super) fn install_xrds(app: &mut App) {
     // Runs in PreUpdate — before Bevy's audio sink creation — so that entities whose
     // rodio decoder would panic are removed before Bevy ever tries to play them.
     app.add_systems(PreUpdate, pre_validate_audio_decoders_system);
+    // Applies each spatial clip's authored distance falloff. In Update rather than
+    // PostUpdate so it sees the transforms this frame's movement produced.
+    app.add_systems(
+        Update,
+        (
+            // Must precede the falloff pass: without a listener on the head camera
+            // that system has nothing to measure from and silently does nothing,
+            // which is exactly how XR shipped until 2026-08-19.
+            crate::xrds_api::audio_falloff::sync_spatial_listener_system,
+            crate::xrds_api::audio_falloff::audio_falloff_system,
+        )
+            .chain(),
+    );
     app.add_observer(apply_pending_gltf_animation_requests_on_scene_ready);
     // Fires synchronously inside scene_spawner_system when a scene is fully
     // instantiated — all ChildOf relationships are established at this point.

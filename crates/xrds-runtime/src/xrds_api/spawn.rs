@@ -925,6 +925,13 @@ pub(super) fn spawn_audio_clip_descriptor(
     let looped = audio.looped;
     let spatial = audio.spatial;
     let autoplay = audio.autoplay;
+    let falloff = crate::xrds_api::audio_falloff::XrdsAudioFalloff {
+        distance_model: audio.distance_model,
+        min_distance: audio.min_distance,
+        max_distance: audio.max_distance,
+        rolloff_factor: audio.rolloff_factor,
+        base_volume: audio.volume.clamp(0.0, 1.0),
+    };
 
     commands.queue(move |world: &mut World| {
         // Resolve catalog asset id → URI, then load the audio source.
@@ -947,6 +954,14 @@ pub(super) fn spawn_audio_clip_descriptor(
             volume: Volume::Linear(volume.clamp(0.0, 1.0)),
             paused: !autoplay,
             spatial,
+            // Left at Bevy's default deliberately. A previous revision shrank the
+            // world here so rodio's per-ear `(1/dist_sq).min(1.0)` stayed pinned at
+            // its clamp, on the theory that the remaining term was the panner. It is
+            // not: `dist_modifier` IS rodio's panning, and `diff_modifier` spans only
+            // 0.5..=1.0 and is inverted (the ear nearer the source gets the smaller
+            // value). Pinning `dist_modifier` therefore left the weak, backwards term
+            // alone and the image collapsed to centre. Verified by listening.
+            spatial_scale: None,
             ..PlaybackSettings::ONCE
         };
 
@@ -958,6 +973,11 @@ pub(super) fn spawn_audio_clip_descriptor(
             build_visibility_hierarchy_components(visible),
             XrdsStored(descriptor),
         ));
+        // Only spatial clips have a falloff curve to apply; an ambient clip keeps
+        // the flat `volume` Bevy already set and must not be touched per frame.
+        if spatial {
+            entity_mut.insert(falloff);
+        }
 
         // Only attempt to load audio if AudioSource has been registered with the asset
         // server (i.e. AudioPlugin is present). In test environments that use minimal

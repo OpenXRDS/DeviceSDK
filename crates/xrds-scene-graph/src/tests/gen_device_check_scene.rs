@@ -11,30 +11,88 @@ use super::*;
 /// Driven by `docs/quest-device-test-recipe.md`, which carries the deploy sequence
 /// and the traps.
 ///
-/// # Current check: can the player walk into a zone?
+/// # Current check: does head tracking resolve front/back for spatial audio?
 ///
-/// This is the whole point of `docs/done/player-body-collider-plan.md`. Before that work
-/// the answer was no — `zone_collision_system` needs colliders on *both* bodies and
-/// nothing ever gave the player one, so a correctly authored zone produced zero
-/// events. Two earlier device attempts were spent assuming the volume had been
-/// missed before checking whether the event could fire at all.
+/// Previous contents built the zone-enter check for
+/// `docs/done/player-body-collider-plan.md`; that landed and was verified, so the
+/// scene has been repurposed. Recover it from git if it is needed again.
 ///
-/// So the scene is deliberately minimal and the zone is deliberately **visible**:
+/// ## The question
 ///
-/// - `PAD` — a flat, bright, unlit slab marking exactly where the zone is. An
-///   unmarked trigger volume is indistinguishable from a broken one (recipe Trap 6).
-/// - `ZONE` — a box sensor covering the pad, generous in Y so it cannot be stepped
-///   over or under.
-/// - `PLUME` — `auto_play = false`, directly above the pad. If it is already
-///   running the test proves nothing.
-/// - Track `on_enter`, bound to `ZoneEnter` on the zone: `PlayEffect` at 0s.
-///   `when_finished: Keep` so the plume stays up and the result is unambiguous
-///   rather than being cleaned up a frame later.
+/// Bevy's spatial audio is rodio's, which emits **one gain per ear** and nothing
+/// else — no filtering, no inter-aural delay, no HRTF. A source 30° front-left and
+/// one 30° back-left therefore produce identical ear gains. Statically, front and
+/// back are indistinguishable, and that is not a bug we can fix from our side.
+///
+/// What may rescue it is **movement**. Turn your head and a front source drifts one
+/// way in the stereo image while a rear source drifts the other; listeners use this
+/// unconsciously. Bevy already feeds it: ear positions come from
+/// `transform.transform_point(ear_offset)` — the full transform, rotation included
+/// (`bevy_audio-0.17.2/src/audio_output.rs:73`) — and `update_listener_positions`
+/// re-runs on `Changed<GlobalTransform>`. Every XRDS camera is the listener, so a
+/// head turn on a Quest already repans every source.
+///
+/// None of that is worth anything until somebody hears it, and it cannot be heard
+/// on desktop, where the check example drives a camera that never rotates. Hence a
+/// device scene. The answer decides whether HRTF is worth costing out at all — see
+/// `docs/spatial-audio-backend-spike.md`.
+///
+/// ## The scene, and why it is shaped this way
+///
+/// **Two identical markers, one in front and one behind, and audio from only one.**
+/// The task is "which marker is making the sound?", which is a genuine forced choice
+/// rather than an invitation to agree with the tester.
+///
+/// - Identical size, colour and distance, so nothing visual distinguishes them.
+///   A single marker would let the listener infer the answer from the fact that
+///   only one object exists.
+/// - The sound is on the **rear** marker. Guessing "in front" is the default
+///   assumption, so a correct answer is informative.
+/// - `spatial_test_ping.wav`: mono, 1 s loop, four broadband bursts with sharp
+///   onsets. Onsets are what the ear localises with. Every other clip in
+///   `assets/sound/` is stereo and ~20 s, and rodio downmixes a spatial source to
+///   mono — so a recording with its own baked-in stereo movement fights the cue
+///   under test. `assets/sound` is staged into the APK automatically by
+///   `build.ps1`, so no scene-dir assets are needed.
+/// - `max_distance` **6 m**, not 30. The first device attempt used 30 so the source
+///   would stay audible while turning, and that made the falloff impossible to
+///   hear: `Linear` over 1..30 m gives gain 0.948 at 2.5 m and 0.862 at 5 m —
+///   about 0.8 dB across the whole walkable area. Over 1..6 m the same walk spans
+///   0.70 down to 0.20 and then silence, which a listener can actually judge. Set
+///   the range to the space the tester can physically cover.
 ///
 /// Positions are relative to xrds-app's default spawn `(0, 1.6, 8)` looking down
-/// -Z — not the origin. The pad sits at z = 6.5, a step and a half ahead, close
-/// enough to find without locomotion but far enough that the player does not start
-/// inside it (starting inside would mean no *enter* transition at all).
+/// -Z — not the origin (recipe Trap 4). The markers sit 2.5 m ahead and 2.5 m
+/// behind at ear height.
+///
+/// ## Wear headphones. The built-in speakers cannot show this.
+///
+/// Quest's speakers are open-ear and both of them reach both ears — acoustic
+/// crosstalk. Amplitude panning works *entirely* by inter-aural level difference,
+/// so crosstalk destroys precisely the cue under test. A first device run on the
+/// built-in speakers produced "I can hear the ping but hard to recognize the volume
+/// and direction changing", which says more about the speakers than about the code.
+/// Pair Bluetooth headphones (Settings → Devices → Bluetooth); latency is
+/// irrelevant here because the judgement is about a continuous sound, not about
+/// sync with an action. If the headphones offer their own spatial-audio or
+/// head-tracking mode, **turn it off** — a second spatializer on top of ours
+/// invalidates the result.
+///
+/// This is worth knowing beyond the test: on Quest speakers, amplitude-panned
+/// spatial audio is inherently weak for every XRDS app, not just this scene.
+///
+/// ## Running it
+///
+/// Put the headset on, stand still, and **turn slowly on the spot**. Decide which
+/// marker the sound is coming from before looking. Then look.
+///
+/// Then walk toward and away from the sounding marker — over a 6 m range the level
+/// change should be obvious. That is the S1 falloff on device.
+///
+/// - Correct, and the direction feels stable in the world as you turn → rung 1
+///   works, and front/back may not need HRTF.
+/// - It stays centred and you cannot tell → head tracking is not enough, and
+///   binaural is the only route left.
 #[test]
 fn xxx_gen_device_check_scene() {
     let Ok(out) = std::env::var("XRDS_GEN_DEVICE_SCENE") else {
@@ -49,9 +107,17 @@ fn xxx_gen_device_check_scene() {
         v
     };
 
+    // Spawn is (0, 1.6, 8) looking down -Z, so -Z is "ahead" and +Z is "behind".
+    const EAR_Y: f32 = 1.6;
+    const OFFSET: f32 = 2.5;
+    const FRONT_Z: f32 = 8.0 - OFFSET;
+    const BACK_Z: f32 = 8.0 + OFFSET;
+
+    const AUDIO_ASSET_ID: &str = "asset:spatial-ping";
+
     let mut ground = XrdsPlane3D::new().with_name("Ground");
     ground.size = [24.0, 24.0];
-    ground.transform.translation = [0.0, 0.0, 4.0];
+    ground.transform.translation = [0.0, 0.0, 8.0];
     doc.nodes
         .push(XrdsSceneNode::from_xrds_plane3d(id(), None, &ground, None));
 
@@ -60,103 +126,56 @@ fn xxx_gen_device_check_scene() {
     doc.nodes
         .push(XrdsSceneNode::from_xrds_directional_light(id(), None, &sun));
 
-    // --- The visible marker -------------------------------------------------
-    // Unlit so it reads as a marker rather than as lit geometry, and thin enough
-    // to be obviously a floor decal rather than an obstacle. Slightly above the
-    // ground plane to avoid z-fighting with it.
-    const PAD_X: f32 = 0.0;
-    const PAD_Z: f32 = 6.5;
-    const PAD_HALF: f32 = 0.9;
-
-    let mut pad = XrdsCube::new().with_name("PAD");
-    pad.size = [PAD_HALF * 2.0, 0.04, PAD_HALF * 2.0];
-    pad.transform.translation = [PAD_X, 0.02, PAD_Z];
-    let mut pad_mat = xrds_components::XrdsMaterialParams::default();
-    pad_mat.base_color = XrdsColor {
-        rgba: [0.15, 0.85, 0.35, 1.0],
+    // --- The two markers ----------------------------------------------------
+    // Deliberately indistinguishable. Emissive so they read clearly against the
+    // ground without depending on where the sun happens to fall.
+    let mut marker_material = xrds_components::XrdsMaterialParams::default();
+    marker_material.base_color = XrdsColor {
+        rgba: [0.85, 0.85, 0.9, 1.0],
     };
-    pad_mat.unlit = true;
-    doc.nodes.push(XrdsSceneNode::from_xrds_cube(
-        id(),
-        None,
-        &pad,
-        Some(pad_mat),
-    ));
+    marker_material.unlit = true;
 
-    // --- The effect the zone fires ------------------------------------------
-    let mut plume = XrdsEffect::new()
-        .with_name("PLUME")
-        .with_kind(XrdsEffectKind::Trail);
-    // Above the pad, high enough to be visible while standing on it — looking
-    // straight down at your own feet is an awkward way to check a result.
-    plume.transform.translation = [PAD_X, 1.4, PAD_Z];
-    plume.auto_play = false;
-    plume.spawn_rate = 250.0;
-    plume.lifetime_secs = 1.2;
-    plume.size_min = 0.08;
-    plume.size_max = 0.16;
-    plume.omnidirectional = false;
-    plume.spread_deg = 25.0;
-    plume.gravity = [0.0, 0.8, 0.0];
-    plume.color_start = XrdsColor {
-        rgba: [1.0, 0.75, 0.25, 1.0],
-    };
-    plume.color_end = XrdsColor {
-        rgba: [0.5, 0.15, 0.0, 0.0],
-    };
-    let plume_id = id();
-    doc.nodes
-        .push(XrdsSceneNode::from_xrds_effect(plume_id, None, &plume));
+    for (name, z) in [("MARKER_FRONT", FRONT_Z), ("MARKER_BACK", BACK_Z)] {
+        let mut marker = XrdsSphere::new().with_name(name);
+        marker.radius = 0.22;
+        marker.transform.translation = [0.0, EAR_Y, z];
+        doc.nodes.push(XrdsSceneNode::from_xrds_sphere(
+            id(),
+            None,
+            &marker,
+            Some(marker_material.clone()),
+        ));
+    }
 
-    doc.tracks = vec![XrdsNamedTrack {
-        name: "on_enter".to_string(),
-        track: XrdsTrack {
-            assets: vec![XrdsTrackAsset {
-                target: XrdsActionTarget::Node(plume_id),
-                keys: vec![XrdsTrackKey {
-                    at_secs: 0.0,
-                    action: XrdsAction::PlayEffect { count: None },
-                }],
-                // Keep, so the plume stays visible after the Track completes.
-                // Restore would soft-stop it almost immediately and the result
-                // would be a flicker nobody could judge.
-                when_finished: XrdsWhenFinished::Keep,
-            }],
-            ..Default::default()
-        },
-    }];
-
-    // --- The zone itself ----------------------------------------------------
-    // Box, not sphere: a box of the pad's footprint is unambiguous about where the
-    // boundary is, which matters when the whole question is whether crossing it
-    // registers. Tall (±1.5m about y=1.0) so neither a standing nor a crouching
-    // player can pass through without overlapping.
-    let mut zone_node = XrdsSceneNode::from_xrds_node(
-        id(),
-        None,
-        &xrds_components::world::XrdsNode {
-            name: "ZONE".to_string(),
-            enabled: true,
-            visible: true,
-            transform: Default::default(),
-        },
-    );
-    zone_node.transform.translation = [PAD_X, 1.0, PAD_Z];
-    zone_node.payload = XrdsSceneNodePayload::InteractionZone(XrdsSceneInteractionZone {
-        shape: xrds_components::XrdsInteractionZoneShape::Box {
-            half_extents: [PAD_HALF, 1.5, PAD_HALF],
-        },
-        grab_type: xrds_components::XrdsGrabType::None,
-        hoverable: false,
+    // --- The sound, on the REAR marker only ---------------------------------
+    doc.assets.push(XrdsSceneAsset {
+        id: AUDIO_ASSET_ID.to_string(),
+        uri: "sound/wav/spatial_test_ping.wav".to_string(),
+        kind: XrdsSceneAssetKind::Audio,
     });
-    zone_node.triggers = vec![XrdsTriggerBinding {
-        trigger: XrdsTriggerKind::ZoneEnter,
-        track: Some("on_enter".to_string()),
-        ..Default::default()
-    }];
-    doc.nodes.push(zone_node);
+
+    let mut ping = xrds_components::XrdsAudioClip::new(AUDIO_ASSET_ID).with_name("REAR_SOURCE");
+    ping.transform.translation = [0.0, EAR_Y, BACK_Z];
+    ping.volume = 1.0;
+    ping.looped = true;
+    ping.spatial = true;
+    ping.autoplay = true;
+    // Inverse, not Linear: linear-in-amplitude is brutal in loudness terms, since
+    // the final stretch runs -14 dB to silence over one metre. Inverse is how sound
+    // actually behaves and holds a usable level across the room.
+    ping.distance_model = xrds_components::XrdsAudioDistanceModel::Inverse;
+    // `min_distance` is the reference radius, not just a near clamp: raising it
+    // flattens the near field so the whole curve is gentler. At 2.0 the far marker
+    // (5 m away) sits at 0.4 — clearly audible — where the previous
+    // `min 1 / max 6 / Linear` setup put it at 0.18, which read as nothing.
+    ping.min_distance = 2.0;
+    ping.max_distance = 15.0;
+    ping.rolloff_factor = 1.0;
+    doc.nodes
+        .push(XrdsSceneNode::from_xrds_audio_clip(id(), None, &ping));
 
     doc.save_json(std::path::Path::new(&out))
         .expect("device-check scene should save");
     println!("[gen] wrote {out} with {} nodes", doc.nodes.len());
+    println!("[gen] sound is on MARKER_BACK at z={BACK_Z}; MARKER_FRONT at z={FRONT_Z} is silent");
 }

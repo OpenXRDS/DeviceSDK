@@ -272,6 +272,10 @@ name = "scene_document_audio_workflow"
 path = "examples/xrds_first/scene_document_audio_workflow.rs"
 
 [[example]]
+name = "spatial_audio_falloff_check"
+path = "examples/xrds_first/spatial_audio_falloff_check.rs"
+
+[[example]]
 name = "scene_document_material_workflow"
 path = "examples/xrds_first/scene_document_material_workflow.rs"
 
