@@ -431,8 +431,6 @@ pub(super) fn apply_transform_to_entity(
 }
 
 fn transform_params_from_transform(transform: &Transform) -> TransformParams {
-    let (x_deg, y_deg, z_deg) = transform.rotation.to_euler(EulerRot::XYZ);
-
     TransformParams {
         translation: transform.translation.to_array(),
         rotation_quat_xyzw: [
@@ -441,7 +439,6 @@ fn transform_params_from_transform(transform: &Transform) -> TransformParams {
             transform.rotation.z,
             transform.rotation.w,
         ],
-        rotation_euler_xyz_deg: [x_deg.to_degrees(), y_deg.to_degrees(), z_deg.to_degrees()],
         scale: transform.scale.to_array(),
     }
 }

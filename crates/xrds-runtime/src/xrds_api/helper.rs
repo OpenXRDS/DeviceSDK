@@ -542,9 +542,6 @@ where
         None => return,
     };
     params.rotation_quat_xyzw = xyzw;
-    let quat = Quat::from_xyzw(xyzw[0], xyzw[1], xyzw[2], xyzw[3]);
-    let (x_deg, y_deg, z_deg) = quat.to_euler(EulerRot::XYZ);
-    params.rotation_euler_xyz_deg = [x_deg.to_degrees(), y_deg.to_degrees(), z_deg.to_degrees()];
     set_transform_in_world(world, handle, params);
 }
 

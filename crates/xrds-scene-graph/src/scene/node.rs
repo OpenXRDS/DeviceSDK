@@ -1052,7 +1052,6 @@ impl From<XrdsSceneTransform> for TransformParams {
         Self {
             translation: value.translation,
             rotation_quat_xyzw: value.rotation_quat_xyzw,
-            rotation_euler_xyz_deg: [0.0, 0.0, 0.0],
             scale: value.scale,
         }
     }

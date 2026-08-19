@@ -70,7 +70,10 @@ impl XrdsApp for ParentChildApp {
         let plane_handle = api.spawn(&{
             let mut plane = XrdsPlane3D::new().with_name("GrandchildPlane");
             plane.transform.translation = [0.0, 1.2, 0.0];
-            plane.transform.rotation_euler_xyz_deg = [-90.0, 0.0, 0.0];
+            // Was `rotation_euler_xyz_deg = [-90, 0, 0]`, which did nothing at all:
+            // the runtime reads the quaternion, and this example had been shipping
+            // an unrotated plane. `set_euler_deg` actually applies it.
+            plane.transform.set_euler_deg(-90.0, 0.0, 0.0);
             plane
         });
         api.set_material_base_color(&plane_handle, XrdsColor::srgb(0.95, 0.88, 0.38));
@@ -126,7 +129,6 @@ impl XrdsApp for ParentChildApp {
             TransformParams {
                 translation: [(t * 0.7).sin() * 1.2, 1.1 + 0.25 * (t * 1.4).sin(), 0.0],
                 rotation_quat_xyzw: [0.0, cube_half_yaw.sin(), 0.0, cube_half_yaw.cos()],
-                rotation_euler_xyz_deg: [0.0, cube_yaw.to_degrees(), 0.0],
                 scale: [1.0, 1.0, 1.0],
             },
         );
@@ -143,7 +145,6 @@ impl XrdsApp for ParentChildApp {
                     0.0,
                 ],
                 rotation_quat_xyzw: [sphere_half_pitch.sin(), 0.0, 0.0, sphere_half_pitch.cos()],
-                rotation_euler_xyz_deg: [sphere_pitch.to_degrees(), 0.0, 0.0],
                 scale: [1.0, 1.0, 1.0],
             },
         );
@@ -156,7 +157,6 @@ impl XrdsApp for ParentChildApp {
             TransformParams {
                 translation: [0.0, 1.2, 0.0],
                 rotation_quat_xyzw: [0.0, 0.0, plane_half_roll.sin(), plane_half_roll.cos()],
-                rotation_euler_xyz_deg: [0.0, 0.0, plane_roll.to_degrees()],
                 scale: [1.0, 1.0, 1.0],
             },
         );

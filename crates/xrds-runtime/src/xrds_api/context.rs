@@ -242,9 +242,6 @@ impl XrdsUpdateContext<'_> {
         let mut rotation = Quat::from_xyzw(x, y, z, w);
         rotation *= Quat::from_rotation_x(angle_rad);
         params.rotation_quat_xyzw = [rotation.x, rotation.y, rotation.z, rotation.w];
-        let (x_deg, y_deg, z_deg) = rotation.to_euler(EulerRot::XYZ);
-        params.rotation_euler_xyz_deg =
-            [x_deg.to_degrees(), y_deg.to_degrees(), z_deg.to_degrees()];
         self.set_transform(handle, params);
     }
 
@@ -263,9 +260,6 @@ impl XrdsUpdateContext<'_> {
         let mut rotation = Quat::from_xyzw(x, y, z, w);
         rotation *= Quat::from_rotation_y(angle_rad);
         params.rotation_quat_xyzw = [rotation.x, rotation.y, rotation.z, rotation.w];
-        let (x_deg, y_deg, z_deg) = rotation.to_euler(EulerRot::XYZ);
-        params.rotation_euler_xyz_deg =
-            [x_deg.to_degrees(), y_deg.to_degrees(), z_deg.to_degrees()];
         self.set_transform(handle, params);
     }
 
@@ -281,9 +275,6 @@ impl XrdsUpdateContext<'_> {
         let mut rotation = Quat::from_xyzw(x, y, z, w);
         rotation *= Quat::from_rotation_z(angle_rad);
         params.rotation_quat_xyzw = [rotation.x, rotation.y, rotation.z, rotation.w];
-        let (x_deg, y_deg, z_deg) = rotation.to_euler(EulerRot::XYZ);
-        params.rotation_euler_xyz_deg =
-            [x_deg.to_degrees(), y_deg.to_degrees(), z_deg.to_degrees()];
         self.set_transform(handle, params);
     }
 

@@ -57,7 +57,10 @@ impl XrdsApp for ParentChildQueuedApp {
 
         let mut plane = XrdsPlane3D::new().with_name("RootPlane");
         plane.transform.translation = [0.0, 0.8, 0.0];
-        plane.transform.rotation_euler_xyz_deg = [-90.0, 0.0, 0.0];
+        // Same silently-inert write as `parent_child.rs` had: setting only the
+        // euler field left the plane unrotated, because the runtime reads the
+        // quaternion.
+        plane.transform.set_euler_deg(-90.0, 0.0, 0.0);
         let plane_id = api.queue_spawn(plane);
 
         let mut cube = XrdsCube::new().with_name("ChildCube");

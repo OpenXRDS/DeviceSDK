@@ -101,7 +101,6 @@ impl XrdsApp for SimpleAPIApp {
             TransformParams {
                 translation: [0.0, bob_y, 0.0],
                 rotation_quat_xyzw: [0.0, half_yaw.sin(), 0.0, half_yaw.cos()],
-                rotation_euler_xyz_deg: [0.0, t * 45.0, 0.0],
                 scale: [1.0, 1.0, 1.0],
             },
         );

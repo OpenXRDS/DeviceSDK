@@ -42,7 +42,9 @@ impl XrdsApp for MorphTargetsApp {
 
         let _sun = api.spawn(&{
             let mut light = XrdsDirectionalLight::new().with_name("MorphTargetsSun");
-            light.transform.rotation_euler_xyz_deg = [0.0, 0.0, 90.0];
+            // Third instance of the same inert write: euler-only, so the sun kept
+            // its default orientation.
+            light.transform.set_euler_deg(0.0, 0.0, 90.0);
             light
         });
 
