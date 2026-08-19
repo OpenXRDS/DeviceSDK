@@ -569,6 +569,27 @@ impl XrdsAPI<'_> {
         Ok(imported_ids)
     }
 
+    /// Start or resume an audio clip node. See
+    /// [`XrdsUpdateContext::play_audio_for_node`] for the semantics; this is the
+    /// same operation from the setup/editor side, where the editor's audition
+    /// button needs it.
+    pub fn play_audio_for_node(&mut self, id: XrdsId) -> bool {
+        use crate::xrds_api::audio_playback::{transport_for_node, AudioTransport};
+        transport_for_node(self.app.world_mut(), id, AudioTransport::Play)
+    }
+
+    /// Pause an audio clip node where it is.
+    pub fn pause_audio_for_node(&mut self, id: XrdsId) -> bool {
+        use crate::xrds_api::audio_playback::{transport_for_node, AudioTransport};
+        transport_for_node(self.app.world_mut(), id, AudioTransport::Pause)
+    }
+
+    /// Stop an audio clip node and rewind it, so it can be played again.
+    pub fn stop_audio_for_node(&mut self, id: XrdsId) -> bool {
+        use crate::xrds_api::audio_playback::{transport_for_node, AudioTransport};
+        transport_for_node(self.app.world_mut(), id, AudioTransport::Stop)
+    }
+
     /// Load a saved XRDS scene document from JSON and import it into runtime state.
     ///
     /// This is the end-to-end document path for editor or tool flows that persist authored scene

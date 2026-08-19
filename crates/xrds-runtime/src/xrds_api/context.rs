@@ -112,6 +112,40 @@ impl XrdsUpdateContext<'_> {
         }
     }
 
+    /// Start or resume an audio clip node.
+    ///
+    /// Works whether the clip was authored with `autoplay` or not, which is what
+    /// makes a sound triggerable at all — before this existed, `autoplay` was the
+    /// only way anything ever played. Safe to call on a clip that is already
+    /// playing.
+    ///
+    /// Returns `false` when nothing happened: the id is unknown, the node is not
+    /// an audio clip, or its sink has not been created yet (Bevy builds it an
+    /// observer tick after decoder validation, so a call in the same frame as the
+    /// spawn is simply early). The reason is logged at `debug`.
+    pub fn play_audio_for_node(&mut self, id: XrdsId) -> bool {
+        use super::audio_playback::{transport_for_node, AudioTransport};
+        transport_for_node(self.world, id, AudioTransport::Play)
+    }
+
+    /// Pause an audio clip node where it is. Resume with [`Self::play_audio_for_node`].
+    pub fn pause_audio_for_node(&mut self, id: XrdsId) -> bool {
+        use super::audio_playback::{transport_for_node, AudioTransport};
+        transport_for_node(self.world, id, AudioTransport::Pause)
+    }
+
+    /// Stop an audio clip node and rewind it to the start.
+    ///
+    /// "Stop" here means what it means in every other engine — stopped *and*
+    /// restartable. Rodio's own `stop` is one-way ("It won't be possible to restart
+    /// it afterwards"), which would leave an author who stopped and then played
+    /// with permanent silence and no error, so this pauses and seeks to zero
+    /// instead.
+    pub fn stop_audio_for_node(&mut self, id: XrdsId) -> bool {
+        use super::audio_playback::{transport_for_node, AudioTransport};
+        transport_for_node(self.world, id, AudioTransport::Stop)
+    }
+
     /// Update the `XrdsAnchorFov` component on a PlayerAnchor entity without reimport.
     /// Called during the live-preview phase so the FOV overlay reflects slider changes instantly.
     pub fn set_anchor_fov_for_node(&mut self, id: XrdsId, fov_deg: f32) {

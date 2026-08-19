@@ -28,10 +28,16 @@ pub struct OpenXrInstance {
 /// Main world only: neither handle is `Clone`, and the render world needs just the
 /// layer handle (see [`OpenXrPassthroughLayerHandle`]). Dropping this stops
 /// passthrough, so it must outlive every frame that submits the layer.
+/// Both fields are write-only by design: this resource exists purely to own the
+/// two handles for the session's lifetime. Dropping either stops passthrough, and
+/// the raw layer id needed each frame is copied into
+/// [`OpenXrPassthroughLayerHandle`] at creation. So "never read" is the intended
+/// state, not an oversight.
 #[derive(Resource)]
 pub struct OpenXrPassthrough {
     #[allow(unused)]
     pub feature: openxr::Passthrough,
+    #[allow(unused)]
     pub layer: openxr::PassthroughLayer,
 }
 

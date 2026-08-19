@@ -10,6 +10,8 @@ mod player_body;
 pub(crate) mod audio_falloff;
 #[path = "xrds_api/passthrough.rs"]
 pub(crate) mod passthrough;
+#[path = "xrds_api/audio_playback.rs"]
+pub(crate) mod audio_playback;
 #[path = "xrds_api/context.rs"]
 mod context;
 #[path = "xrds_api/environment.rs"]
