@@ -252,7 +252,7 @@ export function Inspector({ snapshot, send, onOpenTrack,
       <div className="inspector">
         <div className="panel-header">Inspector</div>
         {showEnvironment ? (
-          <SceneEnvironmentSection env={snapshot.environment} send={send} />
+          <SceneEnvironmentSection env={snapshot.environment} passthrough={snapshot.xr_passthrough} send={send} />
         ) : (
           <div className="insp-empty">
             Select a node to inspect it — or to bind a trigger to it under Triggers.
@@ -631,6 +631,184 @@ function WatchersSection({ node, send }: {
 }
 
 // ---------------------------------------------------------------------------
+// Audio clip
+// ---------------------------------------------------------------------------
+
+/** The gain curve, mirroring `XrdsAudioDistanceModel::gain` in xrds-components.
+ *  Kept in step with it by hand; if the Rust changes, change this too — a preview
+ *  that lies is worse than no preview. */
+function audioGain(model: string, d: number, min: number, max: number, rolloff: number): number {
+  min = Math.max(min, 1e-6);
+  rolloff = Math.max(rolloff, 0);
+  if (d > max) return 0;
+  if (d <= min) return 1;
+  let g: number;
+  if (model === "Linear")           g = 1 - rolloff * (d - min) / (max - min);
+  else if (model === "Exponential") g = Math.pow(d / min, -rolloff);
+  else                              g = min / (min + rolloff * (d - min));
+  // Edge taper: the last half of the band fades out, so no model steps off a
+  // cliff at max_distance.
+  const band = (max - min) * 0.5;
+  let t = band > 0 ? Math.min(Math.max((max - d) / band, 0), 1) : 1;
+  t = t * t * (3 - 2 * t);
+  return Math.min(Math.max(g * t, 0), 1);
+}
+
+/** Falloff curve plotted in **decibels**, not amplitude.
+ *
+ *  This is the whole point of the preview. An amplitude plot of `Linear` looks
+ *  like a gentle straight line while sounding like a switch, because the ear
+ *  hears dB: the last stretch runs -14 dB to silence. Two implementations were
+ *  tuned and rejected by ear before that was understood — see
+ *  docs/small-phases-plan.md S1. Plotting dB makes the audible shape visible. */
+function FalloffCurve({ model, min, max, rolloff }:
+  { model: string; min: number; max: number; rolloff: number }) {
+  const W = 200, H = 64, FLOOR_DB = -40;
+  const pts: string[] = [];
+  for (let i = 0; i <= W; i++) {
+    const d = (i / W) * max * 1.1;
+    const g = audioGain(model, d, min, max, rolloff);
+    const db = g > 0 ? Math.max(20 * Math.log10(g), FLOOR_DB) : FLOOR_DB;
+    const y = H - ((db - FLOOR_DB) / -FLOOR_DB) * H;
+    pts.push(`${i},${y.toFixed(1)}`);
+  }
+  const minX = (min / (max * 1.1)) * W;
+  return (
+    <div style={{ padding: "4px 10px 8px" }}>
+      <svg width="100%" viewBox={`0 0 ${W} ${H}`} style={{ display: "block" }}>
+        <rect x={0} y={0} width={W} height={H} fill="var(--mantle, #1e1e2e)" rx={3} />
+        {/* Full-volume radius: everything left of this line is at 0 dB. */}
+        <line x1={minX} y1={0} x2={minX} y2={H} stroke="var(--overlay0, #6c7086)"
+          strokeWidth={1} strokeDasharray="3 3" />
+        <polyline points={pts.join(" ")} fill="none" stroke="var(--blue, #89b4fa)" strokeWidth={1.5} />
+      </svg>
+      <div style={{ display:"flex", justifyContent:"space-between", fontSize:9, color:"var(--overlay0)" }}>
+        <span>0 m</span><span>{FLOOR_DB} dB floor</span><span>{(max * 1.1).toFixed(0)} m</span>
+      </div>
+    </div>
+  );
+}
+
+function AudioClipSection({ id, a, assets, send }: {
+  id: number;
+  a: Extract<NodePayload, { type: "AudioClip" }>;
+  assets: AssetCatalogEntry[];
+  send: (c: EditorCommand) => void;
+}) {
+  // Every field goes in one command so a slider drag is one undo entry.
+  const commit = (patch: Partial<typeof a>) => send({
+    type: "SetAudioClipParams",
+    payload: {
+      id,
+      asset_id:       patch.asset_id       ?? a.asset_id,
+      volume:         patch.volume         ?? a.volume,
+      looped:         patch.looped         ?? a.looped,
+      spatial:        patch.spatial        ?? a.spatial,
+      autoplay:       patch.autoplay       ?? a.autoplay,
+      distance_model: patch.distance_model ?? a.distance_model,
+      min_distance:   patch.min_distance   ?? a.min_distance,
+      max_distance:   patch.max_distance   ?? a.max_distance,
+      rolloff_factor: patch.rolloff_factor ?? a.rolloff_factor,
+    },
+  });
+
+  const audioAssets = assets.filter(x => x.kind === "Audio");
+
+  return (
+    <>
+      <div className="insp-section">
+        <h4>Audio</h4>
+        {/* Audition. Before the runtime gained play/stop, `autoplay` was the only
+            way a clip ever sounded, so checking a falloff meant exporting an APK
+            and putting a headset on — about an hour per adjustment.
+            Styled with `tb-btn` and the Toolbar's own ▶/■ glyphs so it reads as
+            the same kind of control as the viewport's play button, rather than as
+            two unstyled browser buttons. */}
+        <div className="insp-row">
+          <label>Preview</label>
+          <div className="flex gap-1">
+            <button className="tb-btn text-[11px] px-2 py-0.5"
+              title="Play this clip from where it sits in the scene"
+              onClick={() => send({ type: "PreviewAudioClip", payload: { id, playing: true } })}>
+              ▶ Play
+            </button>
+            <button className="tb-btn text-[11px] px-2 py-0.5"
+              title="Stop and rewind to the start"
+              onClick={() => send({ type: "PreviewAudioClip", payload: { id, playing: false } })}>
+              ■ Stop
+            </button>
+          </div>
+        </div>
+        <div className="insp-note">
+          Heard from the editor camera through the clip's own falloff, so the curve
+          below is what you are listening to.
+        </div>
+        {/* The shared Select, not a raw <select>: it punches its open list out of
+            the Bevy viewport hole. A native dropdown here would be sliced off
+            wherever it overlapped the 3D view — the same clipping that hid the
+            APK dialog. */}
+        <div className="insp-row">
+          <label>Clip</label>
+          <Select
+            value={a.asset_id}
+            onValueChange={v => commit({ asset_id: v })}
+            options={audioAssets.map(x => ({ value: x.id, label: x.name }))}
+            placeholder="No sound imported"
+          />
+        </div>
+        <SliderRow label="Volume" value={a.volume} min={0} max={1} step={0.01}
+          onLive={() => {}} onCommit={v => commit({ volume: v })} />
+        <Toggle label="Loop"     value={a.looped}   onChange={v => commit({ looped: v })} />
+        <Toggle label="Autoplay" value={a.autoplay} onChange={v => commit({ autoplay: v })} />
+        <Toggle label="Spatial"  value={a.spatial}  onChange={v => commit({ spatial: v })} />
+        {!a.spatial && (
+          <div className="insp-note">
+            Non-spatial: plays at the same volume everywhere, and the falloff below
+            is ignored.
+          </div>
+        )}
+      </div>
+
+      {a.spatial && (
+        <div className="insp-section">
+          <h4>Distance falloff</h4>
+          <FalloffCurve model={a.distance_model} min={a.min_distance}
+            max={a.max_distance} rolloff={a.rolloff_factor} />
+          <div className="insp-row">
+            <label>Model</label>
+            <Select
+              value={a.distance_model}
+              onValueChange={v => commit({ distance_model: v })}
+              options={[
+                { value: "Inverse",     label: "Inverse",     hint: "natural" },
+                { value: "Linear",      label: "Linear" },
+                { value: "Exponential", label: "Exponential" },
+              ]}
+            />
+          </div>
+          <SliderRow label="Full volume within" value={a.min_distance} min={0.1} max={20} step={0.1}
+            onLive={() => {}} onCommit={v => commit({ min_distance: v })} />
+          <SliderRow label="Silent beyond" value={a.max_distance} min={1} max={200} step={1}
+            onLive={() => {}} onCommit={v => commit({ max_distance: v })} />
+          <SliderRow label="Rolloff" value={a.rolloff_factor} min={0} max={5} step={0.1}
+            onLive={() => {}} onCommit={v => commit({ rolloff_factor: v })} />
+          {/* Named for what it does rather than what it is called in the payload:
+              "min_distance" sounds like a floor, but it is the reference radius —
+              raising it flattens the whole curve, and it is the first thing to
+              reach for when a sound dies too fast. That cost real device time to
+              work out. */}
+          <div className="insp-note">
+            If a sound fades too quickly, raise <b>Full volume within</b> before
+            touching Rolloff — it sets the reference radius and gentles the whole
+            curve, not just the near part.
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Scene environment (shown when nothing is selected)
 // ---------------------------------------------------------------------------
 
@@ -644,7 +822,8 @@ function Toggle({ label, value, onChange }: { label: string; value: boolean; onC
   );
 }
 
-function SceneEnvironmentSection({ env, send }: { env: EnvironmentDto | null; send: (c: EditorCommand) => void }) {
+function SceneEnvironmentSection({ env, passthrough, send }:
+  { env: EnvironmentDto | null; passthrough: boolean; send: (c: EditorCommand) => void }) {
   // Bevy's default ev100 is 9.7 (outdoor daylight). We display exposure as a
   // "brightness" offset where 0 = Bevy default, positive = brighter, negative = darker.
   // Mapping: displayed_brightness = BEVY_EV100 - stored_ev100  →  brighter = lower ev100.
@@ -680,6 +859,27 @@ function SceneEnvironmentSection({ env, send }: { env: EnvironmentDto | null; se
     <>
       <div className="insp-empty" style={{ fontSize:10, color:"var(--overlay0)", padding:"8px 10px 2px" }}>
         Select a node to inspect it
+      </div>
+
+      {/* XR */}
+      <div className="insp-section">
+        <h4>XR</h4>
+        <Toggle label="Passthrough" value={passthrough}
+          onChange={enabled => send({ type:"SetXrPassthrough", payload:{ enabled } })} />
+        {/* Said out loud because otherwise this looks broken: passthrough is a
+            compositor layer on the headset, and the desktop viewport has no
+            compositor. An author toggling it and seeing no change would
+            reasonably conclude it does nothing. */}
+        <div className="insp-note">
+          Shows the real world behind the scene on an XR device. No effect in this
+          viewport — the editor has no XR compositor.
+        </div>
+        {passthrough && (
+          <div className="insp-note">
+            Only visible where the scene is transparent. Remove the skybox and any
+            full-coverage geometry, or the room stays hidden behind them.
+          </div>
+        )}
       </div>
 
       {/* Fog */}
@@ -747,6 +947,9 @@ function PayloadSection({ node, send, isPlaying, snapshot }: { node: NodeInspect
   }
   if (payload.type === "Effect") {
     return <EffectParamsSection id={id} fx={payload} send={send} />;
+  }
+  if (payload.type === "AudioClip") {
+    return <AudioClipSection id={id} a={payload} assets={snapshot.asset_catalog} send={send} />;
   }
   // Tetrahedron is mapped to Cube DTO on the Rust side
   if (payload.type === "Cube" || payload.type === "Sphere" || payload.type === "Cylinder" ||

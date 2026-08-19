@@ -1,7 +1,7 @@
 use bevy::log::error;
 use xrds_scene_graph::{
     XrdsSceneFogEnvironment, XrdsSceneExposureEnvironment,
-    XrdsSceneIblEnvironment, XrdsSceneSkyboxEnvironment,
+    XrdsSceneIblEnvironment, XrdsSceneSkyboxEnvironment, XrdsXrBlendMode,
 };
 use crate::bridge::{EditorCommand, EnvironmentDto};
 use crate::editor_state::{EditorSession, EditorState};
@@ -28,6 +28,15 @@ pub fn apply_environment_command(
                     doc.metadata.environment = None;
                 }
             });
+            true
+        }
+        EditorCommand::SetXrPassthrough { enabled } => {
+            let mode = if *enabled {
+                XrdsXrBlendMode::AlphaBlend
+            } else {
+                XrdsXrBlendMode::Opaque
+            };
+            let _ = session.0.edit(|doc| doc.metadata.xr_blend_mode = mode);
             true
         }
         EditorCommand::SetExposure { ev100 } => {
@@ -84,6 +93,18 @@ pub fn apply_environment_command(
 }
 
 /// Build an `EnvironmentDto` from the scene document's metadata.
+/// Whether the scene is authored for passthrough.
+///
+/// Separate from [`build_environment_dto`] because `xr_blend_mode` sits on
+/// `metadata` directly rather than inside `metadata.environment`, and a scene can
+/// want passthrough without having any environment at all.
+pub fn build_xr_passthrough(session: &EditorSession) -> bool {
+    matches!(
+        session.0.document().metadata.xr_blend_mode,
+        XrdsXrBlendMode::AlphaBlend
+    )
+}
+
 pub fn build_environment_dto(session: &EditorSession) -> Option<EnvironmentDto> {
     let env = session.0.document().metadata.environment.as_ref()?;
     let fog = env.fog.as_ref();

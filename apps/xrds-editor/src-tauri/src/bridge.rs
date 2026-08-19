@@ -214,6 +214,32 @@ pub enum EditorCommand {
     ClearExposure,
     SetIbl        { diffuse_asset_id: String, specular_asset_id: String, intensity: f32 },
     ClearIbl,
+    /// Scene-wide passthrough: `XrdsXrBlendMode::AlphaBlend` when true, `Opaque`
+    /// otherwise. Has no visible effect in the editor viewport — passthrough is an
+    /// XR compositor layer and desktop has no compositor — so the UI says so
+    /// rather than leaving the author to wonder.
+    SetXrPassthrough { enabled: bool },
+
+    // --- Audio ---
+    /// Audition a clip in the editor. `playing: false` stops and rewinds, so the
+    /// next preview starts from the top.
+    PreviewAudioClip { id: u64, playing: bool },
+    /// Every field of an audio clip in one command, mirroring `SetEffectParams`.
+    /// One command rather than nine keeps the document edit — and therefore the
+    /// undo entry — a single step, which is what an author expects from dragging
+    /// one slider.
+    SetAudioClipParams {
+        id: u64,
+        asset_id: String,
+        volume: f32,
+        looped: bool,
+        spatial: bool,
+        autoplay: bool,
+        distance_model: String,
+        min_distance: f32,
+        max_distance: f32,
+        rolloff_factor: f32,
+    },
     SetSkybox     { texture_asset_id: String, brightness: f32 },
     ClearSkybox,
 
@@ -376,6 +402,16 @@ pub struct EditorSnapshot {
     pub has_clipboard: bool,
     /// Current scene environment (from document metadata). None = no environment set.
     pub environment: Option<EnvironmentDto>,
+    /// Scene-wide passthrough (`xr_blend_mode == AlphaBlend`).
+    #[serde(default)]
+    pub xr_passthrough: bool,
+    /// Whether this scene has ever been saved, i.e. whether it has a path.
+    ///
+    /// The frontend needs this to decide whether Ctrl+S can save at all: without a
+    /// path, `SaveScene` has nothing to write to and must become Save As. Before
+    /// this existed, Ctrl+S on a new scene silently did nothing.
+    #[serde(default)]
+    pub has_save_path: bool,
     /// All Camera nodes in the current scene (for the camera selector dropdown).
     pub available_cameras: Vec<CameraNodeDto>,
     /// None = editor camera active; Some(id) = scene camera node active.
@@ -537,6 +573,21 @@ pub enum NodePayloadDto {
         drag: f32,
         fade_edge: f32,
         fade_scene: f32,
+    },
+    /// An authored audio clip. Until 2026-08-19 this fell through to `Other`, so a
+    /// placed audio node showed nothing at all in the inspector — its volume, loop,
+    /// spatial flag and entire distance-falloff curve were reachable only from Rust.
+    AudioClip {
+        asset_id: String,
+        volume: f32,
+        looped: bool,
+        spatial: bool,
+        autoplay: bool,
+        /// "Linear" | "Inverse" | "Exponential"
+        distance_model: String,
+        min_distance: f32,
+        max_distance: f32,
+        rolloff_factor: f32,
     },
     Camera  { fov: f32, near: f32, far: f32 },
     PointLight { color: [f32; 4], intensity: f32, range: f32 },

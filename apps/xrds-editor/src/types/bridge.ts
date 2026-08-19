@@ -140,6 +140,9 @@ export type NodePayload =
   | { type: "Sphere";   material: MaterialParams; physics_body: string; gravity_scale: number; mass: number }
   | { type: "Cylinder"; material: MaterialParams; physics_body: string; gravity_scale: number; mass: number }
   | { type: "Capsule";  material: MaterialParams; physics_body: string; gravity_scale: number; mass: number; radius: number; length: number }
+  | { type: "AudioClip"; asset_id: string; volume: number; looped: boolean; spatial: boolean;
+      autoplay: boolean; distance_model: string; min_distance: number; max_distance: number;
+      rolloff_factor: number }
   // No `material`: an effect's colour is its own start/end gradient, not a
   // MaterialParams. Keep colour components <= 1.0 -- the runtime clamps, since
   // the XR cameras have no HDR pass, so >1 would render flat white on device.
@@ -450,6 +453,11 @@ export interface EditorSnapshot {
   is_exporting: boolean;
   has_clipboard: boolean;
   environment: EnvironmentDto | null;
+  /** Scene-wide passthrough (`xr_blend_mode == AlphaBlend`). XR-only: the editor
+   *  viewport has no compositor and always renders opaque. */
+  xr_passthrough: boolean;
+  /** Whether the scene has a file path yet. Ctrl+S becomes Save As when false. */
+  has_save_path: boolean;
   available_cameras: CameraNodeDto[];
   active_camera_id: number | null;
   player_anchors: PlayerAnchorEntry[];
@@ -519,6 +527,8 @@ export const defaultSnapshot: EditorSnapshot = {
   is_exporting: false,
   has_clipboard: false,
   environment: null,
+  xr_passthrough: false,
+  has_save_path: false,
   available_cameras: [],
   active_camera_id: null,
   player_anchors: [],
@@ -569,6 +579,11 @@ export type EditorCommand =
   | { type: "SetGrabbable"; payload: { id: number; grabbable: boolean } }
   | { type: "SetFog";       payload: { color: [number,number,number,number]; start: number; end: number } }
   | { type: "ClearFog" }
+  | { type: "SetXrPassthrough"; payload: { enabled: boolean } }
+  | { type: "PreviewAudioClip"; payload: { id: number; playing: boolean } }
+  | { type: "SetAudioClipParams"; payload: { id: number; asset_id: string; volume: number;
+      looped: boolean; spatial: boolean; autoplay: boolean; distance_model: string;
+      min_distance: number; max_distance: number; rolloff_factor: number } }
   | { type: "SetExposure";  payload: { ev100: number } }
   | { type: "ClearExposure" }
   | { type: "SetIbl";       payload: { diffuse_asset_id: string; specular_asset_id: string; intensity: number } }

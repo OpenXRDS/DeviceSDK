@@ -4,6 +4,7 @@ use xrds_scene_graph::{
     XrdsHudAnchor, XrdsSceneDocument, XrdsSceneNodeId, XrdsSceneNodePayload,
     XrdsSceneMaterial, XrdsSceneCameraProjection, XrdsSceneTextAlignment, XrdsSceneTextAnchor,
     XrdsScenePlayerSpawnZone, XrdsSceneEffect, XrdsSceneEffectBlend, XrdsSceneEffectKind,
+    XrdsAudioDistanceModel, XrdsSceneAudioClip,
     XrdsSceneWorldLayout, XrdsSceneWorldWidget,
     XrdsSceneWorldLabel, XrdsSceneWorldButton, XrdsSceneWorldImage,
     XrdsSceneWorldSlider, XrdsSceneWorldToggle,
@@ -66,6 +67,17 @@ fn build_payload_dto(
         XrdsSceneNodePayload::Cylinder(c)   => NodePayloadDto::Cylinder { material: mat_dto(&c.material), physics_body: physics_body_str(c.physics_body), gravity_scale: c.gravity_scale, mass: c.mass },
         XrdsSceneNodePayload::Effect(e)     => NodePayloadDto::Effect   { kind: effect_kind_str(e.kind).to_string(), auto_play: e.auto_play, burst_count: e.burst_count, spawn_rate: e.spawn_rate, lifetime_secs: e.lifetime_secs, size_min: e.size_min, size_max: e.size_max, color_start: e.color_start, color_end: e.color_end, speed_min: e.speed_min, speed_max: e.speed_max, omnidirectional: e.omnidirectional, spread_deg: e.spread_deg, gravity: e.gravity, emission_radius: e.emission_radius, blend: effect_blend_str(e.blend).to_string(), size_end: e.size_end, drag: e.drag, fade_edge: e.fade_edge, fade_scene: e.fade_scene },
         XrdsSceneNodePayload::Capsule(c)    => NodePayloadDto::Capsule  { material: mat_dto(&c.material), physics_body: physics_body_str(c.physics_body), gravity_scale: c.gravity_scale, mass: c.mass, radius: c.radius, length: c.length },
+        XrdsSceneNodePayload::AudioClip(a)  => NodePayloadDto::AudioClip {
+            asset_id: a.asset_id.clone(),
+            volume: a.volume,
+            looped: a.looped,
+            spatial: a.spatial,
+            autoplay: a.autoplay,
+            distance_model: audio_distance_model_str(a.distance_model).to_string(),
+            min_distance: a.min_distance,
+            max_distance: a.max_distance,
+            rolloff_factor: a.rolloff_factor,
+        },
         XrdsSceneNodePayload::Plane3D(c)    => NodePayloadDto::Plane    { material: mat_dto(&c.material), physics_body: physics_body_str(c.physics_body), gravity_scale: c.gravity_scale, mass: c.mass },
         XrdsSceneNodePayload::Tetrahedron(c)=> NodePayloadDto::Cube     { material: mat_dto(&c.material), physics_body: "None".to_string(), gravity_scale: 1.0, mass: 1.0 }, // reuse Cube DTO for now
 
@@ -546,6 +558,64 @@ pub fn apply_inspector_command(
             false
         }
 
+        EditorCommand::PreviewAudioClip { id, playing } => {
+            state.pending_audio_preview = Some((XrdsSceneNodeId(*id), *playing));
+            // No reimport: the point of auditioning is to hear the clip that is
+            // already there. Rebuilding the entity would restart every other sound
+            // in the scene and lose the playhead.
+            false
+        }
+        EditorCommand::SetAudioClipParams {
+            id,
+            asset_id,
+            volume,
+            looped,
+            spatial,
+            autoplay,
+            distance_model,
+            min_distance,
+            max_distance,
+            rolloff_factor,
+        } => {
+            let id = XrdsSceneNodeId(*id);
+            let Some(model) = audio_distance_model_from_str(distance_model) else {
+                error!("[inspector] SetAudioClipParams: unknown distance model {distance_model:?}, ignoring");
+                return false;
+            };
+
+            // `max` is held above `min`: the two are dragged independently in the
+            // UI, and an inverted pair would mean "silent everywhere", which reads
+            // as a broken clip rather than as a bad value.
+            let min_distance = min_distance.max(0.01);
+            let max_distance = max_distance.max(min_distance + 0.01);
+
+            let clip = XrdsSceneAudioClip {
+                asset_id: asset_id.clone(),
+                volume: volume.clamp(0.0, 1.0),
+                looped: *looped,
+                spatial: *spatial,
+                autoplay: *autoplay,
+                distance_model: model,
+                min_distance,
+                max_distance,
+                rolloff_factor: rolloff_factor.max(0.0),
+            };
+
+            match session.0.edit(|doc| {
+                if let Some(node) = doc.node_mut(id) {
+                    if let XrdsSceneNodePayload::AudioClip(ref mut a) = node.payload {
+                        *a = clip.clone();
+                    }
+                }
+            }) {
+                Ok(_) => {}
+                Err(e) => error!("[inspector] SetAudioClipParams failed: {:?}", e),
+            }
+            // Audio is re-imported rather than live-patched: the runtime builds the
+            // sink and its falloff component at spawn, so a changed curve needs the
+            // entity rebuilt.
+            true
+        }
         EditorCommand::SetEffectParams {
             id,
             kind,
@@ -772,6 +842,23 @@ pub fn euler_degrees_to_quat(degrees: [f32; 3]) -> [f32; 4] {
 // ---------------------------------------------------------------------------
 // Helpers — physics body string ↔ XrdsPhysicsBody
 // ---------------------------------------------------------------------------
+
+fn audio_distance_model_str(model: XrdsAudioDistanceModel) -> &'static str {
+    match model {
+        XrdsAudioDistanceModel::Linear => "Linear",
+        XrdsAudioDistanceModel::Inverse => "Inverse",
+        XrdsAudioDistanceModel::Exponential => "Exponential",
+    }
+}
+
+fn audio_distance_model_from_str(model: &str) -> Option<XrdsAudioDistanceModel> {
+    match model {
+        "Linear" => Some(XrdsAudioDistanceModel::Linear),
+        "Inverse" => Some(XrdsAudioDistanceModel::Inverse),
+        "Exponential" => Some(XrdsAudioDistanceModel::Exponential),
+        _ => None,
+    }
+}
 
 fn effect_kind_str(kind: XrdsSceneEffectKind) -> &'static str {
     match kind {

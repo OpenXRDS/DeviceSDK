@@ -595,6 +595,29 @@ impl XrdsApp for XrdsEditorTauriApp {
             }
         }
 
+        let pending_audio = ctx
+            .resource::<EditorState>()
+            .and_then(|s| s.pending_audio_preview);
+        if let Some((id, playing)) = pending_audio {
+            let heard = if playing {
+                ctx.play_audio_for_node(id.into())
+            } else {
+                ctx.stop_audio_for_node(id.into())
+            };
+            if !heard {
+                // Says so rather than leaving a dead button: a clip whose decoder
+                // has not validated yet has no sink, and silence would otherwise be
+                // indistinguishable from a broken preview.
+                if let Some(mut state) = ctx.resource_mut::<EditorState>() {
+                    state.pending_status =
+                        Some("Clip is not ready to play yet — check the asset loaded".to_string());
+                }
+            }
+            if let Some(mut state) = ctx.resource_mut::<EditorState>() {
+                state.pending_audio_preview = None;
+            }
+        }
+
         // Keep physics paused outside play mode so Dynamic objects stay at authored positions.
         let is_playing = ctx.resource::<EditorState>().map(|s| s.is_playing).unwrap_or(false);
         ctx.set_physics_paused(!is_playing);

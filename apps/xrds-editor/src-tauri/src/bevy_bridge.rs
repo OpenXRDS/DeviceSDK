@@ -124,6 +124,8 @@ pub fn broadcast_editor_snapshot_system(
         is_exporting: state.export_job.is_some(),
         has_clipboard: state.clipboard.is_some(),
         environment: build_environment_dto(&session),
+        xr_passthrough: crate::environment::build_xr_passthrough(&session),
+        has_save_path: session.0.save_path().is_some(),
         available_cameras: doc.nodes.iter()
             .filter(|n| matches!(n.payload, XrdsSceneNodePayload::Camera(_)))
             .map(|n| CameraNodeDto { id: n.id.0, name: n.name.clone() })
