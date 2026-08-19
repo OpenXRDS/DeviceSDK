@@ -74,9 +74,14 @@ jobs:
     name: test (xrds-net --lib)
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    # A real gate now: no `continue-on-error`. Every test that reaches a public server is
-    # tagged `#[ignore]` and runs in `test-live-network` below, so a red mark here means our
-    # code is broken rather than someone else's server being down.
+    # A real gate: no `continue-on-error`. Every test that reaches a public server is tagged
+    # `#[ignore]` and lives in `xrds-net-live-network.yml`, which runs on a schedule rather
+    # than on pull requests — so a red mark here means our code is broken rather than someone
+    # else's server being down.
+    #
+    # Those tests are deliberately NOT run here, even allowed-to-fail. A check that is
+    # permanently red trains people to ignore CI, and it cannot be justified to a reviewer who
+    # has to decide whether a red mark matters.
     #
     # This replaces the long-standing stopgap (docs/done/xrds-net-release-readiness.md
     # Phase 5): the suite used to hit mosquitto/rebex/coap.me/echo.websocket.org/rust-lang.org
@@ -94,33 +99,6 @@ jobs:
           toolchain: "1.95.0"
       - uses: Swatinem/rust-cache@v2
       - run: cargo test -p xrds-net --lib
-
-  # The tests that need the public internet: mosquitto, rebex, coap.me,
-  # echo.websocket.org, rust-lang.org, quic.nginx.org, cloudflare-quic.com, litespeedtech.
-  #
-  # Allowed to fail, deliberately — a red mark here usually means someone else's server is
-  # down, which is worth *seeing* but must never block a merge. Keeping them visible rather
-  # than deleting them preserves the only coverage we have of real-world protocol behaviour.
-  test-live-network:
-    name: test (xrds-net live network)
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install native build deps (quiche/BoringSSL)
-        env:
-          DEBIAN_FRONTEND: noninteractive
-        run: |
-          sudo -E apt-get update -o Acquire::Retries=3 -o Acquire::http::Timeout=30
-          sudo -E apt-get install -y --no-install-recommends -o Acquire::Retries=3 -o Acquire::http::Timeout=30 cmake perl
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: "1.95.0"
-      - uses: Swatinem/rust-cache@v2
-      # Single-threaded: several of these share a public broker topic, and running them
-      # concurrently makes them interfere with each other rather than with the network.
-      - run: cargo test -p xrds-net --lib -- --ignored --test-threads=1
 
   test-webrtc-integration:
     name: test (xrds-net webrtc_integration)

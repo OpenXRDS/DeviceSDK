@@ -412,7 +412,7 @@ mod tests {
     //   QUIC connectivity is covered by `client::tests::test_client_quic_connect`.
 
     #[test]
-    #[ignore = "live network: hits www.rust-lang.org; run with --ignored"]
+    #[ignore = "live network: hits www.rust-lang.org; run with --ignored, or see the xrds-net-live-network workflow"]
     fn request_http_reaches_a_real_server() {
         let response = XrdsNet::request("http://www.rust-lang.org:80/", RequestOptions::get())
             .expect("HTTP request should succeed");
@@ -421,7 +421,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "live network: downloads from files.keti-xr.duckdns.org; run with --ignored"]
+    #[ignore = "live network: downloads from files.keti-xr.duckdns.org; run with --ignored, or see the xrds-net-live-network workflow"]
     fn request_file_returns_bytes() {
         let response = XrdsNet::request(
             "https://files.keti-xr.duckdns.org/api/public/dl/afeLp4YK/Box.glb",
@@ -432,7 +432,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "live network: hits coap.me; run with --ignored"]
+    #[ignore = "live network: hits coap.me; run with --ignored, or see the xrds-net-live-network workflow"]
     fn request_coap_reaches_a_real_server() {
         let response = XrdsNet::request("coap://coap.me:5683/test", RequestOptions::get())
             .expect("CoAP request should succeed");
@@ -450,21 +450,21 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "live network: hits echo.websocket.org; run with --ignored"]
+    #[ignore = "live network: hits echo.websocket.org; run with --ignored, or see the xrds-net-live-network workflow"]
     fn dispatch_ws_reaches_a_real_server() {
         XrdsNet::dispatch("wss://echo.websocket.org/", b"hello from XrdsNet".to_vec())
             .expect("WS dispatch should succeed");
     }
 
     #[test]
-    #[ignore = "live network: hits test.mosquitto.org; run with --ignored"]
+    #[ignore = "live network: hits test.mosquitto.org; run with --ignored, or see the xrds-net-live-network workflow"]
     fn dispatch_mqtt_publishes_to_a_real_broker() {
         XrdsNet::dispatch("mqtt://test.mosquitto.org:1883/hello/keti", b"ping".to_vec())
             .expect("MQTT dispatch (publish) should succeed");
     }
 
     #[test]
-    #[ignore = "live network: hits test.mosquitto.org; run with --ignored"]
+    #[ignore = "live network: hits test.mosquitto.org; run with --ignored, or see the xrds-net-live-network workflow"]
     fn listen_mqtt_receives_a_dispatched_message() {
         // A topic distinct from `dispatch_mqtt_publishes_to_a_real_broker`'s
         // `hello/keti` — that test's publish is `retain: true`, so
@@ -487,7 +487,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "live network: hits test.rebex.net; run with --ignored"]
+    #[ignore = "live network: hits test.rebex.net; run with --ignored, or see the xrds-net-live-network workflow"]
     fn transfer_ftp_downloads_a_real_file() {
         // FTP credentials travel as URL userinfo (`user:pass@host`) since
         // `XrdsNet`'s verbs take a bare URL — no protocol-specific builder
