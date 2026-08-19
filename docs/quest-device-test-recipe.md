@@ -187,15 +187,29 @@ Historically: `ZoneEnter`/`ZoneExit` go through avian3d collision events, and th
 had no collider, so walking into an `InteractionZone` fired nothing at all — which reads
 exactly like a mis-placed volume.
 
-**Zone events are still not logged.** `Grabbed` prints `GRABBED`; zones print nothing,
-so the grep below finds grab and track activity but never the zone event itself. Judge a
-zone visually, or add a log line first.
-
-Confirm the event reached the runtime before blaming placement:
+**Zone events are logged as of 2026-08-19.** They previously printed nothing, so a
+zone could only be judged visually and "nothing happened" was unreadable. Both
+outcomes now appear at `info!`, which matters because the deployed runtime runs at
+`Level::INFO` (`runtime.rs:178`) — a `debug!` line would be invisible on device,
+which is the one place this needs reading:
 
 ```bash
-grep -oiE "grabbed|zoneenter|fire_and_stop" run.txt | sort | uniq -c
-grep -c "trigger-action.*did nothing"        run.txt   # 0 = the action found its target
+grep -oE "\[zone\] (ENTER|EXIT) .*"  run.txt   # the event fired, with both ids
+grep -oE "\[zone\] .* dropped: .*"   run.txt   # collision occurred, id unresolved
+```
+
+The second is the important one. A drop means the collision **did** happen and an
+id was missing — an id-registration gap, not a mis-placed volume. Only the first
+drop logs at `info!` (further ones fall to `debug!`), because unregistered entities
+overlapping a zone is legitimate and warning on each would be noise.
+
+So the three states are now distinguishable from the log alone, without a rebuild:
+no `[zone]` line at all = no collision; `dropped` = collision but no id; `ENTER` =
+the event reached the runtime, so look at the Track binding next.
+
+```bash
+grep -oiE "grabbed|\[zone\] ENTER|fire_and_stop" run.txt | sort | uniq -c
+grep -c "trigger-action.*did nothing"           run.txt   # 0 = the action found its target
 ```
 
 ---
