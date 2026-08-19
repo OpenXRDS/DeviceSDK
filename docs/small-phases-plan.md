@@ -631,6 +631,41 @@ be heard in the viewport, the loop closes without an APK build. During S1 the on
 way to judge a curve was a four-rebuild device cycle — roughly an hour per
 adjustment for a change that is one number.
 
+### Blocker found 2026-08-19: audio cannot be *started* at all
+
+Surfaced while testing S6 phase 1 in the editor — "we don't have a test play button"
+and "I didn't hear anything in play mode". The first is a missing feature. The
+second turned out to be structural.
+
+**`autoplay` is the only way a sound ever plays.** There is no runtime playback
+API — `grep` for `fn play_audio` / `fn stop_audio` in `xrds-runtime` returns
+nothing — and no `PlayAudio` track action; the latter exists only as a *future*
+example in `trigger_action.rs`'s round-trip docs and in
+`docs/xrds-trigger-action-backlog.md`. So a clip either starts with the scene and
+loops forever, or is silent for the entire session.
+
+That is a real hole, not an editor gap:
+
+- **Nothing can trigger a sound.** Walking into an `InteractionZone`, pressing a
+  panel button, finishing a Track — none of them can play audio. For an XR SDK
+  that is a conspicuous absence, and it is invisible from the document schema,
+  which happily stores clips that can never sound.
+- **The inspector preview button cannot be built without it.** Auditioning a clip
+  means starting and stopping one on demand, which is exactly the missing API.
+
+Immediate mitigation only: the palette now spawns clips with `autoplay = true`, so
+a placed sound is audible rather than silently inert. The Inspector's Autoplay
+toggle turns it off for anyone wiring a trigger later — once there is a trigger to
+wire.
+
+**Suggested split**, since this is bigger than S6:
+
+1. `XrdsAPI::play_audio` / `pause_audio` / `stop_audio` against `AudioSink`, which
+   the runtime already puts on the entity. Small.
+2. A `PlayAudio` / `StopAudio` `XrdsAction`, so Tracks and triggers can sound. Needs
+   the backlog's action-design pass.
+3. Only then S6's preview button and audition, which are thin clients of (1).
+
 ### Done when
 
 An author can place an audio clip, see its reach in the viewport, adjust the curve
