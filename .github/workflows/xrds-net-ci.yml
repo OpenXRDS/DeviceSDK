@@ -73,16 +73,19 @@ jobs:
   test-unit:
     name: test (xrds-net --lib)
     runs-on: ubuntu-latest
-    # `continue-on-error` below ignores a *failure*; it does nothing about a *hang*,
-    # which would otherwise sit on a runner for the 360-minute default. This suite
-    # already talks to live public servers, so bound it.
     timeout-minutes: 20
-    # Stopgap, not a fix: a large fraction of this suite hits live public
-    # servers (mosquitto/rebex/coap.me/echo.websocket.org) and isn't tagged
-    # #[ignore] the way the WebRTC slow test is, so it can't be cleanly
-    # split into blocking/non-blocking today. See docs/done/xrds-net-release-readiness.md
-    # Phase 5 — tagging those tests is the real fix, tracked as a follow-up.
-    continue-on-error: true
+    # A real gate: no `continue-on-error`. Every test that reaches a public server is tagged
+    # `#[ignore]` and lives in `xrds-net-live-network.yml`, which runs on a schedule rather
+    # than on pull requests — so a red mark here means our code is broken rather than someone
+    # else's server being down.
+    #
+    # Those tests are deliberately NOT run here, even allowed-to-fail. A check that is
+    # permanently red trains people to ignore CI, and it cannot be justified to a reviewer who
+    # has to decide whether a red mark matters.
+    #
+    # This replaces the long-standing stopgap (docs/done/xrds-net-release-readiness.md
+    # Phase 5): the suite used to hit mosquitto/rebex/coap.me/echo.websocket.org/rust-lang.org
+    # and was allowed to fail, which meant it reported nothing either way.
     steps:
       - uses: actions/checkout@v4
       - name: Install native build deps (quiche/BoringSSL)

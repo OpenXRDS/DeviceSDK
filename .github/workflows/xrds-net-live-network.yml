@@ -1,0 +1,49 @@
+name: xrds-net live network
+
+# The tests that talk to the public internet: test.mosquitto.org, test.rebex.net, coap.me,
+# echo.websocket.org, www.rust-lang.org, quic.nginx.org, cloudflare-quic.com, litespeedtech.com.
+# They are `#[ignore]`d in the source and run only from here.
+#
+# **Why they are not on pull requests, not even allowed to fail.** They fail whenever someone
+# else's server is down, which is often. A check that is permanently red trains people to ignore
+# CI, and it cannot be justified to a reviewer deciding whether a red mark matters. So the PR
+# workflow (`xrds-net-ci.yml`) contains only gates that mean something, and this runs on its own
+# schedule where a failure is information rather than an obstacle.
+#
+# A red run here means "investigate", not "do not merge". Usually it means a public test broker
+# is down; occasionally it means we broke real protocol behaviour that no hermetic test covers,
+# which is exactly why these are kept rather than deleted.
+
+on:
+  schedule:
+    # 06:00 UTC daily. Note GitHub only runs schedules from the default branch, so this starts
+    # once merged to main.
+    - cron: "0 6 * * *"
+  # So anyone can check on demand — e.g. before a release, or when a live test failure is
+  # suspected of hiding a real regression.
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  live-network:
+    name: test (xrds-net --ignored)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install native build deps (quiche/BoringSSL)
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo -E apt-get update -o Acquire::Retries=3 -o Acquire::http::Timeout=30
+          sudo -E apt-get install -y --no-install-recommends -o Acquire::Retries=3 -o Acquire::http::Timeout=30 cmake perl
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.95.0" # keep in sync with xrds-net-ci.yml
+      - uses: Swatinem/rust-cache@v2
+      # Single-threaded on purpose: several of these publish to and subscribe from the same
+      # public broker topic, so running them concurrently makes them interfere with each other
+      # rather than with the network — a failure would then say nothing about connectivity.
+      - run: cargo test -p xrds-net --lib -- --ignored --test-threads=1

@@ -156,6 +156,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "live network: hits www.rust-lang.org; run with --ignored, or see the xrds-net-live-network workflow"]
     fn get_request_with_redirect_returns_200() {
         let handler = HttpHandler::new();
         let mut ctx = ctx_for(PROTOCOLS::HTTP, "http://www.rust-lang.org:80/");
@@ -169,6 +170,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "live network: hits www.rust-lang.org; run with --ignored, or see the xrds-net-live-network workflow"]
     fn get_request_without_redirect_returns_a_redirect_status() {
         let handler = HttpHandler::new();
         let ctx = ctx_for(PROTOCOLS::HTTP, "http://www.rust-lang.org:80/"); // redirection: false
