@@ -16,6 +16,7 @@ use crate::{
         layers::builder::OpenXrCompositionLayerBuilder,
         resources::{
             OpenXrEnvironmentBlendModes, OpenXrFrameState, OpenXrFrameStream,
+            OpenXrPassthroughEnabled, OpenXrPassthroughLayerHandle,
             OpenXrPrimaryReferenceSpace, OpenXrRenderResources, OpenXrSwapchain,
             OpenXrSwapchainImages, OpenXrSwapchainInfo, OpenXrViewConfigurations, OpenXrViews,
         },
@@ -45,6 +46,9 @@ impl Plugin for OpenXrRenderPlugin {
             ExtractResourcePlugin::<OpenXrEnvironmentBlendModes>::default(),
             ExtractResourcePlugin::<OpenXrPrimaryReferenceSpace>::default(),
             ExtractResourcePlugin::<OpenXrSwapchainInfo>::default(),
+            // Both are read by layer builders, which run in the render world.
+            ExtractResourcePlugin::<OpenXrPassthroughEnabled>::default(),
+            ExtractResourcePlugin::<OpenXrPassthroughLayerHandle>::default(),
         ))
         .add_systems(
             OpenXrSchedules::Update,

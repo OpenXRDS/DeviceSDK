@@ -396,6 +396,10 @@ pub(super) fn install_xrds(app: &mut App) {
         )
             .chain(),
     );
+    // A system rather than a one-shot at import: the scene is imported before the
+    // OpenXR session exists, so nothing to configure is present yet. See the module
+    // docs — the first implementation dropped the authored value for this reason.
+    app.add_systems(Update, crate::xrds_api::passthrough::sync_passthrough_system);
     app.add_observer(apply_pending_gltf_animation_requests_on_scene_ready);
     // Fires synchronously inside scene_spawner_system when a scene is fully
     // instantiated — all ChildOf relationships are established at this point.

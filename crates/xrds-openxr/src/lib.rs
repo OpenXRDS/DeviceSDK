@@ -111,6 +111,11 @@ pub use openxr::camera::OpenXrCameraIndex;
 pub use openxr::camera::OpenXrPlayerRoot;
 pub use openxr::input::{XrHand, XrHapticRequest, XrInput, XrInputSource, XrPointerState};
 pub use openxr::render_model::XrControllerModelAssets;
+/// Switches the `XR_FB_passthrough` composition layer on and off.
+///
+/// Re-exported because `xrds-runtime` projects `XrdsSceneMetadata::xr_blend_mode`
+/// onto it; see `xrds-runtime`'s `xrds_api::passthrough`.
+pub use openxr::resources::OpenXrPassthroughEnabled;
 
 use crate::openxr::{
     blit::OpenXrBlitPlugin,

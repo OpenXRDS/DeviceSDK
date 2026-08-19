@@ -562,6 +562,10 @@ impl XrdsAPI<'_> {
         crate::xrds_api::reimport::sync_panel_registry(self.app.world_mut(), document);
         crate::xrds_api::reimport::sync_track_registry(self.app.world_mut(), document);
         apply_imported_scene_environment_policy_in_world(self.app.world_mut());
+        crate::xrds_api::passthrough::apply_xr_blend_mode(
+            self.app.world_mut(),
+            document.metadata.xr_blend_mode,
+        );
         Ok(imported_ids)
     }
 

@@ -16,7 +16,14 @@ impl OpenXrCompositionLayerBuilder {
         self.layers.insert(index, layer);
     }
 
+    /// Every layer that wants to be submitted this frame, in registration order.
+    ///
+    /// Order is the compositing order: index 0 is furthest back. Passthrough is
+    /// inserted at 0 so it sits beneath the projection layer.
     pub fn build(&self, world: &World) -> Vec<Box<dyn OpenXrCompositionLayer>> {
-        self.layers.iter().map(|layer| layer.build(world)).collect()
+        self.layers
+            .iter()
+            .filter_map(|layer| layer.build(world))
+            .collect()
     }
 }

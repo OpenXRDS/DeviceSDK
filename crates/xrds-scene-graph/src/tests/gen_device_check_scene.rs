@@ -11,7 +11,18 @@ use super::*;
 /// Driven by `docs/quest-device-test-recipe.md`, which carries the deploy sequence
 /// and the traps.
 ///
-/// # Current check: does head tracking resolve front/back for spatial audio?
+/// # Current check: passthrough (S4), and spatial audio still working under it
+///
+/// The scene carries `xr_blend_mode = AlphaBlend` and **no ground plane**.
+/// Passthrough composites beneath the scene and shows only where the scene's alpha
+/// is below 1.0, so an opaque floor would hide it. What should appear: the real
+/// room, with two floating markers and the ping still audible from the rear one.
+///
+/// If the markers render but the background is black rather than the room, the
+/// layer is not reaching the compositor or the camera clear is still opaque. If
+/// nothing renders at all, suspect the layer order.
+///
+/// # Previous check, still exercised: does head tracking resolve front/back?
 ///
 /// Previous contents built the zone-enter check for
 /// `docs/done/player-body-collider-plan.md`; that landed and was verified, so the
@@ -115,11 +126,14 @@ fn xxx_gen_device_check_scene() {
 
     const AUDIO_ASSET_ID: &str = "asset:spatial-ping";
 
-    let mut ground = XrdsPlane3D::new().with_name("Ground");
-    ground.size = [24.0, 24.0];
-    ground.transform.translation = [0.0, 0.0, 8.0];
-    doc.nodes
-        .push(XrdsSceneNode::from_xrds_plane3d(id(), None, &ground, None));
+    // Passthrough: reality is composited *beneath* the scene and shows only where
+    // the scene's alpha is below 1.0. A ground plane therefore has to go — a
+    // 24x24 opaque slab would hide the floor and most of the point.
+    //
+    // Two things are being checked at once, deliberately: that passthrough appears
+    // at all, and that the audio work still behaves with it on. The markers stay
+    // visible because they are opaque geometry over a transparent background.
+    doc.metadata.xr_blend_mode = XrdsXrBlendMode::AlphaBlend;
 
     let mut sun = XrdsDirectionalLight::new().with_name("Sun");
     sun.transform.translation = [2.0, 5.0, 6.0];

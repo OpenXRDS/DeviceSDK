@@ -25,7 +25,8 @@ use crate::{
             projection::OpenXrCompositionLayerProjectionBuilder,
         },
         resources::{
-            OpenXrEnvironmentBlendModes, OpenXrFrameStream, OpenXrInstance, OpenXrRenderResources,
+            OpenXrEnvironmentBlendModes, OpenXrFrameStream, OpenXrInstance, OpenXrPassthrough,
+            OpenXrPassthroughEnabled, OpenXrPassthroughLayerHandle, OpenXrRenderResources,
             OpenXrSpace, OpenXrSwapchain, OpenXrSwapchainImages, OpenXrViewConfigurations,
             OpenXrViews,
         },
@@ -483,7 +484,23 @@ fn initialize_view_and_blend_mode(world: &mut World) {
             return;
         }
     };
-    let blend_mode = match blend_modes.first() {
+    // `environmentBlendMode` is a mandatory, GLOBAL `xrEndFrame` parameter deciding
+    // how the *whole frame* blends with the real world. Taking index 0 is wrong:
+    // a runtime that enumerates ALPHA_BLEND or ADDITIVE first makes reality show
+    // through everywhere our content's alpha is below 1.0, whatever the app
+    // intended — and plenty of content is incidentally non-opaque (unlit panels,
+    // particle trails, text atlases).
+    //
+    // Prefer OPAQUE explicitly. Passthrough is **not** meant to be reached through
+    // this enum: on Quest it is an `XR_FB_passthrough` composition layer submitted
+    // beneath an alpha-blended projection layer, with the environment mode left
+    // OPAQUE. Verified against a shipped Quest 3 passthrough app; the recipe is in
+    // `docs/small-phases-plan.md` S4.
+    let blend_mode = match blend_modes
+        .iter()
+        .find(|&&m| m == openxr::EnvironmentBlendMode::OPAQUE)
+        .or_else(|| blend_modes.first())
+    {
         Some(v) => v,
         None => {
             log::error!("XR: no environment blend modes");
@@ -524,6 +541,20 @@ fn initialize_view_and_blend_mode(world: &mut World) {
 
     let mut openxr_layer_builder = OpenXrCompositionLayerBuilder::new();
     openxr_layer_builder.insert_layer(0, Box::new(OpenXrCompositionLayerProjectionBuilder));
+    // Inserted at 0 *after* the projection, which pushes projection to 1 and leaves
+    // the order [passthrough, projection] — index 0 composites furthest back, and
+    // passthrough must sit beneath the scene for the scene's alpha to reveal it.
+    //
+    // Registered here, before the session exists, because this is where the layer
+    // list is assembled; the builder yields nothing until the handle resource
+    // appears (created in `initialize_openxr_session`) and stays silent whenever
+    // `OpenXrPassthroughEnabled` is false.
+    if openxr_instance.passthrough_supported {
+        openxr_layer_builder.insert_layer(
+            0,
+            Box::new(crate::openxr::layers::fb::OpenXrCompositionLayerPassthroughFBBuilder),
+        );
+    }
 
     // TODO: Create action set here
 
@@ -562,9 +593,62 @@ fn initialize_openxr_session(world: &mut World) {
         };
     log::info!("OpenXR session created");
 
+    create_passthrough(world, &session);
+
     world.insert_resource(session);
     world.insert_resource(frame_waiter);
     world.insert_resource(frame_stream);
+}
+
+/// Creates the passthrough feature and layer, once, for the session's lifetime.
+///
+/// Created **already running** via `IS_RUNNING_AT_CREATION` rather than by calling
+/// `start()`/`resume()` afterwards: in openxr 0.19 those wrappers invoke the wrong
+/// entry point, so a layer started that way never produces imagery. Learned from a
+/// shipped Quest 3 passthrough app — see `docs/small-phases-plan.md` S4.
+///
+/// Whether the passthrough is *visible* is a separate question answered per frame by
+/// `OpenXrPassthroughEnabled`; creating it here costs a handle and nothing more
+/// until the layer is actually submitted.
+fn create_passthrough(world: &mut World, session: &OpenXrSession) {
+    world.init_resource::<OpenXrPassthroughEnabled>();
+
+    let supported = world
+        .get_resource::<OpenXrInstance>()
+        .is_some_and(|i| i.passthrough_supported);
+    if !supported {
+        log::info!("XR: passthrough unsupported by this runtime; scenes requesting it stay opaque");
+        return;
+    }
+
+    let created = openxr_graphics!(
+        &session.0;
+        inner => {
+            inner
+                .create_passthrough(openxr::PassthroughFlagsFB::IS_RUNNING_AT_CREATION)
+                .and_then(|feature| {
+                    let layer = inner.create_passthrough_layer(
+                        &feature,
+                        openxr::PassthroughFlagsFB::IS_RUNNING_AT_CREATION,
+                        openxr::PassthroughLayerPurposeFB::RECONSTRUCTION,
+                    )?;
+                    Ok((feature, layer))
+                })
+        }
+    );
+
+    match created {
+        Ok((feature, layer)) => {
+            log::info!("XR: passthrough layer created");
+            world.insert_resource(OpenXrPassthroughLayerHandle(*layer.inner()));
+            world.insert_resource(OpenXrPassthrough { feature, layer });
+        }
+        Err(e) => {
+            // Not fatal: the scene renders opaque, which is the same outcome as a
+            // device without the extension.
+            log::error!("XR: could not create passthrough ({e:?}); scenes will stay opaque");
+        }
+    }
 }
 
 fn finish_session_create(world: &mut World) {

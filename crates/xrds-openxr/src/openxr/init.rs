@@ -179,7 +179,19 @@ impl OpenXrInitPlugin {
         };
         openxr_extensions.fb_render_model = true;
         openxr_extensions.ext_hand_tracking = true;
+        // Passthrough. Requested unconditionally and downgraded by
+        // `intersects_extensions` when the runtime lacks it, so a desktop or
+        // non-Meta runtime is unaffected.
+        //
+        // Note this is the *only* route to passthrough: it is a composition layer
+        // submitted beneath the projection layer, NOT
+        // `EnvironmentBlendMode::ALPHA_BLEND`. That enum blends the whole frame with
+        // reality and is deliberately kept `OPAQUE` — see the blend-mode selection
+        // in `session.rs`.
+        openxr_extensions.fb_passthrough = true;
         openxr_extensions = intersects_extensions(&entry, openxr_extensions)?;
+        let passthrough_supported = openxr_extensions.fb_passthrough;
+        log::info!("XR: passthrough supported = {passthrough_supported}");
 
         let application_info = ApplicationInfo {
             application_name: app_name,
@@ -236,6 +248,7 @@ impl OpenXrInitPlugin {
         let openxr_instance = OpenXrInstance {
             instance: instance.clone(),
             system_id,
+            passthrough_supported,
         };
 
         Ok((openxr_instance, graphics_backends))

@@ -8,7 +8,8 @@ use openxr::{
 use crate::openxr::{
     layers::{OpenXrCompositionLayer, OpenXrLayerBuilder},
     resources::{
-        OpenXrPrimaryReferenceSpace, OpenXrSpace, OpenXrSwapchain, OpenXrSwapchainInfo, OpenXrViews,
+        OpenXrPassthroughEnabled, OpenXrPrimaryReferenceSpace, OpenXrSpace, OpenXrSwapchain,
+        OpenXrSwapchainInfo, OpenXrViews,
     },
 };
 
@@ -91,33 +92,33 @@ impl OpenXrCompositionLayerProjectionView {
 }
 
 impl OpenXrLayerBuilder for OpenXrCompositionLayerProjectionBuilder {
-    fn build(&self, world: &bevy::ecs::world::World) -> Box<dyn OpenXrCompositionLayer> {
+    fn build(&self, world: &bevy::ecs::world::World) -> Option<Box<dyn OpenXrCompositionLayer>> {
         let reference_space = match world.get_resource::<OpenXrPrimaryReferenceSpace>() {
             Some(r) => r,
             None => {
                 log::error!("XR: projection build: OpenXrPrimaryReferenceSpace missing in render world");
-                return Box::new(OpenXrCompositionLayerProjection::new());
+                return Some(Box::new(OpenXrCompositionLayerProjection::new()));
             }
         };
         let views = match world.get_resource::<OpenXrViews>() {
             Some(r) => r,
             None => {
                 log::error!("XR: projection build: OpenXrViews missing in render world");
-                return Box::new(OpenXrCompositionLayerProjection::new());
+                return Some(Box::new(OpenXrCompositionLayerProjection::new()));
             }
         };
         let swapchain = match world.get_resource::<OpenXrSwapchain>() {
             Some(r) => r,
             None => {
                 log::error!("XR: projection build: OpenXrSwapchain missing in render world");
-                return Box::new(OpenXrCompositionLayerProjection::new());
+                return Some(Box::new(OpenXrCompositionLayerProjection::new()));
             }
         };
         let swapchain_info = match world.get_resource::<OpenXrSwapchainInfo>() {
             Some(r) => r,
             None => {
                 log::error!("XR: projection build: OpenXrSwapchainInfo missing in render world");
-                return Box::new(OpenXrCompositionLayerProjection::new());
+                return Some(Box::new(OpenXrCompositionLayerProjection::new()));
             }
         };
         let raw_swapchain = swapchain.as_raw();
@@ -166,11 +167,29 @@ impl OpenXrLayerBuilder for OpenXrCompositionLayerProjectionBuilder {
             })
             .collect();
 
-        Box::new(
+        // With passthrough beneath, this layer's alpha decides where reality shows
+        // through, so the compositor must be told the alpha is unpremultiplied —
+        // Bevy renders straight (unpremultiplied) alpha. Without the flag the
+        // runtime assumes premultiplied and darkens every partially transparent
+        // pixel toward black instead of revealing the room.
+        //
+        // Only added while passthrough is actually being submitted: the flag is not
+        // free elsewhere, and an opaque VR scene has no alpha to interpret.
+        let passthrough_active = world
+            .get_resource::<OpenXrPassthroughEnabled>()
+            .is_some_and(|e| e.0);
+        let layer_flags = if passthrough_active {
+            CompositionLayerFlags::BLEND_TEXTURE_SOURCE_ALPHA
+                | CompositionLayerFlags::UNPREMULTIPLIED_ALPHA
+        } else {
+            CompositionLayerFlags::BLEND_TEXTURE_SOURCE_ALPHA
+        };
+
+        Some(Box::new(
             OpenXrCompositionLayerProjection::new()
-                .layer_flags(CompositionLayerFlags::BLEND_TEXTURE_SOURCE_ALPHA)
+                .layer_flags(layer_flags)
                 .space(&reference_space.0)
                 .views(&projection_views),
-        )
+        ))
     }
 }
