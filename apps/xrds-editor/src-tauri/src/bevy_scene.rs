@@ -26,6 +26,7 @@ use crate::wry_overlay::{
 #[cfg(target_os = "linux")]
 use crate::wry_overlay::pump_gtk_events;
 use crate::viewport_gizmo::{
+    audio_falloff_gizmo_system,
     floor_grid_system, fov_overlay_system, interaction_zone_gizmo_system, light_rays_system,
     physics_collider_gizmo_system, player_spawn_gizmo_system, spawn_zone_gizmo_system,
     transform_gizmo_system,
@@ -147,6 +148,7 @@ impl XrdsApp for XrdsEditorTauriApp {
                 floor_grid_system,
                 light_rays_system,
                 interaction_zone_gizmo_system,
+                audio_falloff_gizmo_system,
                 player_spawn_gizmo_system,
                 spawn_zone_gizmo_system,
                 physics_collider_gizmo_system,
@@ -592,6 +594,23 @@ impl XrdsApp for XrdsEditorTauriApp {
             ctx.set_effect_params_for_node(id.into(), effect_params_from_scene(&fx));
             if let Some(mut state) = ctx.resource_mut::<EditorState>() {
                 state.pending_effect_params = None;
+            }
+        }
+
+        let pending_falloff = ctx
+            .resource::<EditorState>()
+            .and_then(|s| s.pending_audio_falloff.clone());
+        if let Some((id, clip)) = pending_falloff {
+            ctx.set_audio_falloff_for_node(
+                id.into(),
+                clip.distance_model,
+                clip.min_distance,
+                clip.max_distance,
+                clip.rolloff_factor,
+                clip.volume,
+            );
+            if let Some(mut state) = ctx.resource_mut::<EditorState>() {
+                state.pending_audio_falloff = None;
             }
         }
 

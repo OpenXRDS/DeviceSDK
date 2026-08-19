@@ -104,6 +104,9 @@ pub struct EditorState {
     /// `pending_effect_params` because playback needs the Bevy world, which the
     /// command handlers do not have.
     pub pending_audio_preview:     Option<(XrdsSceneNodeId, bool)>,
+    /// Live falloff/volume edit, applied without respawning the clip so a slider
+    /// drag does not cut off the preview being listened to.
+    pub pending_audio_falloff:     Option<(XrdsSceneNodeId, xrds_scene_graph::XrdsSceneAudioClip)>,
 
     // ── Gizmo state ───────────────────────────────────────────────────────
     pub gizmo_mode:  GizmoMode,
@@ -235,6 +238,7 @@ impl Default for EditorState {
             pending_capsule_geometry: None,
             pending_effect_params: None,
             pending_audio_preview: None,
+            pending_audio_falloff: None,
             gizmo_mode: GizmoMode::Translate,
             gizmo_hover: None,
             gizmo_drag: None,

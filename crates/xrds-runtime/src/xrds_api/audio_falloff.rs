@@ -136,6 +136,37 @@ fn rodio_correction(emitter: Vec3, left_ear: Vec3, right_ear: Vec3) -> f32 {
     }
 }
 
+/// Update a live clip's falloff without respawning it.
+///
+/// The curve is read fresh every frame by [`audio_falloff_system`], so changing
+/// the component is enough — no sink rebuild, no reimport. That matters for
+/// authoring: reimporting to apply a slider would respawn the entity, restart
+/// every sound in the scene, and cut off the very preview the author is listening
+/// to while dragging.
+///
+/// Returns false when the node has no falloff component, which means it is not an
+/// audio clip or is not spatial. Non-spatial clips deliberately have none — they
+/// play at one volume everywhere, and there is nothing to attenuate.
+pub(crate) fn set_falloff_for_entity(
+    world: &mut World,
+    entity: Entity,
+    distance_model: XrdsAudioDistanceModel,
+    min_distance: f32,
+    max_distance: f32,
+    rolloff_factor: f32,
+    base_volume: f32,
+) -> bool {
+    let Some(mut falloff) = world.get_mut::<XrdsAudioFalloff>(entity) else {
+        return false;
+    };
+    falloff.distance_model = distance_model;
+    falloff.min_distance = min_distance;
+    falloff.max_distance = max_distance;
+    falloff.rolloff_factor = rolloff_factor;
+    falloff.base_volume = base_volume.clamp(0.0, 1.0);
+    true
+}
+
 /// Keeps `SpatialListener` on the entity that actually carries the head pose.
 ///
 /// **This is what makes spatial audio work in XR at all.** `SpatialListener` used to

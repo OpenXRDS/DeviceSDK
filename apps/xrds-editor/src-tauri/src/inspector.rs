@@ -601,6 +601,29 @@ pub fn apply_inspector_command(
                 rolloff_factor: rolloff_factor.max(0.0),
             };
 
+            // Which fields changed decides whether the entity must be rebuilt.
+            // Reimport respawns it, which restarts every sound in the scene and
+            // cuts off the clip the author is auditioning — so it is reserved for
+            // the three fields that genuinely require a new sink.
+            let needs_respawn = session
+                .0
+                .document()
+                .node(id)
+                .and_then(|n| match &n.payload {
+                    XrdsSceneNodePayload::AudioClip(a) => Some(a),
+                    _ => None,
+                })
+                .map(|a| {
+                    // asset_id: a different file entirely.
+                    // looped:   PlaybackMode is fixed when the sink is built.
+                    // spatial:  decides AudioSink vs SpatialAudioSink — a different
+                    //           component, so a different sink.
+                    a.asset_id != clip.asset_id
+                        || a.looped != clip.looped
+                        || a.spatial != clip.spatial
+                })
+                .unwrap_or(true);
+
             match session.0.edit(|doc| {
                 if let Some(node) = doc.node_mut(id) {
                     if let XrdsSceneNodePayload::AudioClip(ref mut a) = node.payload {
@@ -611,10 +634,14 @@ pub fn apply_inspector_command(
                 Ok(_) => {}
                 Err(e) => error!("[inspector] SetAudioClipParams failed: {:?}", e),
             }
-            // Audio is re-imported rather than live-patched: the runtime builds the
-            // sink and its falloff component at spawn, so a changed curve needs the
-            // entity rebuilt.
-            true
+
+            if !needs_respawn {
+                // Volume and the whole falloff curve are read fresh every frame, so
+                // they can be applied live — a slider drag is audible immediately
+                // on a clip that is already playing.
+                state.pending_audio_falloff = Some((id, clip));
+            }
+            needs_respawn
         }
         EditorCommand::SetEffectParams {
             id,

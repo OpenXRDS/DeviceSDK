@@ -112,6 +112,37 @@ impl XrdsUpdateContext<'_> {
         }
     }
 
+    /// Update a spatial clip's distance falloff in place, without respawning it.
+    ///
+    /// The live-preview path for the editor's falloff sliders: the curve is read
+    /// fresh each frame, so a change is audible immediately and a clip that is
+    /// currently playing keeps playing. Reimporting instead would restart every
+    /// sound in the scene and cut off the preview being adjusted.
+    ///
+    /// Returns false if the node is not a spatial audio clip.
+    pub fn set_audio_falloff_for_node(
+        &mut self,
+        id: XrdsId,
+        distance_model: xrds_components::XrdsAudioDistanceModel,
+        min_distance: f32,
+        max_distance: f32,
+        rolloff_factor: f32,
+        volume: f32,
+    ) -> bool {
+        let Some(entity) = self.world.resource::<XrdsIdIndex>().entity_of(id) else {
+            return false;
+        };
+        super::audio_falloff::set_falloff_for_entity(
+            self.world,
+            entity,
+            distance_model,
+            min_distance,
+            max_distance,
+            rolloff_factor,
+            volume,
+        )
+    }
+
     /// Start or resume an audio clip node.
     ///
     /// Works whether the clip was authored with `autoplay` or not, which is what

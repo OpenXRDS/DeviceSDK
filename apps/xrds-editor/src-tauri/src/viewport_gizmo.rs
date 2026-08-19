@@ -271,6 +271,89 @@ pub fn interaction_zone_gizmo_system(
     }
 }
 
+/// Draw an audio clip's falloff radii — the reach the numbers in the Inspector
+/// actually describe.
+///
+/// `min_distance` and `max_distance` are *spatial* quantities, and typing `15`
+/// into a box says nothing about whether that reaches the far wall. Every
+/// comparable engine draws them: Unity puts min/max spheres on an AudioSource,
+/// Unreal draws the attenuation shape, Godot the emission sphere. S6 step 2 of
+/// docs/small-phases-plan.md.
+///
+/// Two circles rather than two spheres. A sphere gizmo at 50 m is a dense ball of
+/// lines that hides the scene inside it, and the outer radius is routinely that
+/// large; a horizontal ring reads as a radius at any size. The inner ring gets a
+/// vertical companion so a source directly above or below the camera is still
+/// visible.
+///
+/// ## Colour identifies the source, brightness identifies the radius
+///
+/// All spatial clips are drawn, not just the selected one, so overlapping reach
+/// can be seen — which is the main thing an author needs to judge when placing
+/// several sounds. That only works if rings can be attributed, so **hue is per
+/// source**: a clip's inner and outer rings always share a colour, and two clips
+/// never do. Inner versus outer is then carried by alpha alone, within one hue.
+///
+/// The first version used one hue for everything and distinguished the two radii
+/// by brightness, which is obvious to whoever wrote it and invisible to anyone
+/// else once two sources overlap.
+pub fn audio_falloff_gizmo_system(
+    mut gizmos:   Gizmos,
+    editor_state: Res<EditorState>,
+    session:      Res<EditorSession>,
+) {
+    use std::f32::consts::FRAC_PI_2;
+
+    let doc = session.0.document();
+    for node in &doc.nodes {
+        let xrds_scene_graph::XrdsSceneNodePayload::AudioClip(clip) = &node.payload else {
+            continue;
+        };
+        // A non-spatial clip plays at the same volume everywhere, so it has no
+        // reach to draw and rings would be a lie.
+        if !clip.spatial {
+            continue;
+        }
+
+        let pos = Vec3::from_array(node.transform.translation);
+        let flat = Quat::from_rotation_x(FRAC_PI_2);
+        let hue = source_hue(node.id.0);
+        let selected = editor_state.selection.contains(node.id);
+        // Unselected sources stay legible but recede, so the one being edited
+        // still reads first in a scene with several.
+        let emphasis = if selected { 1.0 } else { 0.45 };
+
+        // Inner: full volume within — the radius an author reaches for first when
+        // a sound dies too fast, so it is the more solid of the two.
+        let inner = Color::hsla(hue, 0.75, 0.62, 0.90 * emphasis);
+        gizmos.circle(Isometry3d::new(pos, flat), clip.min_distance, inner);
+        gizmos.circle(
+            Isometry3d::new(pos, Quat::IDENTITY),
+            clip.min_distance,
+            inner.with_alpha(0.5 * emphasis),
+        );
+
+        // Outer: silent beyond. Fainter because it is a boundary rather than a
+        // region, and usually far enough out to dominate the view otherwise.
+        gizmos.circle(
+            Isometry3d::new(pos, flat),
+            clip.max_distance,
+            Color::hsla(hue, 0.75, 0.62, 0.32 * emphasis),
+        );
+    }
+}
+
+/// A stable, well-separated hue for an audio source.
+///
+/// Stepping by the golden angle keeps consecutive node ids far apart on the colour
+/// wheel, so sources placed one after another — the usual case — never come out
+/// looking alike. Derived from the id rather than assigned in order so a clip
+/// keeps its colour when others are added or deleted.
+fn source_hue(node_id: u64) -> f32 {
+    const GOLDEN_ANGLE_DEG: f32 = 137.507_76;
+    (node_id as f32 * GOLDEN_ANGLE_DEG) % 360.0
+}
+
 /// Draw a stick-figure gizmo at each PlayerSpawn node position.
 /// Selected spawns are drawn brighter; all others are faint green.
 pub fn player_spawn_gizmo_system(
