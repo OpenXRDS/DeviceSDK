@@ -1,6 +1,6 @@
 # DeviceSDK Overall Progress
 
-Last updated: 2026-08-11
+Last updated: 2026-08-19
 
 ## Project Goal
 
@@ -13,6 +13,26 @@ Provide a non-expert-first SDK to build XR applications, with:
 ## Overall Completion (Estimated)
 
 Estimated overall progress toward a strong SDK basement for XR applications: **95%**.
+
+## What 1.0 Means
+
+The remaining work in this document comes almost entirely from the Gap Analysis —
+that is, from comparing DeviceSDK against what Unity, Godot, and Unreal already
+give an author. That comparison is the definition of done we are using:
+
+> **When the Gap Analysis rows are closed, including their editor halves,
+> DeviceSDK is version 1.0.**
+
+This is deliberately a *parity* bar, not a feature-ambition bar. It says an author
+who knows a conventional 3D engine can sit down with DeviceSDK and not hit a wall
+where a familiar capability is simply absent. It does **not** promise anything
+beyond parity, and rows explicitly deferred as Low priority (Terrain, Video) are
+judged against whether an XR workflow needs them, not against whether Unity has
+them.
+
+The blueprint below sizes that remaining work. Editor-only halves are called out
+as such, because several rows are finished on the SDK side and missing only
+authoring UI.
 
 ## General 3D Editor Progress
 
@@ -171,9 +191,19 @@ here so they stay visible:
   (`Opaque`/`AlphaBlend`) already exists at `scene/node.rs:20` and the runtime handles
   `EnvironmentBlendMode` plus the `fb_passthrough` extension. Only the editor toggle is
   missing, which makes this a small, well-scoped job rather than a feature.
-- **Spatial audio parameters — editor half only.** `XrdsSceneAudioClip` already carries
-  `distance_model`, `min_distance`, `max_distance`, `rolloff_factor` and `hrtf`. No
-  inspector UI reads them, so authored scenes cannot use fields the SDK supports.
+- **Spatial audio parameters — corrected 2026-08-19: this is *not* an editor half.**
+  The earlier claim here was that the SDK supported these fields and only inspector UI
+  was missing. That is wrong. `XrdsSceneAudioClip` does carry `distance_model`,
+  `min_distance`, `max_distance`, `rolloff_factor` and `hrtf`
+  (`xrds-scene-graph/src/scene/payload.rs`), but the runtime reads **only `spatial:
+  bool`** — `xrds-runtime/src/xrds_api/spawn.rs:926` passes that one flag to Bevy and
+  nothing anywhere touches the other five. They are serialized and inert.
+  `xrds-audio`, the crate that would have honoured them, was deprecated and excluded
+  from the workspace on 2026-08-18 (see the `exclude` note in the root `Cargo.toml`).
+  So the open question is not "wire up the inspector" but **decide whether these
+  fields can be honoured on Bevy's audio at all, and delete them if not** — shipping
+  authorable-but-inert fields is the exact failure mode `player-body-collider-plan.md`
+  was written about.
 - **Keyframe curve editor.** The Track/Sequencer system covers timed *action*
   sequencing; interpolating a property along a curve is still unbuilt. Note the original
   item's "export as a glTF animation track" is void — glTF export is retired.
@@ -184,44 +214,81 @@ here so they stay visible:
 
 LOD groups were also on that list and are already tracked in Gap Analysis below.
 
-Separately tracked, both with their own plans and both deliberately unfixed:
+Separately tracked:
 
-- **A player cannot enter an `InteractionZone`** — the player has no collider, so a
-  fundamental XR interaction silently does nothing. `docs/done/player-body-collider-plan.md`.
-- **Android window-lifecycle crash** — intermittent, trigger not yet reproduced.
-  `docs/android-window-lifecycle-plan.md`.
+- ~~**A player cannot enter an `InteractionZone`**~~ — **fixed and device-verified on
+  Quest 3, 2026-08-18.** This document previously listed it as "deliberately unfixed";
+  that was stale. The player now gets a capsule physics body and an `XrdsId` (both
+  were required — a collider alone would have compiled and still emitted no events).
+  Plan archived to `docs/done/player-body-collider-plan.md`.
+- **Android window-lifecycle crash** — intermittent, trigger **not reproduced** under
+  controlled conditions; two staged attempts failed to trigger it. Not schedulable as
+  planned work until there is a repro. `docs/android-window-lifecycle-plan.md`.
 
-## Suggested Next Steps (Short Horizon)
+## Road to 1.0 — Small / Medium / Large Blueprint
 
-Four of the five items previously listed here are done: Text3D rendering, the
-texture-slot UI, `XrdsCapsule`, and particle systems/VFX — which was the only
-remaining **High** priority row in the Gap Analysis. There is no High-priority
-engine gap left open.
+Recorded 2026-08-19. This is the sizing of everything between here and the 1.0
+bar defined above. Sizes are in *phases*, where a phase is a coherent landable
+change with its own tests — not in calendar time.
 
-That leaves the documentation pass as the standing recommendation, and it is now
-the oldest surviving item on this list:
+There is no **High**-priority engine gap left open; particle systems/VFX was the
+last one and shipped 2026-08-12.
 
-1. **Documentation pass.** The in-world UI/panel-template system, the
-   physics/grab system, particle effects, and `xrds-net`'s hardening are all
-   substantial, all shipped, and none are covered by user-facing docs — only
-   internal `docs/done/*` design records, which are written for whoever
-   maintains the code rather than for someone building a scene.
+### Small — 1 phase each
 
-   Already scoped: `docs/manual/gui-user-manual-outline.md` and
-   `docs/manual/api-reference-outline.md` are complete tables of contents
-   marked "outline only", split by audience (editor author vs. SDK/expert
-   developer). The next step is writing against them, not deciding what to
-   write.
+Planned in detail in `docs/small-phases-plan.md`.
 
-2. **Small, well-scoped engine work**, if a break from prose is wanted. The
-   cheapest items with real value, all from §5 above: the passthrough
-   blend-mode toggle and the spatial-audio inspector UI are both *editor-only*
-   halves of finished SDK work, and a `debug!` line for zone events would make
-   the next device check self-verifying rather than dependent on someone
-   describing what they saw.
+| # | Item | Crate | Note |
+| --- | --- | --- | --- |
+| S1 | ~~Spatial-audio params: honour or delete~~ | `xrds-components` / `xrds-scene-graph` / `xrds-runtime` | **Done 2026-08-19, verified on desktop and Quest 3.** Four falloff fields honoured, `hrtf` removed. Also fixed a bug it uncovered: `SpatialListener` was attached only on the `XrdsAPI` camera path, so **spatial audio had no listener in XR at all** — every XRDS app on a headset, not just this feature. Backends were evaluated and rejected; stay on `bevy_audio` (`docs/spatial-audio-backend-spike.md`). |
+| S2 | Zone-event `debug!` logging | `xrds-runtime` | Makes the next device pass self-verifying instead of dependent on someone describing what they saw. |
+| S3 | Head-locked interactive-template diagnostic | `xrds-scene-graph` | SDK half of §4. Editor grey-out is separate and follows this. |
+| S4 | Passthrough blend-mode toggle | editor only | `XrdsXrBlendMode` and the runtime `fb_passthrough` path both exist; only the control is missing. |
+| S5 | Naming polish (§3) | `xrds-scene-graph` | `TransformParams` dual rotation field; `*Patch` ECS jargon. Mechanical but source-breaking. |
 
-3. **Pick a Medium-priority Gap Analysis row** for a larger piece — animation
-   state machine, post-processing depth, NavMesh, or LOD.
+### Medium — 2–3 phases each
+
+| Item | Phases | Where the cost actually is |
+| --- | --- | --- |
+| **LOD system** | 3: payload + document → runtime selection → authoring/validation | Greenfield — no LOD vocabulary exists in `xrds-scene-graph` (verified). Authored levels only; automatic LOD *generation* is out of scope. Best payoff at scene scale on Quest. |
+| **Post-processing depth** (DOF, SSAO, colour grading) | 2–3, roughly one per effect | `XrdsBloom`/`XrdsTonemapping` establish the pattern and Bevy supplies the effects, so this is mostly authorable-surface plumbing. **Verify each on Adreno before committing** — same class of trap that killed `bevy_hanabi`. |
+| **Video asset kind** (§2) | 3: asset kind + catalog/validation → runtime playback → round-trip tests | The asset-kind half follows `Audio`/`EnvironmentMap` exactly. The *playback* half has no precedent in the workspace — no video decode path exists. That asymmetry is why it keeps being deferred. |
+| **Keyframe curve editor** (SDK half) | 2: curve/interpolation model → runtime property driver | Distinct from Track/Sequencer, which sequences *actions*, not property curves. The editor UI on top is its own larger job. The original item's "export as a glTF animation track" is void — glTF export is retired. |
+| **Audio authoring in the editor** (S6) | 2–3: inspector section + bridge commands → radius gizmos → curve preview + audition | Spatial audio now works on device and is reachable **only from Rust**: `Inspector.tsx` has no `AudioClip` section and the bridge has no audio commands, so an authored clip's volume, loop, spatial flag and entire falloff curve are all unauthorable. Not "add rows to the audio panel" — there is no audio panel. Detailed scope, including why the curve preview must be drawn in dB, in `docs/small-phases-plan.md` S6. |
+
+### Large — 4+ phases, each gated on a design decision
+
+None of these should be started as implementation work. Each needs its blocking
+question answered first, and for three of the four the design is the larger half.
+
+| Item | Phases | Blocking question |
+| --- | --- | --- |
+| **Animation state machine** | ~4: state/transition model → blend trees → runtime evaluation → authoring | Largest pure-engine item. Playback and morph sliders exist; blend trees, transition graphs and IK are all unbuilt. Scope question: is IK in 1.0 or not? |
+| **Spatial anchor node** | ~4: OpenXR persist-anchor binding → payload → runtime resolve/rebind → cross-session tests | `xrds-openxr` has no anchor persistence today. Vendor-extension territory — Meta's persisted-anchor path differs from Android XR's, so "which platforms does 1.0 promise this on?" has to be answered first. Cross-session testing is manual by nature. |
+| **NavMesh / pathfinding** | ~4: bake/import → agent component → runtime steering → authoring | Greenfield. Bake in-editor vs. import a baked mesh are different projects; pick one before scoping. |
+| **Networking / multiplayer** | Not sizable yet | Transport (`xrds-net`) is hardened and internal-milestone-ready, two-machine WebRTC handshake included. Missing piece is the *game-level* `XrdsAction` that syncs trigger effects, and **the authority model must be decided first** — see the Networking entry in `docs/xrds-trigger-action-backlog.md`. Do not estimate this before that decision. |
+
+### Deliberately not in the blueprint
+
+- **Documentation pass.** Previously the standing #1 recommendation here. Held
+  back on purpose: the GUI manual documents an editor whose Tailwind/Radix
+  migration is mid-flight and which is about to grow new inspector sections
+  (S1, S4), so writing it now buys a rewrite. The *API reference* half has no
+  such problem and is better written as rustdoc on the items themselves, where
+  a signature change and its docs move in the same diff. Revisit once the Small
+  tier lands.
+- **Android window-lifecycle crash** — unreproduced; see §5.
+- **Particle blend modes** — a no-op upstream in `bevy_firework`, not our code.
+- **Terrain** — Low priority and not an XR-shaped need; judged against workflow,
+  not against Unity parity, per the 1.0 definition.
+
+### Honest total
+
+Four Small (one now done), **five** Medium, four Large. The Small tier is days. The Medium tier is
+where most of the value-per-phase sits and compounds with what already exists.
+The Large tier is genuinely large, and three of its four items are blocked on a
+decision rather than on effort — which means the next real milestone after the
+Small tier is a design session, not a sprint.
 
 ## Gap Analysis vs. Mature 3D Engines
 
