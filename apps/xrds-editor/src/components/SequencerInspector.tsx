@@ -16,12 +16,15 @@ export const ACTION_KINDS = [
   "SetTransform", "SetVisible", "SetMaterial",
   "PlayGltfAnimation", "StopGltfAnimation", "ModifyHealth",
   "PlayEffect", "StopEffect",
+  "PlayAudio", "StopAudio",
 ] as const;
 
 export const ACTION_ICONS: Record<string, string> = {
   SetVisible: "👁", SetTransform: "🎬", SetMaterial: "🎨",
   ModifyHealth: "❤", PlayGltfAnimation: "🎞", StopGltfAnimation: "⏹",
-  PlayEffect: "💥", StopEffect: "🛑", Unknown: "?",
+  PlayEffect: "💥", StopEffect: "🛑",
+  PlayAudio: "🔊", StopAudio: "🔇",
+  Unknown: "?",
 };
 
 /** Lane-category colour, matching the mockup's per-track dot colours — one
@@ -31,6 +34,7 @@ export const ACTION_COLOR: Record<string, string> = {
   SetMaterial: "var(--flamingo)", ModifyHealth: "var(--red)",
   PlayGltfAnimation: "var(--blue)", StopGltfAnimation: "var(--surface1)",
   PlayEffect: "var(--peach)", StopEffect: "var(--surface1)",
+  PlayAudio: "var(--green)", StopAudio: "var(--surface1)",
   Unknown: "var(--surface1)",
 };
 
@@ -63,6 +67,10 @@ export function summarizeAction(a: XrdsAction): string {
     case "PlayEffect":
       return a.data.count === null ? "PlayEffect (authored count)" : `PlayEffect × ${a.data.count}`;
     case "StopEffect": return "StopEffect (fade out)";
+    case "PlayAudio": return "PlayAudio";
+    // Spelled out because rodio's own stop is one-way, and the distinction is the
+    // reason this action is safe to use on looping ambience.
+    case "StopAudio": return "StopAudio (rewind)";
     // Element actions show their value: on a panel row the value *is* the point,
     // unlike SetMaterial where the detail lives in the editor below.
     case "SetElementText": return `Text "${a.data.text}"`;

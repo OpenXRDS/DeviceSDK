@@ -231,13 +231,15 @@ fn build_primitive_node(
                 .iter()
                 .find(|a| a.kind == XrdsSceneAssetKind::Audio)
                 .map(|a| a.id.clone())?,
-            // `autoplay` defaults to false, and there is currently NO other way to
-            // start a clip — no runtime play API and no `PlayAudio` track action —
-            // so a placed sound would be permanently silent and look broken.
-            // Reported 2026-08-19: "I didn't hear anything in play mode".
-            // The Inspector's Autoplay toggle turns it off for anyone wiring a
-            // trigger later.
-            autoplay: true,
+            // Left at the payload default of `false`.
+            //
+            // This was briefly `true`, as a stopgap while `autoplay` was the only
+            // way a clip could ever sound — a placed clip was otherwise silent for
+            // the whole session and looked broken. Both reasons are gone: the
+            // Inspector has a preview button, and `XrdsAction::PlayAudio` lets a
+            // zone, button or Track start it. A sound that begins the instant it is
+            // placed is intrusive, and looping ambience placed near the camera is
+            // the usual first thing an author does.
             ..XrdsSceneAudioClip::default()
         }),
         "InteractionZone" => XrdsSceneNodePayload::InteractionZone(XrdsSceneInteractionZone::default()),

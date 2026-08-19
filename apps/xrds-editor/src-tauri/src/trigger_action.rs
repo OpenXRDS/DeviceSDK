@@ -710,6 +710,8 @@ fn default_action_for_kind(kind: &str) -> Option<XrdsAction> {
         // None = use the effect's own authored Burst Count.
         "PlayEffect" => XrdsAction::PlayEffect { count: None },
         "StopEffect" => XrdsAction::StopEffect,
+        "PlayAudio" => XrdsAction::PlayAudio,
+        "StopAudio" => XrdsAction::StopAudio,
         "SetVisible" => XrdsAction::SetVisible(true),
         "SetTransform" => XrdsAction::SetTransform {
             position: Some([0.0, 0.0, 0.0]),
@@ -758,6 +760,8 @@ fn action_to_dto(a: &XrdsAction) -> XrdsActionDto {
         XrdsAction::StopGltfAnimation => XrdsActionDto::StopGltfAnimation,
         XrdsAction::PlayEffect { count } => XrdsActionDto::PlayEffect { count: *count },
         XrdsAction::StopEffect => XrdsActionDto::StopEffect,
+        XrdsAction::PlayAudio => XrdsActionDto::PlayAudio,
+        XrdsAction::StopAudio => XrdsActionDto::StopAudio,
         XrdsAction::SetVisible(v) => XrdsActionDto::SetVisible(*v),
         XrdsAction::SetTransform { position, rotation, scale, duration_secs, ease } =>
             XrdsActionDto::SetTransform {
@@ -810,6 +814,8 @@ fn action_from_dto(a: &XrdsActionDto) -> XrdsAction {
         XrdsActionDto::StopGltfAnimation => XrdsAction::StopGltfAnimation,
         XrdsActionDto::PlayEffect { count } => XrdsAction::PlayEffect { count: *count },
         XrdsActionDto::StopEffect => XrdsAction::StopEffect,
+        XrdsActionDto::PlayAudio => XrdsAction::PlayAudio,
+        XrdsActionDto::StopAudio => XrdsAction::StopAudio,
         XrdsActionDto::SetVisible(v) => XrdsAction::SetVisible(*v),
         XrdsActionDto::SetTransform { position, rotation, scale, duration_secs, ease } =>
             XrdsAction::SetTransform {

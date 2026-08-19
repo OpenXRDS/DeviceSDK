@@ -825,6 +825,11 @@ pub enum XrdsActionDto {
     PlayEffect { count: Option<u32> },
     /// Stops emitting; particles already alive fade out rather than vanishing.
     StopEffect,
+    /// Play the target audio clip, restarting it if it has already finished.
+    /// No clip field: the target node *is* the clip, as with PlayEffect.
+    PlayAudio,
+    /// Stop the target audio clip and rewind, so it can be played again.
+    StopAudio,
     SetVisible(bool),
     /// `ease` is "Linear" | "Quad" | "Cubic" — same plain-String-for-a-
     /// closed-set convention as `repeat`/`hand`/`crossing` elsewhere in

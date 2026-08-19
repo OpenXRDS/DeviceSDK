@@ -237,6 +237,8 @@ export type XrdsAction =
   // `count: null` uses the effect node's own authored Burst Count.
   | { kind: "PlayEffect"; data: { count: number | null } }
   | { kind: "StopEffect" }
+  | { kind: "PlayAudio" }
+  | { kind: "StopAudio" }
   | { kind: "SetVisible"; data: boolean }
   | {
       kind: "SetTransform";

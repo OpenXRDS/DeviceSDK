@@ -1888,6 +1888,29 @@ impl Action for XrdsActionRunner {
                 }
                 true
             }
+            XrdsAction::PlayAudio => {
+                // Fire-and-forget, like PlayEffect: a Track does not wait for the
+                // sound to finish. Making choreography block on audio length would
+                // stall a sequence for a duration nobody authored.
+                use crate::xrds_api::audio_playback::{apply_transport, AudioTransport};
+                if !apply_transport(world, self.target, AudioTransport::Play) {
+                    warn!(
+ "[trigger-action] PlayAudio on {:?} did nothing — the target is not an audio clip, or its decoder has not finished validating.",
+                        self.target
+                    );
+                }
+                true
+            }
+            XrdsAction::StopAudio => {
+                use crate::xrds_api::audio_playback::{apply_transport, AudioTransport};
+                if !apply_transport(world, self.target, AudioTransport::Stop) {
+                    warn!(
+ "[trigger-action] StopAudio on {:?} did nothing — the target is not an audio clip.",
+                        self.target
+                    );
+                }
+                true
+            }
             XrdsAction::StopGltfAnimation => {
                 for player_entity in
                     animation_player_entities_for_root_in_world(world, self.target)

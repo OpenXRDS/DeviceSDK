@@ -55,6 +55,28 @@ pub enum XrdsAction {
     /// particles out of the air reads as a glitch; letting a plume trail off
     /// reads as intent.
     StopEffect,
+    /// Play the targeted audio clip node, restarting it if it has already finished.
+    ///
+    /// **No `clip` field**, despite the backlog's original sketch of
+    /// `PlayAudio { clip }`. The Track model addresses actions through
+    /// `XrdsActionTarget`, so the clip *is* the target node — exactly as
+    /// [`Self::PlayEffect`] names no effect. A second identifier would be a
+    /// second source of truth for the same thing.
+    ///
+    /// Fills the hole that made authored audio nearly unusable: before this,
+    /// `autoplay` was the only way a sound ever started, so nothing in a scene
+    /// could trigger one — not a zone, not a button, not a Track.
+    ///
+    /// No volume override, unlike `PlayEffect`'s `count`. It would be easy to add
+    /// later and additive when it is; guessing now at whether it means "for this
+    /// playback" or "from now on" would bake the wrong answer into the schema.
+    PlayAudio,
+    /// Stop the targeted audio clip and rewind it, so it can play again.
+    ///
+    /// Rewinds rather than destroys, matching `XrdsAPI::stop_audio_for_node`:
+    /// rodio's own `stop` cannot be undone, and an author who stops a looping
+    /// ambience expecting to restart it should not be left with permanent silence.
+    StopAudio,
     SetVisible(bool),
     /// Moves translation/rotation/scale toward the given values over
     /// `duration_secs`, easing by `ease`. Each of `position`/`rotation`/`scale`
@@ -210,6 +232,8 @@ enum XrdsActionKnown {
         count: Option<u32>,
     },
     StopEffect,
+    PlayAudio,
+    StopAudio,
     SetVisible(bool),
     SetTransform {
         position: Option<[f32; 3]>,
@@ -249,6 +273,8 @@ impl From<XrdsActionKnown> for XrdsAction {
             XrdsActionKnown::StopGltfAnimation => XrdsAction::StopGltfAnimation,
             XrdsActionKnown::PlayEffect { count } => XrdsAction::PlayEffect { count },
             XrdsActionKnown::StopEffect => XrdsAction::StopEffect,
+            XrdsActionKnown::PlayAudio => XrdsAction::PlayAudio,
+            XrdsActionKnown::StopAudio => XrdsAction::StopAudio,
             XrdsActionKnown::SetVisible(visible) => XrdsAction::SetVisible(visible),
             XrdsActionKnown::SetTransform { position, rotation, scale, duration_secs, ease } => {
                 XrdsAction::SetTransform { position, rotation, scale, duration_secs, ease }
@@ -276,6 +302,8 @@ const KNOWN_ACTION_KINDS: &[&str] = &[
     "StopGltfAnimation",
     "PlayEffect",
     "StopEffect",
+    "PlayAudio",
+    "StopAudio",
     "SetVisible",
     "SetTransform",
     "SetMaterial",

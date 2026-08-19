@@ -256,9 +256,19 @@ fn a_payload_less_unrecognized_action_does_not_destroy_the_whole_document() {
 /// `docs/done/xrds-track-model-plan.md` §9.
 #[test]
 fn a_payload_carrying_unrecognized_action_should_not_destroy_the_whole_document() {
+    // The fixture used `PlayAudio` until 2026-08-19, when that stopped being
+    // hypothetical and became a real action — at which point this test failed,
+    // because the kind now parses and its `data` does not match. Swapped for a kind
+    // that is still genuinely unimplemented.
+    //
+    // Worth knowing, since the failure showed it: the graceful path covers an
+    // unknown *kind*, not a known kind carrying an unexpected payload. Adding a
+    // field to an existing action is therefore a hard break for older builds,
+    // where an unknown action is not. That is why `PlayAudio` ships with no
+    // fields rather than a speculative volume override.
     let json = r#"{
         "assets":[{"target":{"Node":7},"keys":[
-            {"at_secs":0.0,"action":{"kind":"PlayAudio","data":{"clip":"ding.ogg"}}}
+            {"at_secs":0.0,"action":{"kind":"PlayVideo","data":{"clip":"intro.mp4"}}}
         ]}]
     }"#;
     let track: XrdsTrack =
