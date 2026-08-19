@@ -430,11 +430,29 @@ neither. All three came through the archived `EDITOR_TODO.md`. Treat any remaini
      `OpenXrPassthroughEnabled` on import, **and clears the XR eye cameras to
      transparent**, without which the layer is hidden behind an opaque frame and
      the toggle looks like it does nothing.
-2. **Editor half.** Inspector control on the scene settings surface, plus command
-   and undo entry. Not started.
-3. **Device verification.** Desktop cannot show any of it. Not done — nothing in
-   phase 1 has been seen working; it compiles for `aarch64-linux-android` and that
-   is all that is currently claimed.
+2. ~~**Editor half.**~~ **Done.** A Passthrough toggle in the XR section of scene
+   settings (shown when nothing is selected), with two notes: that it has no effect
+   in the editor viewport, and that opaque scene content will hide the room.
+3. ~~**Device verification.**~~ **Done 2026-08-19 — S4 is complete.** Authored by
+   ticking the box in the editor, saved, bundled, and run on a Quest 3: a cube
+   floating in the real room.
+
+### The authoring trap this confirmed
+
+Verification required stripping the scene to a single cube. That is not a quirk of
+the test — it is the feature's shape. Passthrough composites *beneath* the scene
+and shows only where the scene's alpha is below 1.0, so an ordinary scene hides it
+completely: a ground plane covers the floor, a skybox covers everything else, and
+both are the first things an author places.
+
+So the toggle's honest behaviour on a normal scene is "nothing visibly happens",
+which is the failure mode this whole tier exists to remove. The inspector note
+warns about it, and a note is the weakest form of help.
+
+**Worth building later** (not scoped here): a diagnostic that names what is
+covering the view when `xr_blend_mode` is `AlphaBlend` — "Ground (Plane3D) and the
+skybox are opaque; passthrough will not be visible". The information is all in the
+document, and it converts a note nobody reads into a specific, actionable list.
 
 ### Feasibility: answered 2026-08-19 against a shipped Quest 3 app
 

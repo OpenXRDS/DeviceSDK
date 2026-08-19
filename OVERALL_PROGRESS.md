@@ -243,7 +243,7 @@ Planned in detail in `docs/small-phases-plan.md`.
 | S1 | ~~Spatial-audio params: honour or delete~~ | `xrds-components` / `xrds-scene-graph` / `xrds-runtime` | **Done 2026-08-19, verified on desktop and Quest 3.** Four falloff fields honoured, `hrtf` removed. Also fixed a bug it uncovered: `SpatialListener` was attached only on the `XrdsAPI` camera path, so **spatial audio had no listener in XR at all** — every XRDS app on a headset, not just this feature. Backends were evaluated and rejected; stay on `bevy_audio` (`docs/spatial-audio-backend-spike.md`). |
 | S2 | Zone-event `debug!` logging | `xrds-runtime` | Makes the next device pass self-verifying instead of dependent on someone describing what they saw. |
 | S3 | Head-locked interactive-template diagnostic | `xrds-scene-graph` | SDK half of §4. Editor grey-out is separate and follows this. |
-| S4 | Passthrough blend-mode toggle | editor only | `XrdsXrBlendMode` and the runtime `fb_passthrough` path both exist; only the control is missing. |
+| S4 | ~~Passthrough blend-mode toggle~~ | `xrds-openxr` / `xrds-runtime` / editor | **Done 2026-08-19, device-verified on Quest 3** — authored from the editor, cube floating in the real room. Was recorded as "editor only"; in fact `XR_FB_passthrough` was never requested and the authored field reached nothing. Also **not** `EnvironmentBlendMode::ALPHA_BLEND` — that is a global frame-blend parameter and using it bleeds reality through every non-opaque surface. Passthrough is a composition layer beneath the projection; recipe in `docs/small-phases-plan.md` S4. |
 | S5 | Naming polish (§3) | `xrds-scene-graph` | `TransformParams` dual rotation field; `*Patch` ECS jargon. Mechanical but source-breaking. |
 
 ### Medium — 2–3 phases each
@@ -284,7 +284,19 @@ question answered first, and for three of the four the design is the larger half
 
 ### Honest total
 
-Four Small (one now done), **five** Medium, four Large. The Small tier is days. The Medium tier is
+**The Small tier is complete** (S1–S4 done and device-verified where a device
+applies; S5's rotation half done and its rename half dropped on review — see
+`docs/small-phases-plan.md`). That leaves **five** Medium and four Large.
+
+What the tier actually cost, and why the sizing was not the useful part: it was
+scoped as polish and produced nine defects, none of which fails a test or looks
+wrong in review. Among them, spatial audio had **no listener at all in XR** —
+broken for every XRDS app on a headset, not merely for the feature being added —
+and three shipped examples set rotations that did nothing. Every one was found by
+running the thing and looking at it.
+
+Three items from the archived `EDITOR_TODO.md` were recorded as "editor half only"
+and all three were false. Treat the rest of that list as unverified until grepped. The Small tier is days. The Medium tier is
 where most of the value-per-phase sits and compounds with what already exists.
 The Large tier is genuinely large, and three of its four items are blocked on a
 decision rather than on effort — which means the next real milestone after the
