@@ -23,6 +23,24 @@ pub fn apply_palette_command(
     match cmd {
         EditorCommand::SpawnPrimitive { kind, parent_id } => {
             let parent = parent_id.map(XrdsSceneNodeId);
+
+            // Checked before the edit so the author gets a sentence they can act
+            // on. Without this the spawn silently produces no node — the palette
+            // click just does nothing, which is indistinguishable from a broken
+            // button.
+            if kind == "AudioClip"
+                && !session
+                    .0
+                    .document()
+                    .assets
+                    .iter()
+                    .any(|a| a.kind == XrdsSceneAssetKind::Audio)
+            {
+                let message = "Import a sound first (Ctrl+I) — an audio clip needs a file to play";
+                bevy::log::info!("[palette] {message}");
+                state.pending_status = Some(message.to_string());
+                return false;
+            }
             // Peek at next ID before the edit so we can queue the spawn.
             let new_id = {
                 let doc = session.0.document();
@@ -196,7 +214,32 @@ fn build_primitive_node(
         }),
         "ExtrudedText"    => XrdsSceneNodePayload::ExtrudedText(XrdsSceneExtrudedText::default()),
         "HudText"         => XrdsSceneNodePayload::HudText(XrdsSceneHudText::default()),
-        "AudioClip"       => XrdsSceneNodePayload::AudioClip(XrdsSceneAudioClip::default()),
+        // Takes the first imported Audio asset. `XrdsSceneAudioClip::default()`
+        // has an empty `asset_id`, and the document validator rejects that
+        // (`EmptyAudioClipAssetId`) — correctly, since a clip that names no file
+        // can never make a sound. So the palette entry could never place a node:
+        // it failed validation every time, logging to the terminal where nobody
+        // authoring a scene would see it. Reported 2026-08-19 as "I couldn't find
+        // the audio section", which was true — no audio node could exist to select.
+        //
+        // `?` when there is no audio asset, matching the `Panel` arm's reasoning:
+        // no node beats a node that cannot work. The caller turns that into a
+        // status message telling the author to import a sound first.
+        "AudioClip"       => XrdsSceneNodePayload::AudioClip(XrdsSceneAudioClip {
+            asset_id: doc
+                .assets
+                .iter()
+                .find(|a| a.kind == XrdsSceneAssetKind::Audio)
+                .map(|a| a.id.clone())?,
+            // `autoplay` defaults to false, and there is currently NO other way to
+            // start a clip — no runtime play API and no `PlayAudio` track action —
+            // so a placed sound would be permanently silent and look broken.
+            // Reported 2026-08-19: "I didn't hear anything in play mode".
+            // The Inspector's Autoplay toggle turns it off for anyone wiring a
+            // trigger later.
+            autoplay: true,
+            ..XrdsSceneAudioClip::default()
+        }),
         "InteractionZone" => XrdsSceneNodePayload::InteractionZone(XrdsSceneInteractionZone::default()),
         "PlayerSpawn"     => XrdsSceneNodePayload::PlayerSpawn(XrdsScenePlayerSpawn::default()),
         "PlayerSpawnZone" => XrdsSceneNodePayload::PlayerSpawnZone(XrdsScenePlayerSpawnZone::default()),
