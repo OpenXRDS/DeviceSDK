@@ -126,8 +126,18 @@ pub fn apply_io_command(
                     Ok(_) => info!("[io] saved"),
                     Err(e) => error!("[io] save failed: {:?}", e),
                 }
+            } else {
+                // The frontend routes Ctrl+S to Save As when `has_save_path` is
+                // false, so reaching here means the keystroke came from the Bevy
+                // viewport instead (keyboard_shortcuts.rs), where no file dialog
+                // can be opened. Say so rather than doing nothing: this branch
+                // used to return silently, with only a comment claiming "the JS
+                // layer should have shown a dialog" — which nothing did, so
+                // Ctrl+S on a new scene appeared to work and saved nothing.
+                let message = "Scene has never been saved — use Ctrl+Shift+S (Save As) first";
+                info!("[io] {message}");
+                state.pending_status = Some(message.to_string());
             }
-            // No path set: the JS layer should have shown a dialog and sent SaveSceneAs.
             false
         }
 

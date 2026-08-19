@@ -160,6 +160,10 @@ export default function App() {
     if (path) send({ type: "OpenScene", payload: { path } });
   }
   function handleSave() {
+    // A scene with no path has nothing to save to, and `SaveScene` would return
+    // without writing anything — which is what Ctrl+S used to do on a new scene,
+    // silently. Fall through to Save As so the keystroke always means something.
+    if (!snapshot.has_save_path) { void handleSaveAs(); return; }
     send({ type: "SaveScene" });
   }
   async function handleSaveAs() {
