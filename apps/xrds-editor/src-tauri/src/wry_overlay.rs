@@ -228,6 +228,28 @@ fn ui_occluders() -> &'static Mutex<Vec<(f64, f64, f64, f64)>> {
     S.get_or_init(|| Mutex::new(Vec::new()))
 }
 
+/// Whether a modal has asked for the hole to stay closed.
+///
+/// **Why this has to be sticky.** `set_viewport_hole { enabled: false }` used to
+/// call `clear_region` once and nothing more. There are four other places that
+/// apply a region — the resize handler, the per-frame viewport drain, attach, and
+/// the occluder re-apply — and each one re-cut the hole immediately, so a modal
+/// disappeared behind the 3D scene within a frame of opening. Reported from the
+/// editor 2026-08-19 against the APK export dialog, which is centred and therefore
+/// always over the viewport.
+///
+/// The suppression is now state that every region application consults, rather
+/// than a one-shot that the next application silently undoes.
+fn hole_suppressed() -> &'static Mutex<bool> {
+    static S: OnceLock<Mutex<bool>> = OnceLock::new();
+    S.get_or_init(|| Mutex::new(false))
+}
+
+/// True when a region must not be applied because a modal needs the whole WebView.
+fn region_blocked() -> bool {
+    *hole_suppressed().lock().unwrap()
+}
+
 /// Scale factor from the last region application, for converting [`ui_occluders`].
 ///
 /// Kept separately rather than added to `last_region_params` so the occluder path
@@ -266,6 +288,9 @@ fn ui_occluders_phys() -> Vec<(u32, u32, u32, u32)> {
 /// subtracted. A no-op before React's first report, which is correct: there is no
 /// hole to reshape yet.
 fn reapply_region_with_occluders() {
+    if region_blocked() {
+        return;
+    }
     #[cfg(windows)]
     {
         let hwnd_val = *container_hwnd_val().lock().unwrap();
@@ -594,8 +619,13 @@ pub fn drain_responses_and_viewport(
     {
         let hwnd_val = *container_hwnd_val().lock().unwrap();
         if hwnd_val != 0 {
+            // Params are recorded even while suppressed, so releasing the hole
+            // restores the *current* geometry rather than whatever was last
+            // applied before the modal opened.
             *last_region_params().lock().unwrap() = Some((pw, ph, phys_x, phys_y, phys_w, phys_h));
-            win32::apply_region(hwnd_val, pw, ph, phys_x, phys_y, phys_w, phys_h);
+            if !region_blocked() {
+                win32::apply_region(hwnd_val, pw, ph, phys_x, phys_y, phys_w, phys_h);
+            }
         }
     }
     #[cfg(target_os = "linux")]
@@ -603,14 +633,18 @@ pub fn drain_responses_and_viewport(
         let xwin_val = *container_xwin_val().lock().unwrap();
         if xwin_val != 0 {
             *last_region_params().lock().unwrap() = Some((pw, ph, phys_x, phys_y, phys_w, phys_h));
-            x11::apply_region(xwin_val, pw, ph, phys_x, phys_y, phys_w, phys_h);
+            if !region_blocked() {
+                x11::apply_region(xwin_val, pw, ph, phys_x, phys_y, phys_w, phys_h);
+            }
         }
     }
     #[cfg(target_os = "macos")]
     {
         *appkit::last_region().lock().unwrap() =
             Some((pw, ph, phys_x, phys_y, phys_w, phys_h, sf));
-        appkit::apply_region(pw, ph, phys_x, phys_y, phys_w, phys_h, sf);
+        if !region_blocked() {
+            appkit::apply_region(pw, ph, phys_x, phys_y, phys_w, phys_h, sf);
+        }
         // Also recorded here even though macOS reads its own `appkit::last_region`:
         // `handle_editor_resize` uses *this* being set to mean "React has reported,
         // stop approximating", and that must hold on every platform.
@@ -705,8 +739,13 @@ pub fn handle_editor_resize(
     {
         let hwnd_val = *container_hwnd_val().lock().unwrap();
         if hwnd_val != 0 {
+            // Params are recorded even while suppressed, so releasing the hole
+            // restores the *current* geometry rather than whatever was last
+            // applied before the modal opened.
             *last_region_params().lock().unwrap() = Some((pw, ph, phys_x, phys_y, phys_w, phys_h));
-            win32::apply_region(hwnd_val, pw, ph, phys_x, phys_y, phys_w, phys_h);
+            if !region_blocked() {
+                win32::apply_region(hwnd_val, pw, ph, phys_x, phys_y, phys_w, phys_h);
+            }
         }
     }
     #[cfg(target_os = "linux")]
@@ -714,14 +753,18 @@ pub fn handle_editor_resize(
         let xwin_val = *container_xwin_val().lock().unwrap();
         if xwin_val != 0 {
             *last_region_params().lock().unwrap() = Some((pw, ph, phys_x, phys_y, phys_w, phys_h));
-            x11::apply_region(xwin_val, pw, ph, phys_x, phys_y, phys_w, phys_h);
+            if !region_blocked() {
+                x11::apply_region(xwin_val, pw, ph, phys_x, phys_y, phys_w, phys_h);
+            }
         }
     }
     #[cfg(target_os = "macos")]
     {
         *appkit::last_region().lock().unwrap() =
             Some((pw, ph, phys_x, phys_y, phys_w, phys_h, sf));
-        appkit::apply_region(pw, ph, phys_x, phys_y, phys_w, phys_h, sf);
+        if !region_blocked() {
+            appkit::apply_region(pw, ph, phys_x, phys_y, phys_w, phys_h, sf);
+        }
     }
 }
 
@@ -791,6 +834,13 @@ fn ipc_handler(req: wry::http::Request<String>, inbound: &Arc<Mutex<VecDeque<Edi
             // When disabled: remove the WebView clipping region so the WebView paints
             // over the entire window, making the modal visible above the Bevy viewport.
             // When re-enabled: restore the saved region parameters.
+            //
+            // The flag is what makes this stick. Clearing the region alone was not
+            // enough: four other paths apply a region — resize, the per-frame
+            // viewport drain, attach, and the occluder re-apply — and each re-cut
+            // the hole within a frame, so the modal vanished behind the 3D scene
+            // almost immediately. They now consult `region_blocked()`.
+            *hole_suppressed().lock().unwrap() = !msg["enabled"].as_bool().unwrap_or(true);
             #[cfg(windows)]
             {
                 let hwnd_val = *container_hwnd_val().lock().unwrap();
