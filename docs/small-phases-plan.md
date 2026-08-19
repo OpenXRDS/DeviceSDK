@@ -391,24 +391,109 @@ the editor can already display.
 
 ## S4 — Passthrough blend-mode toggle
 
-**Editor only.** Listed here for completeness of the tier; it is the one Small
-item with no SDK half remaining.
+**Corrected 2026-08-19: this is NOT "editor only", and it is not Small.**
 
-`XrdsXrBlendMode` (`Opaque` / `AlphaBlend`) exists at
-`crates/xrds-scene-graph/src/scene/node.rs:20`, is serialized with a
-`skip_serializing_if` default, and the runtime already handles `EnvironmentBlendMode`
-plus the `fb_passthrough` extension. Only the editor control is missing.
+This item was recorded as having no SDK half — `XrdsXrBlendMode` exists, so the
+runtime was assumed to honour it. It does not. `grep -rn xr_blend_mode` over the
+whole tree returns **two hits, both its own definition**
+(`scene/node.rs:36` and `:53`). Nothing reads it: not the importer, not the
+runtime, not the editor.
 
-### Steps
+What actually happens: `initialize_view_and_blend_mode`
+(`xrds-openxr/src/openxr/session.rs:486`) takes `blend_modes.first()` — whatever
+OpenXR happens to enumerate first — stores it as `current_blend_mode`, and never
+revisits it. `render.rs:521` submits frames with that. The authored field has no
+path to it.
 
-1. Inspector control on the scene/root settings surface, bound to `xr_blend_mode`.
-2. Editor command + undo entry, following an existing scene-level setting.
-3. Device check on Quest 3 — `AlphaBlend` should show passthrough behind the scene.
-   Desktop cannot verify this; do not mark it done on a desktop run.
+**Third instance of the same wrong claim.** The spatial-audio parameters (S1) and
+the player-collider entry were both described as done-or-editor-only and were
+neither. All three came through the archived `EDITOR_TODO.md`. Treat any remaining
+"editor half only" claim from that list as unverified until grepped.
+
+### Real scope: 2–3 phases
+
+1. ~~**SDK half — honour the field.**~~ **Done 2026-08-19, unverified on device.**
+   Built to the recipe below, not to the original plan (which would have set
+   `EnvironmentBlendMode::ALPHA_BLEND` and been actively wrong). As built:
+   - `XR_FB_passthrough` is now **requested** — it never was, so the availability
+     check at `init.rs:488` was a no-op and `create_passthrough` would have failed
+     outright. `OpenXrInstance::passthrough_supported` records the negotiated result.
+   - Feature and layer created once per session with `IS_RUNNING_AT_CREATION`
+     (`session.rs`), inserted at index 0 so they composite beneath the projection.
+   - `OpenXrLayerBuilder::build` now returns `Option`, because `xrEndFrame` takes a
+     fresh layer list each frame and omission is how a layer is switched off.
+   - Projection gains `UNPREMULTIPLIED_ALPHA` only while passthrough is live —
+     Bevy renders straight alpha, and without the flag the runtime assumes
+     premultiplied and darkens transparent pixels toward black instead of revealing
+     the room.
+   - `xrds-runtime`'s `xrds_api::passthrough` projects `xr_blend_mode` onto
+     `OpenXrPassthroughEnabled` on import, **and clears the XR eye cameras to
+     transparent**, without which the layer is hidden behind an opaque frame and
+     the toggle looks like it does nothing.
+2. **Editor half.** Inspector control on the scene settings surface, plus command
+   and undo entry. Not started.
+3. **Device verification.** Desktop cannot show any of it. Not done — nothing in
+   phase 1 has been seen working; it compiles for `aarch64-linux-android` and that
+   is all that is currently claimed.
+
+### Feasibility: answered 2026-08-19 against a shipped Quest 3 app
+
+Checked against `F:\workspace\rust\HMDViewer`, which blends passthrough with 360
+video on a Quest 3. It settles the open question and **inverts the design above**.
+
+**`EnvironmentBlendMode::ALPHA_BLEND` is the wrong mechanism, and reaching for it
+is a trap.** That enum is a mandatory, global `xrEndFrame` parameter governing how
+the *entire frame* blends with reality. HMDViewer explicitly forces `OPAQUE` and
+says why (`src/xr.rs:243`): a runtime enumerating ALPHA_BLEND or ADDITIVE first
+makes reality bleed through wherever content alpha is below 1.0, regardless of app
+intent — and plenty of content is incidentally non-opaque.
+
+**DeviceSDK had that exact bug**, at `session.rs:486`, `blend_modes.first()`.
+Fixed separately: OPAQUE is now preferred explicitly. That is a latent-bug fix
+independent of this item.
+
+**The recipe that actually works**, all six parts required:
+
+1. Request `XR_FB_passthrough` (already done — `init.rs:488`).
+2. Keep `EnvironmentBlendMode::OPAQUE`.
+3. `session.create_passthrough(PassthroughFlagsFB::IS_RUNNING_AT_CREATION)`.
+4. `session.create_passthrough_layer(&feature, IS_RUNNING_AT_CREATION,
+   PassthroughLayerPurposeFB::RECONSTRUCTION)`.
+5. Submit `CompositionLayerPassthroughFB` **first**, beneath the projection layer.
+6. Give the projection layer
+   `BLEND_TEXTURE_SOURCE_ALPHA | UNPREMULTIPLIED_ALPHA`.
+
+Two implementation notes inherited from that project, both non-obvious:
+
+- The `openxr` crate's `start()`/`resume()` wrappers **call the wrong function**;
+  create the feature and layer already-running via `IS_RUNNING_AT_CREATION`.
+- openxr 0.19 has no high-level wrapper for `CompositionLayerPassthroughFB`.
+  HMDViewer transmutes it to `CompositionLayerBase`, which is sound because that
+  type is `#[repr(transparent)]` and the structs are layout-compatible. **We are on
+  openxr 0.19.0 too**, so this applies verbatim.
+
+**Our architecture already fits.** `OpenXrCompositionLayerBuilder::insert_layer`
+takes an index, and session init already does `insert_layer(0, projection)`. A
+passthrough layer inserted at 0 lands underneath, which is exactly the required
+order.
+
+**The corollary the original item missed:** passthrough is only *visible* where the
+app renders alpha below 1.0. Enabling the layer under an opaque scene shows
+nothing. So `XrdsXrBlendMode::AlphaBlend` has to mean more than "add a layer" — it
+must also make the camera clear transparent and suppress the skybox, or the author
+switches it on and sees no change. Confirm how `xrds-runtime` sets clear colour
+before scoping phase 1.
+
+### Revised meaning of the authored field
+
+`AlphaBlend` should be read as **"composite passthrough beneath an alpha-blended
+scene"**, not as "set `EnvironmentBlendMode::ALPHA_BLEND`". The document vocabulary
+survives; only the implementation behind it changes.
 
 ### Done when
 
-An author can switch a scene to passthrough from the editor and see it on device.
+An author can switch a scene to passthrough from the editor and see the real world
+behind it on a Quest.
 
 ---
 
@@ -416,17 +501,54 @@ An author can switch a scene to passthrough from the editor and see it on device
 
 **Crate:** `xrds-scene-graph` · **Source-breaking. Land alone, last.**
 
-From `OVERALL_PROGRESS.md` §3, both long-standing:
+Two items from `OVERALL_PROGRESS.md` §3. They turned out to be very different in
+value, and are now tracked separately.
 
-- `TransformParams::rotation_quat_xyzw` and `rotation_euler_xyz_deg` — a dual
-  field whose precedence has been *clarified in prose but not resolved
-  structurally*. Two ways to say the same thing, with a rule you must read docs to
-  learn, is precisely what the non-expert-first principle exists to prevent. The
-  structural fix is an enum with one variant per representation, so the type makes
-  the rule unstatable-wrongly.
-- `*Patch` types (`NamePatch`, `ParentPatch`, …) — ECS jargon on a surface aimed at
-  non-experts. Currently hidden behind typed helpers, which is a mitigation, not a
-  fix.
+### Rotation dual field — **done 2026-08-19, and it was not cosmetic**
+
+`rotation_euler_xyz_deg` is removed. Degrees are now a conversion —
+`with_euler_deg` / `set_euler_deg` / `euler_deg` — rather than a second field.
+
+The item was filed as naming polish. It was hiding three real bugs, all of the
+authorable-but-inert kind this tier exists to remove:
+
+- `examples/xrds_first/parent_child.rs:73` set **only** the euler field for its
+  grandchild plane. The runtime reads the quaternion, so the plane shipped
+  unrotated.
+- `examples/xrds_first/parent_child_queued.rs:60` — the same write, same result.
+- `examples/rendering/morph_targets.rs:45` — likewise, so that example's sun kept
+  its default orientation.
+
+Nobody could have noticed: it compiles, it round-trips, it renders — just not
+rotated. Every non-example site in the tree only ever *wrote* the field to keep it
+in sync, and `XrdsSceneTransform -> TransformParams` filled it with a hardcoded
+`[0,0,0]` regardless of the actual rotation, which would have been actively wrong
+had anything read it.
+
+**No enum, contrary to the original plan.** An enum would have forced ~74 call
+sites to match on a representation for no benefit: the document format has always
+serialized the quaternion alone, so there is no second representation to preserve.
+One authoritative field plus conversions removes the dual source of truth outright.
+Three tests cover it, comparing quaternions rather than angle triples because a
+rotation has multiple Euler representations and `q` and `-q` are the same rotation.
+
+### `*Patch` rename — **recommend dropping this item**
+
+Not done, and I do not think it should be. The premise looks wrong on inspection:
+
+- **It is not ECS jargon.** Bevy uses "patch" only for hot-patching; it is not a
+  term of art in `bevy_ecs`, and "patch" for a partial update is ordinary English
+  (cf. HTTP PATCH). The original claim appears to be unexamined.
+- **Non-experts do not meet these types.** `rename`, `set_visible` and the other
+  typed helpers already wrap them; a caller only sees `NamePatch` if they reach
+  for `queue_update` directly, which is the expert path.
+- **No defect sits behind it.** Unlike the rotation field, nothing here is silently
+  inert, ambiguous, or unstatable-correctly. It is a rename for its own sake across
+  46 call sites and a public API break for anyone using `queue_update`.
+
+If the naming is still disliked, `*Update` reads better next to `queue_update` than
+`*Patch` does — but that is a preference, and this tier has better uses. Recorded
+here rather than silently skipped so the decision is visible.
 
 ### Why last
 
