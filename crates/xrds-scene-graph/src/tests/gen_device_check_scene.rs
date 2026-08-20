@@ -13,7 +13,7 @@ use super::*;
 ///
 /// # Current check: does Adreno sample `Rgb9e5Ufloat`?
 ///
-/// The last open question from `docs/editor-task-queue-and-hdr-conversion.md`.
+/// The last open question from `docs/done/editor-task-queue-and-hdr-conversion.md`.
 ///
 /// An environment map is `Rgba16Float` today — 8 bytes per pixel, and a 512² cube
 /// costs 16.78 MB of VRAM. The obvious fix would be a GPU-compressed HDR format,

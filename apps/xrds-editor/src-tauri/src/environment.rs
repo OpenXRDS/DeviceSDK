@@ -13,8 +13,11 @@ pub fn apply_environment_command(
     _state: &mut EditorState,
 ) -> bool {
     match cmd {
-        EditorCommand::SetFog { color, start, end } => {
-            let fog = XrdsSceneFogEnvironment { color: *color, start: *start, end: *end };
+        EditorCommand::SetFog { color, falloff } => {
+            // Sanitized rather than refused: this fires on every slider tick, and a
+            // drag that momentarily inverts the ramp should keep previewing.
+            let falloff: xrds_scene_graph::XrdsSceneFogFalloff = (*falloff).into();
+            let fog = XrdsSceneFogEnvironment { color: *color, falloff: falloff.sanitized() };
             let _ = session.0.edit(|doc| {
                 doc.metadata.environment.get_or_insert_with(Default::default).fog = Some(fog);
             });
@@ -123,8 +126,7 @@ pub fn build_environment_dto(session: &EditorSession) -> Option<EnvironmentDto> 
     Some(EnvironmentDto {
         fog_enabled:  fog.is_some(),
         fog_color:    fog.map(|f| f.color).unwrap_or([0.5, 0.6, 0.7, 1.0]),
-        fog_start:    fog.map(|f| f.start).unwrap_or(10.0),
-        fog_end:      fog.map(|f| f.end).unwrap_or(100.0),
+        fog_falloff:  fog.map(|f| f.falloff.into()).unwrap_or_default(),
         exposure_enabled: exp.is_some(),
         ev100:        exp.map(|e| e.ev100).unwrap_or(0.0),
         ibl_enabled:  ibl.is_some(),

@@ -2,7 +2,7 @@ use super::*;
 use bevy::camera::Exposure;
 use bevy::core_pipeline::Skybox;
 use bevy::pbr::{DistanceFog, FogFalloff};
-use xrds_scene_graph::XrdsSceneEnvironment;
+use xrds_scene_graph::{XrdsSceneEnvironment, XrdsSceneFogFalloff};
 
 #[derive(Resource, Debug, Clone, Default, PartialEq)]
 pub(super) struct XrdsImportedSceneEnvironment(pub(super) Option<XrdsSceneEnvironment>);
@@ -442,9 +442,21 @@ fn resolve_imported_scene_fog_in_world(world: &World) -> Option<DistanceFog> {
         .and_then(|environment| environment.fog)
         .map(|fog| DistanceFog {
             color: Color::srgba(fog.color[0], fog.color[1], fog.color[2], fog.color[3]),
-            falloff: FogFalloff::Linear {
-                start: fog.start,
-                end: fog.end,
+            // `sanitized` first: a live slider drag can pass through an inverted
+            // ramp or a zero visibility, and those render as artefacts rather than
+            // failing. `set_fog_environment` refuses them on the authoring path;
+            // here we repair, because a preview that blanks mid-drag is worse than
+            // one that clamps.
+            falloff: match fog.falloff.sanitized() {
+                XrdsSceneFogFalloff::Linear { start, end } => FogFalloff::Linear { start, end },
+                // Authored as a visibility distance, not a density — Bevy's own
+                // Koschmieder inversion converts it. See `XrdsSceneFogFalloff`.
+                XrdsSceneFogFalloff::Exponential { visibility } => {
+                    FogFalloff::from_visibility(visibility)
+                }
+                XrdsSceneFogFalloff::ExponentialSquared { visibility } => {
+                    FogFalloff::from_visibility_squared(visibility)
+                }
             },
             ..default()
         })

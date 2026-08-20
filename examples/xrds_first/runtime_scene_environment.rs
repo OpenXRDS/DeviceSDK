@@ -1,6 +1,7 @@
 use xrds::scene_graph::{
     XrdsSceneAsset, XrdsSceneAssetKind, XrdsSceneEnvironment, XrdsSceneExposureEnvironment,
-    XrdsSceneFogEnvironment, XrdsSceneIblEnvironment, XrdsSceneSkyboxEnvironment,
+    XrdsSceneFogEnvironment, XrdsSceneFogFalloff, XrdsSceneIblEnvironment,
+    XrdsSceneSkyboxEnvironment,
 };
 use xrds::sdk::{
     primitives::{XrdsPlane3D, XrdsSphere},
@@ -70,8 +71,7 @@ impl XrdsApp for RuntimeSceneEnvironmentApp {
             exposure: Some(XrdsSceneExposureEnvironment { ev100: 6.0 }),
             fog: Some(XrdsSceneFogEnvironment {
                 color: [0.35, 0.48, 0.66, 1.0],
-                start: 5.0,
-                end: 40.0,
+                falloff: XrdsSceneFogFalloff::Linear { start: 5.0, end: 40.0 },
             }),
             ..Default::default()
         });
@@ -234,8 +234,9 @@ impl XrdsApp for RuntimeSceneEnvironmentApp {
                 exposure: Some(XrdsSceneExposureEnvironment { ev100: 6.0 }),
                 fog: Some(XrdsSceneFogEnvironment {
                     color: [0.35, 0.48, 0.66, 1.0],
-                    start: 5.0,
-                    end: 40.0,
+                    // Exponential fog is authored as the distance at which things
+                    // fade out, not as a density — see `XrdsSceneFogFalloff`.
+                    falloff: XrdsSceneFogFalloff::Exponential { visibility: 60.0 },
                 }),
                 ..Default::default()
             });

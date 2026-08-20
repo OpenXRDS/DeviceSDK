@@ -1,4 +1,5 @@
 use super::*;
+use xrds_scene_graph::XrdsSceneFogFalloff;
 
 #[test]
 fn import_scene_document_applies_authored_exposure_to_imported_cameras() {
@@ -53,8 +54,7 @@ fn import_scene_document_applies_authored_fog_to_imported_cameras() {
             environment: Some(XrdsSceneEnvironment {
                 fog: Some(XrdsSceneFogEnvironment {
                     color: [0.35, 0.48, 0.66, 1.0],
-                    start: 5.0,
-                    end: 40.0,
+                    falloff: XrdsSceneFogFalloff::Linear { start: 5.0, end: 40.0 },
                 }),
                 ..Default::default()
             }),
@@ -694,8 +694,7 @@ fn scene_environment_policy_preserves_explicit_camera_fog() {
             environment: Some(XrdsSceneEnvironment {
                 fog: Some(XrdsSceneFogEnvironment {
                     color: [0.35, 0.48, 0.66, 1.0],
-                    start: 5.0,
-                    end: 40.0,
+                    falloff: XrdsSceneFogFalloff::Linear { start: 5.0, end: 40.0 },
                 }),
                 ..Default::default()
             }),
@@ -875,8 +874,7 @@ fn scene_environment_policy_clears_managed_camera_fog_when_removed() {
             environment: Some(XrdsSceneEnvironment {
                 fog: Some(XrdsSceneFogEnvironment {
                     color: [0.35, 0.48, 0.66, 1.0],
-                    start: 5.0,
-                    end: 40.0,
+                    falloff: XrdsSceneFogFalloff::Linear { start: 5.0, end: 40.0 },
                 }),
                 ..Default::default()
             }),
@@ -1053,8 +1051,7 @@ fn export_scene_document_preserves_imported_fog_by_default() {
             environment: Some(XrdsSceneEnvironment {
                 fog: Some(XrdsSceneFogEnvironment {
                     color: [0.35, 0.48, 0.66, 1.0],
-                    start: 5.0,
-                    end: 40.0,
+                    falloff: XrdsSceneFogFalloff::Linear { start: 5.0, end: 40.0 },
                 }),
                 ..Default::default()
             }),
@@ -1299,8 +1296,7 @@ fn set_scene_environment_applies_runtime_fog_policy_to_existing_camera() {
         xrds.set_scene_environment(XrdsSceneEnvironment {
             fog: Some(XrdsSceneFogEnvironment {
                 color: [0.35, 0.48, 0.66, 1.0],
-                start: 5.0,
-                end: 40.0,
+                falloff: XrdsSceneFogFalloff::Linear { start: 5.0, end: 40.0 },
             }),
             ..Default::default()
         });
@@ -1353,8 +1349,7 @@ fn export_scene_document_preserves_runtime_set_scene_fog_environment() {
         let environment = XrdsSceneEnvironment {
             fog: Some(XrdsSceneFogEnvironment {
                 color: [0.35, 0.48, 0.66, 1.0],
-                start: 5.0,
-                end: 40.0,
+                falloff: XrdsSceneFogFalloff::Linear { start: 5.0, end: 40.0 },
             }),
             ..Default::default()
         };
@@ -1369,8 +1364,7 @@ fn export_scene_document_preserves_runtime_set_scene_fog_environment() {
         Some(XrdsSceneEnvironment {
             fog: Some(XrdsSceneFogEnvironment {
                 color: [0.35, 0.48, 0.66, 1.0],
-                start: 5.0,
-                end: 40.0,
+                falloff: XrdsSceneFogFalloff::Linear { start: 5.0, end: 40.0 },
             }),
             ..Default::default()
         })
@@ -1516,3 +1510,80 @@ fn export_scene_document_preserves_runtime_asset_aliases_for_environment_texture
 }
 
 
+
+/// The exponential modes must reach Bevy as exponential falloffs, with the
+/// authored *visibility* converted to a density.
+///
+/// This is the whole point of the change: before it, every fog mode collapsed to
+/// `FogFalloff::Linear` regardless of what was authored — a value that could be
+/// set, saved and reloaded while changing nothing on screen.
+#[test]
+fn exponential_fog_modes_reach_the_camera_as_exponential_falloffs() {
+    for (falloff, label) in [
+        (XrdsSceneFogFalloff::Exponential { visibility: 80.0 }, "Exponential"),
+        (
+            XrdsSceneFogFalloff::ExponentialSquared { visibility: 80.0 },
+            "ExponentialSquared",
+        ),
+    ] {
+        let mut app = xrds_test_app();
+        let camera = app.world_mut().spawn(Camera3d::default()).id();
+        {
+            let mut xrds = XrdsAPI::attach(&mut app);
+            xrds.set_scene_environment(XrdsSceneEnvironment {
+                fog: Some(XrdsSceneFogEnvironment {
+                    color: [0.35, 0.48, 0.66, 1.0],
+                    falloff,
+                }),
+                ..Default::default()
+            });
+        }
+
+        let fog = app
+            .world()
+            .get::<DistanceFog>(camera)
+            .unwrap_or_else(|| panic!("{label}: the camera should have received fog"));
+
+        let density = match (&fog.falloff, label) {
+            (FogFalloff::Exponential { density }, "Exponential") => *density,
+            (FogFalloff::ExponentialSquared { density }, "ExponentialSquared") => *density,
+            (other, _) => panic!("{label}: got {other:?}"),
+        };
+        // Koschmieder gives a small positive density for an 80 m visibility. The
+        // exact constant is Bevy's to choose; what matters here is that a real
+        // conversion happened rather than a zero or a passthrough.
+        assert!(
+            density > 0.0 && density < 1.0,
+            "{label}: visibility 80 should convert to a plausible density, got {density}"
+        );
+    }
+}
+
+/// Shorter visibility must mean denser fog. Without this, the direction of the
+/// conversion could be inverted and every test above would still pass.
+#[test]
+fn shorter_visibility_produces_denser_fog() {
+    let density_for = |visibility: f32| {
+        let mut app = xrds_test_app();
+        let camera = app.world_mut().spawn(Camera3d::default()).id();
+        {
+            let mut xrds = XrdsAPI::attach(&mut app);
+            xrds.set_scene_environment(XrdsSceneEnvironment {
+                fog: Some(XrdsSceneFogEnvironment {
+                    color: [0.5; 4],
+                    falloff: XrdsSceneFogFalloff::Exponential { visibility },
+                }),
+                ..Default::default()
+            });
+        }
+        match app.world().get::<DistanceFog>(camera).unwrap().falloff {
+            FogFalloff::Exponential { density } => density,
+            ref other => panic!("expected exponential, got {other:?}"),
+        }
+    };
+
+    assert!(
+        density_for(20.0) > density_for(200.0),
+        "seeing less far must mean thicker fog"
+    );
+}

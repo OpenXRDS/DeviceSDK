@@ -145,20 +145,18 @@ impl XrdsSceneDocument {
     pub fn set_fog_environment(
         &mut self,
         color: [f32; 4],
-        start: f32,
-        end: f32,
+        falloff: XrdsSceneFogFalloff,
     ) -> Result<(), XrdsSceneEnvironmentWorkflowError> {
         if color.iter().any(|channel| !channel.is_finite()) {
             return Err(XrdsSceneEnvironmentWorkflowError::InvalidFogColor);
         }
-        if !start.is_finite() || !end.is_finite() || start < 0.0 || end < start {
-            return Err(XrdsSceneEnvironmentWorkflowError::InvalidFogRange);
-        }
+        validate_fog_falloff(&falloff)
+            .map_err(|_| XrdsSceneEnvironmentWorkflowError::InvalidFogRange)?;
 
         self.metadata
             .environment
             .get_or_insert_with(XrdsSceneEnvironment::default)
-            .fog = Some(XrdsSceneFogEnvironment { color, start, end });
+            .fog = Some(XrdsSceneFogEnvironment { color, falloff });
 
         self.validate()
             .map_err(XrdsSceneEnvironmentWorkflowError::Validation)

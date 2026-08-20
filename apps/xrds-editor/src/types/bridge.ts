@@ -415,6 +415,15 @@ export interface PlayerAnchorEntry {
   player_name: string;
 }
 
+/** Mirrors `XrdsSceneFogFalloff`. Exponential modes carry a **visibility
+ *  distance**, not a density — an author knows "about 80 metres", not 0.023. */
+export type FogFalloff =
+  | { mode: "Linear"; start: number; end: number }
+  | { mode: "Exponential"; visibility: number }
+  | { mode: "ExponentialSquared"; visibility: number };
+
+export type FogMode = FogFalloff["mode"];
+
 export interface ApkPrerequisite {
   name: string;
   ok: boolean;
@@ -462,7 +471,7 @@ export interface TaskDto {
  *  replaced wholesale by the first real snapshot.
  *
  *  Bump this together with the Rust constant whenever a DTO changes. */
-export const BRIDGE_VERSION = 17;
+export const BRIDGE_VERSION = 18;
 
 export interface EditorSnapshot {
   /** See {@link BRIDGE_VERSION}. `0` means a build predating the check. */
@@ -536,7 +545,7 @@ export interface NodeBindingSummary {
 }
 
 export interface EnvironmentDto {
-  fog_enabled: boolean;  fog_color: [number,number,number,number]; fog_start: number; fog_end: number;
+  fog_enabled: boolean;  fog_color: [number,number,number,number]; fog_falloff: FogFalloff;
   exposure_enabled: boolean; ev100: number;
   ibl_enabled: boolean; ibl_diffuse: string; ibl_specular: string; ibl_intensity: number;
   skybox_enabled: boolean; skybox_asset: string; skybox_brightness: number;
@@ -615,7 +624,7 @@ export type EditorCommand =
   | { type: "SetAmbientLight";     payload: { id: number; color: [number,number,number,number]; brightness: number } }
   | { type: "SetVisible";    payload: { id: number; visible: boolean } }
   | { type: "SetGrabbable"; payload: { id: number; grabbable: boolean } }
-  | { type: "SetFog";       payload: { color: [number,number,number,number]; start: number; end: number } }
+  | { type: "SetFog";       payload: { color: [number,number,number,number]; falloff: FogFalloff } }
   | { type: "ClearFog" }
   | { type: "SetXrPassthrough"; payload: { enabled: boolean } }
   | { type: "PreviewAudioClip"; payload: { id: number; playing: boolean } }

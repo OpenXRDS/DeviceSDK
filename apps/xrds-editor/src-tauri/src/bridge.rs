@@ -208,7 +208,7 @@ pub enum EditorCommand {
     SetViewportFocus { focused: bool },
 
     // --- Scene environment ---
-    SetFog        { color: [f32; 4], start: f32, end: f32 },
+    SetFog        { color: [f32; 4], falloff: FogFalloffDto },
     ClearFog,
     SetExposure   { ev100: f32 },
     ClearExposure,
@@ -376,7 +376,7 @@ pub enum EditorCommand {
 ///
 /// **If you change a DTO and do not bump this, you have removed the only thing
 /// that would have told anyone.**
-pub const BRIDGE_VERSION: u32 = 17;
+pub const BRIDGE_VERSION: u32 = 18;
 
 /// State snapshot emitted to the webview after each frame's update.
 /// Grow this incrementally — add fields as each phase is implemented.
@@ -498,8 +498,9 @@ pub struct EditorSnapshot {
 pub struct EnvironmentDto {
     pub fog_enabled:  bool,
     pub fog_color:    [f32; 4],
-    pub fog_start:    f32,
-    pub fog_end:      f32,
+    /// How fog thickens with distance. Mirrors `XrdsSceneFogFalloff`.
+    #[serde(default)]
+    pub fog_falloff:  FogFalloffDto,
     pub exposure_enabled: bool,
     pub ev100:        f32,
     pub ibl_enabled:  bool,
@@ -824,6 +825,48 @@ pub struct ApkPrerequisite {
     pub name: String,
     pub ok: bool,
     pub hint: String,
+}
+
+/// Mirrors `xrds_scene_graph::XrdsSceneFogFalloff`.
+///
+/// Exponential modes carry a **visibility distance**, not a density: an author
+/// knows "I want to see about 80 metres" and does not know that 0.023 means. Bevy
+/// inverts Koschmieder's equation to get the density from it.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, PartialEq)]
+#[serde(tag = "mode")]
+pub enum FogFalloffDto {
+    Linear { start: f32, end: f32 },
+    Exponential { visibility: f32 },
+    ExponentialSquared { visibility: f32 },
+}
+
+impl Default for FogFalloffDto {
+    fn default() -> Self {
+        Self::Linear { start: 10.0, end: 100.0 }
+    }
+}
+
+impl From<xrds_scene_graph::XrdsSceneFogFalloff> for FogFalloffDto {
+    fn from(f: xrds_scene_graph::XrdsSceneFogFalloff) -> Self {
+        use xrds_scene_graph::XrdsSceneFogFalloff as F;
+        match f {
+            F::Linear { start, end } => Self::Linear { start, end },
+            F::Exponential { visibility } => Self::Exponential { visibility },
+            F::ExponentialSquared { visibility } => Self::ExponentialSquared { visibility },
+        }
+    }
+}
+
+impl From<FogFalloffDto> for xrds_scene_graph::XrdsSceneFogFalloff {
+    fn from(f: FogFalloffDto) -> Self {
+        match f {
+            FogFalloffDto::Linear { start, end } => Self::Linear { start, end },
+            FogFalloffDto::Exponential { visibility } => Self::Exponential { visibility },
+            FogFalloffDto::ExponentialSquared { visibility } => {
+                Self::ExponentialSquared { visibility }
+            }
+        }
+    }
 }
 
 /// One entry in the background task list. See `crate::task_queue`.

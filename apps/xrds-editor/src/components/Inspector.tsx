@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import type {
   EditorSnapshot, EditorCommand, NodeInspector, MaterialParams, MaterialTextures,
-  AssetCatalogEntry, EnvironmentDto,
+  AssetCatalogEntry, EnvironmentDto, FogFalloff,
   ObservableDto, ThresholdWatcherDto, XrdsTriggerKind, NodePayload, TriggerEffect,
 } from "../types/bridge";
 import { rgbaToHex, hexToRgba, MATERIAL_TEXTURE_SLOTS, TRIGGER_EFFECTS } from "../types/bridge";
@@ -883,14 +883,18 @@ function SceneEnvironmentSection({ env, passthrough, assets, send }:
   const toBrightness = (ev: number) => BEVY_EV100 - ev;
   const toEv100 = (b: number) => BEVY_EV100 - b;
 
-  const e = env ?? { fog_enabled:false, fog_color:[1,0.4,0.1,1] as [number,number,number,number], fog_start:2, fog_end:30,
+  const e = env ?? { fog_enabled:false, fog_color:[1,0.4,0.1,1] as [number,number,number,number],
+                     fog_falloff:{ mode:"Linear", start:2, end:30 } as FogFalloff,
                      exposure_enabled:false, ev100:BEVY_EV100,
                      ibl_enabled:false, ibl_diffuse:"", ibl_specular:"", ibl_intensity:1000,
                      skybox_enabled:false, skybox_asset:"", skybox_brightness:1000, skybox_yaw_deg:0, atmosphere_enabled:false };
 
   const [fogColor, setFogColor]     = useState<[number,number,number,number]>(e.fog_color);
-  const [fogStart, setFogStart]     = useState(e.fog_start);
-  const [fogEnd,   setFogEnd]       = useState(e.fog_end);
+  const [fogFalloff, setFogFalloff] = useState<FogFalloff>(e.fog_falloff);
+  /** One place that knows the shape of a fog write, so the colour row, the mode
+   *  picker and four sliders cannot drift apart. */
+  const sendFog = (color: [number,number,number,number], falloff: FogFalloff) =>
+    send({ type:"SetFog", payload:{ color, falloff } });
   // brightness = BEVY_EV100 - ev100  (0 = default, positive = brighter)
   const [brightness, setBrightness] = useState(toBrightness(e.ev100));
   const isDragging = useRef(false);
@@ -901,8 +905,8 @@ function SceneEnvironmentSection({ env, passthrough, assets, send }:
   useEffect(() => {
     if (isDragging.current) return;
     if (env) {
-      setFogColor(env.fog_color); setFogStart(env.fog_start);
-      setFogEnd(env.fog_end);     setBrightness(toBrightness(env.ev100));
+      setFogColor(env.fog_color); setFogFalloff(env.fog_falloff);
+      setBrightness(toBrightness(env.ev100));
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [envKey]);
@@ -952,18 +956,58 @@ function SceneEnvironmentSection({ env, passthrough, assets, send }:
         <h4>Fog</h4>
         <Toggle label="Enable" value={e.fog_enabled}
           onChange={on => on
-            ? send({ type:"SetFog", payload:{ color:fogColor, start:fogStart, end:fogEnd } })
+            ? send({ type:"SetFog", payload:{ color:fogColor, falloff:fogFalloff } })
             : send({ type:"ClearFog" })} />
         {e.fog_enabled && <>
           <ColorRow label="Color" color={fogColor}
             onLive={v  => { isDragging.current = true;  setFogColor(v); }}
-            onCommit={v => { isDragging.current = false; setFogColor(v); send({ type:"SetFog", payload:{ color:v, start:fogStart, end:fogEnd } }); }} />
-          <SliderRow label="Start" value={fogStart} min={0} max={500} step={1}
-            onLive={v  => { isDragging.current = true;  setFogStart(v); }}
-            onCommit={v => { isDragging.current = false; setFogStart(v); send({ type:"SetFog", payload:{ color:fogColor, start:v, end:fogEnd } }); }} />
-          <SliderRow label="End" value={fogEnd} min={1} max={2000} step={1}
-            onLive={v  => { isDragging.current = true;  setFogEnd(v); }}
-            onCommit={v => { isDragging.current = false; setFogEnd(v); send({ type:"SetFog", payload:{ color:fogColor, start:fogStart, end:v } }); }} />
+            onCommit={v => { isDragging.current = false; setFogColor(v); sendFog(v, fogFalloff); }} />
+
+          <div className="insp-row">
+            <label>Falloff</label>
+            <Select value={fogFalloff.mode} onValueChange={m => {
+              // Each mode is authored with different numbers, so switching carries
+              // a sensible default across rather than an empty field. Distances
+              // are not interchangeable between them — a linear `end` is where fog
+              // is total, a visibility is where it is merely thick.
+              const next: FogFalloff =
+                m === "Linear"             ? { mode:"Linear", start:2, end:30 }
+              : m === "Exponential"        ? { mode:"Exponential", visibility:60 }
+              :                              { mode:"ExponentialSquared", visibility:60 };
+              setFogFalloff(next); sendFog(fogColor, next);
+            }}
+              options={[
+                { value:"Linear",             label:"Linear" },
+                { value:"Exponential",        label:"Exponential" },
+                { value:"ExponentialSquared", label:"Exponential²" },
+              ]} />
+          </div>
+
+          {fogFalloff.mode === "Linear" ? <>
+            <SliderRow label="Start" value={fogFalloff.start} min={0} max={500} step={1}
+              onLive={v  => { isDragging.current = true;  setFogFalloff({ ...fogFalloff, start:v }); }}
+              onCommit={v => { isDragging.current = false; const f: FogFalloff = { ...fogFalloff, start:v }; setFogFalloff(f); sendFog(fogColor, f); }} />
+            <SliderRow label="End" value={fogFalloff.end} min={1} max={2000} step={1}
+              onLive={v  => { isDragging.current = true;  setFogFalloff({ ...fogFalloff, end:v }); }}
+              onCommit={v => { isDragging.current = false; const f: FogFalloff = { ...fogFalloff, end:v }; setFogFalloff(f); sendFog(fogColor, f); }} />
+            <div className="insp-note">
+              Clear until Start, fully fogged at End. Not physical, but the only
+              mode with a distance where fog is exactly absent — which is what you
+              want when hiding a draw-distance boundary.
+            </div>
+          </> : <>
+            <SliderRow label="Visibility" value={fogFalloff.visibility} min={1} max={2000} step={1}
+              onLive={v  => { isDragging.current = true;  setFogFalloff({ ...fogFalloff, visibility:v }); }}
+              onCommit={v => { isDragging.current = false; const f: FogFalloff = { ...fogFalloff, visibility:v }; setFogFalloff(f); sendFog(fogColor, f); }} />
+            {/* Visibility rather than density, because a density is a number
+              * nobody can picture. See XrdsSceneFogFalloff. */}
+            <div className="insp-note">
+              Roughly the distance at which things fade into the fog colour, in
+              metres. {fogFalloff.mode === "Exponential"
+                ? "Exponential is how real haze behaves — no clear zone, thickening steadily."
+                : "Exponential² stays clearer up close, then thickens faster — a heavier bank of fog."}
+            </div>
+          </>}
         </>}
       </div>
 
@@ -984,7 +1028,7 @@ function SceneEnvironmentSection({ env, passthrough, assets, send }:
           Placed above Skybox because for an outdoor scene it is usually the better
           answer: the sun comes from the scene's own directional light, so sky and
           shadows agree and moving the light moves the sun. A captured panorama
-          cannot do that. See docs/editor-task-queue-and-hdr-conversion.md 0b. */}
+          cannot do that. See docs/done/editor-task-queue-and-hdr-conversion.md 0b. */}
       <div className="insp-section">
         <h4>Atmosphere <span style={{color:"var(--overlay0)",fontSize:9,fontWeight:"normal",marginLeft:4}}>procedural sky · desktop</span></h4>
         <Toggle label="Enable" value={e.atmosphere_enabled}

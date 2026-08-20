@@ -1,6 +1,6 @@
 //! A queue for slow, author-initiated background work.
 //!
-//! Phase A of `docs/editor-task-queue-and-hdr-conversion.md`. This replaces two
+//! Phase A of `docs/done/editor-task-queue-and-hdr-conversion.md`. This replaces two
 //! bespoke job implementations (`ExportJob`, `ApkExportJob`) that each carried
 //! their own `Arc<Mutex<Option<Result<..>>>>`, their own snapshot boolean, and
 //! their own UI, and neither of which could be cancelled or report progress.

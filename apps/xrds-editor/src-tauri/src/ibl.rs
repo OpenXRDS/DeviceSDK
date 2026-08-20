@@ -1,6 +1,6 @@
 //! Image-based lighting: diffuse irradiance and a prefiltered specular chain.
 //!
-//! Phase C of `docs/editor-task-queue-and-hdr-conversion.md`. Phase B produces a
+//! Phase C of `docs/done/editor-task-queue-and-hdr-conversion.md`. Phase B produces a
 //! cubemap you can *see*; this produces the two maps that let it *light* a scene.
 //! Without them a converted panorama is a backdrop — a metal sphere in front of it
 //! reflects nothing.
@@ -639,9 +639,11 @@ mod real_file_check {
     use super::*;
     use crate::env_convert::tests::with_ctx;
 
-    /// Runs only when XRDS_TEST_PANORAMA points at a real `.exr`. The synthetic
-    /// fixtures cannot exercise a sun four orders of magnitude above the mean,
-    /// which is exactly the input that makes prefiltering hard.
+    /// Runs only when XRDS_TEST_PANORAMA points at a real `.exr` — for example
+    /// `assets/environment_maps/DayEnvironmentHDRI043_4K_HDR.exr`.
+    ///
+    /// The synthetic fixtures cannot exercise a sun four orders of magnitude above
+    /// the mean, which is exactly the input that makes prefiltering hard.
     #[test]
     fn xxx_prefilter_a_real_panorama() {
         let Ok(src) = std::env::var("XRDS_TEST_PANORAMA") else { return };

@@ -388,15 +388,17 @@ fn fog_environment_helpers_set_and_clear_scene_environment() {
     let mut document = XrdsSceneDocument::default();
 
     document
-        .set_fog_environment([0.35, 0.48, 0.66, 1.0], 5.0, 40.0)
+        .set_fog_environment(
+            [0.35, 0.48, 0.66, 1.0],
+            XrdsSceneFogFalloff::Linear { start: 5.0, end: 40.0 },
+        )
         .expect("fog environment should be accepted");
 
     let fog = document
         .fog_environment()
         .expect("fog environment should be stored");
     assert_eq!(fog.color, [0.35, 0.48, 0.66, 1.0]);
-    assert_eq!(fog.start, 5.0);
-    assert_eq!(fog.end, 40.0);
+    assert_eq!(fog.falloff, XrdsSceneFogFalloff::Linear { start: 5.0, end: 40.0 });
 
     document.clear_fog_environment();
     assert!(document.fog_environment().is_none());
@@ -486,8 +488,7 @@ fn document_validation_rejects_invalid_scene_fog_range() {
             environment: Some(XrdsSceneEnvironment {
                 fog: Some(XrdsSceneFogEnvironment {
                     color: [0.35, 0.48, 0.66, 1.0],
-                    start: 20.0,
-                    end: 10.0,
+                    falloff: XrdsSceneFogFalloff::Linear { start: 20.0, end: 10.0 },
                 }),
                 ..Default::default()
             }),
@@ -584,8 +585,7 @@ fn json_round_trip_preserves_scene_fog_environment() {
     document.metadata.environment = Some(XrdsSceneEnvironment {
         fog: Some(XrdsSceneFogEnvironment {
             color: [0.35, 0.48, 0.66, 1.0],
-            start: 5.0,
-            end: 40.0,
+            falloff: XrdsSceneFogFalloff::Linear { start: 5.0, end: 40.0 },
         }),
         ..Default::default()
     });
@@ -620,4 +620,90 @@ fn loading_rejects_unsupported_document_version() {
         }
         other => panic!("expected unsupported version error, got {other:?}"),
     }
+}
+
+// ── Fog falloff modes ────────────────────────────────────────────────────
+
+/// Scenes saved before falloff modes existed carry `start`/`end` on the fog object
+/// itself. They must still load, as linear fog.
+///
+/// This is why `XrdsSceneFogEnvironment` has a hand-written `Deserialize`. A
+/// derived one would ignore the unknown fields and silently reset every existing
+/// scene's fog to the default — data loss that no other test would see, because
+/// nothing else reads a file written by an older build.
+#[test]
+fn a_scene_saved_before_falloff_modes_still_loads_as_linear_fog() {
+    let legacy = r#"{ "color": [0.35, 0.48, 0.66, 1.0], "start": 5.0, "end": 40.0 }"#;
+    let fog: XrdsSceneFogEnvironment =
+        serde_json::from_str(legacy).expect("a pre-falloff fog object must still deserialize");
+
+    assert_eq!(fog.color, [0.35, 0.48, 0.66, 1.0]);
+    assert_eq!(
+        fog.falloff,
+        XrdsSceneFogFalloff::Linear { start: 5.0, end: 40.0 },
+        "the authored distances must survive, not be replaced by defaults"
+    );
+}
+
+#[test]
+fn every_falloff_mode_round_trips_through_json() {
+    for falloff in [
+        XrdsSceneFogFalloff::Linear { start: 5.0, end: 40.0 },
+        XrdsSceneFogFalloff::Exponential { visibility: 80.0 },
+        XrdsSceneFogFalloff::ExponentialSquared { visibility: 120.0 },
+    ] {
+        let fog = XrdsSceneFogEnvironment { color: [0.3, 0.4, 0.5, 1.0], falloff };
+        let json = serde_json::to_string(&fog).expect("serialize");
+        let back: XrdsSceneFogEnvironment = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back, fog, "round trip changed {falloff:?}");
+    }
+}
+
+/// Both failure modes render as artefacts rather than errors, so they are refused
+/// where an author can still be told: an inverted ramp, and a visibility of zero
+/// that divides by zero inside Koschmieder's equation.
+#[test]
+fn fog_rejects_an_inverted_ramp_and_a_non_positive_visibility() {
+    let mut doc = XrdsSceneDocument::default();
+    let color = [0.35, 0.48, 0.66, 1.0];
+
+    assert!(doc
+        .set_fog_environment(color, XrdsSceneFogFalloff::Linear { start: 20.0, end: 10.0 })
+        .is_err());
+    assert!(doc
+        .set_fog_environment(color, XrdsSceneFogFalloff::Exponential { visibility: 0.0 })
+        .is_err());
+    assert!(doc
+        .set_fog_environment(color, XrdsSceneFogFalloff::ExponentialSquared { visibility: -5.0 })
+        .is_err());
+    assert!(doc
+        .set_fog_environment(color, XrdsSceneFogFalloff::Exponential { visibility: f32::NAN })
+        .is_err());
+
+    // And the valid ones are accepted, so the guard is not simply refusing
+    // everything.
+    assert!(doc
+        .set_fog_environment(color, XrdsSceneFogFalloff::Exponential { visibility: 80.0 })
+        .is_ok());
+    assert_eq!(
+        doc.fog_environment().unwrap().falloff,
+        XrdsSceneFogFalloff::Exponential { visibility: 80.0 }
+    );
+}
+
+#[test]
+fn sanitizing_repairs_rather_than_rejects_for_live_editing() {
+    // A slider dragged past its partner should keep rendering, not blank out — so
+    // the editor path repairs instead of refusing.
+    match (XrdsSceneFogFalloff::Linear { start: 30.0, end: 10.0 }).sanitized() {
+        XrdsSceneFogFalloff::Linear { start, end } => assert!(end > start),
+        other => panic!("mode changed: {other:?}"),
+    }
+    match (XrdsSceneFogFalloff::Exponential { visibility: 0.0 }).sanitized() {
+        XrdsSceneFogFalloff::Exponential { visibility } => assert!(visibility > 0.0),
+        other => panic!("mode changed: {other:?}"),
+    }
+    // A already-valid value is left exactly alone.
+    let good = XrdsSceneFogFalloff::Exponential { visibility: 80.0 };
+    assert_eq!(good.sanitized(), good);
 }

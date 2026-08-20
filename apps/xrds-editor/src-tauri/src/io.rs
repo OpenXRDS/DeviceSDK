@@ -264,7 +264,7 @@ pub struct EnvironmentSource {
 }
 
 /// Decide whether a file can serve as an environment map, per the import contract
-/// in `docs/editor-task-queue-and-hdr-conversion.md`.
+/// in `docs/done/editor-task-queue-and-hdr-conversion.md`.
 ///
 /// Accepts equirectangular `.exr` and `.hdr`. `.ktx2` cubemaps are handled by
 /// `detect_asset_kind` and never reach here — they are already in the target
@@ -1281,7 +1281,7 @@ mod tests {
     }
 
     // ── Environment-map import contract ──────────────────────────────────
-    // docs/editor-task-queue-and-hdr-conversion.md. `.exr` equirectangular is the
+    // docs/done/editor-task-queue-and-hdr-conversion.md. `.exr` equirectangular is the
     // contract; everything else is refused with a reason an author can act on.
 
     /// A 2:1 OpenEXR is what ambientCG and Poly Haven actually ship.

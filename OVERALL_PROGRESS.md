@@ -83,7 +83,7 @@ Resolved since the last update, corrected below:
 | Core SDK surface (`XrdsApp`, `XrdsAPI`, `XrdsUpdateContext`) | Stable; 70+ typed methods; material texture slots added | **92%** |
 | Scene document model (`xrds-scene-graph`) | All asset kinds, 11 payload types, hierarchy, materials, audio, round-trips | **95%** |
 | Runtime projection (`xrds-runtime`) | All built-in types, audio playback, environment, export | **90%** |
-| Scene environment policy | IBL + skybox + exposure + linear fog; document-driven and runtime-driven | **97%** |
+| Scene environment policy | IBL + skybox + exposure + atmosphere + fog (linear/exp/exp²); document-driven and runtime-driven | **98%** |
 | Physics | avian3d v0.4; Static/Dynamic/None bodies; per-primitive colliders; grab/throw; raycasting; interaction zone sensors; scene-doc serialized | **90%** |
 | Asset workflow | Gltf, Texture, EnvironmentMap, Audio — catalog, validation, diagnostics, runtime | **92%** |
 | GUI editor | Functional editor with all core panels; text3d and texture-slot UI gaps closed; Panels workspace (in-world UI authoring) added; visual polish (Tailwind/Radix) partial | **92%** |
@@ -317,6 +317,7 @@ Features present in engines like Unity, Godot, or Unreal that are not yet in Dev
 | ~~**Capsule primitive**~~ | **Done** | `XrdsCapsule` shipped; also now the shape of the player's physics body. |
 | **Networking / multiplayer** | Low | The transport layer (`xrds-net`) is itself hardened and internal-milestone-ready, including a real two-machine WebRTC handshake — see `docs/done/xrds-net-release-readiness.md`. What is still missing is the *game-level* feature: an `XrdsAction` that syncs trigger effects across clients, which needs an authority model decided first (see `docs/xrds-trigger-action-backlog.md`'s Networking entry). Large scope, deferred. |
 | **Terrain system** | Low | Heightmaps, large world; not a near-term XR target |
+| **Atmospheric (coloured) fog** | Far future | Bevy's fourth `FogFalloff`. Linear, exponential and exponential-squared ship today; `Atmospheric` adds wavelength-dependent extinction and sun inscattering — coloured haze that reddens toward the sun. Deliberately not exposed: it takes two `Vec3`s that Bevy's own docs call non-intuitive, and nobody has asked for coloured scattering. The authorable route exists when someone does — `FogFalloff::from_visibility_colors(visibility, extinction_color, inscattering_color)` reduces it to one distance and two colours, so this is purely additive to `XrdsSceneFogFalloff`. Same reasoning that keeps `XrdsSceneAtmosphereEnvironment` free of physical parameters: do not author a physics UI on speculation. |
 
 Already covered that engines also provide: scene graph, PBR materials, lights,
 cameras, spatial audio, animation playback, physics (rigid body, colliders,

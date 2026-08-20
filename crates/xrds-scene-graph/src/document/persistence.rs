@@ -374,12 +374,34 @@ fn validate_scene_environment(
         if fog.color.iter().any(|channel| !channel.is_finite()) {
             return Err(XrdsSceneValidationError::InvalidSceneFogColor);
         }
-        if !fog.start.is_finite() || !fog.end.is_finite() || fog.start < 0.0 || fog.end < fog.start
-        {
-            return Err(XrdsSceneValidationError::InvalidSceneFogRange);
-        }
+        validate_fog_falloff(&fog.falloff)?;
     }
 
+    Ok(())
+}
+
+/// Reject fog parameters that render as artefacts rather than as fog.
+///
+/// An inverted linear ramp (`end <= start`) and a non-positive visibility both
+/// produce garbage rather than an error at draw time — the second divides by zero
+/// inside Koschmieder's equation — so they are refused here where an author can
+/// still be told.
+pub(crate) fn validate_fog_falloff(
+    falloff: &XrdsSceneFogFalloff,
+) -> Result<(), XrdsSceneValidationError> {
+    match *falloff {
+        XrdsSceneFogFalloff::Linear { start, end } => {
+            if !start.is_finite() || !end.is_finite() || start < 0.0 || end < start {
+                return Err(XrdsSceneValidationError::InvalidSceneFogRange);
+            }
+        }
+        XrdsSceneFogFalloff::Exponential { visibility }
+        | XrdsSceneFogFalloff::ExponentialSquared { visibility } => {
+            if !visibility.is_finite() || visibility <= 0.0 {
+                return Err(XrdsSceneValidationError::InvalidSceneFogRange);
+            }
+        }
+    }
     Ok(())
 }
 

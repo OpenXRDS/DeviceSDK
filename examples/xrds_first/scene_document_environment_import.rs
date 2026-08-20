@@ -1,6 +1,7 @@
 use xrds::scene_graph::{
     XrdsEditorMetadata, XrdsSceneAsset, XrdsSceneAssetKind, XrdsSceneCamera,
-    XrdsSceneCameraProjection, XrdsSceneDocument, XrdsSceneMaterial, XrdsSceneMaterialPbrParams,
+    XrdsSceneCameraProjection, XrdsSceneDocument, XrdsSceneFogFalloff, XrdsSceneMaterial,
+    XrdsSceneMaterialPbrParams,
     XrdsSceneMetadata, XrdsSceneNode, XrdsSceneNodeId, XrdsSceneNodePayload,
     XrdsScenePlane3D, XrdsScenePointLight, XrdsSceneSphere, XrdsSceneTransform,
 };
@@ -233,7 +234,10 @@ fn authored_scene_document() -> XrdsSceneDocument {
         .set_exposure_environment(6.0)
         .expect("scene exposure authoring should validate");
     document
-        .set_fog_environment([0.35, 0.48, 0.66, 1.0], 5.0, 40.0)
+        .set_fog_environment(
+            [0.35, 0.48, 0.66, 1.0],
+            XrdsSceneFogFalloff::Linear { start: 5.0, end: 40.0 },
+        )
         .expect("scene fog authoring should validate");
 
     document

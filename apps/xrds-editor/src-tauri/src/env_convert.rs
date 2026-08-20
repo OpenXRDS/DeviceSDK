@@ -1,6 +1,6 @@
 //! Equirectangular panorama → cubemap KTX2.
 //!
-//! Phase B of `docs/editor-task-queue-and-hdr-conversion.md`. An author downloads a
+//! Phase B of `docs/done/editor-task-queue-and-hdr-conversion.md`. An author downloads a
 //! `.exr` panorama; Bevy's `Skybox` and `EnvironmentMapLight` both require a *cube*
 //! texture, and nothing in the tree could produce one. This is that step.
 //!
@@ -588,10 +588,13 @@ mod real_file_check {
     use super::*;
     use super::tests::with_ctx;
 
-    /// Runs only when XRDS_TEST_PANORAMA points at a real `.exr`. Not part of
-    /// `cargo test`, because a 31 MB panorama does not belong in the repo — but the
-    /// synthetic fixtures cannot exercise PIZ decoding, 4K throughput, or a sun
-    /// four orders of magnitude above the mean.
+    /// Runs only when XRDS_TEST_PANORAMA points at a real `.exr` — for example
+    /// `assets/environment_maps/DayEnvironmentHDRI043_4K_HDR.exr`.
+    ///
+    /// Opt-in rather than part of `cargo test` because it decodes 31 MB and takes
+    /// seconds, but worth running after any change here: the synthetic fixtures
+    /// cannot exercise PIZ decoding, 4K throughput, or a sun four orders of
+    /// magnitude above the mean.
     #[test]
     fn xxx_convert_a_real_panorama() {
         let Ok(src) = std::env::var("XRDS_TEST_PANORAMA") else { return };
