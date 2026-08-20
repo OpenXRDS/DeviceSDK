@@ -69,13 +69,22 @@ impl XrdsSceneDocument {
         }
     }
 
+    /// Set the scene skybox.
+    ///
+    /// `yaw_deg` turns the sky about the vertical axis — the adjustment that places
+    /// the sun where the author wants it. Any finite value is accepted and wrapped
+    /// on use; rejecting 370° would be pedantry, since it is the same sky as 10°.
     pub fn set_skybox_environment(
         &mut self,
         texture_asset_id: impl Into<String>,
         brightness: f32,
+        yaw_deg: f32,
     ) -> Result<(), XrdsSceneEnvironmentWorkflowError> {
         if !brightness.is_finite() || brightness < 0.0 {
             return Err(XrdsSceneEnvironmentWorkflowError::InvalidSkyboxBrightness);
+        }
+        if !yaw_deg.is_finite() {
+            return Err(XrdsSceneEnvironmentWorkflowError::InvalidSkyboxYaw);
         }
 
         let texture_asset_id = normalize_asset_id(texture_asset_id.into())
@@ -87,6 +96,7 @@ impl XrdsSceneDocument {
             .skybox = Some(XrdsSceneSkyboxEnvironment {
             texture_asset_id,
             brightness,
+            yaw_deg,
         });
 
         self.validate()
@@ -171,6 +181,10 @@ pub enum XrdsSceneEnvironmentWorkflowError {
     Asset(XrdsSceneAssetWorkflowError),
     InvalidIblIntensity,
     InvalidSkyboxBrightness,
+    /// A non-finite skybox yaw. Rejected rather than clamped because it would reach
+    /// `Quat::from_rotation_y` and produce a NaN rotation, which renders as nothing
+    /// with no error anywhere.
+    InvalidSkyboxYaw,
     InvalidExposureEv100,
     InvalidFogColor,
     InvalidFogRange,

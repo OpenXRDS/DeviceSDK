@@ -349,7 +349,7 @@ fn skybox_environment_helpers_set_and_clear_scene_environment() {
     };
 
     document
-        .set_skybox_environment("asset:skybox", 750.0)
+        .set_skybox_environment("asset:skybox", 750.0, 90.0)
         .expect("skybox environment should be accepted");
 
     let skybox = document
@@ -357,6 +357,7 @@ fn skybox_environment_helpers_set_and_clear_scene_environment() {
         .expect("skybox environment should be stored");
     assert_eq!(skybox.texture_asset_id, "asset:skybox");
     assert_eq!(skybox.brightness, 750.0);
+    assert_eq!(skybox.yaw_deg, 90.0);
     assert_eq!(document.skybox_environment_asset_id(), Some("asset:skybox"));
 
     document.clear_skybox_environment();
@@ -441,6 +442,7 @@ fn document_validation_rejects_missing_scene_skybox_asset() {
                 skybox: Some(XrdsSceneSkyboxEnvironment {
                     texture_asset_id: "asset:skybox".to_string(),
                     brightness: 1200.0,
+                    yaw_deg: 0.0,
                 }),
                 ..Default::default()
             }),
@@ -545,6 +547,7 @@ fn json_round_trip_preserves_scene_skybox_environment() {
         skybox: Some(XrdsSceneSkyboxEnvironment {
             texture_asset_id: "asset:skybox".to_string(),
             brightness: 640.0,
+            yaw_deg: 0.0,
         }),
         ..Default::default()
     });

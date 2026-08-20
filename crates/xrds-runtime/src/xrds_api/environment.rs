@@ -7,6 +7,57 @@ use xrds_scene_graph::XrdsSceneEnvironment;
 #[derive(Resource, Debug, Clone, Default, PartialEq)]
 pub(super) struct XrdsImportedSceneEnvironment(pub(super) Option<XrdsSceneEnvironment>);
 
+/// Asset ids already reported as missing, so each is reported once.
+///
+/// The environment policy is re-applied every frame — deliberately, since assets
+/// can finish loading later — and the missing-asset warnings sat directly in that
+/// path, so one unresolvable id produced a warning per frame per camera and buried
+/// every other log line. Reported 2026-08-19 as an "infinite loop" of warnings; it
+/// was not a loop, just an unthrottled warning in a per-frame system.
+///
+/// Keyed by id rather than using `warn_once!`, which is per call site: with that, a
+/// second asset failing after the first would be silent, which is the failure this
+/// warning exists to prevent.
+///
+/// A process-wide static rather than a resource, because the resolvers take
+/// `&World` and threading `&mut World` through four functions to throttle a log
+/// line is a poor trade. The consequence is that the set is not cleared between
+/// apps in one process — only relevant to tests, which do not assert on warnings.
+fn warn_missing_environment_asset_once(world: &World, what: &str, asset_id: &str) {
+    use std::sync::{Mutex, OnceLock};
+
+    static REPORTED: OnceLock<Mutex<std::collections::HashSet<String>>> = OnceLock::new();
+    let reported = REPORTED.get_or_init(|| Mutex::new(std::collections::HashSet::new()));
+
+    if !reported.lock().unwrap().insert(format!("{what}:{asset_id}")) {
+        return;
+    }
+
+    // Two very different causes, and naming the wrong one sends people looking in
+    // the wrong place. An earlier version of this message asserted the kind was
+    // wrong; the actual case was an asset absent from the catalog entirely, and the
+    // message duly sent the reader to check kinds that were already correct.
+    let wrong_kind = world
+        .get_resource::<XrdsImportedAssetCatalog>()
+        .map(|catalog| catalog.assets.iter().any(|a| a.id == asset_id))
+        .unwrap_or(false);
+
+    if wrong_kind {
+        warn!(
+            "Scene {what} asset '{asset_id}' is in the runtime catalog but not as an \
+             EnvironmentMap. Skybox and IBL need a cubemap: re-import it, and note \
+             that a .ktx2 is only treated as an EnvironmentMap when its header \
+             reports 6 faces."
+        );
+    } else {
+        warn!(
+            "Scene {what} asset '{asset_id}' is not in the runtime asset catalog at \
+             all. The document references it, so it was probably imported without the \
+             runtime being told — check that the import path triggers a reimport."
+        );
+    }
+}
+
 #[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct XrdsManagedSceneIblEnvironment;
 
@@ -84,6 +135,32 @@ fn sync_managed_scene_ibl_in_world(world: &mut World) {
 }
 
 fn sync_managed_scene_skybox_in_world(world: &mut World) {
+    // Passthrough wins over a skybox, and the two cannot coexist.
+    //
+    // A skybox is inserted on every `Camera3d`, which includes the XR eye cameras,
+    // and it draws into the main pass — so it paints opaque over the transparent
+    // clear that passthrough depends on. The projection layer would then be alpha=1
+    // everywhere and the passthrough layer beneath it never revealed: the author
+    // ticks Passthrough, sees their skybox, and has no way to tell why the room
+    // never appears.
+    //
+    // Suppressed rather than diagnosed because the combination is contradictory
+    // rather than merely awkward — a skybox is a *virtual* background and
+    // passthrough is a request for the real one. Logged rather than silent, since
+    // an authored setting is being overridden.
+    if world
+        .get_resource::<xrds_openxr::OpenXrPassthroughEnabled>()
+        .is_some_and(|e| e.0)
+    {
+        if clear_managed_scene_skybox_in_world(world) {
+            info!(
+                "[environment] skybox suppressed while passthrough is on — a skybox would \
+                 paint over the real world. Turn passthrough off to see it."
+            );
+        }
+        return;
+    }
+
     let Some(skybox) = resolve_imported_scene_skybox_in_world(world) else {
         clear_managed_scene_skybox_in_world(world);
         return;
@@ -188,18 +265,12 @@ fn resolve_imported_scene_environment_light_in_world(world: &World) -> Option<En
     };
 
     let Some(diffuse_uri) = resolve_texture_asset_uri_in_world(world, &ibl.diffuse_asset_id) else {
-        warn!(
-            "Scene IBL diffuse asset '{}' was not found in the runtime asset catalog",
-            ibl.diffuse_asset_id
-        );
+        warn_missing_environment_asset_once(world, "IBL diffuse", &ibl.diffuse_asset_id);
         return None;
     };
     let Some(specular_uri) = resolve_texture_asset_uri_in_world(world, &ibl.specular_asset_id)
     else {
-        warn!(
-            "Scene IBL specular asset '{}' was not found in the runtime asset catalog",
-            ibl.specular_asset_id
-        );
+        warn_missing_environment_asset_once(world, "IBL specular", &ibl.specular_asset_id);
         return None;
     };
 
@@ -211,10 +282,35 @@ fn resolve_imported_scene_environment_light_in_world(world: &World) -> Option<En
         )
     };
 
+    // The environment lighting turns with the sky.
+    //
+    // Rotating the skybox to place the sun and leaving the lighting where it was
+    // would put reflections and ambient light on the wrong side of the scene —
+    // visible on any smooth metal, and puzzling because the sky *looks* right. The
+    // two are one environment, so one yaw drives both.
+    //
+    // **Same sign as the skybox**, negated, despite the two being documented
+    // differently. Bevy calls `Skybox::rotation` a *view space* rotation and
+    // `EnvironmentMapLight::rotation` a *world space* one, which is why this first
+    // used the yaw unnegated — and the result was a reflection that turned the
+    // opposite way to the sky, confirmed by looking at a metal sphere while dragging
+    // the slider. The wording differs; the behaviour does not. Both rotate the
+    // sampling direction, so both take the same negation.
+    //
+    // The yaw lives on the skybox settings, so IBL only rotates when a skybox is
+    // also present. An IBL-only scene that needs rotating would need its own field;
+    // no workflow has asked for that, and inventing one now would add a second
+    // control that must agree with the first.
+    let yaw = imported_scene_environment_in_world(world)
+        .and_then(|environment| environment.skybox)
+        .map(|skybox| skybox.yaw_deg)
+        .unwrap_or(0.0);
+
     Some(EnvironmentMapLight {
         diffuse_map,
         specular_map,
         intensity: ibl.intensity,
+        rotation: Quat::from_rotation_y(-yaw.to_radians()),
         ..default()
     })
 }
@@ -228,10 +324,7 @@ fn resolve_imported_scene_skybox_in_world(world: &World) -> Option<Skybox> {
 
     let Some(texture_uri) = resolve_texture_asset_uri_in_world(world, &skybox.texture_asset_id)
     else {
-        warn!(
-            "Scene skybox asset '{}' was not found in the runtime asset catalog",
-            skybox.texture_asset_id
-        );
+        warn_missing_environment_asset_once(world, "skybox", &skybox.texture_asset_id);
         return None;
     };
 
@@ -243,6 +336,12 @@ fn resolve_imported_scene_skybox_in_world(world: &World) -> Option<Skybox> {
     Some(Skybox {
         image,
         brightness: skybox.brightness,
+        // Negated so a positive yaw turns the *sky* the way the author expects.
+        // `Skybox::rotation` is applied in view space — it rotates the sampling
+        // direction, not the sky — so rotating the lookup by +y appears to swing the
+        // sky by -y. Getting this backwards is invisible in code review and obvious
+        // the moment someone drags the slider.
+        rotation: Quat::from_rotation_y(-skybox.yaw_deg.to_radians()),
         ..default()
     })
 }
@@ -284,18 +383,23 @@ fn clear_managed_scene_ibl_in_world(world: &mut World) {
     }
 }
 
-fn clear_managed_scene_skybox_in_world(world: &mut World) {
+/// Removes the managed skybox from every camera. Returns whether anything was
+/// removed, so a caller overriding an authored setting can say so once rather
+/// than every frame.
+fn clear_managed_scene_skybox_in_world(world: &mut World) -> bool {
     let entities: Vec<Entity> = {
         let mut query = world
             .query_filtered::<Entity, (With<Camera3d>, With<XrdsManagedSceneSkyboxEnvironment>)>();
         query.iter(world).collect()
     };
 
+    let removed = !entities.is_empty();
     for entity in entities {
         let mut entity_mut = world.entity_mut(entity);
         entity_mut.remove::<Skybox>();
         entity_mut.remove::<XrdsManagedSceneSkyboxEnvironment>();
     }
+    removed
 }
 
 fn clear_managed_scene_exposure_in_world(world: &mut World) {

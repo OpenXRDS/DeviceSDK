@@ -1154,6 +1154,7 @@ fn environment_map_assets_referenced_by_environment_policy_are_not_flagged_unuse
                 skybox: Some(XrdsSceneSkyboxEnvironment {
                     texture_asset_id: "asset:skybox".to_string(),
                     brightness: 1.0,
+                    yaw_deg: 0.0,
                 }),
                 ..Default::default()
             }),

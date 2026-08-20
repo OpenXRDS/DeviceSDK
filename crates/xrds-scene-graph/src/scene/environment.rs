@@ -38,6 +38,21 @@ pub enum XrdsSceneIblAssetSlot {
 pub struct XrdsSceneSkyboxEnvironment {
     pub texture_asset_id: String,
     pub brightness: f32,
+    /// Rotation about the vertical axis, in degrees.
+    ///
+    /// **Why yaw and not a quaternion**, when `Skybox::rotation` is a `Quat`: the
+    /// authoring question is "where is the sun", and that is a yaw. A cubemap
+    /// arrives in whatever orientation it was captured, so turning it to place the
+    /// sun — or to line a horizon feature up with the scene — is the one adjustment
+    /// an author actually makes.
+    ///
+    /// Bevy's own doc for the field describes the other use, correcting for a Z-up
+    /// source. That is a property of the file rather than of the scene, and belongs
+    /// wherever the cubemap is produced; storing a full quaternion per scene to
+    /// express it would make the common case unauthorable to avoid a conversion-time
+    /// fix.
+    #[serde(default)]
+    pub yaw_deg: f32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

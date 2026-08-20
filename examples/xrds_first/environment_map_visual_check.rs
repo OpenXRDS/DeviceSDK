@@ -59,6 +59,7 @@ impl XrdsApp for EnvironmentMapVisualCheckApp {
             skybox: Some(XrdsSceneSkyboxEnvironment {
                 texture_asset_id: SKYBOX_ASSET_ID.to_string(),
                 brightness: 950.0,
+                yaw_deg: 0.0,
             }),
             exposure: Some(XrdsSceneExposureEnvironment { ev100: 6.0 }),
             ..Default::default()

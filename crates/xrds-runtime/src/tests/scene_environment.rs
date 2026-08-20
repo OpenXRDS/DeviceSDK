@@ -174,6 +174,201 @@ fn import_scene_document_applies_authored_ibl_environment_to_imported_cameras() 
 }
 
 
+/// An authored yaw must reach the `Skybox` component, and reach it as a rotation
+/// about the vertical axis.
+///
+/// `Skybox::rotation` is applied in view space — it rotates the sampling direction
+/// rather than the sky — so the runtime negates the authored yaw to make a positive
+/// value turn the sky the way an author expects. That sign is invisible in review
+/// and obvious the moment someone drags the slider, so it is pinned here.
+#[test]
+fn an_authored_skybox_yaw_reaches_the_component() {
+    let mut app = xrds_test_app();
+    app.insert_resource(xrds_openxr::OpenXrPassthroughEnabled(false));
+
+    let mut document = skybox_document();
+    if let Some(env) = document.metadata.environment.as_mut() {
+        if let Some(sky) = env.skybox.as_mut() {
+            sky.yaw_deg = 90.0;
+        }
+    }
+
+    {
+        let mut xrds = XrdsAPI::attach(&mut app);
+        xrds.import_scene_document(&document)
+            .expect("document should import");
+    }
+
+    let camera_entity = app
+        .world()
+        .resource::<XrdsIdIndex>()
+        .entity_of(XrdsId(501))
+        .expect("camera entity should exist");
+    let skybox = app
+        .world()
+        .get::<Skybox>(camera_entity)
+        .expect("camera should receive the skybox");
+
+    let expected = Quat::from_rotation_y(-90f32.to_radians());
+    // Compared by dot product: `q` and `-q` are the same rotation, so a
+    // component-wise assert would fail for a correct value.
+    let dot = skybox.rotation.dot(expected).abs();
+    assert!(
+        (dot - 1.0).abs() < 1e-5,
+        "expected a -90 degree yaw about Y, got {:?}",
+        skybox.rotation,
+    );
+}
+
+/// The sky and the lighting must turn *together*.
+///
+/// They did not, at first: Bevy documents `Skybox::rotation` as view space and
+/// `EnvironmentMapLight::rotation` as world space, so this code used opposite signs
+/// — and the reflection on a metal sphere turned the opposite way to the sky, which
+/// is worse than either being individually inverted. The wording differs; the
+/// behaviour does not.
+///
+/// Asserted as *equality between the two*, not against a literal quaternion,
+/// because that is the property that matters and it survives someone later
+/// discovering the absolute direction is backwards.
+#[test]
+fn skybox_and_environment_light_rotate_together() {
+    let mut app = xrds_test_app();
+    app.insert_resource(xrds_openxr::OpenXrPassthroughEnabled(false));
+
+    let mut document = skybox_document();
+    if let Some(env) = document.metadata.environment.as_mut() {
+        if let Some(sky) = env.skybox.as_mut() {
+            sky.yaw_deg = 55.0;
+        }
+        env.ibl = Some(XrdsSceneIblEnvironment {
+            diffuse_asset_id: "asset:skybox".to_string(),
+            specular_asset_id: "asset:skybox".to_string(),
+            intensity: 1000.0,
+        });
+    }
+
+    {
+        let mut xrds = XrdsAPI::attach(&mut app);
+        xrds.import_scene_document(&document)
+            .expect("document should import");
+    }
+
+    let camera_entity = app
+        .world()
+        .resource::<XrdsIdIndex>()
+        .entity_of(XrdsId(501))
+        .expect("camera entity should exist");
+
+    let sky_rotation = app
+        .world()
+        .get::<Skybox>(camera_entity)
+        .expect("camera should receive the skybox")
+        .rotation;
+    let ibl_rotation = app
+        .world()
+        .get::<EnvironmentMapLight>(camera_entity)
+        .expect("camera should receive the environment light")
+        .rotation;
+
+    let dot = sky_rotation.dot(ibl_rotation).abs();
+    assert!(
+        (dot - 1.0).abs() < 1e-5,
+        "sky and lighting must share a rotation, got {sky_rotation:?} vs {ibl_rotation:?}",
+    );
+}
+
+/// A skybox and passthrough are mutually exclusive, and the conflict is silent
+/// without this: the skybox is inserted on every `Camera3d` — the XR eye cameras
+/// included — and draws into the main pass, painting over the transparent clear
+/// passthrough needs. The projection layer ends up opaque everywhere, the
+/// passthrough layer beneath is never revealed, and the author sees their skybox
+/// with no indication of why the real world never appears.
+#[test]
+fn passthrough_suppresses_an_authored_skybox() {
+    let mut app = xrds_test_app();
+    app.insert_resource(xrds_openxr::OpenXrPassthroughEnabled(true));
+
+    let document = skybox_document();
+    {
+        let mut xrds = XrdsAPI::attach(&mut app);
+        xrds.import_scene_document(&document)
+            .expect("document should import");
+    }
+
+    let camera_entity = app
+        .world()
+        .resource::<XrdsIdIndex>()
+        .entity_of(XrdsId(501))
+        .expect("camera entity should exist");
+    assert!(
+        app.world().get::<Skybox>(camera_entity).is_none(),
+        "an authored skybox must not be applied while passthrough is on — it would \
+         hide the real world with no way for the author to tell why",
+    );
+}
+
+/// The same scene without passthrough still gets its skybox, so the suppression
+/// above is conditional rather than a regression in skybox support.
+#[test]
+fn a_skybox_still_applies_when_passthrough_is_off() {
+    let mut app = xrds_test_app();
+    app.insert_resource(xrds_openxr::OpenXrPassthroughEnabled(false));
+
+    let document = skybox_document();
+    {
+        let mut xrds = XrdsAPI::attach(&mut app);
+        xrds.import_scene_document(&document)
+            .expect("document should import");
+    }
+
+    let camera_entity = app
+        .world()
+        .resource::<XrdsIdIndex>()
+        .entity_of(XrdsId(501))
+        .expect("camera entity should exist");
+    assert!(
+        app.world().get::<Skybox>(camera_entity).is_some(),
+        "skybox should apply normally when passthrough is off",
+    );
+}
+
+/// One camera, one authored skybox — the shared fixture for the two tests above.
+fn skybox_document() -> XrdsSceneDocument {
+    XrdsSceneDocument {
+        metadata: XrdsSceneMetadata {
+            environment: Some(XrdsSceneEnvironment {
+                skybox: Some(XrdsSceneSkyboxEnvironment {
+                    texture_asset_id: "asset:skybox".to_string(),
+                    brightness: 321.0,
+                    yaw_deg: 0.0,
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+        assets: vec![XrdsSceneAsset {
+            id: "asset:skybox".to_string(),
+            uri: "environment_maps/specular.ktx2".to_string(),
+            kind: XrdsSceneAssetKind::EnvironmentMap,
+        }],
+        nodes: vec![XrdsSceneNode {
+            id: XrdsSceneNodeId(501),
+            parent_id: None,
+            name: "Camera".to_string(),
+            enabled: true,
+            visible: true,
+            transform: XrdsSceneTransform::default(),
+            payload: XrdsSceneNodePayload::Camera(Default::default()),
+            grabbable: false,
+            editor: XrdsEditorMetadata::default(),
+            triggers: Vec::new(),
+            watchers: Vec::new(),
+        }],
+        ..Default::default()
+    }
+}
+
 #[test]
 fn import_scene_document_applies_authored_skybox_to_imported_cameras() {
     let mut app = xrds_test_app();
@@ -183,6 +378,7 @@ fn import_scene_document_applies_authored_skybox_to_imported_cameras() {
                 skybox: Some(XrdsSceneSkyboxEnvironment {
                     texture_asset_id: "asset:skybox".to_string(),
                     brightness: 321.0,
+                    yaw_deg: 0.0,
                 }),
                 ..Default::default()
             }),
@@ -372,6 +568,7 @@ fn scene_environment_policy_preserves_explicit_camera_skybox() {
                 skybox: Some(XrdsSceneSkyboxEnvironment {
                     texture_asset_id: "asset:skybox".to_string(),
                     brightness: 500.0,
+                    yaw_deg: 0.0,
                 }),
                 ..Default::default()
             }),
@@ -565,6 +762,7 @@ fn scene_environment_policy_clears_managed_camera_skybox_when_removed() {
                 skybox: Some(XrdsSceneSkyboxEnvironment {
                     texture_asset_id: "asset:skybox".to_string(),
                     brightness: 250.0,
+                    yaw_deg: 0.0,
                 }),
                 ..Default::default()
             }),
@@ -732,6 +930,7 @@ fn export_scene_document_preserves_imported_skybox_environment_by_default() {
                 skybox: Some(XrdsSceneSkyboxEnvironment {
                     texture_asset_id: "asset:skybox".to_string(),
                     brightness: 600.0,
+                    yaw_deg: 0.0,
                 }),
                 ..Default::default()
             }),
@@ -919,6 +1118,7 @@ fn set_scene_environment_supports_distinct_asset_ids_for_same_texture_uri() {
             skybox: Some(XrdsSceneSkyboxEnvironment {
                 texture_asset_id: "asset:skybox".to_string(),
                 brightness: 777.0,
+                yaw_deg: 0.0,
             }),
             ..Default::default()
         });
@@ -1155,6 +1355,7 @@ fn set_scene_environment_applies_runtime_skybox_policy_to_existing_camera() {
             skybox: Some(XrdsSceneSkyboxEnvironment {
                 texture_asset_id: "asset:skybox".to_string(),
                 brightness: 777.0,
+                yaw_deg: 0.0,
             }),
             ..Default::default()
         });
@@ -1178,6 +1379,7 @@ fn export_scene_document_preserves_runtime_set_scene_skybox_environment() {
             skybox: Some(XrdsSceneSkyboxEnvironment {
                 texture_asset_id: "asset:skybox".to_string(),
                 brightness: 444.0,
+                yaw_deg: 0.0,
             }),
             ..Default::default()
         };
@@ -1198,6 +1400,7 @@ fn export_scene_document_preserves_runtime_set_scene_skybox_environment() {
             skybox: Some(XrdsSceneSkyboxEnvironment {
                 texture_asset_id: "asset:skybox".to_string(),
                 brightness: 444.0,
+                yaw_deg: 0.0,
             }),
             ..Default::default()
         })
@@ -1219,6 +1422,7 @@ fn export_scene_document_preserves_runtime_asset_aliases_for_environment_texture
             skybox: Some(XrdsSceneSkyboxEnvironment {
                 texture_asset_id: "asset:skybox".to_string(),
                 brightness: 333.0,
+                yaw_deg: 0.0,
             }),
             ..Default::default()
         };
@@ -1255,6 +1459,7 @@ fn export_scene_document_preserves_runtime_asset_aliases_for_environment_texture
             skybox: Some(XrdsSceneSkyboxEnvironment {
                 texture_asset_id: "asset:skybox".to_string(),
                 brightness: 333.0,
+                yaw_deg: 0.0,
             }),
             ..Default::default()
         })

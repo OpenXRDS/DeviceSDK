@@ -479,6 +479,7 @@ fn environment_map_assets_survive_import_export_round_trip() {
                 skybox: Some(XrdsSceneSkyboxEnvironment {
                     texture_asset_id: "asset:skybox".to_string(),
                     brightness: 1.2,
+                    yaw_deg: 0.0,
                 }),
                 ..Default::default()
             }),
