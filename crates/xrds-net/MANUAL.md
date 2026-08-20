@@ -72,8 +72,7 @@ selected by a single factory. Protocols advertise their shape via capability
 queries (request-shaped, stream-shaped, or file-transfer-shaped) rather than a
 flat "every protocol implements every method" trait, so an unsupported verb is
 a structured error, not a silent no-op. (The `ProtocolHandler` trait itself is
-internal; it is documented in
-[`docs/done/xrds-net-protocol-handler.md`](../../docs/done/xrds-net-protocol-handler.md).)
+internal and not part of the public surface.)
 
 ---
 
@@ -486,10 +485,9 @@ is a future effort.
 
 `xrds-net` performs **no codec work**. Media *sources* injected into WebRTC
 (`AudioSource` / `VideoSource`, already encoded) are produced by `xrds-media`
-(capture + `ffmpeg`/`opus` encoding under its `transcoding` feature). This
-separation — device capture and codec encoding out of `xrds-net` — is described
-in
-[`docs/done/xrds-net-capture-decoupling.md`](../../docs/done/xrds-net-capture-decoupling.md).
+(capture + `ffmpeg`/`opus` encoding under its `transcoding` feature). Device
+capture and codec encoding are deliberately kept out of `xrds-net`, so this
+crate carries no codec dependencies at all.
 Media *decode and playback* (encoded bytes → frames → a scene texture) are not
 provided by any crate yet; that is `xrds-media` + `XrdsAPI` future work.
 
@@ -504,8 +502,7 @@ provided by any crate yet; that is `xrds-media` + `XrdsAPI` future work.
 **Android** (Quest 3/Pro, arm64, min API 32) is supported — HTTPS and `wss://`
 are verified working on-device. Two caveats: the FTP **server** (`libunftp`) is
 excluded there (an XR client never hosts FTP — dropped via
-`--no-default-features`, see `docs/done/xrds-net-android-shipping.md`), and WebRTC
-remains desktop-only. There is no Bevy dependency (removed) and no async
+`--no-default-features`), and WebRTC remains desktop-only. There is no Bevy dependency (removed) and no async
 runtime is required of the consumer.
 
 **TLS.** Everything except QUIC uses **rustls** (with the `ring` crypto
@@ -513,8 +510,7 @@ provider): HTTP/HTTPS (`reqwest`), `wss://` (`tokio-tungstenite`), FTPS
 (`suppaftp`), MQTT (`rumqttc`), CoAP, WebRTC. QUIC/HTTP3 uses **BoringSSL**,
 vendored inside `quiche` — it has no rustls option, so it's the one exception.
 That's the whole story: two crypto backends, no OpenSSL, no libcurl, no
-`native-tls`, nothing to provision on any platform. See
-`docs/done/xrds-net-crypto-consolidation.md` for why.
+`native-tls`, nothing to provision on any platform.
 
 Certificate validation uses the **webpki-roots** bundled Mozilla CA set (not
 the OS trust store — more portable, and works identically on Android).
@@ -538,10 +534,6 @@ crate on first use; callers don't need to do anything.
   connect-operate-drop. Relevant if HLS/DASH-style segment pulling is ever
   targeted (a handshake per segment otherwise) — noted, not implemented.
 - **WebRTC in the intent model.** Deliberately separate (§13).
-
-See
-[`docs/done/xrds-net-devicesdk-integration.md`](../../docs/done/xrds-net-devicesdk-integration.md)
-for the integration design and its "Boundaries / non-goals" section.
 
 ---
 
@@ -567,11 +559,10 @@ Compare against it rather than expecting an all-green run.
 
 WebRTC's tests are genuine end-to-end integration tests (real signaling
 server, real ICE/DTLS handshake) and live separately in
-[`tests/webrtc_integration.rs`](../tests/webrtc_integration.rs) — see
-`docs/done/xrds-net-webrtc-test-restructure.md` for why and how they're
-structured (OS-assigned ports, polling instead of fixed sleeps, `#[serial]`
+[`tests/webrtc_integration.rs`](tests/webrtc_integration.rs). They use
+OS-assigned ports and polling instead of fixed sleeps, and are `#[serial]`
 within that file since Cargo only isolates *files* into separate processes,
-not functions within one). Pure logic that used to only be exercised
+not functions within one. Pure logic that used to only be exercised
 indirectly through those E2E round-trips — ICE server URL construction,
 `WebRTCMessage` (de)serialization, session create/join/leave/list/close
 bookkeeping, H.264 start-code validation — now has direct, real, sub-second
@@ -579,16 +570,3 @@ unit tests in the crate's own `#[cfg(test)]` modules instead. The slowest
 WebRTC test (`test_client_webrtc_send_video_file`, a full real-time file
 transfer, 60-120s) is `#[ignore]`d by default; run it explicitly with
 `cargo test -p xrds-net --test webrtc_integration -- --ignored`.
-
----
-
-## 17. Design documents
-
-- [`docs/done/xrds-net-protocol-handler.md`](../../docs/done/xrds-net-protocol-handler.md)
-  — the protocol-agnostic API + `ProtocolHandler` mechanism (intent verbs,
-  `NetError`, capability matrix, expert-API refactor).
-- [`docs/done/xrds-net-devicesdk-integration.md`](../../docs/done/xrds-net-devicesdk-integration.md)
-  — the DeviceSDK integration (`XrdsNetTask`/`NetFeed`, bounded `EventStream`,
-  `xrds::net` re-export), phase-by-phase.
-- [`docs/done/xrds-net-capture-decoupling.md`](../../docs/done/xrds-net-capture-decoupling.md)
-  — device capture + codec encoding moved to `xrds-media`.

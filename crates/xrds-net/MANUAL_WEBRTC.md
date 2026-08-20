@@ -35,7 +35,7 @@ For everything else (request/dispatch/listen/transfer/open), see
 it media already encoded in the negotiated codec (H264 Annex-B / Opus), and the
 subscriber receives raw RTP to decode itself. Producing the encoded media
 (capture + encode) is `xrds-media`'s job — see
-[`docs/done/xrds-net-capture-decoupling.md`](../../docs/done/xrds-net-capture-decoupling.md).
+[`crates/xrds-media/README.md`](../xrds-media/README.md).
 
 ---
 
@@ -86,7 +86,7 @@ WebRTC needs setup the rest of the crate doesn't:
    one). Calling `rustls::crypto::ring::default_provider().install_default()`
    directly instead is not recommended: it panics if called twice in the
    same process, which is easy to hit once more than one part of an app
-   touches rustls (see docs/done/xrds-net-crypto-consolidation.md).
+   touches rustls.
 
    Omitting this makes the DTLS handshake fail at runtime.
 3. **A reachable signaling server.** Either run the built-in one
@@ -110,9 +110,7 @@ WebRTC needs setup the rest of the crate doesn't:
    `warn!`) and ICE falls back to STUN-only — connections between peers
    that can reach each other directly (including same-machine/loopback
    testing) still work, but there's no relay fallback for restrictive
-   NATs. There used to be a single hardcoded TURN username/password
-   committed in source; see docs/done/xrds-net-release-readiness.md Phase 1 for
-   why that changed.
+   NATs.
 
    For a loopback/local-testing scenario where you don't want *any* remote
    STUN/TURN network calls (faster, and avoids depending on DNS/network
@@ -290,7 +288,7 @@ WebRTCClient::new() -> Self
   — end-to-end: in-process signaling server + publisher (real webcam/mic,
   captured & encoded via `xrds-media`) + subscriber (saves the received stream).
   The canonical, runnable reference for everything above.
-- [`docs/done/xrds-net-capture-decoupling.md`](../../docs/done/xrds-net-capture-decoupling.md)
+- [`crates/xrds-media/README.md`](../xrds-media/README.md)
   — why capture + encoding live in `xrds-media`, and the exact `VideoSource`/
   `AudioSource` contract.
 - [MANUAL.md](./MANUAL.md) — everything that is *not* WebRTC (the intent verbs,

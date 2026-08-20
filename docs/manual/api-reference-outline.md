@@ -126,7 +126,8 @@ Grouped by the actual method clusters in `xrds_api.rs` (`spawn_*`, the 32
 
 ## 7. Scene Environment
 
-- IBL, skybox, manual exposure, linear fog.
+- IBL, skybox, manual exposure, procedural atmosphere, fog (linear / exponential /
+  exponential-squared).
 - The document-first vs. runtime-first split, from `README.md`:
   save/load-then-import vs. `merge_scene_assets`/`set_scene_environment`/
   `clear_scene_environment` directly on `XrdsAPI`.

@@ -3,9 +3,10 @@
 Desktop-only camera and microphone capture for XRDS. Produces **raw** media
 frames and nothing else — no networking, no codecs.
 
-This crate owns the platform device dependencies (`nokhwa`, `cpal`) that used to
-live inside `xrds-net`. See [`docs/done/xrds-net-capture-decoupling.md`](../../docs/done/xrds-net-capture-decoupling.md)
-for the rationale and the target layering.
+This crate owns the platform device dependencies (`nokhwa`, `cpal`), keeping them
+out of `xrds-net` — which in turn carries no codec dependencies. The two crates do
+not depend on each other; consumer code wires encoded streams from one into the
+other's `VideoSource`/`AudioSource` types.
 
 ## What it produces
 

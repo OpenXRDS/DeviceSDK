@@ -65,7 +65,7 @@ Important rule about ids:
 | Example | Purpose |
 | --- | --- |
 | [simple_api.rs](xrds_first/simple_api.rs) | Smallest end-to-end XRDS runtime example with typed helper methods. |
-| [runtime_scene_environment.rs](xrds_first/runtime_scene_environment.rs) | Runtime-first scene environment policy through `merge_scene_assets`, `set_scene_environment`, and `clear_scene_environment`, including IBL, skybox, manual exposure, and linear fog. |
+| [runtime_scene_environment.rs](xrds_first/runtime_scene_environment.rs) | Runtime-first scene environment policy through `merge_scene_assets`, `set_scene_environment`, and `clear_scene_environment`, including IBL, skybox, manual exposure, and fog. |
 | [environment_map_visual_check.rs](xrds_first/environment_map_visual_check.rs) | Focused visual proof that scene-wide IBL and skybox are affecting reflections across different material roughness levels. |
 | [simple_scene.rs](xrds_first/simple_scene.rs) | Basic scene authored directly with XRDS descriptors. |
 | [simple_update.rs](xrds_first/simple_update.rs) | Simple per-frame updates through XRDS handles. |
@@ -87,8 +87,7 @@ Important rule about ids:
 | [scene_document_session_save_load.rs](xrds_first/scene_document_session_save_load.rs) | Document-only session workflow: save JSON, edit, save in place, and reload through `XrdsSceneDocumentSession`. |
 | [descriptor_gen.rs](xrds_first/descriptor_gen.rs) | Minimal descriptor-authoring demo: spawns a camera, ambient light, and cube purely through `XrdsAPI`/`XrdsApp::setup`. |
 | [glb_runtime_add.rs](xrds_first/glb_runtime_add.rs) | Runtime GLB placement: adds/removes a `.glb` at runtime via a keypress, entirely through `XrdsSceneDocumentSession`/scene-graph node ids. |
-| [trigger_action_sequence.rs](xrds_first/trigger_action_sequence.rs) | Trigger-action sequencing (Phase 5): one node, two `XrdsTriggerBinding`s, watched live as an ordered `XrdsSequence` blinks and teleports a cube on `ZoneEnter`/`ZoneExit`. |
-| [trigger_action_timeline.rs](xrds_first/trigger_action_timeline.rs) | Timeline-based composition and the runnable registry (Phases 9/9a): a looping `XrdsTimeline`, `XrdsAction::Run` interop in both directions (sequence starts a timeline, timeline starts a sequence), and registry reuse across two independently-triggered cubes. |
+| [trigger_action_track.rs](xrds_first/trigger_action_track.rs) | Tracks: one trigger choreographing several nodes at once — a looping Track with one row per asset, concurrent keys on the same tick, and a second Track refused because its assets are already claimed. Replaces the former `trigger_action_sequence` and `trigger_action_timeline` examples, whose sequence-versus-timeline contrast the Track model dissolved. |
 
 ## Extension-First Examples
 
@@ -97,15 +96,15 @@ These show the open extension model. Use them when built-in XRDS components are 
 | Example | Purpose |
 | --- | --- |
 | [generic_update.rs](extensions/generic_update.rs) | Custom descriptor plus custom patch type while still realizing through XRDS-owned geometry/material paths. |
-| [net_app.rs](networking/net_app.rs) | **Networking inside an `XrdsApp`** — the recommended in-app path. Kicks off a one-shot (`request_async` → poll with `Option<XrdsNetTask>::take_ready()`) and an ongoing stream (`NetFeed::try_recv`/`take_error`) from `setup`/`update`, all off the frame thread. Start here if you're networking from a running app. See `docs/done/xrds-net-devicesdk-integration.md`. |
-| [net_intent.rs](networking/net_intent.rs) | The same four intent verbs (`request`/`dispatch`/`listen`/`transfer`) called **synchronously**, standalone (no runtime) — fine for scripts/tests; would block a frame if used in-app. See `docs/done/xrds-net-protocol-handler.md`. |
+| [net_app.rs](networking/net_app.rs) | **Networking inside an `XrdsApp`** — the recommended in-app path. Kicks off a one-shot (`request_async` → poll with `Option<XrdsNetTask>::take_ready()`) and an ongoing stream (`NetFeed::try_recv`/`take_error`) from `setup`/`update`, all off the frame thread. Start here if you're networking from a running app. |
+| [net_intent.rs](networking/net_intent.rs) | The same four intent verbs (`request`/`dispatch`/`listen`/`transfer`) called **synchronously**, standalone (no runtime) — fine for scripts/tests; would block a frame if used in-app. |
 | [net.rs](networking/net.rs) | Expert `ClientBuilder`/`Client` session API `XrdsNet` is built on — protocol-aware (`set_protocol`, `.connect()`/`.request()`/`.send()`/`.rcv()`) for when you need lower-level control. |
 | [net_protocols.rs](networking/net_protocols.rs) | Focused: a **capability tour** — one supported verb per protocol (HTTP/CoAP `request`, WS `dispatch`, MQTT `dispatch`+`listen` round-trip, FTP `transfer`), all through the intent verbs. See MANUAL.md §12. |
 | [net_errors.rs](networking/net_errors.rs) | Focused: the structured **`NetError`** model — one case per variant (`UnrecognizedScheme`/`Capability`/`MissingInput`/`Network`/`Protocol`) and how to react. Mostly network-free. See MANUAL.md §6. |
 | [net_backpressure.rs](networking/net_backpressure.rs) | Focused: **`listen` buffering** — `ListenOptions` + `Overflow` (lossless `Block` vs live `DropOldest`), the knob a video-rate feed needs. See MANUAL.md §7. |
-| [webrtc_webcam_stream.rs](webrtc/webrtc_webcam_stream.rs) | Live webcam + microphone streamed over WebRTC — `xrds-media` owns device access, `xrds-net` only transcodes/transports the injected `VideoSource`/`AudioSource`. See `docs/done/xrds-net-capture-decoupling.md`. |
+| [webrtc_webcam_stream.rs](webrtc/webrtc_webcam_stream.rs) | Live webcam + microphone streamed over WebRTC — `xrds-media` owns device access, `xrds-net` only transcodes/transports the injected `VideoSource`/`AudioSource`. |
 | [webrtc_file_stream.rs](webrtc/webrtc_file_stream.rs) | The same WebRTC signaling/ICE/media path, but publishing a bundled sample file instead of a real webcam+mic — no hardware needed, runs anywhere. Also demonstrates a data channel message, OS-assigned signaling port, loopback-only ICE config, and clean peer-connection teardown. Start here to see the WebRTC API without needing a camera. |
-| [webrtc_realnet_signaling_server.rs](webrtc/webrtc_realnet_signaling_server.rs), [webrtc_realnet_publisher.rs](webrtc/webrtc_realnet_publisher.rs), [webrtc_realnet_subscriber.rs](webrtc/webrtc_realnet_subscriber.rs) | Three standalone binaries for testing WebRTC across a **real** network (not loopback) — e.g. two separate machines. Unlike the examples above, these use the default production STUN/TURN config and print the ICE connection state plus the winning candidate pair type (`host`/`srflx`/`relay`) so you can confirm whether a TURN relay was actually used. **See [webrtc/README.md](webrtc/README.md) for the full launching manual** (flags, multi-terminal order, TURN credentials, troubleshooting); design background in `docs/done/xrds-net-webrtc-realnet-binaries.md` and `docs/done/xrds-net-release-readiness.md` Phase 3. |
+| [webrtc_realnet_signaling_server.rs](webrtc/webrtc_realnet_signaling_server.rs), [webrtc_realnet_publisher.rs](webrtc/webrtc_realnet_publisher.rs), [webrtc_realnet_subscriber.rs](webrtc/webrtc_realnet_subscriber.rs) | Three standalone binaries for testing WebRTC across a **real** network (not loopback) — e.g. two separate machines. Unlike the examples above, these use the default production STUN/TURN config and print the ICE connection state plus the winning candidate pair type (`host`/`srflx`/`relay`) so you can confirm whether a TURN relay was actually used. **See [webrtc/README.md](webrtc/README.md) for the full launching manual** (flags, multi-terminal order, TURN credentials, troubleshooting). |
 
 ## Expert Escape Hatch
 
@@ -123,11 +122,11 @@ These are primarily feature showcases rather than editor-basement teaching examp
 
 For texture UV authoring specifically, start with [scene_document_texture_uv_rotation_only.rs](xrds_first/scene_document_texture_uv_rotation_only.rs). It isolates the authored rotation behavior without extra offset or sampler changes. Use [scene_document_texture_uv_validation.rs](xrds_first/scene_document_texture_uv_validation.rs) when you want the broader proof that authored UV metadata and sampler metadata both survive document import and reach the runtime material path.
 
-For scene-level environment authoring, start with [scene_document_environment_import.rs](xrds_first/scene_document_environment_import.rs). It authors scene-wide environment metadata on the document, imports it through `XrdsAPI`, and shows the imported camera picking up IBL, manual exposure, and linear fog automatically.
+For scene-level environment authoring, start with [scene_document_environment_import.rs](xrds_first/scene_document_environment_import.rs). It authors scene-wide environment metadata on the document, imports it through `XrdsAPI`, and shows the imported camera picking up IBL, manual exposure, and fog automatically.
 
 For a quick visual check that your environment maps are actually landing in the runtime material path, run [environment_map_visual_check.rs](xrds_first/environment_map_visual_check.rs). It keeps the scene small and compares three spheres with different roughness so reflection sharpness is easy to judge by eye.
 
-For scene-level environment control owned by the live application instead of a document, start with [runtime_scene_environment.rs](xrds_first/runtime_scene_environment.rs). It merges durable texture asset ids into the runtime catalog, sets scene-wide IBL, skybox, manual exposure, and linear fog directly through `XrdsAPI`, then clears and restores that policy while the app is running.
+For scene-level environment control owned by the live application instead of a document, start with [runtime_scene_environment.rs](xrds_first/runtime_scene_environment.rs). It merges durable texture asset ids into the runtime catalog, sets scene-wide IBL, skybox, manual exposure, and fog directly through `XrdsAPI`, then clears and restores that policy while the app is running.
 
 For strict layering, treat the label below as authoritative:
 

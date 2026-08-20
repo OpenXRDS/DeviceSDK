@@ -196,6 +196,9 @@ Design intent:
 
 - this is the main supported path for most users
 - new features should be surfaced here first when possible
+- new features are evaluated against one question: can a non-expert use this through XRDS
+  concepts alone? If not, the feature is not finished at this layer yet.
+- typical app code starts here and keeps the typed handles returned by `XrdsAPI::spawn(...)`
 
 ### 2) Expert Layer (engine-facing)
 
@@ -232,14 +235,42 @@ How it relates to SDK layering:
 - authoring data is edited in document APIs
 - runtime behavior is realized through `XrdsAPI` in `xrds-runtime`
 
+#### Which type do I use?
+
+Most descriptors exist as a pair, distinguished by the `XrdsScene` prefix:
+
+- `XrdsCamera`, `XrdsCube`, `XrdsPointLight` — a live runtime object spawned or edited
+  through `XrdsAPI`.
+- `XrdsSceneNode`, `XrdsSceneCube`, `XrdsScenePointLight` — authored scene data that must
+  survive save/load and import/export.
+
+The rule holds for every pair, so `XrdsWorldButton`/`XrdsSceneWorldButton` splits the same
+way. Reach for `xrds-scene-graph` only when you need a durable document model with stable
+ids, hierarchy, editor metadata, and round-trip persistence. See
+[crates/xrds-scene-graph/README.md](crates/xrds-scene-graph/README.md) for the boundary.
+
+Scene environment policy follows the same rule: author it in `XrdsSceneDocument` when it is
+part of saved scene meaning, or call `XrdsAPI::merge_scene_assets(...)`,
+`set_scene_environment(...)`, and `clear_scene_environment(...)` when live app logic owns it.
+
+One deliberate asymmetry: for authored material texture UVs, the document layer treats
+`rotation_deg` as center-based by default. When you need exact low-level origin-based
+behavior, select the `Raw` UV transform mode explicitly through the document/runtime escape
+hatch.
+
 ## Crate Roles (Brief)
 
 - `xrds` (root crate): SDK entry surface and workspace integration layer.
 - `xrds-runtime`: runtime projection layer that realizes XRDS concepts in the live engine.
 - `xrds-scene-graph`: document model, persistence, and authored workflow operations.
 - `xrds-components`: shared XRDS component descriptors/types used by runtime and SDK surfaces.
-- `xrds-openxr`: OpenXR backend integration.
-- `xrds-net`: networking-related runtime integrations/samples.
+- `xrds-openxr`: OpenXR session, reference spaces, swapchain, render/blit, hand and
+  controller input, Android bootstrap.
+- `xrds-net`: protocol-agnostic client (HTTP, WebSocket, MQTT, CoAP, QUIC, FTP, WebRTC) plus
+  a signaling/dev server. Carries no codec dependencies by design.
+- `xrds-media`: desktop-only camera and microphone capture, with optional transcoding behind
+  the `transcoding` feature. Deliberately does not depend on `xrds-net` — it produces
+  already-encoded H264/Opus streams that consumer code wires into `xrds-net`'s source types.
 - `xrds-audio`: **deprecated and excluded from the workspace** — not built, nothing depends
   on it, slated for deletion. Bevy already covers spatial audio (`SpatialListener`,
   `AudioSink`, `PlaybackSettings`), and authored audio goes through `XrdsSceneAudioClip`. The
@@ -257,7 +288,8 @@ Both paths converge in `xrds-runtime`, which applies XRDS-authored policy/compon
 
 ## Current Environment Policy Example
 
-Scene environment policy currently supports IBL, skybox, manual exposure, and linear fog.
+Scene environment policy currently supports IBL, skybox, manual exposure, procedural
+atmosphere, and fog with linear, exponential and exponential-squared falloff.
 
 - Document-driven: author in `XrdsSceneDocument`, import into runtime.
 - Runtime-driven: call `merge_scene_assets(...)`, `set_scene_environment(...)`, and `clear_scene_environment(...)`.
@@ -266,8 +298,7 @@ Scene environment policy currently supports IBL, skybox, manual exposure, and li
 
 Lets an authored scene say "when trigger T fires on this node, run this
 ordered list of actions" — without a scripting language, a visual
-node-graph, or any codegen. Design rationale:
-`docs/done/xrds-scenegraph-trigger-action-sequencing.md`.
+node-graph, or any codegen.
 
 **Two collaborating but separate systems:**
 

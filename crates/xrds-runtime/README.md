@@ -28,6 +28,7 @@ Use the document-driven path when environment belongs to durable authored scene 
 
 The runtime-driven path still uses `XrdsSceneAsset` ids and `XrdsSceneEnvironment` because some scene-wide environment features need durable references to texture assets rather than transient render handles.
 
-Today the scene-wide environment surface includes IBL, skybox, manual exposure, and linear fog.
+Today the scene-wide environment surface includes IBL, skybox, manual exposure, procedural
+atmosphere, and fog with linear, exponential and exponential-squared falloff.
 
 For maintainer guidance on where to implement new primitive types, see [docs/adding-primitive-type.md](../../docs/adding-primitive-type.md).
