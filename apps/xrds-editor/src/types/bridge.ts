@@ -507,6 +507,7 @@ export interface EnvironmentDto {
   exposure_enabled: boolean; ev100: number;
   ibl_enabled: boolean; ibl_diffuse: string; ibl_specular: string; ibl_intensity: number;
   skybox_enabled: boolean; skybox_asset: string; skybox_brightness: number;
+  skybox_yaw_deg: number;
 }
 
 export const defaultSnapshot: EditorSnapshot = {
@@ -590,7 +591,7 @@ export type EditorCommand =
   | { type: "ClearExposure" }
   | { type: "SetIbl";       payload: { diffuse_asset_id: string; specular_asset_id: string; intensity: number } }
   | { type: "ClearIbl" }
-  | { type: "SetSkybox";    payload: { texture_asset_id: string; brightness: number } }
+  | { type: "SetSkybox";    payload: { texture_asset_id: string; brightness: number; yaw_deg: number } }
   | { type: "ClearSkybox" }
   | { type: "SetHudText";         payload: { id: number; text: string; font_size: number; color: [number,number,number,number]; anchor: string; offset: [number,number] } }
   // The 12 HudTemplate/HudItem commands are gone with `XrdsHudTemplate`: a HUD is

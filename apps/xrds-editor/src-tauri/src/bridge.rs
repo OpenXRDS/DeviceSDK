@@ -240,7 +240,7 @@ pub enum EditorCommand {
         max_distance: f32,
         rolloff_factor: f32,
     },
-    SetSkybox     { texture_asset_id: String, brightness: f32 },
+    SetSkybox     { texture_asset_id: String, brightness: f32, yaw_deg: f32 },
     ClearSkybox,
 
     // --- Asset catalog ---
@@ -491,6 +491,9 @@ pub struct EnvironmentDto {
     pub skybox_enabled:  bool,
     pub skybox_asset:    String,
     pub skybox_brightness: f32,
+    /// Sky rotation about the vertical axis, in degrees — where the sun sits.
+    #[serde(default)]
+    pub skybox_yaw_deg: f32,
 }
 
 // ---------------------------------------------------------------------------

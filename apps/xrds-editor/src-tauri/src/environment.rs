@@ -72,10 +72,11 @@ pub fn apply_environment_command(
             });
             true
         }
-        EditorCommand::SetSkybox { texture_asset_id, brightness } => {
+        EditorCommand::SetSkybox { texture_asset_id, brightness, yaw_deg } => {
             let sky = XrdsSceneSkyboxEnvironment {
                 texture_asset_id: texture_asset_id.clone(),
                 brightness: *brightness,
+                yaw_deg: *yaw_deg,
             };
             let _ = session.0.edit(|doc| {
                 doc.metadata.environment.get_or_insert_with(Default::default).skybox = Some(sky);
@@ -121,9 +122,16 @@ pub fn build_environment_dto(session: &EditorSession) -> Option<EnvironmentDto> 
         ibl_enabled:  ibl.is_some(),
         ibl_diffuse:  ibl.map(|i| i.diffuse_asset_id.clone()).unwrap_or_default(),
         ibl_specular: ibl.map(|i| i.specular_asset_id.clone()).unwrap_or_default(),
-        ibl_intensity:ibl.map(|i| i.intensity).unwrap_or(1.0),
+        // cd/m2, like skybox brightness — not a 0..1 factor. Defaulting to 1.0 would
+        // light the scene with essentially nothing, the same trap the skybox had.
+        ibl_intensity:ibl.map(|i| i.intensity).unwrap_or(1000.0),
         skybox_enabled:    sky.is_some(),
         skybox_asset:      sky.map(|s| s.texture_asset_id.clone()).unwrap_or_default(),
-        skybox_brightness: sky.map(|s| s.brightness).unwrap_or(1.0),
+        // 1000 cd/m2, not 1.0: brightness is an absolute luminance measured against
+        // the camera exposure (default ev100 9.7, outdoor daylight), so a value of 1
+        // renders as black. This is the value the UI offers when enabling a skybox
+        // for the first time, so it decides whether the feature appears to work.
+        skybox_brightness: sky.map(|s| s.brightness).unwrap_or(1000.0),
+        skybox_yaw_deg:    sky.map(|s| s.yaw_deg).unwrap_or(0.0),
     })
 }

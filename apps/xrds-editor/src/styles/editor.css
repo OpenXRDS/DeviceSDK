@@ -707,6 +707,20 @@ button, input, select, textarea { font-family: inherit; }
   font-family: var(--font-mono); font-size: 11.5px; color: var(--overlay0);
 }
 
+/* Inspector / Environment tabs. Deliberately identical to `.seq-list-tab` rather
+ * than sharing its class: same visual language, but the sequencer's tabs carry a
+ * count badge and live in a different panel, so coupling them would make either
+ * one hard to change. */
+.insp-tabs { display: flex; flex-shrink: 0; background: var(--mantle);
+             border-bottom: 1px solid var(--surface0); }
+.insp-tab { flex: 1; padding: 7px 8px; font-size: 12px; font-weight: 500;
+            cursor: pointer; background: transparent; border: none;
+            border-top: 2px solid transparent; color: var(--overlay0);
+            white-space: nowrap; }
+.insp-tab:hover { color: var(--subtext1); }
+.insp-tab.active { color: var(--bright); background: var(--base);
+                   border-top-color: var(--blue); }
+
 .insp-empty { padding: 16px 14px; color: var(--overlay0); font-size: 13px; }
 
 .insp-section { border-bottom: 1px solid var(--surface0); padding: 14px 16px; }

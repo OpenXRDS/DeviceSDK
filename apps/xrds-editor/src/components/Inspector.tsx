@@ -225,6 +225,7 @@ function canBeGrabbed(payloadKind: string): boolean {
 
 export function Inspector({ snapshot, send, onOpenTrack,
                             showEnvironment = true }: Props) {
+  const [tab, setTab] = useState<"inspector" | "environment">("inspector");
   const node = snapshot.selected_node;
   const prevId = useRef<number | null>(null);
 
@@ -247,17 +248,51 @@ export function Inspector({ snapshot, send, onOpenTrack,
     }
   }, [node]);
 
+  // Scene settings are a peer of node properties, not the empty state for them.
+  //
+  // They used to render only when nothing was selected, which had two costs: fog,
+  // exposure and IBL could not be touched while a node was selected — you had to
+  // deselect first — and any new scene-wide setting landed somewhere an author had
+  // no reason to look. Passthrough went in that way and was duly hard to find.
+  //
+  // In the Sequencer workspace there is no Environment tab at all: that layout is
+  // for behaviour authoring, and `showEnvironment` already encoded that intent.
+  const tabs = (
+    <div className="insp-tabs">
+      <button className={`insp-tab${tab === "inspector" ? " active" : ""}`}
+        onClick={() => setTab("inspector")}>Inspector</button>
+      {showEnvironment && (
+        <button className={`insp-tab${tab === "environment" ? " active" : ""}`}
+          onClick={() => setTab("environment")}>Environment</button>
+      )}
+    </div>
+  );
+
+  // Falls back to the Inspector tab when Environment is unavailable, so switching
+  // into the Sequencer while on Environment does not leave a blank panel.
+  const showingEnvironment = tab === "environment" && showEnvironment;
+
+  if (showingEnvironment) {
+    return (
+      <div className="inspector">
+        {tabs}
+        <SceneEnvironmentSection
+          env={snapshot.environment}
+          passthrough={snapshot.xr_passthrough}
+          assets={snapshot.asset_catalog}
+          send={send}
+        />
+      </div>
+    );
+  }
+
   if (!node) {
     return (
       <div className="inspector">
-        <div className="panel-header">Inspector</div>
-        {showEnvironment ? (
-          <SceneEnvironmentSection env={snapshot.environment} passthrough={snapshot.xr_passthrough} send={send} />
-        ) : (
-          <div className="insp-empty">
-            Select a node to inspect it — or to bind a trigger to it under Triggers.
-          </div>
-        )}
+        {tabs}
+        <div className="insp-empty">
+          Select a node to inspect it — or to bind a trigger to it under Triggers.
+        </div>
       </div>
     );
   }
@@ -268,7 +303,7 @@ export function Inspector({ snapshot, send, onOpenTrack,
 
   return (
     <div className="inspector">
-      <div className="panel-header">Inspector</div>
+      {tabs}
 
       {/* Node header */}
       <div className="insp-section">
@@ -812,18 +847,35 @@ function AudioClipSection({ id, a, assets, send }: {
 // Scene environment (shown when nothing is selected)
 // ---------------------------------------------------------------------------
 
-function Toggle({ label, value, onChange }: { label: string; value: boolean; onChange: (v: boolean) => void }) {
+function Toggle({ label, value, onChange, disabled }:
+  { label: string; value: boolean; onChange: (v: boolean) => void; disabled?: boolean }) {
   return (
     <div className="insp-row">
-      <label>{label}</label>
-      <input type="checkbox" checked={value} style={{ accentColor:"var(--blue)", cursor:"pointer", width:16, height:16 }}
+      {/* Dimmed alongside the input so the row reads as unavailable rather than
+          as a checkbox that ignores clicks. */}
+      <label style={disabled ? { color: "var(--surface1)" } : undefined}>{label}</label>
+      <input type="checkbox" checked={value} disabled={disabled}
+        style={{ accentColor:"var(--blue)", cursor: disabled ? "default" : "pointer", width:16, height:16 }}
         onChange={e => onChange(e.target.checked)} />
     </div>
   );
 }
 
-function SceneEnvironmentSection({ env, passthrough, send }:
-  { env: EnvironmentDto | null; passthrough: boolean; send: (c: EditorCommand) => void }) {
+function SceneEnvironmentSection({ env, passthrough, assets, send }:
+  { env: EnvironmentDto | null; passthrough: boolean; assets: AssetCatalogEntry[];
+    send: (c: EditorCommand) => void }) {
+  // Both the skybox and IBL consume environment maps, so the filter is shared.
+  const envMaps = assets.filter(a => a.kind === "EnvironmentMap");
+
+  // IBL needs two *different* maps, and enabling with empty ids is refused by
+  // document validation. Guessing by name makes the common case one click — the
+  // SDK ships `diffuse.ktx2` and `specular.ktx2`, and anything produced by an IBL
+  // baker is named the same way — while still being only a starting point the
+  // author can change.
+  const defaultIbl = {
+    diffuse:  envMaps.find(a => /diffuse|irradiance/i.test(a.id))?.id  ?? envMaps[0]?.id ?? "",
+    specular: envMaps.find(a => /specular|radiance/i.test(a.id))?.id ?? envMaps[1]?.id ?? envMaps[0]?.id ?? "",
+  };
   // Bevy's default ev100 is 9.7 (outdoor daylight). We display exposure as a
   // "brightness" offset where 0 = Bevy default, positive = brighter, negative = darker.
   // Mapping: displayed_brightness = BEVY_EV100 - stored_ev100  →  brighter = lower ev100.
@@ -833,8 +885,8 @@ function SceneEnvironmentSection({ env, passthrough, send }:
 
   const e = env ?? { fog_enabled:false, fog_color:[1,0.4,0.1,1] as [number,number,number,number], fog_start:2, fog_end:30,
                      exposure_enabled:false, ev100:BEVY_EV100,
-                     ibl_enabled:false, ibl_diffuse:"", ibl_specular:"", ibl_intensity:1,
-                     skybox_enabled:false, skybox_asset:"", skybox_brightness:1 };
+                     ibl_enabled:false, ibl_diffuse:"", ibl_specular:"", ibl_intensity:1000,
+                     skybox_enabled:false, skybox_asset:"", skybox_brightness:1000, skybox_yaw_deg:0 };
 
   const [fogColor, setFogColor]     = useState<[number,number,number,number]>(e.fog_color);
   const [fogStart, setFogStart]     = useState(e.fog_start);
@@ -875,10 +927,23 @@ function SceneEnvironmentSection({ env, passthrough, send }:
           viewport — the editor has no XR compositor.
         </div>
         {passthrough && (
-          <div className="insp-note">
-            Only visible where the scene is transparent. Remove the skybox and any
-            full-coverage geometry, or the room stays hidden behind them.
-          </div>
+          <>
+            <div className="insp-note">
+              Only visible where the scene is transparent. A ground plane or other
+              full-coverage geometry will hide the room behind it.
+            </div>
+            {/* The skybox is not deletable geometry — it is a scene-environment
+                setting attached to the camera — so it needs saying separately from
+                "delete the opaque nodes". The runtime suppresses it rather than
+                letting it silently paint over the real world. */}
+            {e.skybox_enabled && (
+              <div className="insp-note">
+                The skybox below is <b>disabled on device</b> while passthrough is
+                on — it would paint over the real world. Turn passthrough off to see
+                it again.
+              </div>
+            )}
+          </>
         )}
       </div>
 
@@ -915,15 +980,121 @@ function SceneEnvironmentSection({ env, passthrough, send }:
         )}
       </div>
 
-      {/* IBL */}
+      {/* IBL.
+          Had the same disease as the Skybox section: a toggle, and a note telling
+          the author to "set diffuse/specular asset IDs" with no control to set them
+          — while enabling with empty ids fails document validation
+          (`EmptySceneIblAssetId`), so the checkbox silently refused to tick. */}
       <div className="insp-section">
         <h4>IBL <span style={{color:"var(--overlay0)",fontSize:9,fontWeight:"normal",marginLeft:4}}>image-based lighting</span></h4>
-        <Toggle label="Enable" value={e.ibl_enabled}
+        <Toggle label="Enable" value={e.ibl_enabled} disabled={envMaps.length === 0}
           onChange={on => on
-            ? send({ type:"SetIbl", payload:{ diffuse_asset_id:e.ibl_diffuse, specular_asset_id:e.ibl_specular, intensity:e.ibl_intensity } })
+            ? send({ type:"SetIbl", payload:{
+                diffuse_asset_id:  e.ibl_diffuse  || defaultIbl.diffuse,
+                specular_asset_id: e.ibl_specular || defaultIbl.specular,
+                intensity: e.ibl_intensity,
+              } })
             : send({ type:"ClearIbl" })} />
-        {e.ibl_enabled && (
-          <div className="insp-note">Set diffuse/specular asset IDs from imported environment maps.</div>
+        {envMaps.length === 0 ? (
+          <div className="insp-note">
+            Import environment maps first (Ctrl+I). IBL needs two: an irradiance map
+            for diffuse light and a prefiltered map for reflections.
+            <code>assets/environment_maps/</code> has both.
+          </div>
+        ) : e.ibl_enabled && (
+          <>
+            <div className="insp-row">
+              <label>Diffuse</label>
+              <Select
+                value={e.ibl_diffuse}
+                onValueChange={v => send({ type:"SetIbl", payload:{ diffuse_asset_id: v, specular_asset_id: e.ibl_specular, intensity: e.ibl_intensity } })}
+                options={envMaps.map(x => ({ value: x.id, label: x.name }))}
+                placeholder="Irradiance map"
+              />
+            </div>
+            <div className="insp-row">
+              <label>Specular</label>
+              <Select
+                value={e.ibl_specular}
+                onValueChange={v => send({ type:"SetIbl", payload:{ diffuse_asset_id: e.ibl_diffuse, specular_asset_id: v, intensity: e.ibl_intensity } })}
+                options={envMaps.map(x => ({ value: x.id, label: x.name }))}
+                placeholder="Prefiltered map"
+              />
+            </div>
+            <SliderRow label="Intensity" value={e.ibl_intensity} min={0} max={5000} step={50}
+              onLive={() => {}}
+              onCommit={v => send({ type:"SetIbl", payload:{ diffuse_asset_id: e.ibl_diffuse, specular_asset_id: e.ibl_specular, intensity: v } })} />
+            {e.ibl_diffuse === e.ibl_specular && (
+              <div className="insp-note">
+                Both slots use the same map. They are meant to differ — the diffuse
+                map is heavily blurred irradiance, the specular one a sharp chain
+                prefiltered by roughness — so lighting will look wrong.
+              </div>
+            )}
+          </>
+        )}
+      </div>
+
+      {/* Skybox.
+          The document, the runtime and the SetSkybox/ClearSkybox commands have all
+          existed for a long time; only this section was missing, so the feature was
+          unreachable and unknown. */}
+      <div className="insp-section">
+        <h4>Skybox</h4>
+        {/* Disabled with no environment map, rather than left clickable.
+            A skybox with an empty texture id fails document validation
+            (`EmptySceneSkyboxAssetId`), so the click would be silently rejected and
+            the checkbox would simply refuse to tick with no explanation — which is
+            exactly how this was reported. */}
+        <Toggle label="Enable" value={e.skybox_enabled} disabled={envMaps.length === 0}
+          onChange={on => on
+            ? send({ type:"SetSkybox", payload:{
+                texture_asset_id: e.skybox_asset || envMaps[0]?.id || "",
+                // No `|| 1000` fallback here: the default lives in the DTO
+                // (`build_environment_dto`), where it is a single source of truth.
+                // The fallback that used to be here never fired anyway — the DTO's
+                // old default of 1.0 is truthy in JS — and 1 cd/m² renders as a
+                // black sky, which is exactly how it was reported.
+                brightness: e.skybox_brightness,
+                yaw_deg: e.skybox_yaw_deg,
+              } })
+            : send({ type:"ClearSkybox" })} />
+        {envMaps.length === 0 ? (
+          <div className="insp-note">
+            Import an environment map first (Ctrl+I) — a skybox needs a cubemap
+            texture. <code>assets/environment_maps/specular.ktx2</code> ships with
+            the SDK.
+          </div>
+        ) : e.skybox_enabled && (
+          <>
+            <div className="insp-row">
+              <label>Texture</label>
+              <Select
+                value={e.skybox_asset}
+                onValueChange={v => send({ type:"SetSkybox", payload:{ texture_asset_id: v, brightness: e.skybox_brightness, yaw_deg: e.skybox_yaw_deg } })}
+                options={envMaps.map(x => ({ value: x.id, label: x.name }))}
+                placeholder="Choose an environment map"
+              />
+            </div>
+            {/* Absolute luminance in cd/m², judged against the camera's exposure —
+                not a 0..1 factor. A sky at single digits is black, which is why the
+                range starts where it does rather than at 0. */}
+            <SliderRow label="Brightness" value={e.skybox_brightness} min={0} max={5000} step={50}
+              onLive={() => {}}
+              onCommit={v => send({ type:"SetSkybox", payload:{ texture_asset_id: e.skybox_asset, brightness: v, yaw_deg: e.skybox_yaw_deg } })} />
+            {/* Turning the sky is how the sun gets placed: a cubemap arrives in
+                whatever orientation it was captured, and this is the one adjustment
+                an author actually makes to it. Live-updates rather than
+                commit-only, because aiming a sun is something you do by eye. */}
+            <SliderRow label="Rotation" value={e.skybox_yaw_deg} min={-180} max={180} step={1}
+              onLive={v => send({ type:"SetSkybox", payload:{ texture_asset_id: e.skybox_asset, brightness: e.skybox_brightness, yaw_deg: v } })}
+              onCommit={v => send({ type:"SetSkybox", payload:{ texture_asset_id: e.skybox_asset, brightness: e.skybox_brightness, yaw_deg: v } })} />
+            {passthrough && (
+              <div className="insp-note">
+                Suppressed on device while Passthrough is on — see the XR section.
+              </div>
+            )}
+          </>
         )}
       </div>
     </>
