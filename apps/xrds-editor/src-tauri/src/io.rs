@@ -21,12 +21,69 @@ fn detect_asset_kind(path: &str) -> Option<XrdsSceneAssetKind> {
         .extension().and_then(|e| e.to_str())
         .map(|e| e.to_lowercase());
     match ext.as_deref() {
-        Some("glb" | "gltf")             => Some(XrdsSceneAssetKind::Gltf),
-        Some("png" | "jpg" | "jpeg" | "webp" | "ktx2") => Some(XrdsSceneAssetKind::Texture),
-        Some("mp3" | "wav" | "ogg" | "flac")            => Some(XrdsSceneAssetKind::Audio),
-        Some("hdr")                       => Some(XrdsSceneAssetKind::EnvironmentMap),
-        _                                 => None,
+        Some("glb" | "gltf")                   => Some(XrdsSceneAssetKind::Gltf),
+        Some("png" | "jpg" | "jpeg" | "webp")  => Some(XrdsSceneAssetKind::Texture),
+        Some("mp3" | "wav" | "ogg" | "flac")   => Some(XrdsSceneAssetKind::Audio),
+        // `.ktx2` asks the file, rather than guessing from the extension.
+        //
+        // The container holds either a plain 2-D texture or a cubemap, and only a
+        // cubemap is usable as a skybox or IBL — Bevy's `Skybox` and
+        // `EnvironmentMapLight` both require a cube texture. The KTX2 header says
+        // which: `faceCount` is 6 for a cubemap and 1 otherwise. The SDK's own
+        // `environment_maps/{diffuse,specular}.ktx2` report 6.
+        //
+        // Extension alone was wrong in both directions. As `Texture` it made skybox
+        // and IBL unusable — importing the SDK's own environment map produced
+        // something neither would accept, and enabling a skybox then failed document
+        // validation with nothing shown ("I can't check the skybox checkbox",
+        // 2026-08-19). Blanket `EnvironmentMap` would have been equally wrong for a
+        // `.ktx2` compressed material texture, which is a normal thing to have.
+        Some("ktx2") => Some(match ktx2_face_count(path) {
+            Some(6) => XrdsSceneAssetKind::EnvironmentMap,
+            // Unreadable or truncated headers fall back to Texture: a 2-D texture
+            // that cannot be used as a skybox fails visibly in the picker, whereas a
+            // non-cubemap offered *as* a skybox fails at render time on a headset.
+            _ => XrdsSceneAssetKind::Texture,
+        }),
+        // Radiance `.hdr` is always a single equirectangular image — the format has
+        // no cubemap concept — so it is NOT directly usable as a Bevy skybox or IBL
+        // and needs converting to a cubemap KTX2 first. Kept as `EnvironmentMap`
+        // because that is what it is *for*, and reclassifying it would hide a
+        // downloaded panorama from the only picker an author would look in. See
+        // `docs/small-phases-plan.md` — the missing conversion step is recorded
+        // there rather than papered over here.
+        Some("hdr")                            => Some(XrdsSceneAssetKind::EnvironmentMap),
+        _                                      => None,
     }
+}
+
+/// `faceCount` from a KTX2 header — 6 for a cubemap, 1 for a plain texture.
+///
+/// The header is fixed-layout and starts the file, so this reads 40 bytes rather
+/// than parsing the container: a 12-byte identifier, then `vkFormat`, `typeSize`,
+/// `pixelWidth`, `pixelHeight`, `pixelDepth`, `layerCount`, and `faceCount` as
+/// little-endian `u32`s. Returns `None` when the file is missing, too short, or not
+/// KTX2 — all of which mean "do not claim this is a cubemap".
+fn ktx2_face_count(path: &str) -> Option<u32> {
+    use std::io::Read;
+
+    const KTX2_IDENTIFIER: [u8; 12] = [
+        0xAB, 0x4B, 0x54, 0x58, 0x20, 0x32, 0x30, 0xBB, 0x0D, 0x0A, 0x1A, 0x0A,
+    ];
+    const FACE_COUNT_OFFSET: usize = 36;
+
+    let mut header = [0u8; FACE_COUNT_OFFSET + 4];
+    std::fs::File::open(path)
+        .ok()?
+        .read_exact(&mut header)
+        .ok()?;
+
+    if header[..12] != KTX2_IDENTIFIER {
+        return None;
+    }
+    Some(u32::from_le_bytes(
+        header[FACE_COUNT_OFFSET..FACE_COUNT_OFFSET + 4].try_into().ok()?,
+    ))
 }
 
 fn node_references_asset(node: &XrdsSceneNode, asset_id: &str) -> bool {
@@ -213,9 +270,23 @@ pub fn apply_io_command(
                 Err(e) => {
                     error!("[io] import failed for '{}': {}", path, e);
                     state.pending_status = Some(format!("Import failed: {e}"));
+                    return false;
                 }
             }
-            false
+            // Reimport so the runtime's asset catalog picks the new entry up.
+            //
+            // This returned `false`, and the consequence was invisible: an imported
+            // asset landed in the *document* but never in
+            // `XrdsImportedAssetCatalog`, which is what the environment resolvers
+            // search. So a freshly imported environment map could not be found —
+            // "even after activating skybox, I see nothing but grey background",
+            // 2026-08-20 — and the same was true of every texture until some
+            // unrelated structural change happened to trigger a reimport.
+            //
+            // A full reimport is heavier than merging the catalog alone, but
+            // importing an asset is a rare, deliberate action, and the alternative
+            // is a second sync path that can drift from this one.
+            true
         }
 
         // `ExportGlb` was handled here. Scene export to glTF is retired: glTF has
@@ -831,6 +902,89 @@ fn copy_dir_recursive(src: &Path, dst: &Path) {
 mod tests {
     use super::*;
     use xrds_scene_graph::{XrdsSceneAsset, XrdsSceneGltfAsset, XrdsSceneNode, XrdsSceneNodeId};
+
+    /// `.ktx2` must import as an EnvironmentMap, not a Texture.
+    ///
+    /// Skybox and IBL both require an `EnvironmentMap` asset, and the SDK ships its
+    /// environment maps as `.ktx2`. While this mapped to `Texture`, importing the
+    /// SDK's own `environment_maps/specular.ktx2` produced an asset neither feature
+    /// would accept — so enabling a skybox failed document validation with nothing
+    /// shown to the author, and the checkbox simply would not tick.
+    ///
+    /// The container can legitimately hold a plain texture, so this is a judgement
+    /// about how `.ktx2` is used here rather than a fact about the format. Pinned
+    /// with a test because the alternative reading is reasonable enough that
+    /// someone will otherwise "fix" it back.
+    /// Asserted against the real files in `assets/environment_maps/`, not a
+    /// synthetic fixture: the point is that the header parse agrees with what the
+    /// SDK actually ships, and a hand-built header would only prove the parser
+    /// matches itself.
+    #[test]
+    fn shipped_environment_maps_are_detected_as_cubemaps() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .ancestors()
+            .nth(3)
+            .expect("workspace root")
+            .to_path_buf();
+
+        for name in ["diffuse.ktx2", "specular.ktx2"] {
+            let path = root.join("assets/environment_maps").join(name);
+            let path = path.to_string_lossy();
+            assert_eq!(
+                ktx2_face_count(&path),
+                Some(6),
+                "{name} should report 6 faces",
+            );
+            assert_eq!(
+                detect_asset_kind(&path),
+                Some(XrdsSceneAssetKind::EnvironmentMap),
+                "{name} must import as an EnvironmentMap or skybox and IBL cannot use it",
+            );
+        }
+    }
+
+    /// A `.ktx2` that is not a cubemap — or is not readable — must not be offered
+    /// as a skybox. Falling back to `Texture` fails visibly in the picker; claiming
+    /// EnvironmentMap would fail at render time on a headset instead.
+    #[test]
+    fn a_non_cubemap_ktx2_is_a_texture() {
+        let dir = std::env::temp_dir().join("xrds_ktx2_kind_test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("flat.ktx2");
+
+        // Valid identifier, faceCount = 1.
+        let mut header = vec![
+            0xAB, 0x4B, 0x54, 0x58, 0x20, 0x32, 0x30, 0xBB, 0x0D, 0x0A, 0x1A, 0x0A,
+        ];
+        header.extend(std::iter::repeat(0u8).take(24)); // through layerCount
+        header.extend(1u32.to_le_bytes()); // faceCount
+        std::fs::write(&path, &header).unwrap();
+
+        let path = path.to_string_lossy().into_owned();
+        assert_eq!(ktx2_face_count(&path), Some(1));
+        assert_eq!(detect_asset_kind(&path), Some(XrdsSceneAssetKind::Texture));
+
+        // A file that is not KTX2 at all must not be mistaken for one.
+        let bogus = dir.join("bogus.ktx2");
+        std::fs::write(&bogus, b"not a ktx2 file at all, but long enough to read").unwrap();
+        assert_eq!(ktx2_face_count(&bogus.to_string_lossy()), None);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn other_extensions_keep_their_kinds() {
+        assert_eq!(detect_asset_kind("sky.hdr"), Some(XrdsSceneAssetKind::EnvironmentMap));
+        // Material textures are the png/jpg family and must stay Texture, or the
+        // texture slots stop offering them.
+        for path in ["albedo.png", "normal.jpg", "rough.jpeg", "ao.webp"] {
+            assert_eq!(
+                detect_asset_kind(path),
+                Some(XrdsSceneAssetKind::Texture),
+                "{path} should still import as a Texture",
+            );
+        }
+    }
 
     /// Regression: a scene with RELATIVE catalog URIs (the portable layout
     /// produced by export / dev-mode pushes) must still stage its asset files
