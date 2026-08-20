@@ -320,10 +320,61 @@ as disk. Two things to fix rather than copy:
 - Nothing is supercompressed, though `zstd_rust` is already enabled. The probe got
   6× smaller partly this way.
 
-On a headset the real answer is a GPU-compressed HDR format — BC6H on desktop,
-ASTC HDR on Adreno — rather than raw FP16. `ctt` can emit both. What the Quest
-actually reports in `CompressedImageFormats` is unverified, and after 0b that is a
-measurement, not an assumption.
+#### Runtime format: verified, and not what was assumed
+
+Both open risks were checked against Bevy's real loader (`ktx2_buffer_to_image`)
+rather than reasoned about.
+
+**Zstd supercompression loads.** Our converted file comes back as `Rgba16Float`,
+512×512×6, `view_dimension = Cube` — the same shape as the shipped map. But note
+what it costs: **10.8 MB on disk decompresses to 16.78 MB in memory.**
+Supercompression is a file-size and APK-size win only; it does nothing for VRAM.
+
+**"ASTC HDR on Adreno" was wrong, and would have wasted Phase C.** Bevy's
+`CompressedImageFormats` has exactly three flags — `ASTC_LDR`, `BC`, `ETC2` — and
+its own source says why:
+
+```text
+// NOTE: Rgba16Float should be transcoded to BC6H/ASTC_HDR. Neither are supported by
+// basis-universal, nor is ASTC_HDR supported by wgpu
+```
+
+So there is **no compressed HDR path on Adreno at all**, whatever the device
+reports. BC6H is mapped and real, but BC is desktop-only.
+
+**`Rgb9e5Ufloat` is the answer for a headset**, and a better one than compression
+would have been: shared-exponent RGB at 4 bytes/px against RGBA16F's 8. Verified
+end to end — `ctt` writes `E5B9G9R9_UFLOAT_PACK32`, Bevy's loader maps it, and it
+arrives as `Rgb9e5Ufloat` 512×512×6 cube at **8.39 MB against 16.78 MB, exactly
+half**. Crucially it is *not* a compressed format, so it loaded with
+`CompressedImageFormats::NONE` and needs no device feature flag.
+
+Its range tops out near 65408 with a 9-bit mantissa; the sun in the sample panorama
+peaks at 17312, so it fits with room to spare. It drops alpha, which an environment
+map does not use.
+
+| Target | Format | Bytes/px | 512² cube in VRAM |
+| --- | --- | --- | --- |
+| Desktop | BC6H | 1 | ~2.1 MB |
+| Headset | `Rgb9e5Ufloat` | 4 | 8.39 MB |
+| Today | `Rgba16Float` | 8 | 16.78 MB |
+
+**Verified on a Quest 3, 2026-08-20.** A scene carrying a 512² `Rgb9e5Ufloat`
+skybox converted from the ambientCG panorama, plus a lit cube as a liveness control
+— so a black sky could not be confused with a dead app. Both rendered. No panics,
+no wgpu validation errors, scene loaded with 3 entities.
+
+So the runtime format for a headset is settled: **`Rgb9e5Ufloat`, half the VRAM of
+what we ship, no device feature flag required.** Unlike 0b, this one survived
+contact with the hardware.
+
+Frame time during the check ran ~4.8 ms, comfortably inside the 13.9 ms budget —
+but treat that as "no alarm raised" rather than a measurement. It was sampled over
+a different window than the 0b figures and the counter ran faster than display
+refresh, so it is not comparable to them.
+
+**Resolution remains the bigger lever anyway.** Dropping the diffuse map from 1024²
+to 32² is a ~1000× saving; no format choice comes close.
 
 ## Phasing
 

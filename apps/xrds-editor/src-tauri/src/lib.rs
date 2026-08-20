@@ -2,6 +2,7 @@ mod bevy_bridge;
 mod bevy_scene;
 mod bridge;
 mod editor_state;
+mod env_convert;
 mod environment;
 mod hierarchy;
 mod panel_library;

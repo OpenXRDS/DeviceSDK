@@ -46,6 +46,17 @@ rfd = "0.15"
 # default-features = false: `image` otherwise pulls in every codec it has, and the
 # ones we want are already provided through Bevy.
 image = { version = "0.25", default-features = false, features = ["exr"] }
+# KTX2 writing for the environment-map converter (env_convert.rs). Handles the
+# container, the data-format descriptor and the face/mip layout — fiddly, easy to
+# get subtly wrong, and not where the interesting work is.
+#
+# default-features = false drops all five encoder bindings (bc7enc, ISPC,
+# Compressonator, etcpak, astcenc) and their C++ toolchain requirement. It does
+# still pull zstd-sys, which compiles C; enable the encoders only if BC6H desktop
+# compression is ever wanted.
+ctt = { version = "0.5", default-features = false }
+half = "2"
+rayon = "1"
 wgpu = { workspace = true }
 wry = "0.55"
 raw-window-handle = "0.6"

@@ -284,6 +284,7 @@ type TaskWork = Box<dyn FnOnce(TaskContext) -> Result<String, String> + Send + '
 pub mod tag {
     pub const EXPORT_APP: &str = "export-app";
     pub const EXPORT_APK: &str = "export-apk";
+    pub const ENV_CONVERT: &str = "env-convert";
 }
 
 pub struct EditorTask {

@@ -924,13 +924,18 @@ fn run_file_dialog(kind: &str) -> Option<String> {
             .add_filter("XRDS Scene", &["json"])
             .save_file()
             .map(|p| p.to_string_lossy().into_owned()),
+        // Filters come from `io`, which is also what classifies the chosen file —
+        // so a format the importer accepts can no longer be hidden by the dialog.
+        // These were two hand-maintained lists and they drifted: `.exr` reached the
+        // importer but not the picker, leaving the format an author is most likely
+        // to download reachable only via "All Files".
         "import_asset" => rfd::FileDialog::new()
             .set_title("Import Asset")
-            .add_filter("All Assets",  &["glb","gltf","png","jpg","jpeg","webp","ktx2","mp3","wav","ogg","flac","hdr"])
-            .add_filter("3D Models",   &["glb","gltf"])
-            .add_filter("Textures",    &["png","jpg","jpeg","webp","ktx2"])
-            .add_filter("Audio",       &["mp3","wav","ogg","flac"])
-            .add_filter("Environment", &["hdr","ktx2"])
+            .add_filter("All Assets",  &crate::io::all_importable_exts())
+            .add_filter("3D Models",   crate::io::MODEL_EXTS)
+            .add_filter("Textures",    crate::io::TEXTURE_EXTS)
+            .add_filter("Audio",       crate::io::AUDIO_EXTS)
+            .add_filter("Environment", crate::io::ENVIRONMENT_EXTS)
             .add_filter("All Files",   &["*"])
             .pick_file()
             .map(|p| p.to_string_lossy().into_owned()),

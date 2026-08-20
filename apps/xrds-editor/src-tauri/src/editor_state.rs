@@ -184,6 +184,12 @@ pub struct EditorState {
     /// True for one frame at play start — triggers GLB animation playback.
     pub play_started:   bool,
 
+    /// Conversions in flight, keyed by task id. The work runs on a worker thread;
+    /// registering the result needs the document, so the outcome is matched back
+    /// here in the snapshot broadcaster. See `io::PendingEnvConversion`.
+    pub pending_env_conversions:
+        std::collections::HashMap<u64, crate::io::PendingEnvConversion>,
+
     // ── Android / Quest export ────────────────────────────────────────────
     /// Results of the last `CheckApkPrerequisites` run.  Consumed by the
     /// snapshot broadcaster after one frame (same pattern as `pending_status`).
@@ -247,6 +253,7 @@ impl Default for EditorState {
             track_preview_name: None,
             track_preview: None,
             track_conflict: None,
+            pending_env_conversions: std::collections::HashMap::new(),
             apk_prerequisites: None,
         }
     }

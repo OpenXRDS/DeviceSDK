@@ -15,14 +15,46 @@ use crate::editor_state::{EditorSession, EditorState};
 // Helpers
 // ---------------------------------------------------------------------------
 
+// The importable extensions, in one place.
+//
+// These are the *same* lists the Import Asset dialog filters on. They used to be
+// two hand-maintained copies with nothing linking them, and they drifted exactly
+// as you would expect: `.exr` was added to the importer and not to the dialog, so
+// the format an author is most likely to download was invisible unless they
+// switched the picker to "All Files". A format the importer accepts but the dialog
+// hides is unreachable, which is the same defect as not supporting it.
+pub const MODEL_EXTS: &[&str] = &["glb", "gltf"];
+pub const TEXTURE_EXTS: &[&str] = &["png", "jpg", "jpeg", "webp", "ktx2"];
+pub const AUDIO_EXTS: &[&str] = &["mp3", "wav", "ogg", "flac"];
+/// `.ktx2` appears here *and* in [`TEXTURE_EXTS`] on purpose: the container holds
+/// either, and only its header can say which. See `detect_asset_kind`.
+pub const ENVIRONMENT_EXTS: &[&str] = &["exr", "hdr", "ktx2"];
+
+/// Every importable extension, deduplicated — the dialog's "All Assets" filter.
+pub fn all_importable_exts() -> Vec<&'static str> {
+    let mut out: Vec<&'static str> = Vec::new();
+    for ext in MODEL_EXTS
+        .iter()
+        .chain(TEXTURE_EXTS)
+        .chain(AUDIO_EXTS)
+        .chain(ENVIRONMENT_EXTS)
+    {
+        // Order-preserving, and `.ktx2` genuinely appears twice — `dedup` would not
+        // catch it, since the duplicates are not adjacent.
+        if !out.contains(ext) {
+            out.push(ext);
+        }
+    }
+    out
+}
+
 fn detect_asset_kind(path: &str) -> Option<XrdsSceneAssetKind> {
     let ext = std::path::Path::new(path)
         .extension().and_then(|e| e.to_str())
         .map(|e| e.to_lowercase());
     match ext.as_deref() {
-        Some("glb" | "gltf")                   => Some(XrdsSceneAssetKind::Gltf),
-        Some("png" | "jpg" | "jpeg" | "webp")  => Some(XrdsSceneAssetKind::Texture),
-        Some("mp3" | "wav" | "ogg" | "flac")   => Some(XrdsSceneAssetKind::Audio),
+        Some(e) if MODEL_EXTS.contains(&e)  => Some(XrdsSceneAssetKind::Gltf),
+        Some(e) if AUDIO_EXTS.contains(&e)  => Some(XrdsSceneAssetKind::Audio),
         // `.ktx2` asks the file, rather than guessing from the extension.
         //
         // The container holds either a plain 2-D texture or a cubemap, and only a
@@ -51,12 +83,13 @@ fn detect_asset_kind(path: &str) -> Option<XrdsSceneAssetKind> {
         // downloaded panorama from the only picker an author would look in. See
         // `docs/small-phases-plan.md` — the missing conversion step is recorded
         // there rather than papered over here.
-        Some("hdr")                            => Some(XrdsSceneAssetKind::EnvironmentMap),
-        // OpenEXR, and the format authors actually get: ambientCG and Poly Haven
-        // both ship `.exr` as the payload. Like `.hdr` it is a single
-        // equirectangular image and still needs converting to a cubemap KTX2.
-        Some("exr")                            => Some(XrdsSceneAssetKind::EnvironmentMap),
-        _                                      => None,
+        //
+        // OpenEXR is the format authors actually get — ambientCG and Poly Haven both
+        // ship `.exr` as the payload — and like `.hdr` it is a single
+        // equirectangular image that still needs converting to a cubemap KTX2.
+        Some(e) if ENVIRONMENT_EXTS.contains(&e) => Some(XrdsSceneAssetKind::EnvironmentMap),
+        Some(e) if TEXTURE_EXTS.contains(&e)     => Some(XrdsSceneAssetKind::Texture),
+        _                                        => None,
     }
 }
 
@@ -98,6 +131,102 @@ impl std::fmt::Display for EnvironmentSourceError {
                  width-to-height ratio. This image is {width}×{height}."
             ),
             Self::Undecodable { detail } => write!(f, "Could not read the image: {detail}"),
+        }
+    }
+}
+
+/// What to do with a conversion once it succeeds.
+///
+/// The work happens on a worker thread, but registering the result touches the
+/// document — so the outcome is matched back to this by task id in the snapshot
+/// broadcaster, where session access exists. Recorded per task rather than
+/// reconstructed from the label, which is display text.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PendingEnvConversion {
+    pub asset_id: String,
+    /// Where the cubemap was written.
+    pub output_uri: String,
+}
+
+/// Queue an equirect → cubemap conversion for an imported panorama.
+///
+/// Returns `false`: nothing has changed in the document yet, and there is nothing
+/// to reimport until the task finishes.
+fn queue_environment_conversion(
+    path: &str,
+    asset_id_hint: &str,
+    state: &mut EditorState,
+    tasks: &mut TaskQueue,
+) -> bool {
+    let src = std::path::Path::new(path).to_path_buf();
+
+    // Validate before queueing. A refusal an author waited thirty seconds for is a
+    // worse refusal, and everything checked here is knowable from the header.
+    let source = match classify_environment_source(path) {
+        Ok(s) => s,
+        Err(e) => {
+            error!("[io] environment import refused for '{}': {}", path, e);
+            state.pending_status = Some(e.to_string());
+            return false;
+        }
+    };
+
+    // `sky.exr` -> `sky_cube.ktx2`, beside the source. The `_cube` suffix rather
+    // than a bare `.ktx2` so a converted file cannot quietly overwrite a cubemap the
+    // author already had under the same stem.
+    let stem = src.file_stem().and_then(|s| s.to_str()).unwrap_or("sky").to_string();
+    let dst = src.with_file_name(format!("{stem}_cube.ktx2"));
+    let asset_id = format!("{asset_id_hint}_cube");
+    let output_uri = dst.to_string_lossy().replace('\\', "/");
+
+    let label = format!("Convert {} → cubemap", src.file_name().unwrap_or_default().to_string_lossy());
+    let dst_for_task = dst.clone();
+    let id = tasks.spawn_tagged(label, TaskLane::Convert, Some(task_tag::ENV_CONVERT), move |ctx| {
+        let r = crate::env_convert::convert_equirect_to_cubemap(
+            &src,
+            &dst_for_task,
+            &crate::env_convert::EnvConvertOptions::default(),
+            &ctx,
+        )?;
+        Ok(format!(
+            "Converted to {}² cubemap ({:.1} MB)",
+            r.face_size,
+            r.bytes_written as f64 / 1e6
+        ))
+    });
+
+    state.pending_env_conversions.insert(id, PendingEnvConversion { asset_id, output_uri });
+    info!(
+        "[io] queued environment conversion: {} ({}×{}) → {}",
+        path, source.width, source.height, dst.display()
+    );
+    state.pending_status = Some("Converting panorama to a cubemap…".into());
+    false
+}
+
+/// Register a finished conversion's cubemap in the document.
+///
+/// Called from the snapshot broadcaster once the task reports success, because
+/// that is where session access exists. Returns true if the runtime needs a
+/// reimport — the asset catalog the environment resolvers search is rebuilt there,
+/// not in the document.
+pub fn register_converted_environment(
+    session: &mut EditorSession,
+    state: &mut EditorState,
+    pending: &PendingEnvConversion,
+) -> bool {
+    match session
+        .0
+        .register_environment_map_asset(pending.asset_id.clone(), pending.output_uri.clone())
+    {
+        Ok(asset) => {
+            info!("[io] registered converted environment map '{}'", asset.id);
+            true
+        }
+        Err(e) => {
+            error!("[io] could not register converted map: {e:?}");
+            state.pending_status = Some(format!("Conversion finished but registering it failed: {e:?}"));
+            false
         }
     }
 }
@@ -332,6 +461,24 @@ pub fn apply_io_command(
             let uri = path.replace('\\', "/");
 
             let kind = detect_asset_kind(path);
+
+            // A panorama is not usable as it stands: `Skybox` and
+            // `EnvironmentMapLight` both require a *cube* texture, and `.exr`/`.hdr`
+            // are single equirectangular images. Registering one as an
+            // EnvironmentMap would put an asset in the picker that silently renders
+            // nothing — the "authorable but inert" failure this project keeps
+            // hitting. Convert first; the cubemap is what gets registered, when it
+            // exists.
+            if matches!(kind, Some(XrdsSceneAssetKind::EnvironmentMap))
+                && matches!(
+                    std::path::Path::new(path).extension().and_then(|e| e.to_str())
+                        .map(|e| e.to_lowercase()).as_deref(),
+                    Some("exr" | "hdr")
+                )
+            {
+                return queue_environment_conversion(path, &asset_id_hint, state, tasks);
+            }
+
             let result = match kind {
                 Some(XrdsSceneAssetKind::Gltf) =>
                     session.0.ensure_gltf_asset(Some(asset_id_hint), uri.clone())
@@ -1174,6 +1321,35 @@ mod tests {
         assert!(err.to_string().contains("64×64"));
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Every extension the dialog offers must be one the importer accepts.
+    ///
+    /// This is the drift that hid `.exr`: the picker's filter list and
+    /// `detect_asset_kind` were maintained by hand in two files, so a format could
+    /// be added to one and not the other. Both now read these constants, and this
+    /// pins the property that made the lists worth sharing.
+    #[test]
+    fn every_offered_extension_is_one_the_importer_accepts() {
+        for ext in all_importable_exts() {
+            assert!(
+                detect_asset_kind(&format!("a/file.{ext}")).is_some(),
+                ".{ext} is offered by the import dialog but the importer rejects it"
+            );
+        }
+        // The union covers each group, and lists no duplicate for the "All Assets"
+        // filter even though .ktx2 is deliberately in two groups.
+        let all = all_importable_exts();
+        for group in [MODEL_EXTS, TEXTURE_EXTS, AUDIO_EXTS, ENVIRONMENT_EXTS] {
+            for e in group {
+                assert!(all.contains(e), ".{e} missing from the All Assets filter");
+            }
+        }
+        let mut sorted = all.clone();
+        sorted.sort_unstable();
+        let before = sorted.len();
+        sorted.dedup();
+        assert_eq!(before, sorted.len(), "All Assets must not repeat an extension");
     }
 
     /// `.exr` must reach the environment picker at all. It was absent from

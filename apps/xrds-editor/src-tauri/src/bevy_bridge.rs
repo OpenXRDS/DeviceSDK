@@ -29,6 +29,8 @@ pub fn drain_editor_commands_system(
     mut state: ResMut<EditorState>,
     mut tasks: ResMut<crate::task_queue::TaskQueue>,
 ) {
+    use crate::task_queue::TaskState;
+
     let commands: Vec<EditorCommand> = {
         let mut q = bridge.0.inbound.lock().unwrap();
         q.drain(..).collect()
@@ -85,28 +87,24 @@ pub fn drain_editor_commands_system(
             bevy::log::trace!("[bridge] {:?}", cmd);
         }
     }
-}
-
-// ---------------------------------------------------------------------------
-// Outbound broadcaster — runs each PostUpdate frame
-// ---------------------------------------------------------------------------
-
-pub fn broadcast_editor_snapshot_system(
-    bridge: Res<BevyBridgeResource>,
-    session: Res<EditorSession>,
-    mut state: ResMut<EditorState>,
-    mut tasks: ResMut<crate::task_queue::TaskQueue>,
-    stereo: Res<crate::viewport_camera::StereoPreviewState>,
-) {
-    use crate::task_queue::{tag as task_tag, TaskState, LOG_TAIL_LINES};
-
-    let doc = session.0.document();
 
     // ── Drive the task queue ──────────────────────────────────────────────
     // One pump per frame starts what can start and collects what finished. The
     // toast is transient; the task itself stays in the list until dismissed, so a
     // failure that lands while the author is looking elsewhere survives.
     for outcome in tasks.pump() {
+        // A conversion's product is a file; turning it into a document asset needs
+        // session access, which the worker thread does not have. Matched back by
+        // task id here, where it does. A failed or cancelled conversion drops the
+        // entry instead — registering an asset whose file was never written is
+        // exactly the "authorable but inert" trap.
+        if let Some(pending) = state.pending_env_conversions.remove(&outcome.id) {
+            if outcome.state == TaskState::Done
+                && crate::io::register_converted_environment(&mut session, &mut state, &pending)
+            {
+                state.needs_full_reimport = true;
+            }
+        }
         match outcome.state {
             TaskState::Done => {
                 info!("[tasks] {}: {}", outcome.label, outcome.message);
@@ -123,6 +121,22 @@ pub fn broadcast_editor_snapshot_system(
             _ => {}
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Outbound broadcaster — runs each PostUpdate frame
+// ---------------------------------------------------------------------------
+
+pub fn broadcast_editor_snapshot_system(
+    bridge: Res<BevyBridgeResource>,
+    session: Res<EditorSession>,
+    mut state: ResMut<EditorState>,
+    tasks: Res<crate::task_queue::TaskQueue>,
+    stereo: Res<crate::viewport_camera::StereoPreviewState>,
+) {
+    use crate::task_queue::{tag as task_tag, LOG_TAIL_LINES};
+
+    let doc = session.0.document();
 
     let task_dtos: Vec<crate::bridge::TaskDto> = tasks
         .tasks()

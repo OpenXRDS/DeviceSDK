@@ -11,63 +11,57 @@ use super::*;
 /// Driven by `docs/quest-device-test-recipe.md`, which carries the deploy sequence
 /// and the traps.
 ///
-/// # Current check: procedural atmosphere on Adreno
+/// # Current check: does Adreno sample `Rgb9e5Ufloat`?
 ///
-/// Step 0b of `docs/editor-task-queue-and-hdr-conversion.md`. Bevy's `Atmosphere`
-/// (Hillaire 2020) gives a computed sky whose sun comes from the scene's own
-/// directional light, so sky, sun position and shadow direction agree — something a
-/// captured panorama cannot do. It works on desktop. Whether it is *affordable* on a
-/// Quest is the open question, and the whole reason this is a spike:
+/// The last open question from `docs/editor-task-queue-and-hdr-conversion.md`.
 ///
-/// - `Atmosphere` requires Bevy's `Hdr`, which adds a float intermediate render
-///   target. Paid twice here, once per eye.
-/// - It maintains LUTs and runs a `render_sky` pass per view.
-/// - Nobody has run it on an Adreno GPU. `bevy_hanabi` was adopted and then
-///   rejected for exactly this reason, so the check comes before the commitment.
+/// An environment map is `Rgba16Float` today — 8 bytes per pixel, and a 512² cube
+/// costs 16.78 MB of VRAM. The obvious fix would be a GPU-compressed HDR format,
+/// but **there is no such path on a Quest**: Bevy's `CompressedImageFormats` offers
+/// only `ASTC_LDR`, `BC` and `ETC2`, and its own source notes that ASTC HDR is not
+/// supported by wgpu at all. BC6H is real but desktop-only.
 ///
-/// ## The scene, and why it is this shape
+/// `Rgb9e5Ufloat` — shared-exponent RGB, 4 bytes per pixel — halves that to 8.39 MB
+/// and is **not a compressed format**, so it needs no `CompressedImageFormats`
+/// support and loads with `NONE`. Verified on desktop through Bevy's own
+/// `ktx2_buffer_to_image`. Whether an Adreno GPU actually samples it is the one
+/// thing a desktop check cannot answer, and the reason this scene exists.
 ///
-/// Deliberately minimal, so the frame cost that shows up is the atmosphere's rather
-/// than the content's:
+/// ## Running it
 ///
-/// - `Sun` — a directional light. **Required**: with no directional light there is
-///   no sun, and the sky renders as a flat unlit shell.
-/// - `Ground` — a plane, so aerial perspective and the shadow have something to
-///   fall on. The sky is only interesting against a horizon.
-/// - `Cube` — one shadow caster, to confirm the shadow direction agrees with where
-///   the sun appears.
+/// The `.ktx2` files are produced outside the tree (see the conversion probe in the
+/// plan doc). Lay the scene directory out the way the runtime expects — asset URIs
+/// are bare filenames because the asset-server root *is* `assets/`:
 ///
-/// No passthrough: the runtime suppresses atmosphere under it, deliberately, since
-/// a computed sky would paint over the real world.
+/// ```text
+///   scene_dir/
+///     scene.json
+///     assets/
+///       sky.ktx2
+/// ```
+///
+/// Set `XRDS_GEN_DEVICE_SCENE_RGBA16F=1` to emit the control half of the A/B, which
+/// uses the format we already ship. Both halves reference `sky.ktx2`, so swap the
+/// file rather than the scene — that keeps the document identical and leaves the
+/// texture format as the only difference.
 ///
 /// ## What to look for
 ///
-/// 1. A blue sky with a horizon, and haze on the distant ground.
-/// 2. The sun disc, up and behind the spawn — the light points down and toward -Z,
-///    so the sun sits opposite, up and toward +Z. Turn around and look up ~50°.
-/// 3. The cube's shadow pointing away from it.
-///
-/// ## And the number that decides the feature
-///
-/// Frame rate. `[XR-DIAG] update_view_proj#N` logs every 90 frames, so two
-/// consecutive timestamps give the period of 90 frames:
-///
-/// ```bash
-/// grep -oE "^[0-9-]+ [0-9:.]+.*update_view_proj#[0-9]+" run.txt | tail -20
-/// ```
-///
-/// Compare against the same scene with `atmosphere: None` — that A/B is the point,
-/// since an absolute figure says nothing without a baseline.
+/// 1. **The sky renders.** A correct panorama with a visible horizon means Adreno
+///    sampled the format. Black sky with the cube still visible means it did not.
+/// 2. The cube, lit and casting a shadow — proves the frame is rendering at all, so
+///    a black sky cannot be mistaken for a dead app.
+/// 3. `grep -i "rgb9e5\|Rgb9e5Ufloat\|not supported\|validation" run.txt` — wgpu
+///    names an unsupported texture format explicitly rather than failing silently.
 #[test]
 fn xxx_gen_device_check_scene() {
     let Ok(out) = std::env::var("XRDS_GEN_DEVICE_SCENE") else {
         return;
     };
 
-    // Set XRDS_GEN_DEVICE_SCENE_NO_ATMOSPHERE=1 to emit the baseline half of the
-    // A/B. Same scene otherwise, so the only difference in the frame timing is the
-    // feature under test.
-    let with_atmosphere = std::env::var("XRDS_GEN_DEVICE_SCENE_NO_ATMOSPHERE").is_err();
+    // The control half of the A/B: the format we already ship. Same document
+    // otherwise, so the texture format is the only variable.
+    let control = std::env::var("XRDS_GEN_DEVICE_SCENE_RGBA16F").is_ok();
 
     let mut doc = XrdsSceneDocument::default();
     let mut next = 1u64;
@@ -77,24 +71,31 @@ fn xxx_gen_device_check_scene() {
         v
     };
 
-    if with_atmosphere {
-        doc.metadata
-            .environment
-            .get_or_insert_with(Default::default)
-            .atmosphere = Some(Default::default());
-    }
+    // Bare filename: the runtime's asset-server root is already `assets/`, so an
+    // "assets/" prefix here would resolve to `assets/assets/sky.ktx2`.
+    doc.assets.push(XrdsSceneAsset {
+        id: "sky".to_string(),
+        uri: "sky.ktx2".to_string(),
+        kind: XrdsSceneAssetKind::EnvironmentMap,
+    });
 
+    let env = doc.metadata.environment.get_or_insert_with(Default::default);
+    env.skybox = Some(XrdsSceneSkyboxEnvironment {
+        texture_asset_id: "sky".to_string(),
+        // Matches the shipped maps' authored brightness. A skybox that renders but
+        // is scaled to black would be indistinguishable from an unsupported format,
+        // which is the one confusion this check cannot afford.
+        brightness: 1000.0,
+        yaw_deg: 0.0,
+    });
+
+    // Ground, so the horizon has something to meet.
     let mut ground = XrdsPlane3D::new().with_name("Ground");
-    // Large: aerial perspective is a distance effect, and a small pad would show
-    // none of it.
     ground.size = [200.0, 200.0];
     ground.transform.translation = [0.0, 0.0, 0.0];
     doc.nodes
         .push(XrdsSceneNode::from_xrds_plane3d(id(), None, &ground, None));
 
-    // Points down and toward -Z, so the sun sits up and toward +Z — behind the
-    // spawn, which faces -Z. Matches the editor's default scene so desktop and
-    // device show the same sky.
     let mut sun = XrdsDirectionalLight::new().with_name("Sun");
     sun.transform.translation = [0.0, 5.0, -3.0];
     sun.transform.rotation_quat_xyzw = [-0.4226, 0.0, 0.0, 0.9063];
@@ -103,7 +104,9 @@ fn xxx_gen_device_check_scene() {
     doc.nodes
         .push(XrdsSceneNode::from_xrds_directional_light(id(), None, &sun));
 
-    // One shadow caster, a step in front of the spawn at (0, 1.6, 8).
+    // The liveness check. If the sky is black but this cube is lit and casting a
+    // shadow, the app is fine and the *format* is the failure — which is exactly
+    // the distinction being tested.
     let mut cube = XrdsCube::new().with_name("Cube");
     cube.size = [1.0, 1.0, 1.0];
     cube.transform.translation = [0.0, 0.5, 6.0];
@@ -113,8 +116,8 @@ fn xxx_gen_device_check_scene() {
     doc.save_json(std::path::Path::new(&out))
         .expect("device-check scene should save");
     println!(
-        "[gen] wrote {out} with {} nodes, atmosphere={}",
+        "[gen] wrote {out} with {} nodes, skybox=sky.ktx2 ({})",
         doc.nodes.len(),
-        with_atmosphere
+        if control { "control: rgba16f" } else { "under test: rgb9e5" }
     );
 }
