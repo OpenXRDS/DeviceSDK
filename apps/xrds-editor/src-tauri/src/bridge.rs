@@ -264,6 +264,15 @@ pub enum EditorCommand {
     CheckApkPrerequisites,
     ExportApk { output_dir: String },
 
+    // --- Background task queue ---
+    /// Ask a task to stop. A queued task stops outright; a running one is asked,
+    /// and reports `Cancelling` until its worker actually notices.
+    CancelTask { id: u64 },
+    /// Remove one finished task from the list. Running tasks ignore this.
+    DismissTask { id: u64 },
+    /// Clear every finished task at once.
+    DismissFinishedTasks,
+
     // --- Trigger-action: runnable registry (document-level) ---
     /// kind: "sequence" | "timeline". Rejected (logged, no-op) if `name` is
     /// already taken.
@@ -367,7 +376,7 @@ pub enum EditorCommand {
 ///
 /// **If you change a DTO and do not bump this, you have removed the only thing
 /// that would have told anyone.**
-pub const BRIDGE_VERSION: u32 = 16;
+pub const BRIDGE_VERSION: u32 = 17;
 
 /// State snapshot emitted to the webview after each frame's update.
 /// Grow this incrementally — add fields as each phase is implemented.
@@ -443,11 +452,17 @@ pub struct EditorSnapshot {
     #[serde(default)]
     pub apk_prerequisites: Option<Vec<ApkPrerequisite>>,
     /// True while an APK export build is running.
+    ///
+    /// Derived from the task queue rather than tracked separately, so the APK
+    /// dialog and the task strip cannot disagree about whether a build is running.
     #[serde(default)]
     pub is_exporting_apk: bool,
     /// Tail of the APK build log (last ≤200 lines).  Empty when no APK export is running.
     #[serde(default)]
     pub apk_build_log: Vec<String>,
+    /// Every background task, active and finished-but-not-dismissed.
+    #[serde(default)]
+    pub tasks: Vec<TaskDto>,
     /// Document-level Track registry.
     #[serde(default)]
     pub tracks: Vec<NamedTrackDto>,
@@ -809,6 +824,31 @@ pub struct ApkPrerequisite {
     pub name: String,
     pub ok: bool,
     pub hint: String,
+}
+
+/// One entry in the background task list. See `crate::task_queue`.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct TaskDto {
+    /// Monotonic, so a UI can tell "the build I just started" from a finished one
+    /// left over from earlier in the session.
+    pub id: u64,
+    pub label: String,
+    /// Stable identifier (`crate::task_queue::tag`), for UI that needs one
+    /// specific job rather than whatever is running.
+    pub tag: Option<String>,
+    /// "Build" | "Convert" | "General".
+    pub lane: String,
+    /// "Queued" | "Running" | "Cancelling" | "Done" | "Failed" | "Cancelled".
+    pub state: String,
+    /// `0.0..=1.0`, or `None` for work that cannot honestly report a fraction —
+    /// the UI shows an indeterminate bar rather than inventing one.
+    pub progress: Option<f32>,
+    /// The current step while running, and the error text once failed.
+    pub detail: Option<String>,
+    /// True while the task is queued, running, or stopping.
+    pub active: bool,
+    /// True once finished — the point at which it can be dismissed.
+    pub finished: bool,
 }
 
 // ---------------------------------------------------------------------------

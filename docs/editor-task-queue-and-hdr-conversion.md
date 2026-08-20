@@ -193,7 +193,7 @@ feature.
 | --- | --- | --- |
 | 0a | Expose `Skybox::rotation` | Trivial. Do first — see the reordering at the top |
 | 0b | ~~Procedural atmosphere, verified on Quest~~ | **Done, and measured — see below** |
-| A | Task queue + UI, existing export jobs migrated | Independently useful; unblocks the rest |
+| A | ~~Task queue + UI, existing export jobs migrated~~ | **Done — see below** |
 | B | Equirect → cubemap for skybox | Gated on the conversion-method decision above |
 | C | IBL prefilter (diffuse + specular chain) | Real graphics work; own pass |
 
@@ -261,6 +261,81 @@ The premise that "the atmosphere may make conversion unnecessary for outdoor
 scenes" **does not hold for XR**. On a headset an author still needs a cubemap, so
 conversion keeps whatever priority it had. On desktop the atmosphere is a genuine
 alternative.
+
+## Phase A result: the migration paid for itself before conversion exists
+
+`apps/xrds-editor/src-tauri/src/task_queue.rs`, plus a `TaskStrip` in the
+frontend. Both export jobs are now tasks; `ExportJob` and `ApkExportJob` are gone,
+along with the two `Arc<Mutex<Option<Result<..>>>>` pairs and — importantly — the
+*two separate polling sites* they had grown (`bevy_scene.rs` and
+`bevy_bridge.rs` were both watching the desktop export).
+
+The abstraction test in this plan was "if the existing jobs do not fit, it is the
+wrong shape". They fit, and both got things they did not have:
+
+- **Cancellation.** `TaskContext::run_child` polls `try_wait` rather than
+  blocking on `wait`, so a cancel actually kills the compiler. An APK build runs
+  for minutes and previously could not be abandoned — the dialog's "Cancel" was
+  greyed out while building, so realising you had picked the wrong folder meant
+  waiting it out.
+- **Streamed output for the desktop export**, which previously wrote to the
+  editor's own stdout, i.e. nowhere an author could read it.
+
+Three things worth recording:
+
+**Lanes, not a global cap.** `Build` is capped at 1 because cargo locks the target
+directory: a desktop export and an APK build started together did not run in
+parallel before, they ran one at a time while both claimed to be running. Making
+the second one visibly `Queued` describes what was already happening.
+
+**`Cancelling` is a state.** A cargo build does not stop when asked, and reporting
+"Cancelled" while it still holds the target-dir lock would make the next queued
+build look stuck for no visible reason. Relatedly, a killed build exits non-zero;
+the queue reports that as cancelled rather than failed, because telling an author
+their own stop request "failed" is a lie about their own action.
+
+**It fixed the reported dialog bug as a side effect.** "After clicking Export APK
+the popup disappears" was `phase === "building" && !snapshot.is_exporting_apk`:
+`phase` was set synchronously, but the next snapshot still had the flag `false`
+because the backend had not drained the command yet. *A boolean going low cannot
+distinguish "not started" from "finished".* The dialog now watches its own task by
+monotonic id, which answers the question that was actually being asked.
+
+Also removed: `EditorState::is_selected`, which evaluated `contains(id)`, discarded
+it, and returned `false`. Dead — every caller used `selection.contains` directly —
+but a trap with a correct-looking name.
+
+### What the first real run caught: cancellation wedged the lane
+
+Verified in the editor — export and cancel both work for the desktop app and the
+APK. Getting there took three fixes, and the first is the one worth remembering.
+
+**`kill()` does not kill a process tree.** Killing cargo leaves its rustc children
+alive, and they inherited the stdout/stderr pipe handles. `run_child` joined its
+reader threads unconditionally, so the readers blocked on a pipe a surviving
+grandchild still held; `run_child` never returned, the task sat in `Cancelling`
+forever, and — because a task in `Cancelling` still occupies its lane — every later
+build was refused with "Busy". The symptom was an APK export stuck at "Starting…"
+*after an application export had been cancelled*, which points at the wrong feature
+entirely.
+
+The drain is now bounded (2s), after which the readers are left detached; they hold
+an `Arc`, so late lines still land in the log. The test that guards this asserts the
+invariant rather than the mechanism: **a cancelled build must release its lane.**
+Killing the whole process tree would be better still, and is platform-specific work
+nobody needs yet — a wedged lane was the actual damage.
+
+**A refusal behind a modal is a hang.** `ExportApk` has five guards that reject
+before any task exists, each setting a status toast — which renders *behind* the
+modal dialog. The dialog set `phase = "building"` optimistically and waited forever
+for a task that was never created. It now shows the refusal and returns to "ready",
+with a frame-count backstop for any future guard that forgets to set a message.
+Generalisable: **optimistic UI needs a path for "the backend said no".**
+
+**A guard mirrored in the UI drifts from the one that enforces it.** The dialog's
+`canExport` checked `!is_dirty` but not `has_save_path`, while the backend checks
+both, so a never-saved scene left the button enabled and the export silently
+refused.
 
 ## Done when
 

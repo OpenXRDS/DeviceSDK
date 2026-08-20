@@ -421,6 +421,36 @@ export interface ApkPrerequisite {
   hint: string;
 }
 
+export type TaskState =
+  | "Queued"
+  | "Running"
+  /** Stop requested, worker not yet stopped. Distinct from "Cancelled" so the UI
+   *  never claims a build has stopped while its compiler is still running. */
+  | "Cancelling"
+  | "Done"
+  | "Failed"
+  | "Cancelled";
+
+/** One background job. Mirrors `TaskDto` in `src-tauri/src/bridge.rs`. */
+export interface TaskDto {
+  /** Monotonic. Lets a UI distinguish the job it just started from a finished
+   *  one left over from earlier in the session. */
+  id: number;
+  label: string;
+  /** Stable identifier — "export-app" | "export-apk" | null. */
+  tag: string | null;
+  /** "Build" | "Convert" | "General" */
+  lane: string;
+  state: TaskState;
+  /** 0..1, or null for work that cannot honestly report a fraction — render an
+   *  indeterminate bar rather than inventing a number. */
+  progress: number | null;
+  /** Current step while running; the error text once failed. */
+  detail: string | null;
+  active: boolean;
+  finished: boolean;
+}
+
 /** Must match `BRIDGE_VERSION` in `src-tauri/src/bridge.rs`.
  *
  *  This file is a hand-written mirror of that one with nothing linking them, so
@@ -432,7 +462,7 @@ export interface ApkPrerequisite {
  *  replaced wholesale by the first real snapshot.
  *
  *  Bump this together with the Rust constant whenever a DTO changes. */
-export const BRIDGE_VERSION = 16;
+export const BRIDGE_VERSION = 17;
 
 export interface EditorSnapshot {
   /** See {@link BRIDGE_VERSION}. `0` means a build predating the check. */
@@ -477,8 +507,11 @@ export interface EditorSnapshot {
   /** Populated for one frame after CheckApkPrerequisites; null otherwise. */
   apk_prerequisites: ApkPrerequisite[] | null;
   is_exporting_apk: boolean;
-  /** Tail of the APK build log (last ≤200 lines). Empty when idle. */
+  /** Tail of the APK build log (last ≤200 lines). Empty when idle.
+   *  Survives the build's end so a failure stays readable. */
   apk_build_log: string[];
+  /** Background tasks — active, and finished but not yet dismissed. */
+  tasks: TaskDto[];
   /** Document-level named-runnable registry (Phase 9a). */
   tracks: NamedTrackDto[];
   /** Registry-level trigger diagnostics only (node_id === null). */
@@ -544,6 +577,7 @@ export const defaultSnapshot: EditorSnapshot = {
   apk_prerequisites: null,
   is_exporting_apk: false,
   apk_build_log: [],
+  tasks: [],
   tracks: [],
   track_diagnostics: [],
   track_preview: null,
@@ -672,6 +706,11 @@ export type EditorCommand =
   | { type: "ExportApplication";    payload: { output_dir: string } }
   | { type: "CheckApkPrerequisites" }
   | { type: "ExportApk";            payload: { output_dir: string } }
+
+  // --- Background task queue ---
+  | { type: "CancelTask";           payload: { id: number } }
+  | { type: "DismissTask";          payload: { id: number } }
+  | { type: "DismissFinishedTasks" }
   | { type: "SaveScene" }
   | { type: "SaveSceneAs"; payload: { path: string } }
   | { type: "DeleteSelection" }

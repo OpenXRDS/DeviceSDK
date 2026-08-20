@@ -4,6 +4,7 @@ import { useSendCommand } from "./hooks/useSendCommand";
 import { useResizable } from "./hooks/useResizable";
 import { Menubar } from "./components/Menubar";
 import { Toolbar } from "./components/Toolbar";
+import { TaskStrip } from "./components/TaskStrip";
 import { Hierarchy } from "./components/Hierarchy";
 import { Palette } from "./components/Palette";
 import { Inspector } from "./components/Inspector";
@@ -200,12 +201,8 @@ export default function App() {
         <Toolbar snapshot={snapshot} send={send} onSaveAs={handleSaveAs}
           workspace={workspace} onWorkspaceChange={setWorkspace} />
 
-        {snapshot.is_exporting && (
-          <div className="export-bar">
-            <div className="export-spinner" />
-            <span>Exporting application… <em style={{opacity:0.7, fontSize:11}}>compiling xrds-app, this may take a minute</em></span>
-          </div>
-        )}
+        {/* Every background job, not just the export that used to own this slot. */}
+        <TaskStrip snapshot={snapshot} send={send} />
 
         {snapshot.status_message && (
           <div className="status-toast">{snapshot.status_message}</div>

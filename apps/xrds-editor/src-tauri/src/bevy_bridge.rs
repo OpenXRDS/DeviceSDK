@@ -27,6 +27,7 @@ pub fn drain_editor_commands_system(
     bridge: Res<BevyBridgeResource>,
     mut session: ResMut<EditorSession>,
     mut state: ResMut<EditorState>,
+    mut tasks: ResMut<crate::task_queue::TaskQueue>,
 ) {
     let commands: Vec<EditorCommand> = {
         let mut q = bridge.0.inbound.lock().unwrap();
@@ -41,13 +42,32 @@ pub fn drain_editor_commands_system(
             state.pending_status = Some(message.clone());
             continue;
         }
+        // Task-list controls: they touch only the queue, so they are handled here
+        // rather than threaded through a feature module.
+        match cmd {
+            EditorCommand::CancelTask { id } => {
+                if tasks.cancel(*id) {
+                    info!("[tasks] cancel requested for #{id}");
+                }
+                continue;
+            }
+            EditorCommand::DismissTask { id } => {
+                tasks.dismiss(*id);
+                continue;
+            }
+            EditorCommand::DismissFinishedTasks => {
+                tasks.dismiss_finished();
+                continue;
+            }
+            _ => {}
+        }
         let needs_reimport =
             apply_hierarchy_command(cmd, &mut session, &mut state) ||
             apply_palette_command(cmd, &mut session, &mut state) ||
             apply_inspector_command(cmd, &mut session, &mut state) ||
             crate::panel_library::apply_panel_library_command(cmd, &mut session, &mut state) ||
             apply_trigger_action_command(cmd, &mut session, &mut state) ||
-            apply_io_command(cmd, &mut session, &mut state);
+            apply_io_command(cmd, &mut session, &mut state, &mut tasks);
         let env_changed = apply_environment_command(cmd, &mut session, &mut state);
         if env_changed { state.needs_env_sync = true; }
         let toolbar_reimport = apply_toolbar_command(cmd, &mut session, &mut state);
@@ -75,30 +95,64 @@ pub fn broadcast_editor_snapshot_system(
     bridge: Res<BevyBridgeResource>,
     session: Res<EditorSession>,
     mut state: ResMut<EditorState>,
+    mut tasks: ResMut<crate::task_queue::TaskQueue>,
     stereo: Res<crate::viewport_camera::StereoPreviewState>,
 ) {
+    use crate::task_queue::{tag as task_tag, TaskState, LOG_TAIL_LINES};
+
     let doc = session.0.document();
 
-    // --- Poll APK export job ---
-    // Capture log tail before potentially clearing the job.
-    let apk_build_log: Vec<String> = state.apk_export_job.as_ref()
-        .map(|job| {
-            let log = job.log.lock().unwrap();
-            let start = log.len().saturating_sub(200);
-            log[start..].to_vec()
-        })
-        .unwrap_or_default();
-
-    let apk_done: Option<Result<String, String>> = state.apk_export_job.as_ref()
-        .and_then(|job| job.result.try_lock().ok())
-        .and_then(|guard| guard.clone());
-    if let Some(outcome) = apk_done {
-        state.pending_status = Some(match outcome {
-            Ok(msg)  => msg,
-            Err(msg) => format!("APK export failed: {msg}"),
-        });
-        state.apk_export_job = None;
+    // ── Drive the task queue ──────────────────────────────────────────────
+    // One pump per frame starts what can start and collects what finished. The
+    // toast is transient; the task itself stays in the list until dismissed, so a
+    // failure that lands while the author is looking elsewhere survives.
+    for outcome in tasks.pump() {
+        match outcome.state {
+            TaskState::Done => {
+                info!("[tasks] {}: {}", outcome.label, outcome.message);
+                state.pending_status = Some(outcome.message);
+            }
+            TaskState::Failed => {
+                error!("[tasks] {}: {}", outcome.label, outcome.message);
+                state.pending_status = Some(format!("{} failed: {}", outcome.label, outcome.message));
+            }
+            TaskState::Cancelled => {
+                info!("[tasks] {}", outcome.message);
+                state.pending_status = Some(outcome.message);
+            }
+            _ => {}
+        }
     }
+
+    let task_dtos: Vec<crate::bridge::TaskDto> = tasks
+        .tasks()
+        .iter()
+        .map(|t| crate::bridge::TaskDto {
+            id: t.id,
+            label: t.label.clone(),
+            tag: t.tag.map(|s| s.to_string()),
+            lane: format!("{:?}", t.lane),
+            state: t.state.as_str().to_string(),
+            progress: t.progress(),
+            detail: t.detail(),
+            active: t.state.is_active(),
+            finished: t.state.is_finished(),
+        })
+        .collect();
+
+    // The APK dialog keeps its dedicated build-log view — a scrolling compiler log
+    // is worth more than a one-line task row, and the strip does not replace it.
+    // What changed is that both now read the same task, so they cannot disagree
+    // about whether a build is running.
+    let apk_task = tasks.latest_tagged(task_tag::EXPORT_APK);
+    let is_exporting_apk = apk_task.is_some_and(|t| t.state.is_active());
+    // Kept after the build ends so the dialog still shows why a failure failed.
+    let apk_build_log = apk_task
+        .map(|t| t.shared.log_tail(LOG_TAIL_LINES))
+        .unwrap_or_default();
+    let is_exporting = tasks
+        .latest_tagged(task_tag::EXPORT_APP)
+        .is_some_and(|t| t.state.is_active());
 
     let selection_ids: Vec<u64> = state.selection.ids().iter().map(|id| id.0).collect();
     let snapshot = EditorSnapshot {
@@ -121,7 +175,7 @@ pub fn broadcast_editor_snapshot_system(
         show_fov_overlay: state.show_fov_overlay,
         is_playing: state.is_playing,
         snap_step: state.snap_step,
-        is_exporting: state.export_job.is_some(),
+        is_exporting,
         has_clipboard: state.clipboard.is_some(),
         environment: build_environment_dto(&session),
         xr_passthrough: crate::environment::build_xr_passthrough(&session),
@@ -138,8 +192,9 @@ pub fn broadcast_editor_snapshot_system(
         panel_diagnostics: crate::panel_library::build_panel_diagnostics_dto(doc),
         stereo_preview_active: stereo.enabled,
         apk_prerequisites: state.apk_prerequisites.take(),
-        is_exporting_apk: state.apk_export_job.is_some(),
+        is_exporting_apk,
         apk_build_log,
+        tasks: task_dtos,
         bridge_version: crate::bridge::BRIDGE_VERSION,
         tracks: build_tracks_dto(doc),
         track_diagnostics: build_track_diagnostics_dto(doc),

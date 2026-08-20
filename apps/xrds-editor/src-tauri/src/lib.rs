@@ -10,6 +10,7 @@ mod io;
 mod keyboard_shortcuts;
 mod palette;
 mod play_pointer;
+mod task_queue;
 mod toolbar;
 mod trigger_action;
 mod viewport_camera;

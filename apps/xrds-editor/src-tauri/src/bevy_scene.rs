@@ -73,6 +73,7 @@ impl XrdsApp for XrdsEditorTauriApp {
         app.insert_resource(BevyBridgeResource(Arc::clone(&self.bridge)));
         app.insert_resource(EditorSession(session));
         app.insert_resource(EditorState::default());
+        app.init_resource::<crate::task_queue::TaskQueue>();
         app.insert_resource(EditorCameraState::default());
         app.insert_resource(ViewportRect::default());
         app.insert_resource(StereoPreviewState::default());
@@ -258,20 +259,10 @@ impl XrdsApp for XrdsEditorTauriApp {
             state.needs_env_sync = false;
         }
 
-        // ── Export Application: poll background build result ─────────────────
-        let export_result = ctx.resource::<EditorState>()
-            .and_then(|s| s.export_job.as_ref())
-            .and_then(|j| j.result.lock().ok()?.take());
-
-        if let Some(result) = export_result {
-            if let Some(mut state) = ctx.resource_mut::<EditorState>() {
-                state.export_job = None;
-                state.pending_status = Some(match result {
-                    Ok(msg) => { bevy::log::info!("[export] {}", msg); msg }
-                    Err(e)  => { bevy::log::error!("[export] {}", e); format!("Export failed: {e}") }
-                });
-            }
-        }
+        // Export polling used to happen here as well as in the snapshot
+        // broadcaster — two sites watching two `Arc<Mutex<..>>`. Both jobs are now
+        // tasks, and `TaskQueue::pump` reports each outcome exactly once from the
+        // broadcaster. See `crate::task_queue`.
 
         // ── Refresh GLTF clip names for all GltfAsset nodes ──────────────────
         {

@@ -184,36 +184,15 @@ pub struct EditorState {
     /// True for one frame at play start — triggers GLB animation playback.
     pub play_started:   bool,
 
-    // ── Export Application ────────────────────────────────────────────────
-    /// Background export build job.  `None` when idle.
-    pub export_job: Option<ExportJob>,
-
     // ── Android / Quest export ────────────────────────────────────────────
     /// Results of the last `CheckApkPrerequisites` run.  Consumed by the
     /// snapshot broadcaster after one frame (same pattern as `pending_status`).
     pub apk_prerequisites: Option<Vec<ApkPrerequisite>>,
-    /// Background APK build job.  `None` when idle.
-    pub apk_export_job: Option<ApkExportJob>,
-}
 
-/// A background export job started by `ExportApplication`.
-///
-/// The build thread writes its final status into `result` when done.
-/// `update()` polls this every frame via `try_lock` to keep it non-blocking.
-pub struct ExportJob {
-    pub out_dir: String,
-    /// `Some(Ok(message))` on success, `Some(Err(message))` on failure, `None` while running.
-    pub result: std::sync::Arc<std::sync::Mutex<Option<Result<String, String>>>>,
-}
-
-/// A background APK build job started by `ExportApk`.
-/// Extends ExportJob with a streaming log buffer read by the snapshot broadcaster.
-pub struct ApkExportJob {
-    pub out_dir: String,
-    /// Lines emitted by the build script (stdout + stderr), appended by reader threads.
-    pub log: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
-    /// `Some(Ok(msg))` on success, `Some(Err(msg))` on failure, `None` while running.
-    pub result: std::sync::Arc<std::sync::Mutex<Option<Result<String, String>>>>,
+    // Background export/build jobs used to live here as `export_job` and
+    // `apk_export_job`, each with its own `Arc<Mutex<Option<Result<..>>>>` and
+    // polling site. They are now tasks in `crate::task_queue::TaskQueue`, which is
+    // its own resource — see that module for why.
 }
 
 impl Default for EditorState {
@@ -268,9 +247,7 @@ impl Default for EditorState {
             track_preview_name: None,
             track_preview: None,
             track_conflict: None,
-            export_job: None,
             apk_prerequisites: None,
-            apk_export_job: None,
         }
     }
 }
@@ -280,7 +257,6 @@ impl EditorState {
     pub fn select_single(&mut self, id: XrdsSceneNodeId) { self.selection.set_single(id); }
     pub fn toggle_selection(&mut self, id: XrdsSceneNodeId) { self.selection.toggle(id); }
     pub fn deselect_all(&mut self) { self.selection.clear(); }
-    pub fn is_selected(&self, id: XrdsSceneNodeId) -> bool { self.selection.contains(id); false }
 
     // ── Pending translation helpers (used by gizmo + inspector) ──────────
     pub fn pending_translation_for(&self, id: XrdsSceneNodeId) -> Option<[f32; 3]> {

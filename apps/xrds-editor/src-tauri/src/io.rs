@@ -1,7 +1,6 @@
 use bevy::log::{error, info};
-use std::io::{BufRead, BufReader};
 use std::path::Path;
-use crate::editor_state::{ApkExportJob, ExportJob};
+use crate::task_queue::{tag as task_tag, TaskContext, TaskLane, TaskQueue};
 use xrds_scene_graph::{
     XrdsSceneDocument, XrdsSceneNode, XrdsSceneNodeId, XrdsSceneDocumentSession,
     XrdsSceneNodePayload, XrdsSceneAssetKind,
@@ -113,6 +112,7 @@ pub fn apply_io_command(
     cmd: &EditorCommand,
     session: &mut EditorSession,
     state: &mut EditorState,
+    tasks: &mut TaskQueue,
 ) -> bool {
     match cmd {
         // ── Undo / Redo ──────────────────────────────────────────────────────
@@ -298,8 +298,8 @@ pub fn apply_io_command(
         // only *copy* existing `.glb` assets and rewrite `asset_uri`. Importing
         // and using glTF assets is unaffected.
         EditorCommand::ExportApplication { output_dir } => {
-            if state.export_job.is_some() {
-                state.pending_status = Some("Export already in progress…".into());
+            if let Some(active) = tasks.active_in_lane(TaskLane::Build) {
+                state.pending_status = Some(format!("Busy: {}", active.label));
                 return false;
             }
 
@@ -331,47 +331,46 @@ pub fn apply_io_command(
                 for e in &copy_errors { error!("[io] asset copy: {}", e); }
             }
 
-            // Spawn background cargo build.
+            // Queue the cargo build. The build output now streams into the task
+            // log rather than the editor's own stdout, so a failed export can be
+            // read without a terminal.
             let out_dir_str   = output_dir.clone();
             let workspace_str = workspace_root.to_string_lossy().into_owned();
-            let result = std::sync::Arc::new(std::sync::Mutex::new(
-                None::<Result<String, String>>
-            ));
-            let result_clone = std::sync::Arc::clone(&result);
 
-            std::thread::spawn(move || {
-                let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
-                let status = std::process::Command::new(&cargo)
-                    .args(["build", "--release", "-p", "xrds-app"])
-                    .current_dir(&workspace_str)
-                    .status();
+            tasks.spawn_tagged(
+                format!("Export application → {output_dir}"),
+                TaskLane::Build,
+                Some(task_tag::EXPORT_APP),
+                move |ctx| {
+                    ctx.set_detail("compiling xrds-app");
+                    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
+                    let mut cmd = std::process::Command::new(&cargo);
+                    cmd.args(["build", "--release", "-p", "xrds-app"])
+                        .current_dir(&workspace_str);
 
-                let final_result = match status {
-                    Ok(s) if s.success() => {
-                        let exe_name = format!("xrds-app{}", std::env::consts::EXE_SUFFIX);
-                        let src = std::path::Path::new(&workspace_str)
-                            .join("target").join("release").join(&exe_name);
-                        let dst = std::path::Path::new(&out_dir_str).join(&exe_name);
-                        match std::fs::copy(&src, &dst) {
-                            Ok(_) => Ok(format!("Exported to {out_dir_str}")),
-                            Err(e) => Err(format!("Binary copy failed: {e}")),
-                        }
+                    if !ctx.run_child(cmd).map_err(|e| format!("cargo: {e}"))? {
+                        return Err("cargo build failed — see the task log".into());
                     }
-                    Ok(s) => Err(format!("cargo build exited with code {:?}", s.code())),
-                    Err(e) => Err(format!("Failed to run cargo: {e}")),
-                };
-                *result_clone.lock().unwrap() = Some(final_result);
-            });
 
-            state.export_job = Some(ExportJob { out_dir: output_dir.clone(), result });
+                    ctx.set_detail("copying binary");
+                    let exe_name = format!("xrds-app{}", std::env::consts::EXE_SUFFIX);
+                    let src = std::path::Path::new(&workspace_str)
+                        .join("target").join("release").join(&exe_name);
+                    let dst = std::path::Path::new(&out_dir_str).join(&exe_name);
+                    std::fs::copy(&src, &dst).map_err(|e| format!("Binary copy failed: {e}"))?;
+                    Ok(format!("Exported to {out_dir_str}"))
+                },
+            );
             state.pending_status = Some("Building… (this may take a minute)".into());
             false
         }
 
         EditorCommand::ExportApk { output_dir } => {
-            // Guard: another APK export already running.
-            if state.apk_export_job.is_some() {
-                state.pending_status = Some("APK export already in progress…".into());
+            // Guard: another build already running or queued. Both exports share
+            // the Build lane, so this also refuses to stack an APK build behind a
+            // desktop one — they contend on cargo's target-dir lock.
+            if let Some(active) = tasks.active_in_lane(TaskLane::Build) {
+                state.pending_status = Some(format!("Busy: {}", active.label));
                 return false;
             }
 
@@ -410,156 +409,96 @@ pub fn apply_io_command(
             let workspace_root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .join("../../..");
 
-            // Shared log + result for the background thread.
-            let log    = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
-            // Surface asset staging problems in the build log — a scene that
-            // references missing files otherwise produces an APK with no models
-            // and no visible explanation.
-            {
-                let mut log_lines = log.lock().unwrap();
-                for e in &copy_errors {
-                    log_lines.push(format!("[err] asset staging: {e}"));
-                }
-            }
-            let result = std::sync::Arc::new(std::sync::Mutex::new(
-                None::<Result<String, String>>
-            ));
-            let log_clone    = std::sync::Arc::clone(&log);
-            let result_clone = std::sync::Arc::clone(&result);
-            let out_dir_str  = output_dir.clone();
-            let staging_str  = staging.to_string_lossy().into_owned();
+            let out_dir_str   = output_dir.clone();
+            let staging_str   = staging.to_string_lossy().into_owned();
             let workspace_str = workspace_root.to_string_lossy().into_owned();
+            let staging_errors = copy_errors.clone();
 
-            std::thread::spawn(move || {
-                let push = |line: String| {
-                    log_clone.lock().unwrap().push(line);
-                };
-
-                // Run platform build script.
-                #[cfg(target_os = "windows")]
-                let mut cmd = {
-                    let script = std::path::Path::new(&workspace_str)
-                        .join("android/quest/build.ps1");
-                    let mut c = std::process::Command::new("powershell.exe");
-                    c.args([
-                        "-ExecutionPolicy", "Bypass",
-                        "-File", script.to_str().unwrap_or(""),
-                        "-SceneDir", &staging_str,
-                    ]);
-                    c
-                };
-                #[cfg(not(target_os = "windows"))]
-                let mut cmd = {
-                    let script = std::path::Path::new(&workspace_str)
-                        .join("android/quest/build.sh");
-                    let mut c = std::process::Command::new("bash");
-                    c.args([
-                        script.to_str().unwrap_or(""),
-                        "--scene-dir", &staging_str,
-                    ]);
-                    c
-                };
-
-                cmd.current_dir(&workspace_str)
-                   .stdout(std::process::Stdio::piped())
-                   .stderr(std::process::Stdio::piped());
-
-                let mut child = match cmd.spawn() {
-                    Ok(c) => c,
-                    Err(e) => {
-                        *result_clone.lock().unwrap() = Some(Err(format!("Failed to start build script: {e}")));
-                        return;
+            tasks.spawn_tagged(
+                format!("Export APK → {output_dir}"),
+                TaskLane::Build,
+                Some(task_tag::EXPORT_APK),
+                move |ctx| {
+                    // Surface asset staging problems in the build log — a scene
+                    // that references missing files otherwise produces an APK with
+                    // no models and no visible explanation.
+                    for e in &staging_errors {
+                        ctx.log(format!("[err] asset staging: {e}"));
                     }
-                };
 
-                // Stream stdout and stderr line-by-line from separate threads.
-                // Use take() so child remains valid for wait() below.
-                let log_out = std::sync::Arc::clone(&log_clone);
-                let log_err = std::sync::Arc::clone(&log_clone);
+                    ctx.set_detail("running build script");
 
-                let stdout = child.stdout.take().unwrap();
-                let stderr = child.stderr.take().unwrap();
-                let (tx, rx) = std::sync::mpsc::channel::<()>();
-                let tx2 = tx.clone();
+                    #[cfg(target_os = "windows")]
+                    let cmd = {
+                        let script = std::path::Path::new(&workspace_str)
+                            .join("android/quest/build.ps1");
+                        let mut c = std::process::Command::new("powershell.exe");
+                        c.args([
+                            "-ExecutionPolicy", "Bypass",
+                            "-File", script.to_str().unwrap_or(""),
+                            "-SceneDir", &staging_str,
+                        ]);
+                        c.current_dir(&workspace_str);
+                        c
+                    };
+                    #[cfg(not(target_os = "windows"))]
+                    let cmd = {
+                        let script = std::path::Path::new(&workspace_str)
+                            .join("android/quest/build.sh");
+                        let mut c = std::process::Command::new("bash");
+                        c.args([
+                            script.to_str().unwrap_or(""),
+                            "--scene-dir", &staging_str,
+                        ]);
+                        c.current_dir(&workspace_str);
+                        c
+                    };
 
-                std::thread::spawn(move || {
-                    for line in BufReader::new(stdout).lines().flatten() {
-                        log_out.lock().unwrap().push(line);
+                    // The log goes to disk on every path out of here, success or
+                    // failure — a build log that only survives a success is
+                    // useless, since a failure is the only time it is read.
+                    let flush = |ctx: &TaskContext| {
+                        write_build_log(&ctx.log_snapshot(), &out_dir_str);
+                    };
+
+                    let ok = match ctx.run_child(cmd) {
+                        Ok(ok) => ok,
+                        Err(e) => {
+                            ctx.log(format!("[err] {e}"));
+                            flush(&ctx);
+                            return Err(format!("Failed to start build script: {e}"));
+                        }
+                    };
+                    if !ok {
+                        ctx.log("[err] build script exited non-zero");
+                        flush(&ctx);
+                        return Err("Build script failed — see the task log".into());
                     }
-                    let _ = tx.send(());
-                });
-                std::thread::spawn(move || {
-                    for line in BufReader::new(stderr).lines().flatten() {
-                        // cargo/gradle write ALL diagnostics to stderr — progress,
-                        // warnings, and errors alike. Tag only real errors so the
-                        // build log doesn't present routine output as failures.
-                        let trimmed = line.trim_start();
-                        let tagged = if trimmed.starts_with("error")
-                            || trimmed.contains("error:")
-                            || trimmed.contains("error[")
-                        {
-                            format!("[err] {line}")
-                        } else {
-                            line
-                        };
-                        log_err.lock().unwrap().push(tagged);
+
+                    ctx.log("--- build script finished ---");
+                    ctx.set_detail("collecting APK");
+
+                    let apk_src = std::path::Path::new(&workspace_str)
+                        .join("android/quest/build/xrds-app.apk");
+                    let apk_dst = std::path::Path::new(&out_dir_str).join("xrds-app.apk");
+
+                    if !apk_src.exists() {
+                        flush(&ctx);
+                        return Err("Build script succeeded but xrds-app.apk was not produced.".into());
                     }
-                    let _ = tx2.send(());
-                });
+                    if let Err(e) = std::fs::copy(&apk_src, &apk_dst) {
+                        flush(&ctx);
+                        return Err(format!("Copy APK failed: {e}"));
+                    }
+                    if let Err(e) = write_install_scripts(std::path::Path::new(&out_dir_str)) {
+                        ctx.log(format!("[warn] install script write failed: {e}"));
+                    }
 
-                // Wait for both reader threads to drain, then collect exit status.
-                rx.recv().ok();
-                rx.recv().ok();
-
-                let exit_status = child.wait();
-                let success = exit_status.as_ref().map(|s| s.success()).unwrap_or(false);
-
-                if !success {
-                    let code = exit_status.ok()
-                        .and_then(|s| s.code())
-                        .map(|c| c.to_string())
-                        .unwrap_or_else(|| "unknown".into());
-                    push(format!("[err] Build script exited with code {code}"));
-                    // Flush the log to disk before returning.
-                    write_build_log(&log_clone.lock().unwrap(), &out_dir_str);
-                    *result_clone.lock().unwrap() = Some(Err(
-                        format!("Build script failed (exit code {code}) — see log for details")
-                    ));
-                    return;
-                }
-
-                push(String::from("--- build script finished ---"));
-
-                // Verify APK was produced.
-                let apk_src = std::path::Path::new(&workspace_str)
-                    .join("android/quest/build/xrds-app.apk");
-                let apk_dst = std::path::Path::new(&out_dir_str).join("xrds-app.apk");
-
-                if !apk_src.exists() {
-                    *result_clone.lock().unwrap() = Some(Err(
-                        "Build script succeeded but xrds-app.apk was not produced.".into()
-                    ));
-                    return;
-                }
-
-                if let Err(e) = std::fs::copy(&apk_src, &apk_dst) {
-                    *result_clone.lock().unwrap() = Some(Err(format!("Copy APK failed: {e}")));
-                    return;
-                }
-
-                // Write install scripts alongside the APK.
-                if let Err(e) = write_install_scripts(std::path::Path::new(&out_dir_str)) {
-                    push(format!("[warn] install script write failed: {e}"));
-                }
-
-                push(format!("APK exported to {out_dir_str}"));
-                write_build_log(&log_clone.lock().unwrap(), &out_dir_str);
-                *result_clone.lock().unwrap() = Some(Ok(
-                    format!("APK exported to {out_dir_str}")
-                ));
-            });
-
-            state.apk_export_job = Some(ApkExportJob { out_dir: output_dir.clone(), log, result });
+                    ctx.log(format!("APK exported to {out_dir_str}"));
+                    flush(&ctx);
+                    Ok(format!("APK exported to {out_dir_str}"))
+                },
+            );
             state.pending_status = Some("Building APK… (this may take several minutes)".into());
             info!("[io] APK export started → {}", output_dir);
             false

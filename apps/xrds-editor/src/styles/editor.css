@@ -836,6 +836,74 @@ button, input, select, textarea { font-family: inherit; }
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 
+/* ── Task strip ───────────────────────────────────────────────────────────
+ * Replaces `.export-bar`, which could only report one job and disappeared the
+ * moment it ended. Collapsed by default: a build the author started is not news,
+ * and the row is only worth opening when something needs a decision. */
+.task-strip {
+  background: var(--surface0);
+  border-bottom: 1px solid var(--blue);
+  padding: 5px 12px;
+  display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
+  font-size: 12px; flex-shrink: 0;
+}
+.task-strip-head {
+  display: flex; align-items: center; gap: 8px;
+  background: none; border: none; padding: 2px 0; cursor: pointer;
+  color: inherit; font-size: 12px; flex: 1; min-width: 0; text-align: left;
+}
+.task-summary { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-chevron { color: var(--overlay0); font-size: 10px; flex-shrink: 0; }
+.task-clear {
+  background: none; border: 1px solid var(--surface1); border-radius: var(--radius-sm);
+  color: var(--subtext0); font-size: 11px; padding: 2px 8px; cursor: pointer; flex-shrink: 0;
+}
+.task-clear:hover { color: var(--text); border-color: var(--overlay0); }
+
+.task-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+
+.task-list {
+  width: 100%; display: flex; flex-direction: column; gap: 2px;
+  max-height: 190px; overflow-y: auto;
+  border-top: 1px solid var(--surface1); padding-top: 5px; margin-top: 2px;
+}
+.task-row {
+  display: flex; align-items: flex-start; gap: 8px;
+  padding: 4px 4px; border-radius: var(--radius-sm);
+}
+.task-row:hover { background: var(--mantle); }
+.task-row > .task-dot { margin-top: 4px; }
+.task-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.task-line { display: flex; align-items: baseline; gap: 8px; }
+.task-label {
+  color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1;
+}
+.task-state { font-size: 10px; text-transform: uppercase; letter-spacing: .06em; flex-shrink: 0; }
+.task-detail {
+  color: var(--subtext0); font-size: 11px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+.task-bar { height: 3px; background: var(--surface1); border-radius: 2px; overflow: hidden; }
+.task-bar-fill { height: 100%; background: var(--blue); border-radius: 2px; transition: width .2s linear; }
+/* No honest fraction to show — a sliding sliver says "working" without
+ * inventing a number the job never reported. */
+.task-bar--indeterminate .task-bar-fill {
+  width: 35%; animation: task-slide 1.3s ease-in-out infinite;
+}
+@keyframes task-slide {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(300%); }
+}
+
+.task-action {
+  background: none; border: 1px solid var(--surface1); border-radius: var(--radius-sm);
+  color: var(--subtext0); font-size: 11px; padding: 1px 7px; cursor: pointer;
+  flex-shrink: 0; margin-top: 1px;
+}
+.task-action:hover:not(:disabled) { color: var(--red); border-color: var(--red); }
+.task-action:disabled { opacity: .45; cursor: default; }
+
 /* ── Status toast ────────────────────────────────────────────────────────── */
 .status-toast { position: fixed; bottom: 170px; left: 50%; transform: translateX(-50%);
                 background: var(--mantle); border: 1px solid var(--surface1);
@@ -1001,6 +1069,7 @@ button, input, select, textarea { font-family: inherit; }
 
 .apk-body { padding: 18px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
 
+.apk-task-state { color: var(--overlay0); font-weight: normal; text-transform: none; letter-spacing: 0; }
 .apk-warn { background: rgba(243,139,168,.12); border: 1px solid var(--red);
             color: var(--red); border-radius: var(--radius); padding: 8px 12px; font-size: 13px; }
 
