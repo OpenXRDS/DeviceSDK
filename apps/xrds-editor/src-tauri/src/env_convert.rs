@@ -42,7 +42,7 @@ use rayon::prelude::*;
 /// additive, and Phase C may genuinely need it — a shared exponent costs precision
 /// in the smaller channels of a saturated colour, which matters more for a
 /// prefiltered specular chain than for a backdrop.
-const TARGET_FORMAT: Format = Format::E5B9G9R9_UFLOAT_PACK32;
+pub(crate) const TARGET_FORMAT: Format = Format::E5B9G9R9_UFLOAT_PACK32;
 
 #[derive(Debug, Clone)]
 pub struct EnvConvertOptions {
@@ -82,7 +82,7 @@ fn default_face_size(src_width: u32) -> u32 {
 /// get subtly wrong and produce a cubemap that is structurally perfect and visually
 /// scrambled, so `up_is_brightest_and_down_is_darkest` pins them against physics
 /// rather than against my arithmetic.
-fn face_direction(face: usize, u: f32, v: f32) -> [f32; 3] {
+pub(crate) fn face_direction(face: usize, u: f32, v: f32) -> [f32; 3] {
     match face {
         0 => [1.0, -v, -u],
         1 => [-1.0, -v, u],
@@ -98,7 +98,7 @@ fn face_direction(face: usize, u: f32, v: f32) -> [f32; 3] {
 /// Longitude wraps (the panorama is a full circle, so the last column is adjacent
 /// to the first — clamping there would leave a visible seam behind the viewer).
 /// Latitude clamps, since there is nothing above the north pole.
-fn sample_equirect(pano: &[f32], w: u32, h: u32, lon: f32, lat: f32) -> [f32; 3] {
+pub(crate) fn sample_equirect(pano: &[f32], w: u32, h: u32, lon: f32, lat: f32) -> [f32; 3] {
     use std::f32::consts::PI;
 
     let fx = (lon / (2.0 * PI) + 0.5) * w as f32 - 0.5;
@@ -217,6 +217,50 @@ fn project_faces(
         .collect()
 }
 
+/// Encode six faces — each with one or more mip levels, as
+/// `(edge_length, RGBA16F bytes)` — into a KTX2 cubemap.
+///
+/// `generate_mips` completes the chain by downsampling. True for a skybox, whose
+/// lower mips are just smaller versions of the same image; **false for a specular
+/// IBL chain**, whose levels are prefiltered roughness steps that downsampling
+/// would replace with something that merely looks similar.
+pub(crate) fn encode_cubemap_ktx2(
+    faces: &[Vec<(u32, Vec<u8>)>],
+    zstd_level: i32,
+    generate_mips: bool,
+) -> Result<Vec<u8>, String> {
+    let surfaces: Vec<Vec<Surface>> = faces
+        .iter()
+        .map(|mips| {
+            mips.iter()
+                .map(|(size, data)| Surface {
+                    data: data.clone(),
+                    width: *size,
+                    height: *size,
+                    depth: 1,
+                    stride: size * 8,
+                    slice_stride: 0,
+                    format: Format::R16G16B16A16_SFLOAT,
+                    color_space: ColorSpace::Linear,
+                    alpha: AlphaMode::Opaque,
+                })
+                .collect()
+        })
+        .collect();
+
+    let image = Image { surfaces, kind: TextureKind::Cubemap };
+    let settings = ConvertSettings {
+        format: Some(TargetFormat::Uncompressed(TARGET_FORMAT)),
+        container: Container::ktx2_zstd(zstd_level),
+        mipmap: generate_mips,
+        ..Default::default()
+    };
+    match convert(image, settings).map_err(|e| format!("KTX2 encode failed: {e}"))? {
+        PipelineOutput::Encoded(bytes) => Ok(bytes),
+        PipelineOutput::Raw(_) => Err("expected encoded output".into()),
+    }
+}
+
 /// The result of a conversion, for the caller to report.
 #[derive(Debug, Clone, PartialEq)]
 pub struct EnvConvertResult {
@@ -257,41 +301,12 @@ pub fn convert_equirect_to_cubemap(
     }
 
     ctx.set_detail("encoding KTX2");
-    let surfaces: Vec<Vec<Surface>> = faces
-        .into_iter()
-        .map(|data| {
-            vec![Surface {
-                data,
-                width: face_size,
-                height: face_size,
-                depth: 1,
-                stride: face_size * 8,
-                slice_stride: 0,
-                format: Format::R16G16B16A16_SFLOAT,
-                color_space: ColorSpace::Linear,
-                alpha: AlphaMode::Opaque,
-            }]
-        })
-        .collect();
-
-    let image = Image {
-        surfaces,
-        kind: TextureKind::Cubemap,
-    };
-    let settings = ConvertSettings {
-        format: Some(TargetFormat::Uncompressed(TARGET_FORMAT)),
-        container: Container::ktx2_zstd(opts.zstd_level),
-        // Downsampling to complete the chain, which is right for a skybox. A
-        // specular IBL chain is NOT this: its mips are roughness levels that must be
-        // computed, so Phase C supplies its own levels and sets this false.
-        mipmap: true,
-        ..Default::default()
-    };
-
-    let bytes = match convert(image, settings).map_err(|e| format!("KTX2 encode failed: {e}"))? {
-        PipelineOutput::Encoded(bytes) => bytes,
-        PipelineOutput::Raw(_) => return Err("expected encoded output".into()),
-    };
+    // One mip supplied per face; `generate_mips` completes the chain by
+    // downsampling, which is right for a skybox. A specular IBL chain is NOT this:
+    // its mips are roughness levels that must be computed. See `ibl`.
+    let faces_mips: Vec<Vec<(u32, Vec<u8>)>> =
+        faces.into_iter().map(|d| vec![(face_size, d)]).collect();
+    let bytes = encode_cubemap_ktx2(&faces_mips, opts.zstd_level, true)?;
 
     if let Some(parent) = dst.parent() {
         std::fs::create_dir_all(parent)
@@ -311,7 +326,7 @@ pub fn convert_equirect_to_cubemap(
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::task_queue::{TaskLane, TaskQueue};
 
@@ -341,7 +356,7 @@ mod tests {
 
     /// Run a closure with a real `TaskContext`, which is otherwise only
     /// constructible by the queue.
-    pub(super) fn with_ctx<T: Send + 'static>(
+    pub(crate) fn with_ctx<T: Send + 'static>(
         f: impl FnOnce(&TaskContext) -> T + Send + 'static,
     ) -> T {
         let result = std::sync::Arc::new(std::sync::Mutex::new(None));

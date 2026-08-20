@@ -5,6 +5,7 @@ mod editor_state;
 mod env_convert;
 mod environment;
 mod hierarchy;
+mod ibl;
 mod panel_library;
 mod inspector;
 mod io;

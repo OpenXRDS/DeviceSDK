@@ -383,8 +383,8 @@ to 32² is a ~1000× saving; no format choice comes close.
 | 0a | Expose `Skybox::rotation` | Trivial. Do first — see the reordering at the top |
 | 0b | ~~Procedural atmosphere, verified on Quest~~ | **Done, and measured — see below** |
 | A | ~~Task queue + UI, existing export jobs migrated~~ | **Done — see below** |
-| B | Equirect → cubemap for skybox | **Unblocked** — method decided and probed, see above |
-| C | IBL prefilter (diffuse + specular chain) | Real graphics work; own pass |
+| B | ~~Equirect → cubemap for skybox~~ | **Done** — verified in the editor |
+| C | ~~IBL prefilter (diffuse + specular chain)~~ | **Done** — see below |
 
 Phase A is worth doing regardless of whether B and C ever happen: it removes two
 bespoke job implementations and gives long operations somewhere honest to report.
@@ -525,6 +525,58 @@ Generalisable: **optimistic UI needs a path for "the backend said no".**
 `canExport` checked `!is_dirty` but not `has_save_path`, while the backend checks
 both, so a never-saved scene left the button enabled and the export silently
 refused.
+
+## Phase C result: IBL, and the sizing lesson applied
+
+`ibl.rs`. Split-sum (Karis 2013): a cosine-weighted diffuse irradiance map and a
+GGX-prefiltered specular chain whose mips are roughness levels. The BRDF term is
+not generated — Bevy already has that LUT built in.
+
+**Two conventions were read out of `bevy_pbr`'s shader rather than assumed**, since
+guessing either produces lighting that looks plausible and is wrong:
+
+- `radiance_level = perceptual_roughness * (textureNumLevels - 1)`, so mip *m* is
+  `perceptual_roughness = m / (levels - 1)`. Note *perceptual* — Bevy squares it to
+  get the GGX alpha, so the generator must square it too.
+- The diffuse map is sampled at **mip 0 only**, so it needs exactly one level and
+  no reason to be large.
+
+**Handedness needed no adjustment.** `environment_map.wgsl` negates the sample
+direction's z ("cube maps are left-handed") and `skybox.wgsl` does exactly the
+same, so the face convention already verified for the skybox is correct here. Worth
+having checked: "the reflection turns opposite" has bitten this project before.
+
+**The source mip pyramid is what stops the sun becoming fireflies.** Importance
+sampling takes a few hundred directions per texel; where the source holds a feature
+far brighter and smaller than the sample spacing — 17312 against a mean of 2.6 —
+whether any sample lands on it is luck, and neighbouring texels get wildly
+different answers. Sampling from a mip level chosen by the sample's solid angle
+averages the feature in before the luck applies.
+
+### Measured against the maps we ship
+
+Real ambientCG panorama, release build, ~1 second total:
+
+| | Generated | Shipped | |
+| --- | --- | --- | --- |
+| diffuse | 32²×6, 1 mip, **24 KB** | 1024²×6, 1 mip, 50.3 MB | **2048×** smaller |
+| specular | 512²×6, 10 mips, 8.39 MB | 1024²×6, 11 mips, 67.1 MB | 8× smaller |
+| **total VRAM** | **8.41 MB** | 117.4 MB | **14×** |
+
+Both verified through Bevy's own `ktx2_buffer_to_image` as `Rgb9e5Ufloat` cubes
+with the expected level counts.
+
+The diffuse figure is the sizing note in this document acted on rather than merely
+recorded: irradiance is a cosine-weighted integral over a whole hemisphere and has
+no detail left to carry, so 32² is indistinguishable from 1024² and 2048× cheaper.
+
+### One import, three maps
+
+Importing a `.exr` produces the skybox cubemap *and* both IBL maps, and registers
+all three. Splitting them would leave an author with a sky that lights nothing and
+no indication a second step existed — which is precisely the "backdrop only"
+half-feature this phase was written to avoid. The skybox is generated first, so it
+appears while the prefilter (most of the wall clock) is still running.
 
 ## Done when
 

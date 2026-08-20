@@ -143,9 +143,13 @@ impl std::fmt::Display for EnvironmentSourceError {
 /// reconstructed from the label, which is display text.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PendingEnvConversion {
-    pub asset_id: String,
-    /// Where the cubemap was written.
-    pub output_uri: String,
+    /// `(asset_id, uri)` for each map the conversion produced: the skybox cubemap,
+    /// then the IBL diffuse and specular pair.
+    ///
+    /// All three come from one import, because they answer one authoring question.
+    /// Splitting them would leave an author who converted a panorama with a sky
+    /// that lights nothing and no indication that a second step existed.
+    pub assets: Vec<(String, String)>,
 }
 
 /// Queue an equirect → cubemap conversion for an imported panorama.
@@ -171,64 +175,85 @@ fn queue_environment_conversion(
         }
     };
 
-    // `sky.exr` -> `sky_cube.ktx2`, beside the source. The `_cube` suffix rather
-    // than a bare `.ktx2` so a converted file cannot quietly overwrite a cubemap the
-    // author already had under the same stem.
+    // `sky.exr` -> `sky_cube.ktx2`, `sky_diffuse.ktx2`, `sky_specular.ktx2` beside
+    // the source. Suffixed rather than bare `.ktx2` so a converted file cannot
+    // quietly overwrite a cubemap the author already had under the same stem.
     let stem = src.file_stem().and_then(|s| s.to_str()).unwrap_or("sky").to_string();
-    let dst = src.with_file_name(format!("{stem}_cube.ktx2"));
-    let asset_id = format!("{asset_id_hint}_cube");
-    let output_uri = dst.to_string_lossy().replace('\\', "/");
+    let out = |suffix: &str| src.with_file_name(format!("{stem}_{suffix}.ktx2"));
+    let (cube, diffuse, specular) = (out("cube"), out("diffuse"), out("specular"));
 
-    let label = format!("Convert {} → cubemap", src.file_name().unwrap_or_default().to_string_lossy());
-    let dst_for_task = dst.clone();
+    let uri = |p: &std::path::Path| p.to_string_lossy().replace('\\', "/");
+    let assets = vec![
+        (format!("{asset_id_hint}_cube"), uri(&cube)),
+        (format!("{asset_id_hint}_diffuse"), uri(&diffuse)),
+        (format!("{asset_id_hint}_specular"), uri(&specular)),
+    ];
+
+    let label = format!(
+        "Convert {} → cubemap + IBL",
+        src.file_name().unwrap_or_default().to_string_lossy()
+    );
+    let src_for_task = src.clone();
     let id = tasks.spawn_tagged(label, TaskLane::Convert, Some(task_tag::ENV_CONVERT), move |ctx| {
-        let r = crate::env_convert::convert_equirect_to_cubemap(
-            &src,
-            &dst_for_task,
+        // Skybox first: it is the fast half, and finishing it means the author can
+        // see something while the prefilter — which is most of the wall clock —
+        // is still running.
+        let sky = crate::env_convert::convert_equirect_to_cubemap(
+            &src_for_task,
+            &cube,
             &crate::env_convert::EnvConvertOptions::default(),
             &ctx,
         )?;
+        let ibl = crate::ibl::generate_ibl_maps(
+            &src_for_task,
+            &diffuse,
+            &specular,
+            &crate::ibl::IblOptions::default(),
+            &ctx,
+        )?;
         Ok(format!(
-            "Converted to {}² cubemap ({:.1} MB)",
-            r.face_size,
-            r.bytes_written as f64 / 1e6
+            "Converted: {}² skybox, IBL with {} roughness levels ({:.1} MB total)",
+            sky.face_size,
+            ibl.specular_levels,
+            (sky.bytes_written + ibl.diffuse_bytes + ibl.specular_bytes) as f64 / 1e6
         ))
     });
 
-    state.pending_env_conversions.insert(id, PendingEnvConversion { asset_id, output_uri });
+    state.pending_env_conversions.insert(id, PendingEnvConversion { assets });
     info!(
-        "[io] queued environment conversion: {} ({}×{}) → {}",
-        path, source.width, source.height, dst.display()
+        "[io] queued environment conversion: {} ({}×{})",
+        path, source.width, source.height
     );
-    state.pending_status = Some("Converting panorama to a cubemap…".into());
+    state.pending_status = Some("Converting panorama — skybox and IBL…".into());
     false
 }
 
-/// Register a finished conversion's cubemap in the document.
+/// Register a finished conversion's maps in the document.
 ///
-/// Called from the snapshot broadcaster once the task reports success, because
-/// that is where session access exists. Returns true if the runtime needs a
-/// reimport — the asset catalog the environment resolvers search is rebuilt there,
-/// not in the document.
+/// Called from the command drain once the task reports success, because that is
+/// where session access exists. Returns true if the runtime needs a reimport — the
+/// asset catalog the environment resolvers search is rebuilt there, not in the
+/// document.
 pub fn register_converted_environment(
     session: &mut EditorSession,
     state: &mut EditorState,
     pending: &PendingEnvConversion,
 ) -> bool {
-    match session
-        .0
-        .register_environment_map_asset(pending.asset_id.clone(), pending.output_uri.clone())
-    {
-        Ok(asset) => {
-            info!("[io] registered converted environment map '{}'", asset.id);
-            true
-        }
-        Err(e) => {
-            error!("[io] could not register converted map: {e:?}");
-            state.pending_status = Some(format!("Conversion finished but registering it failed: {e:?}"));
-            false
+    let mut any = false;
+    for (asset_id, uri) in &pending.assets {
+        match session.0.register_environment_map_asset(asset_id.clone(), uri.clone()) {
+            Ok(asset) => {
+                info!("[io] registered converted environment map '{}'", asset.id);
+                any = true;
+            }
+            Err(e) => {
+                error!("[io] could not register '{asset_id}': {e:?}");
+                state.pending_status =
+                    Some(format!("Conversion finished but registering {asset_id} failed: {e:?}"));
+            }
         }
     }
+    any
 }
 
 /// A validated equirectangular source, ready for conversion.
