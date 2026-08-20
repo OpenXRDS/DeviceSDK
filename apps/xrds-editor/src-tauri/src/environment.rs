@@ -83,6 +83,15 @@ pub fn apply_environment_command(
             });
             true
         }
+        EditorCommand::SetAtmosphere { enabled } => {
+            let on = *enabled;
+            let _ = session.0.edit(|doc| {
+                let env = doc.metadata.environment.get_or_insert_with(Default::default);
+                env.atmosphere = on.then(xrds_scene_graph::XrdsSceneAtmosphereEnvironment::default);
+                if env.is_empty() { doc.metadata.environment = None; }
+            });
+            true
+        }
         EditorCommand::ClearSkybox => {
             let _ = session.0.edit(|doc| {
                 if let Some(e) = &mut doc.metadata.environment { e.skybox = None; }
@@ -133,5 +142,6 @@ pub fn build_environment_dto(session: &EditorSession) -> Option<EnvironmentDto> 
         // for the first time, so it decides whether the feature appears to work.
         skybox_brightness: sky.map(|s| s.brightness).unwrap_or(1000.0),
         skybox_yaw_deg:    sky.map(|s| s.yaw_deg).unwrap_or(0.0),
+        atmosphere_enabled: env.atmosphere.is_some(),
     })
 }

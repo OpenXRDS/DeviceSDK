@@ -10,7 +10,33 @@ pub struct XrdsSceneEnvironment {
     pub exposure: Option<XrdsSceneExposureEnvironment>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fog: Option<XrdsSceneFogEnvironment>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub atmosphere: Option<XrdsSceneAtmosphereEnvironment>,
 }
+
+/// Procedural atmospheric scattering — a computed sky rather than an image.
+///
+/// Wraps Bevy's `Atmosphere` (Hillaire 2020). Unlike a skybox this is *lit by the
+/// scene*: the sun's position and colour come from the directional lights already
+/// present, so the sky and the shadows agree, and moving a light moves the sun. A
+/// captured panorama cannot do that.
+///
+/// **Carries no physical parameters yet, deliberately.** Bevy's component exposes
+/// planet radius, Rayleigh and Mie densities, ozone bands and more — perhaps
+/// fifteen numbers describing an atmosphere. Exposing them before anyone has asked
+/// would be authoring a physics UI on speculation; Earth's defaults are what almost
+/// every scene wants, and adding fields later is additive. See
+/// `docs/editor-task-queue-and-hdr-conversion.md` step 0b.
+///
+/// Two consequences worth knowing:
+///
+/// - **It needs a directional light.** With none there is no sun, and the sky
+///   renders as an unlit shell.
+/// - **It forces an HDR camera** (`Atmosphere` requires Bevy's `Hdr`), which adds a
+///   float intermediate render target. That is a real cost on a mobile GPU and the
+///   reason this shipped as a spike to be measured on device rather than assumed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct XrdsSceneAtmosphereEnvironment {}
 
 impl XrdsSceneEnvironment {
     pub fn is_empty(&self) -> bool {
@@ -18,6 +44,7 @@ impl XrdsSceneEnvironment {
             && self.skybox.is_none()
             && self.exposure.is_none()
             && self.fog.is_none()
+            && self.atmosphere.is_none()
     }
 }
 

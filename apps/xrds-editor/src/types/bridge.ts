@@ -508,6 +508,7 @@ export interface EnvironmentDto {
   ibl_enabled: boolean; ibl_diffuse: string; ibl_specular: string; ibl_intensity: number;
   skybox_enabled: boolean; skybox_asset: string; skybox_brightness: number;
   skybox_yaw_deg: number;
+  atmosphere_enabled: boolean;
 }
 
 export const defaultSnapshot: EditorSnapshot = {
@@ -593,6 +594,7 @@ export type EditorCommand =
   | { type: "ClearIbl" }
   | { type: "SetSkybox";    payload: { texture_asset_id: string; brightness: number; yaw_deg: number } }
   | { type: "ClearSkybox" }
+  | { type: "SetAtmosphere"; payload: { enabled: boolean } }
   | { type: "SetHudText";         payload: { id: number; text: string; font_size: number; color: [number,number,number,number]; anchor: string; offset: [number,number] } }
   // The 12 HudTemplate/HudItem commands are gone with `XrdsHudTemplate`: a HUD is
   // a panel template head-locked to an anchor by parenting a Panel node under

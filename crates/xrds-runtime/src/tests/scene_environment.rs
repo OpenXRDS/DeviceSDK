@@ -220,6 +220,45 @@ fn an_authored_skybox_yaw_reaches_the_component() {
     );
 }
 
+/// A procedural sky is applied when authored, and suppressed under passthrough for
+/// the same reason a skybox is: it paints over the transparent clear the
+/// passthrough layer needs, so the author would tick Passthrough and get a computed
+/// sky instead of the room.
+#[test]
+fn atmosphere_applies_when_authored_and_yields_to_passthrough() {
+    use bevy::pbr::Atmosphere;
+
+    fn scene_with_atmosphere() -> XrdsSceneDocument {
+        let mut document = skybox_document();
+        if let Some(env) = document.metadata.environment.as_mut() {
+            env.skybox = None; // atmosphere alone, so the skybox cannot mask the result
+            env.atmosphere = Some(Default::default());
+        }
+        document
+    }
+
+    for (passthrough, expected) in [(false, true), (true, false)] {
+        let mut app = xrds_test_app();
+        app.insert_resource(xrds_openxr::OpenXrPassthroughEnabled(passthrough));
+        {
+            let mut xrds = XrdsAPI::attach(&mut app);
+            xrds.import_scene_document(&scene_with_atmosphere())
+                .expect("document should import");
+        }
+
+        let camera_entity = app
+            .world()
+            .resource::<XrdsIdIndex>()
+            .entity_of(XrdsId(501))
+            .expect("camera entity should exist");
+        assert_eq!(
+            app.world().get::<Atmosphere>(camera_entity).is_some(),
+            expected,
+            "passthrough={passthrough} should give atmosphere present={expected}",
+        );
+    }
+}
+
 /// The sky and the lighting must turn *together*.
 ///
 /// They did not, at first: Bevy documents `Skybox::rotation` as view space and

@@ -192,7 +192,7 @@ feature.
 | Phase | Scope | Notes |
 | --- | --- | --- |
 | 0a | Expose `Skybox::rotation` | Trivial. Do first — see the reordering at the top |
-| 0b | Procedural atmosphere, verified on Quest | May make B/C optional for outdoor scenes |
+| 0b | ~~Procedural atmosphere, verified on Quest~~ | **Done, and measured — see below** |
 | A | Task queue + UI, existing export jobs migrated | Independently useful; unblocks the rest |
 | B | Equirect → cubemap for skybox | Gated on the conversion-method decision above |
 | C | IBL prefilter (diffuse + specular chain) | Real graphics work; own pass |
@@ -205,6 +205,62 @@ two shipped cubemaps cover indoor ones, conversion serves only the author who wa
 one *specific* environment. That is a real use, and a much weaker reason to build a
 GPU cubemap pipeline than "you cannot have a sky at all" was. Re-judge after 0b
 rather than treating this plan as committed.
+
+## 0b result: works on Adreno, costs more than a whole frame budget
+
+Measured on a Quest 3, 2026-08-20. Two APKs from the same generated scene — a
+200×200 ground plane, one shadow-casting directional light, one cube — differing
+only in whether `atmosphere` was set. Frame time taken from the
+`[XR-DIAG] update_view_proj#N` counter, which logs every 90 frames, so consecutive
+timestamps give the period of 90 frames directly.
+
+| | Frame time | Rate |
+| --- | --- | --- |
+| Without atmosphere | ~13.0 ms | ~77 fps (at display cap) |
+| With atmosphere | ~31.3 ms | ~32 fps |
+| **Cost** | **+18.3 ms/frame** | |
+
+The 72 Hz budget is 13.9 ms. **Atmosphere alone costs about 1.3× the entire frame
+budget**, while everything else in the scene fits comfortably inside it. That is not
+a tuning gap; it is a different order of magnitude.
+
+**It renders correctly** — sky, horizon, aerial haze and the sun disc all confirmed
+by eye on device, with no validation errors and no panics. This is not the
+`bevy_hanabi` outcome, where the feature simply produced nothing on Adreno. It
+works; it is unaffordable at default settings.
+
+Two things were needed to get it working at all, both worth keeping in mind if this
+is revisited:
+
+- `Atmosphere` requires Bevy's `Hdr`, adding a float intermediate render target —
+  paid once per eye.
+- The `render_sky` pass **samples the depth texture**, and `Camera3d::default`
+  creates depth as `RENDER_ATTACHMENT` only. Bevy adds `TEXTURE_BINDING` itself for
+  occlusion-culling views and *not* for atmosphere, so the bind group fails
+  validation without an explicit fix on our side.
+
+### Decision: ship it as an advanced, opt-in feature
+
+Not removed — it works, and desktop and exported desktop apps have the budget for
+it. Not defaulted on — an XR scene that enables it drops to under half the target
+frame rate, and a default that is pleasant on desktop and unusable on a headset is
+the wrong default for this SDK. Unreal defaults its sky atmosphere on because it
+targets hardware where the intermediate is nearly free; we do not have that.
+
+The editor states the measured cost rather than a vague warning, so the choice is
+informed at the point it is made.
+
+**Not attempted, and the obvious next question:** `AtmosphereSettings` exposes LUT
+sizes and per-ray sample counts, and the defaults are desktop-tuned. Whether 18 ms
+can be brought under ~3 ms that way is unknown and would be its own measurement.
+Recorded as a lead, not a plan.
+
+### Consequence for B and C
+
+The premise that "the atmosphere may make conversion unnecessary for outdoor
+scenes" **does not hold for XR**. On a headset an author still needs a cubemap, so
+conversion keeps whatever priority it had. On desktop the atmosphere is a genuine
+alternative.
 
 ## Done when
 

@@ -242,6 +242,9 @@ pub enum EditorCommand {
     },
     SetSkybox     { texture_asset_id: String, brightness: f32, yaw_deg: f32 },
     ClearSkybox,
+    /// Procedural sky. No parameters yet — Earth defaults, see
+    /// `XrdsSceneAtmosphereEnvironment`.
+    SetAtmosphere { enabled: bool },
 
     // --- Asset catalog ---
     RemoveAsset { asset_id: String },
@@ -494,6 +497,8 @@ pub struct EnvironmentDto {
     /// Sky rotation about the vertical axis, in degrees — where the sun sits.
     #[serde(default)]
     pub skybox_yaw_deg: f32,
+    #[serde(default)]
+    pub atmosphere_enabled: bool,
 }
 
 // ---------------------------------------------------------------------------

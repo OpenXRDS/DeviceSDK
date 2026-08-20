@@ -886,7 +886,7 @@ function SceneEnvironmentSection({ env, passthrough, assets, send }:
   const e = env ?? { fog_enabled:false, fog_color:[1,0.4,0.1,1] as [number,number,number,number], fog_start:2, fog_end:30,
                      exposure_enabled:false, ev100:BEVY_EV100,
                      ibl_enabled:false, ibl_diffuse:"", ibl_specular:"", ibl_intensity:1000,
-                     skybox_enabled:false, skybox_asset:"", skybox_brightness:1000, skybox_yaw_deg:0 };
+                     skybox_enabled:false, skybox_asset:"", skybox_brightness:1000, skybox_yaw_deg:0, atmosphere_enabled:false };
 
   const [fogColor, setFogColor]     = useState<[number,number,number,number]>(e.fog_color);
   const [fogStart, setFogStart]     = useState(e.fog_start);
@@ -977,6 +977,42 @@ function SceneEnvironmentSection({ env, passthrough, assets, send }:
           <SliderRow label="Brightness" value={brightness} min={-5} max={5} step={0.1}
             onLive={v  => { isDragging.current = true;  setBrightness(v); }}
             onCommit={v => { isDragging.current = false; setBrightness(v); send({ type:"SetExposure", payload:{ ev100: toEv100(v) } }); }} />
+        )}
+      </div>
+
+      {/* Atmosphere — a computed sky rather than an image.
+          Placed above Skybox because for an outdoor scene it is usually the better
+          answer: the sun comes from the scene's own directional light, so sky and
+          shadows agree and moving the light moves the sun. A captured panorama
+          cannot do that. See docs/editor-task-queue-and-hdr-conversion.md 0b. */}
+      <div className="insp-section">
+        <h4>Atmosphere <span style={{color:"var(--overlay0)",fontSize:9,fontWeight:"normal",marginLeft:4}}>procedural sky · desktop</span></h4>
+        <Toggle label="Enable" value={e.atmosphere_enabled}
+          onChange={enabled => send({ type:"SetAtmosphere", payload:{ enabled } })} />
+        {e.atmosphere_enabled && (
+          <>
+            <div className="insp-note">
+              The sun is your directional light — move it to change the time of day.
+              With no directional light in the scene there is no sun, and the sky
+              renders flat.
+            </div>
+            {/* The measured number, not a vague caution. It was "verify on device
+                before relying on this" until the device answered: 13.0 ms -> 31.3 ms
+                on a Quest 3, against a 13.9 ms budget at 72 Hz. An author deciding
+                this deserves the figure, not an adjective. */}
+            <div className="insp-note" style={{ color: "var(--yellow)" }}>
+              <b>Costs ~18 ms/frame on a Quest 3</b> — more than the entire 13.9 ms
+              budget at 72 Hz, measured. It renders correctly there, but halves the
+              frame rate. Fine for desktop and desktop exports; avoid in scenes meant
+              for a headset.
+            </div>
+            {passthrough && (
+              <div className="insp-note">
+                Suppressed on device while Passthrough is on — a computed sky would
+                paint over the real world, exactly as a skybox would.
+              </div>
+            )}
+          </>
         )}
       </div>
 

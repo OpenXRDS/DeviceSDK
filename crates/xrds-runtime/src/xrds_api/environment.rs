@@ -65,6 +65,9 @@ struct XrdsManagedSceneIblEnvironment;
 struct XrdsManagedSceneSkyboxEnvironment;
 
 #[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct XrdsManagedSceneAtmosphereEnvironment;
+
+#[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct XrdsManagedSceneExposureEnvironment;
 
 #[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -99,8 +102,86 @@ pub(super) fn imported_scene_environment_in_world(world: &World) -> Option<XrdsS
 pub(super) fn apply_imported_scene_environment_policy_in_world(world: &mut World) {
     sync_managed_scene_ibl_in_world(world);
     sync_managed_scene_skybox_in_world(world);
+    sync_managed_scene_atmosphere_in_world(world);
     sync_managed_scene_exposure_in_world(world);
     sync_managed_scene_fog_in_world(world);
+}
+
+/// Applies procedural atmospheric scattering to every 3-D camera.
+///
+/// Bevy's `Atmosphere` is a post-process over whatever the camera already drew, so
+/// it composes with a skybox rather than replacing it — a starry skybox still shows
+/// through at night. That is upstream's design, not an accident of ordering here.
+///
+/// Suppressed under passthrough for the same reason as the skybox: it paints a sky
+/// over the transparent clear the passthrough layer needs, so an author would tick
+/// Passthrough and get a computed sky instead of the room.
+fn sync_managed_scene_atmosphere_in_world(world: &mut World) {
+    use bevy::pbr::Atmosphere;
+
+    let wants_atmosphere = imported_scene_environment_in_world(world)
+        .and_then(|environment| environment.atmosphere)
+        .is_some()
+        && !world
+            .get_resource::<xrds_openxr::OpenXrPassthroughEnabled>()
+            .is_some_and(|e| e.0);
+
+    if !wants_atmosphere {
+        let entities: Vec<Entity> = {
+            let mut query = world.query_filtered::<
+                Entity,
+                (With<Camera3d>, With<XrdsManagedSceneAtmosphereEnvironment>),
+            >();
+            query.iter(world).collect()
+        };
+        for entity in entities {
+            let mut entity_mut = world.entity_mut(entity);
+            entity_mut.remove::<Atmosphere>();
+            entity_mut.remove::<XrdsManagedSceneAtmosphereEnvironment>();
+        }
+        return;
+    }
+
+    let cameras: Vec<(Entity, bool)> = {
+        let mut query = world.query_filtered::<(Entity, Option<&Atmosphere>), With<Camera3d>>();
+        query
+            .iter(world)
+            .map(|(entity, existing)| (entity, existing.is_some()))
+            .collect()
+    };
+
+    for (entity, has_atmosphere) in cameras {
+        if has_atmosphere {
+            continue;
+        }
+
+        // The atmosphere's `render_sky` pass **samples the depth texture** (it needs
+        // to know where geometry is, for aerial perspective), but `Camera3d::default`
+        // creates depth as `RENDER_ATTACHMENT` only. Bevy adds `TEXTURE_BINDING`
+        // itself for occlusion-culling views (`configure_occlusion_culling_view_targets`)
+        // and *not* for atmosphere, so without this the bind group fails validation:
+        //
+        //     create_bind_group 'render_sky_bind_group'
+        //     Usage flags TextureUsages(RENDER_ATTACHMENT) ... do not contain
+        //     required usage flags TextureUsages(TEXTURE_BINDING)
+        //
+        // The flag is left in place if atmosphere is later switched off: it only
+        // *permits* sampling, costs nothing on its own, and removing it would mean
+        // guessing whether something else has since come to depend on it.
+        if let Some(mut camera_3d) = world.get_mut::<Camera3d>(entity) {
+            let usages: bevy::render::render_resource::TextureUsages =
+                camera_3d.depth_texture_usages.into();
+            camera_3d.depth_texture_usages =
+                (usages | bevy::render::render_resource::TextureUsages::TEXTURE_BINDING).into();
+        }
+
+        // `Atmosphere` requires `Hdr`, which Bevy inserts for us. That is the whole
+        // performance question of this feature: it adds a float intermediate render
+        // target, which is cheap on desktop and not obviously so on a Quest.
+        world
+            .entity_mut(entity)
+            .insert((Atmosphere::default(), XrdsManagedSceneAtmosphereEnvironment));
+    }
 }
 
 fn sync_managed_scene_ibl_in_world(world: &mut World) {
