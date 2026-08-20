@@ -33,6 +33,19 @@ xrds-components = { workspace = true }
 bevy = { workspace = true }
 bevy_mod_outline = "0.11.0"
 rfd = "0.15"
+# OpenEXR decoding, for the environment-map import contract (see
+# docs/editor-task-queue-and-hdr-conversion.md). `.exr` is what authors actually
+# download — ambientCG and Poly Haven ship it — and nothing in the tree could read
+# one: Bevy's `exr` feature is off and the `exr` crate was absent entirely.
+#
+# Declared here rather than as a Bevy feature on the workspace so the decoder stays
+# out of the Quest APK. `xrds-app` does not depend on the editor, so this reaches
+# only desktop builds; enabling `bevy/exr` at the workspace level would ship an
+# OpenEXR decoder to a headset that only ever loads converted KTX2.
+#
+# default-features = false: `image` otherwise pulls in every codec it has, and the
+# ones we want are already provided through Bevy.
+image = { version = "0.25", default-features = false, features = ["exr"] }
 wgpu = { workspace = true }
 wry = "0.55"
 raw-window-handle = "0.6"

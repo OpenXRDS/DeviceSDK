@@ -170,22 +170,160 @@ graphics work, and worth its own pass rather than being smuggled into Phase B.
 Until Phase C, a converted panorama lights nothing; it is a backdrop. That must be
 said in the UI, or it becomes another silent half-feature.
 
-### How to convert — decide before building
+### The input contract — decided 2026-08-20
 
-1. **In-process with Bevy's renderer.** No external dependency, works on every
-   platform the editor runs on, and the GPU is already initialised. Costs a
-   render-to-cubemap path the editor does not currently have.
-2. **Khronos `ktx` CLI.** `ktx create --cubemap` and friends do this properly and
-   are battle-tested. But it is a tool the author must install, and the editor
-   would need the same prerequisite-check dance as the APK export — which is
-   precisely the friction this feature exists to remove.
-3. **A Rust crate.** Needs a survey; none is known-good here yet. Unverified.
+What the editor accepts as an environment source. Settled by looking at a real
+download rather than reasoning about formats: `DayEnvironmentHDRI043_4K.zip` from
+ambientCG.
 
-Leaning (1) for the skybox phase, since the editor already owns a GPU context and a
-tool dependency defeats the purpose. Phase C may still be easier via (2) offline.
+| Accepted | Notes |
+| --- | --- |
+| Equirectangular **`.exr`**, 2:1 | OpenEXR. **The required format** — what vendors ship |
+| Equirectangular **`.hdr`**, 2:1 | Radiance RGBE. Already enabled, so accepted for free |
+| **`.ktx2`** with `faceCount == 6` | Already a cubemap; passes through unconverted |
 
-**Do not start Phase B before this is settled.** It is the whole cost of the
-feature.
+Everything else is refused, including `.zip` — an author extracts first.
+
+**What the vendor package actually contains**, which is what settled this:
+
+```text
+ 30.89 MB  DayEnvironmentHDRI043_4K_HDR.exr        <- the payload
+  5.70 MB  DayEnvironmentHDRI043_4K_TONEMAPPED.jpg
+  1.14 MB  DayEnvironmentHDRI043_4K.blend
+  0.32 MB  DayEnvironmentHDRI043.png
+  0.00 MB  DayEnvironmentHDRI043_4K.usdc
+  0.00 MB  DayEnvironmentHDRI043_4K.tres           <- Godot stub
+```
+
+One interchange image plus per-engine wrappers, and *no cubemap* — confirming from
+the supply side that every engine builds its own. The `.exr` is 4096×2048, RGBA
+half-float, PIZ-compressed.
+
+**`.exr` could not be read at all.** Bevy's `exr` feature was off and the `exr`
+crate was absent from the lockfile entirely, so the single most likely file an
+author downloads was refused at import. Now enabled — but as an `image` dependency
+of `xrds-editor` rather than a Bevy feature on the workspace, so an OpenEXR decoder
+does not ship to a headset that only ever loads converted KTX2. Verified against
+the real file: PIZ decodes in 0.48 s, and the header-only dimension read the
+classifier uses takes 5.3 ms.
+
+#### Why LDR is refused rather than merely discouraged
+
+Measured on the two halves of that same download — same capture, same resolution,
+solid-angle weighted so polar rows do not distort the average:
+
+| | max | mean luminance | light above 1.0 |
+| --- | --- | --- | --- |
+| `_HDR.exr` | 17312.0 | 2.5645 | **84.4%** |
+| `_TONEMAPPED.jpg` | 1.0 | 0.4492 | 0% |
+
+**84.4% of this environment's light lives above 1.0** and is absent from the JPEG.
+As a backdrop it merely looks flat — the sun clamps to exactly the brightness of a
+cloud, and since the JPEG is already tonemapped, the renderer tonemaps it a second
+time and it reads milky. As *lighting* it is broken: no dominant direction, no
+sun, no directional shadow, no sharp specular. Raising skybox brightness cannot
+recover it, because scaling clipped values brightens sun and cloud together.
+
+Every major engine *does* accept LDR as a backdrop while documenting HDR for
+lighting, and all of them split the two concepts — `scene.background` vs
+`scene.environment` in three.js, `PanoramaSkyMaterial` vs sky radiance in Godot.
+XRDS has the same split already. So allowing LDR as a skybox-only backdrop stays
+open as a later option; it is the same conversion pipeline with a different
+decoder. It is simply not Phase B, and shipping it *without* the distinction would
+invite exactly the `_TONEMAPPED.jpg` mistake this package makes easy.
+
+Hence `EnvironmentSourceError::NotHighDynamicRange` names the fix rather than the
+fault: the file an author wants is usually sitting in the folder they just browsed.
+
+### How to convert — decided 2026-08-20, after a survey and a working probe
+
+The options were: (1) in-process with Bevy's renderer, (2) the Khronos `ktx` CLI,
+(3) a Rust crate. The survey turned (3) into a split, and that split wins.
+
+**No single Rust crate does this.** [`ktx2`](https://crates.io/crates/ktx2) is a
+read-only parser. [`gltf-ibl-sampler-egui`](https://github.com/pcwalton/gltf-ibl-sampler-egui)
+— by a Bevy renderer contributor, targeting Bevy's KTX2 exactly, and very plausibly
+what produced the maps we ship — does the whole job but is a **GUI binary with no
+library API**, bundling the Khronos C++ sampler and needing a Vulkan GPU.
+
+**[`ctt`](https://lib.rs/crates/ctt) 0.5.0** (MIT/Apache/Zlib) is the piece worth
+taking: a Rust library that writes KTX2 with cubemap faces, mip levels and optional
+zstd supercompression, and encodes BC6H/ASTC later if we want them. It does *not*
+do equirect projection or IBL prefiltering.
+
+| Part | Who | Why |
+| --- | --- | --- |
+| Decode `.exr` / `.hdr` | `image` | Already in the editor for the import contract |
+| Equirect → 6 faces | **us**, CPU | Direction math; small, parallel, testable |
+| GGX prefilter (Phase C) | **us**, CPU | Well-documented; the task queue exists for its runtime |
+| Write KTX2 | **`ctt`** | Container, DFD and face/mip layout are fiddly and easy to get subtly wrong |
+| BC6H / ASTC | `ctt` encoders, later | For the VRAM problem below; costs a C++ toolchain |
+
+**Option (1) is rejected, and not on performance.** A CPU converter runs headless,
+so it is unit-testable — and *every* environment-map bug in this project so far was
+found by a person running the editor, never by a test. In-process rendering would
+also mean render-graph plumbing, async readback, and contending with the viewport
+for the GPU, to speed up something already measured at half a second.
+
+Use `gltf-ibl-sampler-egui` anyway, as a **cross-check oracle**: same input through
+both, compare outputs. Better than eyeballing a sphere.
+
+#### What the probe established
+
+Against the real 4096×2048 ambientCG `.exr`, headless:
+
+```text
+decoded 4096x2048        270 ms
+projected 6x512² faces    13 ms
+encoded KTX2 (zstd-9)    205 ms   -> 10.83 MB
+```
+
+Output header versus the map we ship:
+
+| | Format | Size | Faces | Mips | Supercompression | File |
+| --- | --- | --- | --- | --- | --- | --- |
+| probe output | RGBA16F | 512² | 6 | 10 | Zstandard | **10.8 MB** |
+| shipped `specular.ktx2` | RGBA16F | 1024² | 6 | 11 | none | 67.1 MB |
+
+And an orientation check, which a valid header cannot give you — a flipped axis or
+wrong face order still produces a structurally perfect cubemap:
+
+```text
++Y(up)    mean luminance 9.2260   <- open sky, brightest
+-Y(down)  mean luminance 0.2187   <- ground, darkest
+```
+
+A 42× ratio the right way round, so the face order and axis signs are right.
+
+**`ctt` API notes for whoever implements this.** `Image { surfaces, kind }` takes
+raw in-memory buffers with `surfaces[face][mip]`. `ConvertSettings::mipmap = true`
+*downsamples* to complete the chain — correct for a skybox, **wrong for the
+specular chain**, whose mips are roughness levels that must be computed. Phase C
+supplies its own levels and sets `mipmap = false`.
+
+**Caveats.** `default-features = false` drops all five encoder bindings, but `ctt`
+still pulls `zstd-sys`, which compiles C — this workspace otherwise avoids that by
+using Bevy's pure-Rust `zstd_rust`. Editor-only, and it built without complaint.
+Unverified: that Bevy loads a *zstd-supercompressed* KTX2 (we enable `zstd_rust`,
+so it should — but "should" is exactly what 0b punished), and visual correctness,
+since the probe point-sampled. Production needs real filtering: with a sun at
+17312, aliasing will be violent.
+
+#### Sizing: do not reproduce what we ship
+
+The two shipped maps total **117 MB, uncompressed RGBA16F**, which is VRAM as well
+as disk. Two things to fix rather than copy:
+
+- `diffuse.ktx2` is **1024² with a single mip**. Diffuse irradiance is an extremely
+  low-frequency signal and is conventionally 32² or 64² — roughly 50 KB, not 50 MB.
+  `gltf-ibl-sampler-egui` defaults to "max 4K per side", which likely explains it.
+- Nothing is supercompressed, though `zstd_rust` is already enabled. The probe got
+  6× smaller partly this way.
+
+On a headset the real answer is a GPU-compressed HDR format — BC6H on desktop,
+ASTC HDR on Adreno — rather than raw FP16. `ctt` can emit both. What the Quest
+actually reports in `CompressedImageFormats` is unverified, and after 0b that is a
+measurement, not an assumption.
 
 ## Phasing
 
@@ -194,7 +332,7 @@ feature.
 | 0a | Expose `Skybox::rotation` | Trivial. Do first — see the reordering at the top |
 | 0b | ~~Procedural atmosphere, verified on Quest~~ | **Done, and measured — see below** |
 | A | ~~Task queue + UI, existing export jobs migrated~~ | **Done — see below** |
-| B | Equirect → cubemap for skybox | Gated on the conversion-method decision above |
+| B | Equirect → cubemap for skybox | **Unblocked** — method decided and probed, see above |
 | C | IBL prefilter (diffuse + specular chain) | Real graphics work; own pass |
 
 Phase A is worth doing regardless of whether B and C ever happen: it removes two

@@ -1,4 +1,3 @@
-use bevy::log::error;
 use xrds_scene_graph::{
     XrdsSceneFogEnvironment, XrdsSceneExposureEnvironment,
     XrdsSceneIblEnvironment, XrdsSceneSkyboxEnvironment, XrdsXrBlendMode,

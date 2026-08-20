@@ -52,8 +52,98 @@ fn detect_asset_kind(path: &str) -> Option<XrdsSceneAssetKind> {
         // `docs/small-phases-plan.md` — the missing conversion step is recorded
         // there rather than papered over here.
         Some("hdr")                            => Some(XrdsSceneAssetKind::EnvironmentMap),
+        // OpenEXR, and the format authors actually get: ambientCG and Poly Haven
+        // both ship `.exr` as the payload. Like `.hdr` it is a single
+        // equirectangular image and still needs converting to a cubemap KTX2.
+        Some("exr")                            => Some(XrdsSceneAssetKind::EnvironmentMap),
         _                                      => None,
     }
+}
+
+// ---------------------------------------------------------------------------
+// Environment-map import contract
+// ---------------------------------------------------------------------------
+
+/// Why an image cannot serve as an environment map. Carries the explanation, not
+/// just the fact.
+///
+/// The messages matter more than usual here. An ambientCG download contains
+/// `..._HDR.exr` and `..._TONEMAPPED.jpg` side by side, and picking the wrong one
+/// is the obvious mistake — so "unsupported format" would be a wasted answer. Each
+/// variant says what is wrong with *this* file and what to do instead.
+#[derive(Debug, Clone, PartialEq)]
+pub enum EnvironmentSourceError {
+    /// An LDR format. Fatal for lighting: these cannot store values above 1.0, so
+    /// the sun clamps to the same brightness as a cloud.
+    NotHighDynamicRange { ext: String },
+    /// Not a 2:1 latitude-longitude panorama.
+    NotEquirectangular { width: u32, height: u32 },
+    Undecodable { detail: String },
+}
+
+impl std::fmt::Display for EnvironmentSourceError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            // Says the thing an author can act on: the file they want is usually
+            // sitting in the same folder as the one they picked.
+            Self::NotHighDynamicRange { ext } => write!(
+                f,
+                ".{ext} files hold no brightness above 1.0, so they cannot light a \
+                 scene — the sun would be no brighter than a cloud. Use the .exr \
+                 (or .hdr) from the same download instead."
+            ),
+            Self::NotEquirectangular { width, height } => write!(
+                f,
+                "An environment map must be an equirectangular panorama with a 2:1 \
+                 width-to-height ratio. This image is {width}×{height}."
+            ),
+            Self::Undecodable { detail } => write!(f, "Could not read the image: {detail}"),
+        }
+    }
+}
+
+/// A validated equirectangular source, ready for conversion.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EnvironmentSource {
+    pub width: u32,
+    pub height: u32,
+}
+
+/// Decide whether a file can serve as an environment map, per the import contract
+/// in `docs/editor-task-queue-and-hdr-conversion.md`.
+///
+/// Accepts equirectangular `.exr` and `.hdr`. `.ktx2` cubemaps are handled by
+/// `detect_asset_kind` and never reach here — they are already in the target
+/// format and need no conversion.
+pub fn classify_environment_source(path: &str) -> Result<EnvironmentSource, EnvironmentSourceError> {
+    let ext = std::path::Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_lowercase())
+        .unwrap_or_default();
+
+    // Refused before decoding, and deliberately so: an LDR file is not a damaged
+    // environment map, it is the wrong kind of file, and reading its pixels would
+    // not change the answer.
+    if !matches!(ext.as_str(), "exr" | "hdr") {
+        return Err(EnvironmentSourceError::NotHighDynamicRange { ext });
+    }
+
+    // Only the dimensions are needed, so this reads the header rather than
+    // decoding 4096×2048 half-floats to answer a question about aspect ratio.
+    let reader = image::ImageReader::open(path)
+        .map_err(|e| EnvironmentSourceError::Undecodable { detail: e.to_string() })?;
+    let (width, height) = reader
+        .into_dimensions()
+        .map_err(|e| EnvironmentSourceError::Undecodable { detail: e.to_string() })?;
+
+    // Tolerance rather than exact equality: a 2:1 panorama is what every vendor
+    // ships, but rounding in an author's own export should not be a refusal.
+    if height == 0 || (width as f32 / height as f32 - 2.0).abs() > 0.01 {
+        return Err(EnvironmentSourceError::NotEquirectangular { width, height });
+    }
+
+    Ok(EnvironmentSource { width, height })
 }
 
 /// `faceCount` from a KTX2 header — 6 for a cubemap, 1 for a plain texture.
@@ -1016,5 +1106,84 @@ mod tests {
         assert!(errors[0].contains("ghost.glb"));
 
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    // ── Environment-map import contract ──────────────────────────────────
+    // docs/editor-task-queue-and-hdr-conversion.md. `.exr` equirectangular is the
+    // contract; everything else is refused with a reason an author can act on.
+
+    /// A 2:1 OpenEXR is what ambientCG and Poly Haven actually ship.
+    ///
+    /// The fixture is generated rather than committed: a real 4K panorama is 31 MB,
+    /// and the property under test is the header, not the pixels.
+    #[test]
+    fn an_equirectangular_exr_is_accepted() {
+        let dir = std::env::temp_dir().join("xrds_env_contract_exr");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("sky.exr");
+        // Values above 1.0, as a real HDR panorama has — the whole point of the format.
+        let buf = image::Rgb32FImage::from_fn(64, 32, |x, _| image::Rgb([x as f32, 4.0, 0.5]));
+        image::DynamicImage::ImageRgb32F(buf).save(&path).expect("write exr fixture");
+
+        let src = classify_environment_source(path.to_str().unwrap())
+            .expect("a 2:1 .exr is the format the contract exists to accept");
+        assert_eq!(src, EnvironmentSource { width: 64, height: 32 });
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The mistake the refusal message exists for.
+    ///
+    /// An ambientCG download puts `..._HDR.exr` and `..._TONEMAPPED.jpg` in one
+    /// folder. Measured on a real pair, 84.4% of the environment's light lives
+    /// above 1.0 and is absent from the JPEG — so this is not a lesser input, it is
+    /// the wrong one, and the message must point at the file the author has.
+    #[test]
+    fn an_ldr_image_is_refused_with_a_reason_that_names_the_fix() {
+        for ext in ["jpg", "png", "webp"] {
+            let err = classify_environment_source(&format!("some/DayEnvironment_TONEMAPPED.{ext}"))
+                .expect_err("LDR cannot carry the values that light a scene");
+            assert_eq!(err, EnvironmentSourceError::NotHighDynamicRange { ext: ext.into() });
+
+            let msg = err.to_string();
+            assert!(msg.contains("1.0"), "must say what is missing: {msg}");
+            assert!(msg.contains(".exr"), "must name the file to use instead: {msg}");
+        }
+    }
+
+    /// Refused before the file is opened — an LDR path that does not exist must
+    /// still produce the format complaint, not a confusing I/O error.
+    #[test]
+    fn the_ldr_refusal_does_not_depend_on_reading_the_file() {
+        let err = classify_environment_source("nowhere/at/all/sky.png").unwrap_err();
+        assert!(matches!(err, EnvironmentSourceError::NotHighDynamicRange { .. }));
+    }
+
+    /// A cubemap face, a texture atlas, or a cropped panorama. Accepting one would
+    /// wrap the wrong pixels around the sky with nothing said.
+    #[test]
+    fn a_non_2to1_image_is_refused_and_the_message_states_its_size() {
+        let dir = std::env::temp_dir().join("xrds_env_contract_square");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("square.exr");
+        let buf = image::Rgb32FImage::from_fn(64, 64, |_, _| image::Rgb([2.0, 2.0, 2.0]));
+        image::DynamicImage::ImageRgb32F(buf).save(&path).expect("write exr fixture");
+
+        let err = classify_environment_source(path.to_str().unwrap()).unwrap_err();
+        assert_eq!(err, EnvironmentSourceError::NotEquirectangular { width: 64, height: 64 });
+        assert!(err.to_string().contains("64×64"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `.exr` must reach the environment picker at all. It was absent from
+    /// `detect_asset_kind`, so importing the one file an author is most likely to
+    /// download was refused outright.
+    #[test]
+    fn exr_and_hdr_classify_as_environment_maps() {
+        for p in ["a/sky.exr", "a/sky.EXR", "a/sky.hdr"] {
+            assert_eq!(detect_asset_kind(p), Some(XrdsSceneAssetKind::EnvironmentMap),
+                       "{p} should reach the environment picker");
+        }
     }
 }
