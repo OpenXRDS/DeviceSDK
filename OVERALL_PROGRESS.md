@@ -50,8 +50,9 @@ What is complete:
 - Primitive creation palette — Cube, Sphere, Cylinder, Plane, Tetrahedron, Camera, 3 light types, Ambient Light, Audio Clip, Interaction Zone, Text 3D, Player Spawn
 - Material authoring panel — base color, emissive, opacity, roughness, metallic, unlit, double-sided, alpha mode, texture slots
 - Animation playback controls and morph target sliders in inspector
-- Scene environment preview (fog, exposure, IBL, skybox) in real-time
-- Export as GLB (full scene or selection)
+- Scene environment preview in real-time — fog (linear/exponential/exponential-squared), exposure, IBL, skybox, procedural atmosphere
+- Environment map authoring: import a downloaded `.exr` panorama and the editor converts it to a skybox cubemap plus prefiltered IBL, on a cancellable background task queue
+- Audio clip authoring: volume, loop, spatial flag, distance model, falloff curve preview in dB, viewport radius gizmos, and in-editor audition
 - Export as Application — bundles scene + assets into a standalone Rust runner, builds with `cargo build --release`, reveals binary in explorer
 
 What still keeps the editor from being fully polished:
@@ -96,6 +97,15 @@ Resolved since the last update, corrected below:
 - Runtime-first and document-first flows both work and are tested.
 - Scene document round-trip and runtime import/export operational.
 - Scene environment policy end-to-end: document authoring, runtime policy, validated projection.
+- **Environment authoring closed out** (`docs/done/editor-task-queue-and-hdr-conversion.md`,
+  2026-08-20). An author downloads a panorama and uses it: import a `.exr`, and a
+  background task converts it into a skybox cubemap plus prefiltered diffuse and
+  specular IBL. Landed with it: a general cancellable task queue that replaced two
+  bespoke export jobs, procedural atmosphere (shipped opt-in — it costs +18.3 ms on
+  a Quest 3, more than a whole frame budget), skybox yaw, and exponential fog.
+  Generated IBL is **14x smaller than the maps the SDK ships** (8.41 MB against
+  117 MB), using `Rgb9e5Ufloat` — verified rendering on Adreno, where no compressed
+  HDR format exists at all.
 - `XrdsSceneAssetKind` has four distinct kinds: `Gltf`, `Texture`, `EnvironmentMap`, `Audio`.
 - Inspector read/write API complete for camera, all four light types, glTF, all mesh primitives, and material texture slots.
 - GUI editor fully functional: hierarchy (drag-drop reparent), inspector (per-payload sections), palette (drag + double-click), viewport (gizmo, orbit/fly camera, orientation indicator), toolbar (undo/redo, status, shortcuts).
@@ -251,10 +261,10 @@ Planned in detail in `docs/small-phases-plan.md`.
 | Item | Phases | Where the cost actually is |
 | --- | --- | --- |
 | **LOD system** | 3: payload + document → runtime selection → authoring/validation | Greenfield — no LOD vocabulary exists in `xrds-scene-graph` (verified). Authored levels only; automatic LOD *generation* is out of scope. Best payoff at scene scale on Quest. |
-| **Post-processing depth** (DOF, SSAO, colour grading) | 2–3, roughly one per effect | `XrdsBloom`/`XrdsTonemapping` establish the pattern and Bevy supplies the effects, so this is mostly authorable-surface plumbing. **Verify each on Adreno before committing** — same class of trap that killed `bevy_hanabi`. |
+| **Post-processing depth** (DOF, SSAO, colour grading) | 2–3 *if it is affordable at all* | `XrdsBloom`/`XrdsTonemapping` establish the pattern and Bevy supplies the effects, so the desktop half is mostly authorable-surface plumbing. **On a headset, treat this as doubtful rather than merely unverified.** Procedural atmosphere — one LUT-based sky pass — measured **+18.3 ms/frame on a Quest 3** against a 13.9 ms budget (`docs/done/editor-task-queue-and-hdr-conversion.md`, step 0b). DOF and SSAO are full-screen passes on the same GPU. Spike one on device before committing phases, exactly as 0b did. |
 | **Video asset kind** (§2) | 3: asset kind + catalog/validation → runtime playback → round-trip tests | The asset-kind half follows `Audio`/`EnvironmentMap` exactly. The *playback* half has no precedent in the workspace — no video decode path exists. That asymmetry is why it keeps being deferred. |
 | **Keyframe curve editor** (SDK half) | 2: curve/interpolation model → runtime property driver | Distinct from Track/Sequencer, which sequences *actions*, not property curves. The editor UI on top is its own larger job. The original item's "export as a glTF animation track" is void — glTF export is retired. |
-| **Audio authoring in the editor** (S6) | 2–3: inspector section + bridge commands → radius gizmos → curve preview + audition | Spatial audio now works on device and is reachable **only from Rust**: `Inspector.tsx` has no `AudioClip` section and the bridge has no audio commands, so an authored clip's volume, loop, spatial flag and entire falloff curve are all unauthorable. Not "add rows to the audio panel" — there is no audio panel. Detailed scope, including why the curve preview must be drawn in dB, in `docs/small-phases-plan.md` S6. |
+| ~~**Audio authoring in the editor** (S6)~~ | **Done** | Shipped 2026-08-20: `AudioClipSection` in the inspector, audio bridge commands, viewport radius gizmos coloured per source, a falloff preview drawn in dB, and in-editor audition. `autoplay` now defaults false — an authored clip that starts itself the moment a scene loads is the wrong default for authoring. |
 
 ### Large — 4+ phases, each gated on a design decision
 
@@ -270,13 +280,13 @@ question answered first, and for three of the four the design is the larger half
 
 ### Deliberately not in the blueprint
 
-- **Documentation pass.** Previously the standing #1 recommendation here. Held
-  back on purpose: the GUI manual documents an editor whose Tailwind/Radix
-  migration is mid-flight and which is about to grow new inspector sections
-  (S1, S4), so writing it now buys a rewrite. The *API reference* half has no
-  such problem and is better written as rustdoc on the items themselves, where
-  a signature change and its docs move in the same diff. Revisit once the Small
-  tier lands.
+- **Documentation pass — the hold has now expired.** It was held because the GUI
+  manual documented an editor mid-Tailwind/Radix migration that was about to grow
+  new inspector sections. Those sections have landed (S1, S4, S6, and the
+  Environment tab), so the stated reason is largely spent; what remains is to
+  confirm the migration's own state before starting. The *API reference* half
+  never had this problem and is still better written as rustdoc on the items
+  themselves, where a signature change and its docs move in the same diff.
 - **Android window-lifecycle crash** — unreproduced; see §5.
 - **Particle blend modes** — a no-op upstream in `bevy_firework`, not our code.
 - **Terrain** — Low priority and not an XR-shaped need; judged against workflow,
@@ -286,7 +296,7 @@ question answered first, and for three of the four the design is the larger half
 
 **The Small tier is complete** (S1–S4 done and device-verified where a device
 applies; S5's rotation half done and its rename half dropped on review — see
-`docs/small-phases-plan.md`). That leaves **five** Medium and four Large.
+`docs/small-phases-plan.md`). That leaves **four** Medium and four Large.
 
 What the tier actually cost, and why the sizing was not the useful part: it was
 scoped as polish and produced nine defects, none of which fails a test or looks

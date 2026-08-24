@@ -587,8 +587,25 @@ so it is also the safest item to drop if the tier needs to be cut short.
 
 ## S6 — Audio authoring in the editor
 
-**Status: not started. Added 2026-08-19, after S1 shipped and the device pass
-showed what authoring these values actually requires.**
+**Status: done 2026-08-20, verified in the editor.** Added 2026-08-19, after S1
+shipped and the device pass showed what authoring these values actually requires.
+
+All three parts of the "suggested split" below landed, in that order:
+
+1. `XrdsAPI::play_audio_for_node` / `pause_audio_for_node` / `stop_audio_for_node`
+   (and the same three on `XrdsUpdateContext`), against the `AudioSink` the runtime
+   already puts on the entity.
+2. `XrdsAction::PlayAudio` / `StopAudio`, so Tracks and triggers can sound — the
+   hole this section identified as "not an editor gap".
+3. `AudioClipSection` in the inspector, the audio bridge commands, viewport radius
+   gizmos coloured per source, a falloff preview drawn in dB, and audition.
+
+One default changed on review: clips no longer spawn with `autoplay = true`. That
+was the *mitigation* recorded below, correct only while nothing could start a
+sound. Once triggers could, a clip that starts itself the moment a scene loads
+became the wrong default for authoring.
+
+The analysis below is kept as written — it is why the work took the shape it did.
 
 **Size: 2–3 phases — Medium, not Small.** It sits in this document because every
 finding it depends on is here, but it does not belong to the 1-phase tier and
