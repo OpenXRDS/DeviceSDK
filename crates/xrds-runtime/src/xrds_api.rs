@@ -51,6 +51,11 @@ mod billboard;
 mod updaters;
 #[path = "xrds_api/video.rs"]
 mod video;
+// Hardware video decode + Vulkan conversion. Android only: the whole mechanism is
+// MediaCodec and VK_ANDROID_external_memory_android_hardware_buffer.
+#[cfg(target_os = "android")]
+#[path = "xrds_api/video_android.rs"]
+mod video_android;
 #[path = "xrds_api/zone.rs"]
 mod zone;
 #[path = "xrds_api/world_ui_pointer.rs"]

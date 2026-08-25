@@ -83,6 +83,29 @@ pub(super) fn install_xrds(app: &mut App) {
     app.init_resource::<XrdsHierarchyIndex>();
     app.init_resource::<XrdsImportedAssetCatalog>();
     app.init_resource::<crate::xrds_api::video::XrdsVideoTextures>();
+
+    // Hardware video (Android). The decode and conversion run in the render world
+    // because they need the renderer's Vulkan device and its queue; the main-world
+    // half only keeps materials rebinding. See xrds_api/video_android.rs.
+    #[cfg(all(target_os = "android", not(test)))]
+    {
+        use crate::xrds_api::video_android as hw_video;
+        app.init_resource::<hw_video::HardwareVideoRequests>();
+        app.add_plugins(bevy::render::extract_resource::ExtractResourcePlugin::<
+            hw_video::HardwareVideoRequests,
+        >::default());
+        app.add_systems(Update, hw_video::rebind_hardware_video_materials);
+
+        let render_app = app.sub_app_mut(bevy::render::RenderApp);
+        render_app.init_resource::<hw_video::HardwareVideoPlayers>();
+        render_app.add_systems(
+            bevy::render::Render,
+            // Before bind groups are prepared: a material that binds this frame must
+            // find the installed texture, not the placeholder it would replace.
+            hw_video::update_hardware_video
+                .in_set(bevy::render::RenderSystems::PrepareResources),
+        );
+    }
     app.init_resource::<XrdsImportedSceneEnvironment>();
     app.init_resource::<XrdsImportedPanelLibrary>();
     app.init_resource::<XrdsPanelElementIndex>();

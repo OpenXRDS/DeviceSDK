@@ -227,6 +227,17 @@ impl XrdsApp for SceneFileApp {
     }
 
     fn setup(&mut self, api: &mut XrdsAPI<'_>) {
+        // A video screen, when a clip has been pushed as probe_video.mp4. The frame
+        // is decoded by MediaCodec and converted by Vulkan; from here it is an
+        // ordinary texture slot, which is the whole point.
+        #[cfg(target_os = "android")]
+        {
+            const CLIP: &str = "/sdcard/Android/data/org.openxrds.devicesdk/files/probe_video.mp4";
+            if std::path::Path::new(CLIP).exists() {
+                spawn_video_screen(api, CLIP);
+            }
+        }
+
         match api.import_scene_document_json(&self.scene_path) {
             Ok(ids) => eprintln!(
                 "[xrds-app] loaded '{}' — {} entities",
@@ -818,6 +829,58 @@ fn main() {
 // Entry point — Android (GameActivity via cargo-ndk)
 // ---------------------------------------------------------------------------
 
+/// Put a video on a plane in front of the player.
+///
+/// B3 of docs/video-asset-spike.md, and the point of the whole route: after
+/// `play_hardware_video`, a hardware-decoded frame is just a texture slot. Nothing
+/// below this line knows the pixels came from MediaCodec rather than a PNG.
+#[cfg(target_os = "android")]
+fn spawn_video_screen(api: &mut XrdsAPI<'_>, clip: &str) {
+    use xrds_runtime::sdk::primitives::XrdsPlane3D;
+    use xrds_runtime::sdk::{
+        XrdsMaterialParams, XrdsMaterialTextureRef, XrdsMaterialTextureSamplerParams,
+        XrdsMaterialTextureSlotKind, XrdsMaterialTextureUvParams,
+    };
+
+    const VIDEO_ID: &str = "clip";
+
+    if !api.play_hardware_video(VIDEO_ID, clip) {
+        log::error!("[video] could not start {clip}");
+        return;
+    }
+
+    // Upright, 16:9-ish, two metres out and a little above the floor — roughly where
+    // a person would hang a screen, so "is it there" needs no hunting.
+    let mut screen = XrdsPlane3D::new().with_name("VideoScreen");
+    screen.size = [2.4, 1.0];
+    screen.transform.rotation_quat_xyzw = [
+        std::f32::consts::FRAC_PI_4.sin(),
+        0.0,
+        0.0,
+        std::f32::consts::FRAC_PI_4.cos(),
+    ];
+    screen.transform.translation = [0.0, 1.4, -2.0];
+    let screen = api.spawn(&screen);
+
+    // Unlit: a screen showing a picture emits that picture, it does not reflect a
+    // key light. Lit, the video comes out dimmed by whatever the scene happens to
+    // light it with, which reads as a broken texture rather than a dark film.
+    if let Some(params) = api.material_params(&screen) {
+        api.set_material_params(&screen, XrdsMaterialParams { unlit: true, ..params });
+    }
+
+    api.set_material_texture_slot(
+        &screen,
+        XrdsMaterialTextureSlotKind::BaseColor,
+        Some(XrdsMaterialTextureRef {
+            texture_asset_id: VIDEO_ID.to_string(),
+            uv: XrdsMaterialTextureUvParams::default(),
+            sampler: XrdsMaterialTextureSamplerParams::default(),
+        }),
+    );
+    log::info!("[video] screen spawned, playing {clip}");
+}
+
 /// Decode a clip for ten seconds and report what came back. See the call site.
 #[cfg(target_os = "android")]
 fn run_video_decode_probe(path: &std::path::Path) {
@@ -920,16 +983,19 @@ fn android_main(android_app: winit::platform::android::activity::AndroidApp) {
     // --- B1 verification, temporary -----------------------------------------
     //
     // Runs only when a clip has been pushed to external storage:
-    //   adb push clip.mp4 /sdcard/Android/data/org.openxrds.devicesdk/files/probe_video.mp4
+    //   adb push clip.mp4 /sdcard/Android/data/org.openxrds.devicesdk/files/probe_decode.mp4
     //
     // Phase 1/B1 of docs/video-asset-spike.md. It proves the hardware decoder
     // produces GPU-resident frames on this device before B2 tries to import one
     // into Vulkan — the cheapest point at which that can be wrong. It logs and
     // returns without starting the app: the subject is the decoder, and an XR
     // session would only add noise to the measurement.
-    let probe_video = external_dir.join("probe_video.mp4");
-    if probe_video.exists() {
-        run_video_decode_probe(&probe_video);
+    // `probe_decode.mp4` runs the decoder alone and never starts the app.
+    // `probe_video.mp4` (see `video_import_probe`) leaves the app running, because
+    // importing needs the renderer's Vulkan device, which only exists once it has.
+    let probe_decode = external_dir.join("probe_decode.mp4");
+    if probe_decode.exists() {
+        run_video_decode_probe(&probe_decode);
         return;
     }
 

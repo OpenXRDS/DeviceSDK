@@ -204,7 +204,7 @@ pub(super) fn write_video_frame_in_world(world: &mut World, id: &str, rgba: &[u8
 /// a frame that also uploads megabytes; caching the dependents would have to be
 /// invalidated whenever a slot is rebound, which is more ways to be subtly wrong than
 /// the scan is worth.
-fn rebind_materials_sampling(world: &mut World, handle: &bevy::asset::Handle<Image>) {
+pub(super) fn rebind_materials_sampling(world: &mut World, handle: &bevy::asset::Handle<Image>) {
     let id = handle.id();
 
     let Some(materials) = world.get_resource::<Assets<XrdsRuntimeMaterial>>() else {
@@ -283,6 +283,24 @@ fn rebind_standard_materials_sampling(world: &mut World, id: bevy::asset::AssetI
     for asset_id in dependents {
         let _ = materials.get_mut(asset_id);
     }
+}
+
+/// Register a texture whose *contents* come from outside Bevy entirely.
+///
+/// Used by the Android hardware path, where frames are decoded and converted on the
+/// GPU and never exist as bytes the main world could write. The placeholder created
+/// here gives Bevy a real `GpuImage` to start from — so an unfilled video surface
+/// reads as "nothing yet" rather than as a missing texture — and the render world
+/// replaces that entry once frames arrive.
+pub(super) fn external_video_texture_id_in_world(
+    world: &mut World,
+    id: &str,
+) -> Option<bevy::asset::AssetId<Image>> {
+    world
+        .resource::<XrdsVideoTextures>()
+        .entries
+        .get(id)
+        .map(|entry| entry.handle.id())
 }
 
 pub(super) fn remove_video_texture_in_world(world: &mut World, id: &str) {

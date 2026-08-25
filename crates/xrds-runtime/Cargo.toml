@@ -61,4 +61,7 @@ cbindgen = "0.27.0"
 winit = { version = "0.30.5" }
 
 [target.'cfg(target_os = "android")'.dependencies]
+# Hardware video decode. Android-only, and carries no codec library there — the
+# `playback` feature (ffmpeg) is desktop, and capture is target-gated off.
+xrds-media = { workspace = true }
 winit = { version = "0.30.5", features = ["android-native-activity"] }

@@ -1454,6 +1454,38 @@ impl XrdsAPI<'_> {
 
     /// Forget a runtime texture. Materials still pointing at `id` fall back to the
     /// asset catalog, and show nothing if it holds no such asset.
+    /// Play a video file on the headset's hardware decoder, into the texture named
+    /// `id`.
+    ///
+    /// Bind it exactly like any other texture:
+    ///
+    /// ```ignore
+    /// api.play_hardware_video("lobby", "/sdcard/.../clip.mp4");
+    /// api.set_material_texture_slot(&screen, BaseColor, Some(XrdsMaterialTextureRef {
+    ///     texture_asset_id: "lobby".into(),
+    ///     ..Default::default()
+    /// }));
+    /// ```
+    ///
+    /// Android only. The frame is decoded by MediaCodec and converted by Vulkan
+    /// without ever becoming bytes in main memory — the desktop equivalent is
+    /// [`Self::create_video_texture`] plus [`Self::write_video_frame`], which does
+    /// exactly that and costs more than a headset's frame budget.
+    ///
+    /// Returns false if the clip cannot be opened.
+    #[cfg(target_os = "android")]
+    pub fn play_hardware_video(
+        &mut self,
+        id: impl Into<String>,
+        path: impl Into<std::path::PathBuf>,
+    ) -> bool {
+        crate::xrds_api::video_android::play_hardware_video_in_world(
+            self.app.world_mut(),
+            id,
+            path,
+        )
+    }
+
     pub fn remove_video_texture(&mut self, id: &str) -> &mut Self {
         crate::xrds_api::video::remove_video_texture_in_world(self.app.world_mut(), id);
         self
