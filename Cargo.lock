@@ -11568,6 +11568,7 @@ dependencies = [
  "ffmpeg-next",
  "image",
  "log",
+ "ndk-sys 0.6.0+11769913",
  "nokhwa",
  "opus",
  "pretty_env_logger",

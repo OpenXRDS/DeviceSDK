@@ -3,7 +3,7 @@ name = "xrds-media"
 version = "0.1.0"
 edition = "2021"
 license = "Apache-2.0"
-description = "Desktop-only media I/O for XRDS: camera/microphone capture, encoding for transport, and (planned) media import/playback for the SDK and editor. No networking dependencies."
+description = "Media I/O for XRDS: camera/microphone capture and encoding for transport (desktop), software video playback (desktop), and hardware video decode on Android. No networking dependencies."
 
 [features]
 default = []
@@ -41,6 +41,13 @@ optional = true
 [dependencies.opus]
 version = "0.3.0"
 optional = true
+
+# Hardware video decode on Android (AMediaCodec -> AHardwareBuffer). Not behind a
+# feature: it is target-gated, and the `media` feature only adds bindings to NDK
+# headers that are already present on the platform. The version matches the
+# `ndk-sys` android-activity and winit already pull in, so Cargo unifies it.
+[target.'cfg(target_os = "android")'.dependencies]
+ndk-sys = { version = "0.6", features = ["media"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
