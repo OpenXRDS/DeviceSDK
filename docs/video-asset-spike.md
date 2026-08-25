@@ -2,8 +2,8 @@
 
 **Status** (2026-08-25): **answered — a video plays on a material on a Quest 3.**
 Phase 0 complete on desktop; route A measured on device and eliminated; route B
-built and verified end to end. One piece of cleanup outstanding: the conversion pass
-still stalls on a fence every frame, which is most of its 3.53 ms cost.
+built and verified end to end, and the conversion pass measured at **0.27 ms/frame**
+on a Quest 3 at 1920x800.
 Written 2026-08-24.
 
 One question, answered on device before any of the three phases in
@@ -181,23 +181,32 @@ Which is the same two lines the desktop path takes, and the reason phase 0 was w
 doing first: `XrdsMaterialTextureRef` already meant "a texture named by id", so
 nothing about materials, meshes, shaders or the renderer had to learn about video.
 
-**Costs measured, and one is not yet acceptable.** The conversion pass ran at
-**3.53 ms/frame at 1920×800** when measured from the main world — far above the ~3%
-of frame budget the bandwidth estimate predicted. The gap is not the conversion: it
-is a full CPU/GPU stall, because `convert()` blocks on a fence after submitting.
+**Cost, measured three ways, because the first two were misleading.**
 
-Blocking was deliberate — it is what makes the write safe without wgpu knowing the
-pass happened — but it is the dominant cost and it must go. Two related problems,
-one fix:
+| Where the pass ran | ms/frame at 1920×800 |
+| --- | --- |
+| Main world, blocking straight after submit | 3.53 |
+| Render schedule, blocking straight after submit | 0.62 |
+| Render schedule, fence gating the *next* call (current) | **0.27** |
 
-1. **The per-frame fence stall.** Still present.
-2. **`vkQueueSubmit` racing wgpu's own submissions.** Addressed by B3: the pass now
-   runs in the render schedule (`RenderSystems::PrepareResources`), on the render
-   thread, at a point wgpu is not submitting.
+The 3.53 ms was real but not about the conversion: blocking in a main-world system
+stalls the main thread against a busy render thread. Simply moving the pass into
+`RenderSystems::PrepareResources` — which B3 did for an unrelated reason — recovered
+most of it. Removing the stall proper (S6) then roughly halved what was left.
 
-The remaining work is to drop the stall — signal a semaphore wgpu waits on instead of
-blocking the CPU — and to re-measure. Until then the figure above is the honest cost,
-and it is a quarter of a 72 Hz budget at a quarter of 4K.
+Two lessons, both of a kind this document already records. A figure keeps being
+quoted after the thing it measured has moved; and the second measurement was only
+trustworthy because it was an A/B through the *same* code path rather than a
+comparison across call sites.
+
+**What is still not guaranteed.** This submission is not ordered against wgpu's.
+wgpu deliberately does not rely on same-queue submission order — it chains its own
+submits with relay semaphores — and our raw submit is outside that chain. So our
+write may not be complete when wgpu samples it, and we may overwrite the image while
+wgpu still reads the previous frame. Both produce a stale or torn frame rather than
+corruption, and both windows are a frame wide, which is why it looks fine and why
+that is not an argument. `wgpu-hal` exposes only `Queue::add_signal_semaphore`, so
+the wait direction has no hook and closing this properly needs something upstream.
 
 **A note on what B3 had to work around.** The material bind group problem from phase 0
 appears here too, in a nastier form: the render world installs the real texture on

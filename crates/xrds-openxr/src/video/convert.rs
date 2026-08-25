@@ -377,21 +377,38 @@ impl VideoConverter {
         }
     }
 
-    /// Draw one imported frame into the output image, and wait for it.
+    /// Draw one imported frame into the output image.
     ///
-    /// # Synchronisation, and what is deliberately crude here
+    /// # Synchronisation
     ///
-    /// This submits to the same `VkQueue` wgpu uses and then blocks on a fence.
-    /// Blocking is what makes it safe without wgpu's knowledge: by the time this
-    /// returns, the write is complete, so wgpu can sample the texture in any later
-    /// submission without a barrier it does not know to insert.
+    /// The fence is waited on at the *top* of the next call, not after submitting.
+    /// It exists to know when the command buffer is safe to re-record, and a whole
+    /// frame has passed by then, so in practice the wait returns immediately.
     ///
-    /// It is also a full CPU/GPU stall per frame, and `vkQueueSubmit` on a queue
-    /// wgpu may be submitting to concurrently is not externally synchronised the way
-    /// Vulkan requires. Both are acceptable for measuring whether route B is
-    /// affordable at all; neither is acceptable in shipped code, and the fix for
-    /// both is the same — move this into a render-graph node, where it runs on the
-    /// render thread at a point wgpu is not submitting.
+    /// Measured on a Quest 3 at 1920x800, both ways through this same code path:
+    /// **0.62 ms/frame waiting immediately after submit, 0.27 ms/frame waiting at
+    /// the top of the next call.** (A 3.53 ms figure appears in earlier notes for
+    /// this pass; that was measured from a main-world system, where blocking stalls
+    /// the main thread against a busy render thread. Running here, in the render
+    /// schedule, was worth more than this change was.)
+    ///
+    /// **What is still not guaranteed.** This submission is not ordered against
+    /// wgpu's. wgpu deliberately does not rely on same-queue submission order —
+    /// it chains its own submits with relay semaphores
+    /// (`wgpu-hal/src/vulkan/mod.rs`: "In order for submissions to be strictly
+    /// ordered, we encode a dependency between each submission using a pair of
+    /// semaphores") — and our raw submit is not part of that chain. So two
+    /// hazards remain, both of which produce a stale or torn frame rather than
+    /// corruption or a crash:
+    ///
+    /// - our write for frame N may not be complete when wgpu samples it, and
+    /// - we may overwrite the image while wgpu is still reading frame N-1.
+    ///
+    /// Both windows are a full frame wide, which is why this looks fine and why
+    /// that is not an argument. A real fix needs semaphores in both directions;
+    /// wgpu-hal currently exposes only `Queue::add_signal_semaphore`, so the wait
+    /// direction has no hook and closing this properly needs something upstream.
+    /// Tracked as S6 in `OVERALL_PROGRESS.md`.
     pub(super) fn convert(&mut self, frame_view: vk::ImageView, frame_image: vk::Image) -> Result<()> {
         unsafe {
             self.device
@@ -483,6 +500,8 @@ impl VideoConverter {
                 .context("vkEndCommandBuffer")?;
 
             let command_buffers = [self.command_buffer];
+            // Submit and return. The fence is not waited on here — the next call
+            // does that, by which time the work is a frame old and done.
             self.device
                 .queue_submit(
                     self.queue,
@@ -490,14 +509,6 @@ impl VideoConverter {
                     self.fence,
                 )
                 .context("vkQueueSubmit")?;
-            self.device
-                .wait_for_fences(&[self.fence], true, u64::MAX)
-                .context("vkWaitForFences after submit")?;
-            self.device.reset_fences(&[self.fence]).context("vkResetFences")?;
-            // Left signalled for the next frame's wait.
-            self.device
-                .queue_submit(self.queue, &[], self.fence)
-                .context("vkQueueSubmit(signal)")?;
         }
         Ok(())
     }

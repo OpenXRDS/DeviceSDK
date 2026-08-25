@@ -66,6 +66,13 @@ pub(super) struct HardwareVideoPlayers(Mutex<HashMap<String, Player>>);
 struct Player {
     decoder: HardwareVideoDecoder,
     pipeline: AndroidVideoPipeline,
+    /// Decode + convert cost, reported periodically.
+    ///
+    /// Kept rather than removed after S6: this is the number that decides whether a
+    /// video panel fits a frame budget, and it is not derivable from the frame rate
+    /// once anything else is happening in the scene.
+    frames: u32,
+    convert_total: f64,
     /// Built once and reused: a fresh `TextureView` every frame would be a fresh
     /// object in every material bind group that samples it, for no benefit.
     gpu_image: Option<GpuImage>,
@@ -176,6 +183,8 @@ pub(super) fn update_hardware_video(
                 Player {
                     decoder,
                     pipeline,
+                    frames: 0,
+                    convert_total: 0.0,
                     gpu_image: None,
                     failed: false,
                 },
@@ -206,11 +215,24 @@ pub(super) fn update_hardware_video(
             }
         };
 
+        let started = std::time::Instant::now();
         let texture = match player
             .pipeline
             .frame_to_texture(buffer.as_ptr().cast(), width, height)
         {
-            Ok(texture) => texture.clone(),
+            Ok(texture) => {
+                player.frames += 1;
+                player.convert_total += started.elapsed().as_secs_f64();
+                if player.frames % 300 == 0 {
+                    log::info!(
+                        "hardware video '{}': {:.2} ms/frame over {} frames",
+                        request.id,
+                        player.convert_total / player.frames as f64 * 1000.0,
+                        player.frames,
+                    );
+                }
+                texture.clone()
+            }
             Err(e) => {
                 error!("hardware video '{}': convert: {e:#}", request.id);
                 player.failed = true;
