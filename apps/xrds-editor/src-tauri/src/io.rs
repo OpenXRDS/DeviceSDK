@@ -81,7 +81,7 @@ fn detect_asset_kind(path: &str) -> Option<XrdsSceneAssetKind> {
         // and needs converting to a cubemap KTX2 first. Kept as `EnvironmentMap`
         // because that is what it is *for*, and reclassifying it would hide a
         // downloaded panorama from the only picker an author would look in. See
-        // `docs/small-phases-plan.md` — the missing conversion step is recorded
+        // `docs/done/small-phases-plan.md` — the missing conversion step is recorded
         // there rather than papered over here.
         //
         // OpenEXR is the format authors actually get — ambientCG and Poly Haven both

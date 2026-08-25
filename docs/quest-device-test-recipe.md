@@ -88,7 +88,7 @@ Launching while the headset is off, then donning it, aborts Bevy:
 `uniform_buffer.rs:312` (`write_buffer_with(..).unwrap()`), then a queue-submission
 timeout, then a panic in a destructor. Reproduces with no particle crate present — a
 pre-existing Android lifecycle bug, tracked in
-`docs/android-window-lifecycle-plan.md`.
+`docs/deferred/android-window-lifecycle-plan.md`.
 
 Do **not** chase this via `adb`-driven pause/resume: `KEYCODE_HOME` + relaunch
 destroys and recreates the native window cleanly, with zero panics and a correct wgpu

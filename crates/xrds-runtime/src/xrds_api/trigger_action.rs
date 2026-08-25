@@ -63,7 +63,7 @@ pub struct XrdsTriggerValue(pub f32);
 #[derive(Component, Debug, Clone, Copy)]
 pub struct XrdsHealth(pub f32);
 
-/// Emitted by [`XrdsAction::FireCustomEvent`] — the escape hatch into
+/// Emitted by `XrdsAction::FireCustomEvent` — the escape hatch into
 /// expert-layer Rust for behavior not modeled as a first-class action.
 #[derive(Message, Debug, Clone)]
 pub struct XrdsCustomTriggerEvent {
@@ -127,7 +127,7 @@ pub fn sync_completed_gltf_animation_triggers(world: &mut World) {
     }
 }
 
-/// Max causal chain depth for [`XrdsAction::Run`] before the runaway escape
+/// Max causal chain depth for `XrdsAction::Run` before the runaway escape
 /// hatch fires — not a rate limit, a *depth* cap. A rate limit can't tell a
 /// real infinite loop apart from legitimately high-frequency input (e.g.
 /// `SliderChange`); chain depth can. See `XrdsTriggerKind::RunawayDetected`.
@@ -863,7 +863,7 @@ pub fn spawn_track_agent_deferred(
 // Panel elements
 // ---------------------------------------------------------------------------
 
-/// Spawns one [`XrdsPanelElement`] onto `panel_entity` and tags it with the
+/// Spawns one `XrdsPanelElement` onto `panel_entity` and tags it with the
 /// element's authored triggers, returning the element's entity.
 ///
 /// **This is the whole reason authored widget triggers can fire.** The chain
@@ -1214,7 +1214,7 @@ pub fn despawn_finished_sequence_agents(
 /// Runtime agent driving one in-flight `XrdsTimeline` — absolute-time,
 /// concurrent choreography, unlike `XrdsSequenceAgent`'s ordered, relative
 /// queue. Never blocks: each key is fired by spawning it as its own
-/// one-step sequence agent (see [`advance_timelines`]) rather than
+/// one-step sequence agent (see `advance_timelines`) rather than
 /// duplicating action-execution here.
 #[derive(Component, Debug, Clone)]
 pub struct XrdsTrackAgent {

@@ -42,7 +42,7 @@ impl XrdsWorldSlider {
     }
 }
 
-/// Parameters for [`super::super::XrdsAPI::spawn_world_slider`].
+/// Parameters for `XrdsAPI::spawn_world_slider`.
 #[derive(Debug, Clone)]
 pub struct XrdsWorldSliderParams {
     pub min: f32,

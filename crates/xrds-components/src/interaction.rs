@@ -2,7 +2,7 @@ use bevy::math::{Quat, Vec3};
 use bevy::prelude::Component;
 use crate::XrdsId;
 
-/// A single raycast hit returned by [`XrdsUpdateContext::raycast`].
+/// A single raycast hit returned by `XrdsUpdateContext::raycast`.
 #[derive(Debug, Clone)]
 pub struct XrRayhit {
     /// XRDS id of the entity that was hit (the closest `XrdsId` ancestor of the Bevy mesh entity).
@@ -15,7 +15,7 @@ pub struct XrRayhit {
 
 /// Mark any XRDS entity as pick-up-able by the XR grab system.
 ///
-/// Add via [`XrdsAPI::make_grabbable`] or [`XrdsUpdateContext::make_grabbable`].
+/// Add via `XrdsAPI::make_grabbable` or `XrdsUpdateContext::make_grabbable`.
 /// The SDK grab system scans for entities with this marker when the player presses
 /// the trigger within grab range.
 #[derive(Component, Debug, Clone)]

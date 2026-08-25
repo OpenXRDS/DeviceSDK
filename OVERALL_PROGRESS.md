@@ -233,7 +233,7 @@ Separately tracked:
   Plan archived to `docs/done/player-body-collider-plan.md`.
 - **Android window-lifecycle crash** — intermittent, trigger **not reproduced** under
   controlled conditions; two staged attempts failed to trigger it. Not schedulable as
-  planned work until there is a repro. `docs/android-window-lifecycle-plan.md`.
+  planned work until there is a repro. `docs/deferred/android-window-lifecycle-plan.md`.
 
 ## Road to 1.0 — Small / Medium / Large Blueprint
 
@@ -246,23 +246,23 @@ last one and shipped 2026-08-12.
 
 ### Small — 1 phase each
 
-Planned in detail in `docs/small-phases-plan.md`.
+Planned in detail in `docs/done/small-phases-plan.md`.
 
 | # | Item | Crate | Note |
 | --- | --- | --- | --- |
 | S1 | ~~Spatial-audio params: honour or delete~~ | `xrds-components` / `xrds-scene-graph` / `xrds-runtime` | **Done 2026-08-19, verified on desktop and Quest 3.** Four falloff fields honoured, `hrtf` removed. Also fixed a bug it uncovered: `SpatialListener` was attached only on the `XrdsAPI` camera path, so **spatial audio had no listener in XR at all** — every XRDS app on a headset, not just this feature. Backends were evaluated and rejected; stay on `bevy_audio` (`docs/spatial-audio-backend-spike.md`). |
 | S2 | Zone-event `debug!` logging | `xrds-runtime` | Makes the next device pass self-verifying instead of dependent on someone describing what they saw. |
 | S3 | Head-locked interactive-template diagnostic | `xrds-scene-graph` | SDK half of §4. Editor grey-out is separate and follows this. |
-| S4 | ~~Passthrough blend-mode toggle~~ | `xrds-openxr` / `xrds-runtime` / editor | **Done 2026-08-19, device-verified on Quest 3** — authored from the editor, cube floating in the real room. Was recorded as "editor only"; in fact `XR_FB_passthrough` was never requested and the authored field reached nothing. Also **not** `EnvironmentBlendMode::ALPHA_BLEND` — that is a global frame-blend parameter and using it bleeds reality through every non-opaque surface. Passthrough is a composition layer beneath the projection; recipe in `docs/small-phases-plan.md` S4. |
+| S4 | ~~Passthrough blend-mode toggle~~ | `xrds-openxr` / `xrds-runtime` / editor | **Done 2026-08-19, device-verified on Quest 3** — authored from the editor, cube floating in the real room. Was recorded as "editor only"; in fact `XR_FB_passthrough` was never requested and the authored field reached nothing. Also **not** `EnvironmentBlendMode::ALPHA_BLEND` — that is a global frame-blend parameter and using it bleeds reality through every non-opaque surface. Passthrough is a composition layer beneath the projection; recipe in `docs/done/small-phases-plan.md` S4. |
 | S5 | Naming polish (§3) | `xrds-scene-graph` | `TransformParams` dual rotation field; `*Patch` ECS jargon. Mechanical but source-breaking. |
 
 ### Medium — 2–3 phases each
 
 | Item | Phases | Where the cost actually is |
 | --- | --- | --- |
-| **LOD system** | 3: payload + document → runtime selection → authoring/validation | Greenfield — no LOD vocabulary exists in `xrds-scene-graph` (verified). Authored levels only; automatic LOD *generation* is out of scope. Best payoff at scene scale on Quest. |
+| **LOD system** | **Deferred** — see `docs/deferred/lod-plan.md` | Attempted 2026-08-24 through three phases, device-verified at **59 → 75 fps** on a Quest 3, then removed unbuilt. Two findings changed the judgement. **Bevy already implements the mechanism** (`VisibilityRange`, plugin already running), so this was never greenfield — the work was authoring, and the authoring model was wrong: levels as sibling nodes are each measured from their own position, and coincident levels cannot be inspected in an editor, so the design forced the one arrangement that breaks it. **And there is nothing to swap to**: our primitives are procedural and authors have no hand-modelled low-poly variants, so the measured win came from a synthetic Sphere→Cube→Tetrahedron triple no real scene contains. What is actually wanted is Unreal's model — levels inside the mesh asset — which needs **LOD generation** (decimation at import), its own project. `docs/deferred/lod-plan.md` carries the Bevy mechanics, the measurements, both failed designs and the profile/screen-size proposals. |
 | **Post-processing depth** (DOF, SSAO, colour grading) | 2–3 *if it is affordable at all* | `XrdsBloom`/`XrdsTonemapping` establish the pattern and Bevy supplies the effects, so the desktop half is mostly authorable-surface plumbing. **On a headset, treat this as doubtful rather than merely unverified.** Procedural atmosphere — one LUT-based sky pass — measured **+18.3 ms/frame on a Quest 3** against a 13.9 ms budget (`docs/done/editor-task-queue-and-hdr-conversion.md`, step 0b). DOF and SSAO are full-screen passes on the same GPU. Spike one on device before committing phases, exactly as 0b did. |
-| **Video asset kind** (§2) | 3: asset kind + catalog/validation → runtime playback → round-trip tests | The asset-kind half follows `Audio`/`EnvironmentMap` exactly. The *playback* half has no precedent in the workspace — no video decode path exists. That asymmetry is why it keeps being deferred. |
+| **Video asset kind** (§2) | **Spike first** — `docs/video-asset-spike.md` — then 3 | The asset-kind half follows `Audio`/`EnvironmentMap` exactly. The reason this kept being deferred — "no video decode path exists" — was true of this workspace and **false of the team's work**: `HMDViewer` already does MediaCodec → AHardwareBuffer → VkImage zero-copy on a Quest 3 at 4096×2048@30, and `xrds-openxr` already bridges Vulkan images into wgpu via `create_texture_from_hal`. One specific thing does not join: MediaCodec's zero-copy output is `AIMAGE_FORMAT_PRIVATE`, so the Vulkan import uses an **external format** needing a Ycbcr conversion and an immutable sampler — neither of which wgpu can express. The spike settles whether the decoder can emit a wgpu-importable format instead, or whether a GPU conversion pass is needed. **Do not build the asset-kind half first**: an importable asset that plays nothing is the authorable-but-inert failure this project keeps repeating. |
 | **Keyframe curve editor** (SDK half) | 2: curve/interpolation model → runtime property driver | Distinct from Track/Sequencer, which sequences *actions*, not property curves. The editor UI on top is its own larger job. The original item's "export as a glTF animation track" is void — glTF export is retired. |
 | ~~**Audio authoring in the editor** (S6)~~ | **Done** | Shipped 2026-08-20: `AudioClipSection` in the inspector, audio bridge commands, viewport radius gizmos coloured per source, a falloff preview drawn in dB, and in-editor audition. `autoplay` now defaults false — an authored clip that starts itself the moment a scene loads is the wrong default for authoring. |
 
@@ -296,7 +296,7 @@ question answered first, and for three of the four the design is the larger half
 
 **The Small tier is complete** (S1–S4 done and device-verified where a device
 applies; S5's rotation half done and its rename half dropped on review — see
-`docs/small-phases-plan.md`). That leaves **four** Medium and four Large.
+`docs/done/small-phases-plan.md`). That leaves **four** Medium and four Large.
 
 What the tier actually cost, and why the sizing was not the useful part: it was
 scoped as polish and produced nine defects, none of which fails a test or looks

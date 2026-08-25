@@ -1,6 +1,27 @@
 # XRDS API Reference — Outline
 
-**Status: outline only.** This is the table of contents and section scope for
+**Status: outline only — but the rustdoc half is now done.**
+
+Pass of 2026-08-24, before writing any of the narrative below:
+
+- **Per-item coverage was already good** and is not where the gap was: `XrdsAPI`
+  105/117 documented (89%), `XrdsUpdateContext` 98/111 (88%). About 25 public
+  functions still lack a doc comment, listed by running the coverage check in that
+  session; a worthwhile small job, not a blocker.
+- **The landing pages were empty**, which is what a reader actually meets first.
+  `xrds` — the crate that *is* the SDK — had zero lines of crate-level docs, as did
+  `xrds-runtime`, `xrds-components`, `xrds-openxr` and `xrds-net`. `cargo doc --open`
+  opened on a blank page. All but `xrds-net` now have one, and `xrds`'s carries a
+  runnable example that is checked by `cargo test --doc`.
+- **24 intra-doc links were broken** and are now zero. Most pointed from
+  `xrds-components` at `XrdsAPI`, which lives in `xrds-runtime` — a link that could
+  never resolve, because the dependency runs the other way. Those are code spans
+  now. `cargo doc --workspace --no-deps` is clean, so a new break is visible.
+
+What remains here is the narrative layer described below — task-oriented topics
+that rustdoc's per-item view cannot give.
+
+**Original status:** This is the table of contents and section scope for
 a manual covering both the SDK layer (`XrdsApp`/`XrdsAPI`/`XrdsUpdateContext`)
 and the expert layer (`RuntimeHandler`, direct Bevy). Per the project's own
 two-layer model, these are one audience for documentation purposes — a reader

@@ -5,7 +5,7 @@ recommendation below is actionable but two of its three remaining unknowns need 
 Quest 3. Written 2026-08-19 on branch `road-to-v1.0`.
 
 **Why this exists:** `XrdsSceneAudioClip` carries five spatial fields that nothing
-reads (see `docs/small-phases-plan.md` S1). Before implementing them on the current
+reads (see `docs/done/small-phases-plan.md` S1). Before implementing them on the current
 stack, we checked whether the current stack is the one we want — because building
 attenuation on a backend we are about to replace is wasted work.
 

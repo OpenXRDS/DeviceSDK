@@ -513,7 +513,7 @@ pub enum XrdsTriggerKind {
 
     /// An application-defined trigger, matched by name.
     ///
-    /// The inbound counterpart to [`XrdsAction::FireCustomEvent`]: that
+    /// The inbound counterpart to `XrdsAction::FireCustomEvent`: that
     /// lets a sequence call *out* to app code, this lets app code fire a
     /// sequence *in*. App code defines its own message type, implements
     /// `XrdsTriggerEvent` returning `Custom("its-name")`, and registers

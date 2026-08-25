@@ -3,7 +3,7 @@
 // This exists because the four falloff fields on `XrdsSceneAudioClip`
 // (`distance_model`, `min_distance`, `max_distance`, `rolloff_factor`) were
 // serialized and inert until 2026-08-19 — an author could set them, save, reload,
-// and hear no difference. See `docs/small-phases-plan.md` S1.
+// and hear no difference. See `docs/done/small-phases-plan.md` S1.
 //
 // ## Why two sources rather than one
 //

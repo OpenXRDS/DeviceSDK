@@ -695,7 +695,7 @@ function audioGain(model: string, d: number, min: number, max: number, rolloff: 
  *  like a gentle straight line while sounding like a switch, because the ear
  *  hears dB: the last stretch runs -14 dB to silence. Two implementations were
  *  tuned and rejected by ear before that was understood — see
- *  docs/small-phases-plan.md S1. Plotting dB makes the audible shape visible. */
+ *  docs/done/small-phases-plan.md S1. Plotting dB makes the audible shape visible. */
 function FalloffCurve({ model, min, max, rolloff }:
   { model: string; min: number; max: number; rolloff: number }) {
   const W = 200, H = 64, FLOOR_DB = -40;

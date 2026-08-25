@@ -18,7 +18,7 @@ use crate::openxr::{
 /// over it.
 ///
 /// Verified against a shipped Quest 3 passthrough app; the recipe and its
-/// provenance are in `docs/small-phases-plan.md` S4.
+/// provenance are in `docs/done/small-phases-plan.md` S4.
 #[derive(Clone)]
 pub struct OpenXrCompositionLayerPassthroughFB {
     inner: openxr::sys::CompositionLayerPassthroughFB,

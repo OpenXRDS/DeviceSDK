@@ -3,7 +3,7 @@
 //! Until 2026-08-19 the field was inert: `grep -rn xr_blend_mode` over the tree
 //! returned only its own definition. `XrdsXrBlendMode::AlphaBlend` could be
 //! authored, saved and reloaded, and the scene stayed opaque. This is S4 of
-//! `docs/small-phases-plan.md`.
+//! `docs/done/small-phases-plan.md`.
 //!
 //! ## `AlphaBlend` does not mean `EnvironmentBlendMode::ALPHA_BLEND`
 //!

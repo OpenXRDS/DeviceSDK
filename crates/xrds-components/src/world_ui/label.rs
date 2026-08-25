@@ -15,7 +15,7 @@ pub struct XrdsWorldLabel {
     pub layout_size: [f32; 2],
 }
 
-/// Parameters for [`super::super::XrdsAPI::spawn_world_label`].
+/// Parameters for `XrdsAPI::spawn_world_label`.
 #[derive(Debug, Clone)]
 pub struct XrdsWorldLabelParams {
     pub text: String,

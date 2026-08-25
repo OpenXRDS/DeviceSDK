@@ -13,7 +13,7 @@ pub struct XrdsWorldImage {
     pub size: [f32; 2],
 }
 
-/// Parameters for [`super::super::XrdsAPI::spawn_world_image`].
+/// Parameters for `XrdsAPI::spawn_world_image`.
 #[derive(Debug, Clone)]
 pub struct XrdsWorldImageParams {
     /// Asset path relative to the `assets/` directory (e.g. `"textures/icon.png"`).

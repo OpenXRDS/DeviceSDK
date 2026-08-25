@@ -1,6 +1,28 @@
 # XRDS Editor — User Manual Outline
 
-**Status: outline only.** Table of contents and section scope for a manual
+**Status: outline only, and still gated — measured 2026-08-24.**
+
+`OVERALL_PROGRESS.md` held this back because the editor was mid-Tailwind/Radix
+migration and about to grow inspector sections. The sections have landed (S1, S4,
+S6, the Environment tab, the task strip), so half the hold expired. **The migration
+half did not**, and it is split by component rather than being uniformly partial:
+
+| Migrated | Not migrated |
+| --- | --- |
+| SequencerInspector 46/1 · PanelWorkspace 28/2 · SequencerWorkspace 13/0 · PanelInstanceTriggers 15/3 | Menubar 0/32 · ApkExportDialog 0/27 · TaskStrip 0/17 · Toolbar 0/5 · Palette 0/6 |
+
+(Counts are Tailwind-utility vs legacy-class `className` occurrences.) `Inspector`
+is mixed at 33/109.
+
+So **§8 Panels and §9 Sequencer are stable enough to screenshot; §1–§7 and §10–§13
+are not** — they cover the main editing chrome, which is the unmigrated half. Since
+this manual is screenshot-heavy by nature, writing those sections now buys a
+re-shoot.
+
+Text that does not depend on chrome — concepts, decision rules, troubleshooting —
+is not blocked by this and could be written at any time.
+
+**Original status:** Table of contents and section scope for a manual
 covering the GUI editor (`xrds-editor`). Audience: someone building an XR
 scene through the editor — no Rust, no Bevy knowledge required. This is a
 different audience from `api-reference-outline.md`; a reader here may never

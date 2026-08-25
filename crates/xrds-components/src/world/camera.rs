@@ -6,8 +6,8 @@ use crate::{
 
 /// Blueprint node representing a camera in the scene tree.
 ///
-/// Authored data here is the design-time default. At runtime the Bevy [`Camera`],
-/// [`Projection`], and [`Transform`] components are the live state.
+/// Authored data here is the design-time default. At runtime the Bevy `Camera`,
+/// `Projection`, and `Transform` components are the live state.
 ///
 /// For XR eye cameras (driven by OpenXR tracking), use the `xrds-openxr` crate instead.
 #[derive(Debug, Clone)]

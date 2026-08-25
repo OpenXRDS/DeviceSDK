@@ -1,6 +1,12 @@
 # Small phases — the 1-phase tier on the road to 1.0
 
-**Status:** planned, none started. Written 2026-08-19.
+**Status: complete.** Written 2026-08-19, finished 2026-08-20.
+
+S1–S4 and S6 are done and device-verified where a device applies. S5 split on
+review: its rotation half landed and its rename half was dropped as churn — see
+that section. Kept as a record of what the tier cost, which was the interesting
+part: it was scoped as polish and produced nine defects, none of which fails a test
+or looks wrong in review, and every one was found by running the software.
 
 Scope: the five **Small** items from the blueprint in `OVERALL_PROGRESS.md`
 ("Road to 1.0"). Each is meant to be one landable change with its own tests.

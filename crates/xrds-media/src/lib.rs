@@ -33,8 +33,8 @@ limitations under the License.
 //!   consumer needs a `std::io::Read` instead.
 //! - Audio: [`audio::Microphone`] streams PCM `i16` chunks over a channel plus an
 //!   [`audio::AudioFormat`] descriptor.
-//! - Transcoding (`transcoding` feature): [`transcoding::encode_jpeg_stream_to_h264`]
-//!   and [`transcoding::encode_pcm_stream_to_opus`] turn the two outputs above
+//! - Transcoding (`transcoding` feature): `transcoding::encode_jpeg_stream_to_h264`
+//!   and `transcoding::encode_pcm_stream_to_opus` turn the two outputs above
 //!   into exactly what `xrds-net`'s `VideoSource::EncodedH264` / `AudioSource`
 //!   expect — because encoding for a specific wire codec is a media concern,
 //!   not a networking one (see `docs/done/xrds-net-capture-decoupling.md`).

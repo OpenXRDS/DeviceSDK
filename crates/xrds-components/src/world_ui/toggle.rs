@@ -32,7 +32,7 @@ impl XrdsWorldToggle {
     }
 }
 
-/// Parameters for [`super::super::XrdsAPI::spawn_world_toggle`].
+/// Parameters for `XrdsAPI::spawn_world_toggle`.
 #[derive(Debug, Clone)]
 pub struct XrdsWorldToggleParams {
     pub checked: bool,

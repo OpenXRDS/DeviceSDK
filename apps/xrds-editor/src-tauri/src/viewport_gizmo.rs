@@ -278,7 +278,7 @@ pub fn interaction_zone_gizmo_system(
 /// into a box says nothing about whether that reaches the far wall. Every
 /// comparable engine draws them: Unity puts min/max spheres on an AudioSource,
 /// Unreal draws the attenuation shape, Godot the emission sphere. S6 step 2 of
-/// docs/small-phases-plan.md.
+/// docs/done/small-phases-plan.md.
 ///
 /// Two circles rather than two spheres. A sphere gizmo at 50 m is a dense ball of
 /// lines that hides the scene inside it, and the outer radius is routinely that

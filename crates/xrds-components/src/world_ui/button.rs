@@ -32,7 +32,7 @@ pub enum XrdsWorldButtonState {
     Pressed,
 }
 
-/// Parameters for [`super::super::XrdsAPI::spawn_world_button`].
+/// Parameters for `XrdsAPI::spawn_world_button`.
 #[derive(Debug, Clone)]
 pub struct XrdsWorldButtonParams {
     pub label: String,

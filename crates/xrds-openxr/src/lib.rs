@@ -1,3 +1,21 @@
+//! OpenXR backend: session lifecycle, reference spaces, swapchains, rendering and input.
+//!
+//! Applications do not normally call into this crate — the SDK selects it when a
+//! headset is present, and the same XRDS code runs on desktop without it. What is
+//! here is the part that cannot be abstracted away: session state transitions,
+//! per-eye swapchain acquisition and blit, composition layers (including
+//! passthrough via `XR_FB_passthrough`), hand and controller input, and the Android
+//! activity bootstrap.
+//!
+//! # Notes worth having before changing anything here
+//!
+//! XR frame timing is not the desktop loop. Views must be initialized with an
+//! identity pose rather than left uninitialized, composition layers may only be
+//! submitted once the session reports `SYNCHRONIZED`, and both eyes need
+//! `NoIndirectDrawing` — Bevy 0.17's GPU indirect preprocessing culls the second
+//! eye's draws on Adreno. Each of those was a device-only failure with no desktop
+//! symptom; see `docs/done/` in the repository for the investigations.
+
 use bevy::{
     app::PluginGroupBuilder,
     prelude::*,

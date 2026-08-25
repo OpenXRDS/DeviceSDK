@@ -495,7 +495,7 @@ fn initialize_view_and_blend_mode(world: &mut World) {
     // this enum: on Quest it is an `XR_FB_passthrough` composition layer submitted
     // beneath an alpha-blended projection layer, with the environment mode left
     // OPAQUE. Verified against a shipped Quest 3 passthrough app; the recipe is in
-    // `docs/small-phases-plan.md` S4.
+    // `docs/done/small-phases-plan.md` S4.
     let blend_mode = match blend_modes
         .iter()
         .find(|&&m| m == openxr::EnvironmentBlendMode::OPAQUE)
@@ -605,7 +605,7 @@ fn initialize_openxr_session(world: &mut World) {
 /// Created **already running** via `IS_RUNNING_AT_CREATION` rather than by calling
 /// `start()`/`resume()` afterwards: in openxr 0.19 those wrappers invoke the wrong
 /// entry point, so a layer started that way never produces imagery. Learned from a
-/// shipped Quest 3 passthrough app — see `docs/small-phases-plan.md` S4.
+/// shipped Quest 3 passthrough app — see `docs/done/small-phases-plan.md` S4.
 ///
 /// Whether the passthrough is *visible* is a separate question answered per frame by
 /// `OpenXrPassthroughEnabled`; creating it here costs a handle and nothing more

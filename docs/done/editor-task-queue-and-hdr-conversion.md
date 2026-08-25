@@ -67,7 +67,7 @@ no cubemap concept at all, so no import-time classification can make one work. T
 missing piece is a conversion, and it does not exist anywhere in the tree.
 
 This surfaced while adding the Skybox section to the editor
-(`docs/small-phases-plan.md`, S6-adjacent work): asset-kind detection was fixed to
+(`docs/done/small-phases-plan.md`, S6-adjacent work): asset-kind detection was fixed to
 read the KTX2 header — `faceCount == 6` means cubemap — which correctly identifies
 the SDK's own maps, and equally correctly refuses to pretend a panorama is one.
 
