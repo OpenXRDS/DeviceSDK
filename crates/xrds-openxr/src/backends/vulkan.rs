@@ -62,6 +62,17 @@ impl OpenXrGraphicsBackend<openxr::Vulkan> for GraphicsInner<openxr::Vulkan> {
             ash::khr::portability_subset::NAME,
             #[cfg(target_os = "macos")]
             ash::ext::metal_objects::NAME,
+            // Zero-copy video on Android: import a MediaCodec/AImageReader
+            // AHardwareBuffer as a sampled image. The buffer is vendor-tiled and
+            // Vulkan describes it only by external format (measured — see
+            // docs/video-asset-spike.md), so sampling it needs a Ycbcr conversion
+            // and the feature enabled below.
+            #[cfg(target_os = "android")]
+            c"VK_ANDROID_external_memory_android_hardware_buffer",
+            #[cfg(target_os = "android")]
+            c"VK_EXT_queue_family_foreign",
+            #[cfg(target_os = "android")]
+            c"VK_KHR_external_memory",
         ];
 
         let instance_extensions_cchar: Vec<_> =
@@ -198,13 +209,39 @@ impl OpenXrGraphicsBackend<openxr::Vulkan> for GraphicsInner<openxr::Vulkan> {
         let mut physical_device_multiview_features =
             ash::vk::PhysicalDeviceMultiviewFeatures::default().multiview(true);
 
-        let device_create_info = enabled_physical_device_features
-            .add_to_device_create(
-                ash::vk::DeviceCreateInfo::default()
-                    .queue_create_infos(&queue_create_infos)
-                    .push_next(&mut physical_device_multiview_features),
-            )
-            .enabled_extension_names(&device_extensions_cchar);
+        // Sampling an external-format image requires this feature, not just the
+        // extension. Android only: enabling it elsewhere would be a device-creation
+        // risk for no gain.
+        #[cfg(target_os = "android")]
+        let mut ycbcr_conversion_features =
+            ash::vk::PhysicalDeviceSamplerYcbcrConversionFeatures::default()
+                .sampler_ycbcr_conversion(true);
+
+        let device_create_info = enabled_physical_device_features.add_to_device_create(
+            ash::vk::DeviceCreateInfo::default()
+                .queue_create_infos(&queue_create_infos)
+                .push_next(&mut physical_device_multiview_features),
+        );
+        #[cfg(target_os = "android")]
+        let device_create_info = device_create_info.push_next(&mut ycbcr_conversion_features);
+        let device_create_info =
+            device_create_info.enabled_extension_names(&device_extensions_cchar);
+
+        // Say plainly whether the video extensions survived the support filter
+        // above. They are dropped silently when unsupported, and the failure would
+        // otherwise surface much later as a confusing import error.
+        #[cfg(target_os = "android")]
+        {
+            let want = c"VK_ANDROID_external_memory_android_hardware_buffer";
+            log::info!(
+                "Vulkan AHardwareBuffer import: {}",
+                if all_device_extensions.contains(&want) {
+                    "available"
+                } else {
+                    "UNAVAILABLE — zero-copy video cannot work on this device"
+                }
+            );
+        }
 
         let raw_device = unsafe {
             openxr_instance.create_vulkan_device(
