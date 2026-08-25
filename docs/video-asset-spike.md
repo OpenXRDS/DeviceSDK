@@ -142,7 +142,47 @@ whole import path, discarded.
 | --- | --- | --- |
 | 0 ✅ | Desktop: a decoded frame on a quad, any decoder | Does the Bevy material/asset shape work at all? — **yes**, see below |
 | 1 ❌ | Quest: route A — `YUV_420_888` + two-plane import + shader convert | Is the cheap join available? — **no**, see below |
-| 2 | Quest: route B if A fails — external-format import + conversion pass | Is the fallback affordable? |
+| 2 | Quest: route B — external-format import + conversion pass | Is the fallback affordable? |
+
+Route B is split into three stages, because only the middle one is uncertain:
+
+| | Stage | State |
+| --- | --- | --- |
+| B1 | Android decode → `AHardwareBuffer` (`xrds-media/src/video/android.rs`) | ✅ verified on device |
+| B2 | `ash` import + Ycbcr conversion pass → RGBA → wgpu via `texture_from_hal` | next |
+| B3 | Wire into the video texture registry | mostly done in phase 0 |
+
+### B1 result — hardware decode on a Quest 3
+
+```text
+hardware decode: video/hevc 1920x800
+[b1] frame 1: HardwareBuffer(0xb400007917f5bf00)
+[b1] 240 frames in 10.0s = 24.0 fps, from 2341 polls
+```
+
+HEVC decoded in hardware into GPU-resident buffers, paced exactly to the clip's
+24 fps. The 2341 polls against 240 frames is the part worth noting: the
+presentation clock is driving output, not the poll loop.
+
+Run it by pushing a clip and launching; it logs and returns without starting the
+app, because the subject is the decoder and an XR session would only add noise:
+
+```powershell
+adb push clip.mp4 /sdcard/Android/data/org.openxrds.devicesdk/files/probe_video.mp4
+```
+
+**Delete that file to get the normal app back** — its presence is the only trigger.
+
+Two things B1 settled that were not on anyone's list:
+
+- **`xrds-media`'s capture half cannot exist on Android.** `nokhwa` and `cpal`
+  (via `oboe`) fail at *link* time, not compile time, so nothing catches it until
+  an Android binary actually depends on the crate. Both are now target-gated off.
+- **`cargo ndk check -p xrds-app` is not the build.** Without
+  `--no-default-features` it pulls `xrds-net`'s FTP server and with it
+  `libunftp → rustls → aws-lc-sys`, which does not cross-compile. The project's
+  own build script passes that flag; a bare `check` does not, and looks like a
+  broken tree.
 
 Phase 0 is desktop and can use anything (`bevy_av1` 0.3.0 targets Bevy 0.17 and
 decodes AV1/IVF via dav1d; `xrds-media` already has ffmpeg decoders behind its
