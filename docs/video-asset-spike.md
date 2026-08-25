@@ -1,8 +1,9 @@
 # Video on a headset — spike plan
 
-**Status** (2026-08-25): phase 0 complete on desktop. Route A measured on a Quest 3
-and **eliminated**. Route B in progress — B1 (hardware decode to `AHardwareBuffer`)
-verified on device; B2 (Vulkan import and conversion pass) is next.
+**Status** (2026-08-25): **answered — a video plays on a material on a Quest 3.**
+Phase 0 complete on desktop; route A measured on device and eliminated; route B
+built and verified end to end. One piece of cleanup outstanding: the conversion pass
+still stalls on a fence every frame, which is most of its 3.53 ms cost.
 Written 2026-08-24.
 
 One question, answered on device before any of the three phases in
@@ -151,8 +152,60 @@ Route B is split into three stages, because only the middle one is uncertain:
 | | Stage | State |
 | --- | --- | --- |
 | B1 | Android decode → `AHardwareBuffer` (`xrds-media/src/video/android.rs`) | ✅ verified on device |
-| B2 | `ash` import + Ycbcr conversion pass → RGBA → wgpu via `texture_from_hal` | next |
-| B3 | Wire into the video texture registry | mostly done in phase 0 |
+| B2 | `ash` import + Ycbcr conversion pass → RGBA → wgpu (`xrds-openxr/src/video/`) | ✅ verified on device |
+| B3 | Wire into the video texture registry (`xrds-runtime/src/xrds_api/video_android.rs`) | ✅ **video playing on a Quest 3** |
+
+### Route B works — 2026-08-25
+
+A video file plays on a material in a 3-D scene on a Quest 3. The full chain:
+
+```text
+MediaCodec (hardware) → AImageReader → AHardwareBuffer
+  → VkImage, external format + VkSamplerYcbcrConversion
+  → fullscreen pass through an immutable sampler
+  → R8G8B8A8_SRGB VkImage → wgpu::Texture
+  → RenderAssets<GpuImage> → XRDS material texture slot
+```
+
+From an author's point of view none of that is visible:
+
+```rust
+api.play_hardware_video("clip", "/sdcard/.../clip.mp4");
+api.set_material_texture_slot(&screen, BaseColor, Some(XrdsMaterialTextureRef {
+    texture_asset_id: "clip".into(),
+    ..Default::default()
+}));
+```
+
+Which is the same two lines the desktop path takes, and the reason phase 0 was worth
+doing first: `XrdsMaterialTextureRef` already meant "a texture named by id", so
+nothing about materials, meshes, shaders or the renderer had to learn about video.
+
+**Costs measured, and one is not yet acceptable.** The conversion pass ran at
+**3.53 ms/frame at 1920×800** when measured from the main world — far above the ~3%
+of frame budget the bandwidth estimate predicted. The gap is not the conversion: it
+is a full CPU/GPU stall, because `convert()` blocks on a fence after submitting.
+
+Blocking was deliberate — it is what makes the write safe without wgpu knowing the
+pass happened — but it is the dominant cost and it must go. Two related problems,
+one fix:
+
+1. **The per-frame fence stall.** Still present.
+2. **`vkQueueSubmit` racing wgpu's own submissions.** Addressed by B3: the pass now
+   runs in the render schedule (`RenderSystems::PrepareResources`), on the render
+   thread, at a point wgpu is not submitting.
+
+The remaining work is to drop the stall — signal a semaphore wgpu waits on instead of
+blocking the CPU — and to re-measure. Until then the figure above is the honest cost,
+and it is a quarter of a 72 Hz budget at a quarter of 4K.
+
+**A note on what B3 had to work around.** The material bind group problem from phase 0
+appears here too, in a nastier form: the render world installs the real texture on
+some frame, and a material whose bind group was built before that keeps sampling the
+placeholder forever. `rebind_hardware_video_materials` marks the materials modified
+every frame rather than reasoning about the ordering — the same Bevy gap
+([bevy#3674](https://github.com/bevyengine/bevy/issues/3674)), reached by a different
+road.
 
 ### B1 result — hardware decode on a Quest 3
 
