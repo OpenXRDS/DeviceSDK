@@ -1,6 +1,8 @@
 # Video on a headset — spike plan
 
-**Status:** phase 0 complete on desktop (2026-08-25); phases 1 and 2 not started.
+**Status** (2026-08-25): phase 0 complete on desktop. Route A measured on a Quest 3
+and **eliminated**. Route B in progress — B1 (hardware decode to `AHardwareBuffer`)
+verified on device; B2 (Vulkan import and conversion pass) is next.
 Written 2026-08-24.
 
 One question, answered on device before any of the three phases in
