@@ -131,7 +131,7 @@ export function Palette({ snapshot, send }: Props) {
                      style={{ display:"flex", alignItems:"center", gap:6, width:"100%" }}
                      onClick={() => spawnAsset(asset.id)}>
                   <span style={{ fontSize:11, flexShrink:0 }}>
-                    {asset.kind === "Gltf" ? "📦" : asset.kind === "Texture" ? "🖼" : asset.kind === "Audio" ? "♪" : "🌄"}
+                    {asset.kind === "Gltf" ? "📦" : asset.kind === "Texture" ? "🖼" : asset.kind === "Audio" ? "♪" : asset.kind === "Video" ? "▶" : "🌄"}
                   </span>
                   <span style={{ flex: 1 }}>{asset.name}</span>
                   <span className="asset-kind">{asset.kind}</span>

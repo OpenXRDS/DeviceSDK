@@ -489,6 +489,8 @@ fn has_supported_binary_asset_extension(uri: &str, kind: XrdsSceneAssetKind) -> 
         XrdsSceneAssetKind::Audio => {
             matches!(extension.as_str(), "mp3" | "ogg" | "wav" | "flac")
         }
+        // Container only — the codec inside cannot be inferred from the extension.
+        XrdsSceneAssetKind::Video => matches!(extension.as_str(), "mp4"),
         XrdsSceneAssetKind::Gltf => matches!(extension.as_str(), "gltf" | "glb"),
     }
 }

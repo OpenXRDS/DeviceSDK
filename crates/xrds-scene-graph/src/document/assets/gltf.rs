@@ -158,6 +158,9 @@ impl XrdsSceneDocument {
             XrdsSceneAssetKind::Texture => self.material_texture_reference_node_ids(&asset.id),
             XrdsSceneAssetKind::EnvironmentMap => Vec::new(),
             XrdsSceneAssetKind::Audio => self.audio_asset_reference_node_ids(&asset.id),
+            // A video is referenced wherever a texture is: it fills a material
+            // texture slot, and the slot names it by asset id like any other.
+            XrdsSceneAssetKind::Video => self.material_texture_reference_node_ids(&asset.id),
         };
 
         Ok(XrdsSceneAssetUsage {
@@ -179,6 +182,11 @@ impl XrdsSceneDocument {
                     XrdsSceneAssetKind::EnvironmentMap => Vec::new(),
                     XrdsSceneAssetKind::Audio => {
                         self.audio_asset_reference_node_ids(&asset.id)
+                    }
+                    // See the single-asset path above: a video fills a material
+                    // texture slot, so it is referenced where a texture is.
+                    XrdsSceneAssetKind::Video => {
+                        self.material_texture_reference_node_ids(&asset.id)
                     }
                 },
                 asset,

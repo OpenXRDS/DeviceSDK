@@ -26,6 +26,10 @@ use crate::editor_state::{EditorSession, EditorState};
 pub const MODEL_EXTS: &[&str] = &["glb", "gltf"];
 pub const TEXTURE_EXTS: &[&str] = &["png", "jpg", "jpeg", "webp", "ktx2"];
 pub const AUDIO_EXTS: &[&str] = &["mp3", "wav", "ogg", "flac"];
+/// Container only. The accepted *codecs* are H.264 and HEVC — what a Quest decodes
+/// in hardware — and an extension cannot tell you which is inside, so import probes
+/// the stream (see [`detect_asset_kind`]'s caller).
+pub const VIDEO_EXTS: &[&str] = &["mp4"];
 /// `.ktx2` appears here *and* in [`TEXTURE_EXTS`] on purpose: the container holds
 /// either, and only its header can say which. See `detect_asset_kind`.
 pub const ENVIRONMENT_EXTS: &[&str] = &["exr", "hdr", "ktx2"];
@@ -37,6 +41,7 @@ pub fn all_importable_exts() -> Vec<&'static str> {
         .iter()
         .chain(TEXTURE_EXTS)
         .chain(AUDIO_EXTS)
+        .chain(VIDEO_EXTS)
         .chain(ENVIRONMENT_EXTS)
     {
         // Order-preserving, and `.ktx2` genuinely appears twice — `dedup` would not
@@ -55,6 +60,7 @@ fn detect_asset_kind(path: &str) -> Option<XrdsSceneAssetKind> {
     match ext.as_deref() {
         Some(e) if MODEL_EXTS.contains(&e)  => Some(XrdsSceneAssetKind::Gltf),
         Some(e) if AUDIO_EXTS.contains(&e)  => Some(XrdsSceneAssetKind::Audio),
+        Some(e) if VIDEO_EXTS.contains(&e)  => Some(XrdsSceneAssetKind::Video),
         // `.ktx2` asks the file, rather than guessing from the extension.
         //
         // The container holds either a plain 2-D texture or a cubemap, and only a
@@ -494,6 +500,33 @@ pub fn apply_io_command(
             // nothing — the "authorable but inert" failure this project keeps
             // hitting. Convert first; the cubemap is what gets registered, when it
             // exists.
+            // Ask the file which codec it holds before accepting it.
+            //
+            // `.mp4` is a container, not a codec: one holding AV1 or VP9 imports
+            // exactly as happily as H.264 and then plays nothing on a headset. That
+            // is the authorable-but-inert failure this project keeps repeating, and
+            // an extension check cannot catch it.
+            if matches!(kind, Some(XrdsSceneAssetKind::Video)) {
+                match xrds_media::video::probe_video_codec(path) {
+                    Ok(xrds_media::video::VideoCodec::H264)
+                    | Ok(xrds_media::video::VideoCodec::Hevc) => {}
+                    Ok(other) => {
+                        let message = format!(
+                            "Unsupported video codec {other} in '{path}'.                              DeviceSDK accepts H.264 or HEVC in .mp4 — those are what                              a headset decodes in hardware."
+                        );
+                        error!("[io] {message}");
+                        state.pending_status = Some(message);
+                        return false;
+                    }
+                    Err(e) => {
+                        let message = format!("Could not read video '{path}': {e}");
+                        error!("[io] {message}");
+                        state.pending_status = Some(message);
+                        return false;
+                    }
+                }
+            }
+
             if matches!(kind, Some(XrdsSceneAssetKind::EnvironmentMap))
                 && matches!(
                     std::path::Path::new(path).extension().and_then(|e| e.to_str())
@@ -513,6 +546,9 @@ pub fn apply_io_command(
                         .map_err(|e| format!("{e:?}")),
                 Some(XrdsSceneAssetKind::Audio) =>
                     session.0.ensure_audio_asset(Some(asset_id_hint), uri.clone())
+                        .map_err(|e| format!("{e:?}")),
+                Some(XrdsSceneAssetKind::Video) =>
+                    session.0.ensure_video_asset(Some(asset_id_hint), uri.clone())
                         .map_err(|e| format!("{e:?}")),
                 Some(XrdsSceneAssetKind::EnvironmentMap) =>
                     session.0.register_environment_map_asset(asset_id_hint, uri.clone())
@@ -1185,6 +1221,32 @@ mod tests {
                 "{path} should still import as a Texture",
             );
         }
+        assert_eq!(detect_asset_kind("clip.mp4"), Some(XrdsSceneAssetKind::Video));
+    }
+
+    /// The codec gate, against a real file rather than a claim about one.
+    ///
+    /// `.mp4` is a container: one holding AV1 or VP9 passes every extension check
+    /// and then plays nothing on a headset. The repository's own sample is HEVC, so
+    /// this asserts the probe reads the stream rather than the filename — which is
+    /// the entire point of having a probe.
+    #[test]
+    fn the_codec_probe_reads_the_stream_not_the_extension() {
+        let sample = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../crates/xrds-net/samples/sample_video_only.mp4");
+        // Asserted, not skipped: the sample is committed, and a test that quietly
+        // returns when its fixture is missing reports success for having done
+        // nothing.
+        assert!(
+            sample.exists(),
+            "missing fixture {} — the codec probe is then untested",
+            sample.display()
+        );
+        assert_eq!(
+            xrds_media::video::probe_video_codec(&sample).expect("sample should probe"),
+            xrds_media::video::VideoCodec::Hevc,
+            "the repository sample is HEVC; a probe that reports otherwise is reading              something other than the stream",
+        );
     }
 
     /// Regression: a scene with RELATIVE catalog URIs (the portable layout

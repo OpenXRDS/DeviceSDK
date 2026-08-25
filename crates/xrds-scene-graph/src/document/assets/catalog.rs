@@ -71,6 +71,41 @@ impl XrdsSceneDocument {
         self.ensure_asset_with_kind(preferred_asset_id, uri, XrdsSceneAssetKind::Audio)
     }
 
+    pub fn video_assets(&self) -> impl Iterator<Item = &XrdsSceneAsset> {
+        self.assets
+            .iter()
+            .filter(|asset| asset.kind == XrdsSceneAssetKind::Video)
+    }
+
+    pub fn video_source_diagnostic(
+        &self,
+        asset_id: &str,
+    ) -> Result<XrdsSceneAssetSourceDiagnostic, XrdsSceneAssetWorkflowError> {
+        self.asset_source_diagnostic_with_kind(asset_id, XrdsSceneAssetKind::Video)
+    }
+
+    pub fn video_source_diagnostics(&self) -> Vec<XrdsSceneAssetSourceDiagnostic> {
+        self.video_assets()
+            .filter_map(|asset| self.video_source_diagnostic(&asset.id).ok())
+            .collect()
+    }
+
+    pub fn register_video_asset(
+        &mut self,
+        asset_id: impl Into<String>,
+        uri: impl Into<String>,
+    ) -> Result<XrdsSceneAsset, XrdsSceneAssetWorkflowError> {
+        self.register_asset_with_kind(asset_id, uri, XrdsSceneAssetKind::Video)
+    }
+
+    pub fn ensure_video_asset(
+        &mut self,
+        preferred_asset_id: Option<String>,
+        uri: impl Into<String>,
+    ) -> Result<XrdsSceneAssetEnsureResult, XrdsSceneAssetWorkflowError> {
+        self.ensure_asset_with_kind(preferred_asset_id, uri, XrdsSceneAssetKind::Video)
+    }
+
     pub fn texture_assets(&self) -> impl Iterator<Item = &XrdsSceneAsset> {
         self.assets
             .iter()
@@ -239,6 +274,7 @@ fn asset_id_seed_from_uri(kind: XrdsSceneAssetKind, uri: &str) -> String {
             XrdsSceneAssetKind::Texture => "texture",
             XrdsSceneAssetKind::EnvironmentMap => "envmap",
             XrdsSceneAssetKind::Audio => "audio",
+            XrdsSceneAssetKind::Video => "video",
         });
 
     let mut slug = String::new();
@@ -263,6 +299,7 @@ fn asset_id_seed_from_uri(kind: XrdsSceneAssetKind, uri: &str) -> String {
         XrdsSceneAssetKind::Texture => "texture",
         XrdsSceneAssetKind::EnvironmentMap => "envmap",
         XrdsSceneAssetKind::Audio => "audio",
+        XrdsSceneAssetKind::Video => "video",
     };
     let slug = slug.trim_matches('-');
     if slug.is_empty() {
@@ -386,6 +423,7 @@ fn asset_kind_label(kind: XrdsSceneAssetKind) -> &'static str {
         XrdsSceneAssetKind::Texture => "texture",
         XrdsSceneAssetKind::EnvironmentMap => "environment map",
         XrdsSceneAssetKind::Audio => "audio",
+        XrdsSceneAssetKind::Video => "video",
     }
 }
 
@@ -396,6 +434,10 @@ fn supported_binary_asset_extensions(kind: XrdsSceneAssetKind) -> &'static [&'st
         ],
         XrdsSceneAssetKind::EnvironmentMap => &["hdr", "exr", "ktx2", "dds"],
         XrdsSceneAssetKind::Audio => &["mp3", "ogg", "wav", "flac"],
+        // Container only. H.264 and HEVC are what a Quest decodes in hardware, and
+        // an extension cannot tell you which codec is inside — the editor probes
+        // the stream on import. See `XrdsSceneAssetKind::Video`.
+        XrdsSceneAssetKind::Video => &["mp4"],
         XrdsSceneAssetKind::Gltf => &["gltf", "glb"],
     }
 }

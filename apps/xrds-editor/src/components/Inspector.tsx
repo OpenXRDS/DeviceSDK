@@ -1594,13 +1594,17 @@ function TextureSlotRows({ id, textures, assets, send }: {
   assets: AssetCatalogEntry[];
   send: (c: EditorCommand) => void;
 }) {
-  const textureAssets = assets.filter(a => a.kind === "Texture");
+  // Video belongs here, not in a category of its own. A video *is* a texture from
+  // the material's point of view — it fills the same slot, named by the same asset
+  // id — and the only difference is that its contents change. Filtering it out was
+  // the difference between an asset that imports and an asset that can be used.
+  const textureAssets = assets.filter(a => a.kind === "Texture" || a.kind === "Video");
   return (
     <>
       <div className="text-[10px] text-overlay0 mt-1 mb-0.5">TEXTURES</div>
       {textureAssets.length === 0 && (
         <div className="text-[10px] text-yellow">
-          ⚠ no texture assets imported yet
+          ⚠ no texture or video assets imported yet
         </div>
       )}
       {MATERIAL_TEXTURE_SLOTS.map(slot => (
@@ -1618,7 +1622,12 @@ function TextureSlotRows({ id, textures, assets, send }: {
             })}
             options={[
               { value: TEXTURE_NONE_SENTINEL, label: "— none —" },
-              ...textureAssets.map(a => ({ value: a.id, label: a.name })),
+              // Marked, because "this slot plays a video" is a materially
+              // different thing to author than "this slot shows a picture".
+              ...textureAssets.map(a => ({
+                value: a.id,
+                label: a.kind === "Video" ? `▶ ${a.name}` : a.name,
+              })),
             ]}
           />
         </div>

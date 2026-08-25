@@ -10,7 +10,7 @@ mod webcam;
 #[cfg(feature = "playback")]
 mod decode;
 #[cfg(feature = "playback")]
-pub use decode::{VideoDecoder, VideoFrame};
+pub use decode::{probe_video_codec, VideoCodec, VideoDecoder, VideoFrame};
 
 // Hardware decode, target-gated rather than feature-gated: on Android it is the
 // only decode path worth having, and off Android it cannot compile at all.

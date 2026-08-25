@@ -29,6 +29,9 @@ tokio = { workspace = true }
 # docs/done/xrds-net-android-shipping.md Phase 3.
 xrds-runtime = { workspace = true, default-features = false }
 xrds-scene-graph = { workspace = true }
+# Reads a video's codec at import. The editor must refuse a container whose codec
+# a headset cannot decode, or it happily imports something that plays nothing.
+xrds-media = { workspace = true, features = ["playback"] }
 xrds-components = { workspace = true }
 bevy = { workspace = true }
 bevy_mod_outline = "0.11.0"

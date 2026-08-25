@@ -262,6 +262,30 @@ fn resolved_texture_handle_for_material_slot(
         return Some(handle);
     }
 
+    // A video asset that no player has been started for.
+    //
+    // It resolves to nothing — the catalog lookup below matches only `Texture` — and
+    // silence here is the exact failure this SDK keeps repeating: an asset that
+    // imports, validates, round-trips, is selectable in a slot, and shows nothing.
+    // Say so instead. Starting playback automatically on scene import is the real
+    // fix and is not built yet.
+    if world
+        .get_resource::<XrdsImportedAssetCatalog>()
+        .map(|catalog| {
+            catalog.assets.iter().any(|asset| {
+                asset.id == texture.texture_asset_id
+                    && asset.kind == XrdsSceneAssetKind::Video
+            })
+        })
+        .unwrap_or(false)
+    {
+        warn!(
+            "material slot names video asset '{}', but no playback has been started              for it — the surface will show nothing. Start it with              `play_hardware_video` (Android) or `create_video_texture` +              `write_video_frame`.",
+            texture.texture_asset_id
+        );
+        return None;
+    }
+
     let asset_uri = resolve_texture_asset_uri_in_world(world, &texture.texture_asset_id)?;
     let server = world.get_resource::<AssetServer>()?;
 

@@ -212,6 +212,20 @@ impl XrdsSceneDocumentSession {
         })
     }
 
+    pub fn ensure_video_asset(
+        &mut self,
+        preferred_asset_id: Option<impl Into<String>>,
+        uri: impl Into<String>,
+    ) -> Result<XrdsSceneAssetEnsureResult, XrdsSceneDocumentEditError> {
+        let preferred_asset_id = preferred_asset_id.map(Into::into);
+        let uri = uri.into();
+        self.apply_operation(|document| {
+            document
+                .ensure_video_asset(preferred_asset_id, uri)
+                .map_err(XrdsSceneDocumentEditError::AssetWorkflow)
+        })
+    }
+
     pub fn ensure_environment_map_asset(
         &mut self,
         preferred_asset_id: Option<impl Into<String>>,

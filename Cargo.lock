@@ -11557,6 +11557,7 @@ dependencies = [
  "wry",
  "x11rb",
  "xrds-components",
+ "xrds-media",
  "xrds-runtime",
  "xrds-scene-graph",
 ]

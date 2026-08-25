@@ -310,3 +310,45 @@ mod tests {
         assert!(count > 0, "no frames decoded");
     }
 }
+
+/// The video codec inside a container, for import validation.
+///
+/// Only the two a Quest decodes in hardware are named. Everything else is
+/// [`VideoCodec::Unsupported`] with the codec's own name attached, so a refusal can
+/// say *what* was rejected rather than only that something was.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VideoCodec {
+    H264,
+    Hevc,
+    Unsupported(String),
+}
+
+impl std::fmt::Display for VideoCodec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            VideoCodec::H264 => write!(f, "H.264"),
+            VideoCodec::Hevc => write!(f, "HEVC"),
+            VideoCodec::Unsupported(name) => write!(f, "{name}"),
+        }
+    }
+}
+
+/// Read a container's video codec without decoding a frame.
+///
+/// The extension cannot answer this. An `.mp4` holding AV1 or VP9 imports happily
+/// and then plays nothing on a headset, which is the authorable-but-inert failure
+/// this project keeps repeating — so the import path asks the file.
+pub fn probe_video_codec(path: impl AsRef<Path>) -> Result<VideoCodec, ffmpeg::Error> {
+    ffmpeg::init()?;
+    let input = ffmpeg::format::input(&path.as_ref())?;
+    let stream = input
+        .streams()
+        .best(ffmpeg::media::Type::Video)
+        .ok_or(ffmpeg::Error::StreamNotFound)?;
+
+    Ok(match stream.parameters().id() {
+        ffmpeg::codec::Id::H264 => VideoCodec::H264,
+        ffmpeg::codec::Id::HEVC => VideoCodec::Hevc,
+        other => VideoCodec::Unsupported(format!("{other:?}")),
+    })
+}
