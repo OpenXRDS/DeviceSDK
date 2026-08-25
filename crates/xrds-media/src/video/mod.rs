@@ -2,6 +2,9 @@
 
 mod frame_reader;
 mod jpeg;
+
+// Camera capture is desktop-only — see Cargo.toml.
+#[cfg(not(target_os = "android"))]
 mod webcam;
 
 #[cfg(feature = "playback")]
@@ -18,4 +21,6 @@ pub use android::{HardwareBuffer, HardwareVideoDecoder};
 
 pub use frame_reader::FrameReader;
 pub use jpeg::{find_complete_jpeg, EOI, SOI};
+
+#[cfg(not(target_os = "android"))]
 pub use webcam::{list_available_devices, Webcam};

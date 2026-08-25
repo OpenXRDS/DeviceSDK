@@ -818,6 +818,61 @@ fn main() {
 // Entry point — Android (GameActivity via cargo-ndk)
 // ---------------------------------------------------------------------------
 
+/// Decode a clip for ten seconds and report what came back. See the call site.
+#[cfg(target_os = "android")]
+fn run_video_decode_probe(path: &std::path::Path) {
+    use xrds_media::video::HardwareVideoDecoder;
+
+    let mut decoder = match HardwareVideoDecoder::open(path) {
+        Ok(decoder) => decoder,
+        Err(e) => {
+            log::error!("[b1] could not open {}: {e}", path.display());
+            return;
+        }
+    };
+    log::info!(
+        "[b1] hardware decoder open: {}x{}",
+        decoder.width(),
+        decoder.height()
+    );
+
+    let start = std::time::Instant::now();
+    let (mut frames, mut polls) = (0u32, 0u32);
+    let mut last = None;
+
+    while start.elapsed().as_secs() < 10 {
+        match decoder.next_buffer() {
+            // The reader recycles a small pool, so buffers repeat; a *change*
+            // is what marks a new frame. Counting polls instead would measure
+            // this loop's sleep, not the decoder.
+            Ok(Some(buffer)) => {
+                if Some(buffer) != last {
+                    frames += 1;
+                    last = Some(buffer);
+                    if frames <= 3 || frames % 60 == 0 {
+                        log::info!("[b1] frame {frames}: {buffer:?}");
+                    }
+                }
+            }
+            Ok(None) => {}
+            Err(e) => {
+                log::error!("[b1] decode failed after {frames} frames: {e}");
+                return;
+            }
+        }
+        polls += 1;
+        // Poll faster than the video's frame rate so pacing is the decoder's
+        // decision rather than this loop's.
+        std::thread::sleep(std::time::Duration::from_millis(4));
+    }
+
+    let secs = start.elapsed().as_secs_f64();
+    log::info!(
+        "[b1] {frames} frames in {secs:.1}s = {:.1} fps, from {polls} polls",
+        frames as f64 / secs
+    );
+}
+
 #[cfg(target_os = "android")]
 #[no_mangle]
 fn android_main(android_app: winit::platform::android::activity::AndroidApp) {
@@ -861,6 +916,22 @@ fn android_main(android_app: winit::platform::android::activity::AndroidApp) {
         format!("/sdcard/Android/data/{PACKAGE}/files"),
     );
     let external_scene = external_dir.join("scene.json");
+
+    // --- B1 verification, temporary -----------------------------------------
+    //
+    // Runs only when a clip has been pushed to external storage:
+    //   adb push clip.mp4 /sdcard/Android/data/org.openxrds.devicesdk/files/probe_video.mp4
+    //
+    // Phase 1/B1 of docs/video-asset-spike.md. It proves the hardware decoder
+    // produces GPU-resident frames on this device before B2 tries to import one
+    // into Vulkan — the cheapest point at which that can be wrong. It logs and
+    // returns without starting the app: the subject is the decoder, and an XR
+    // session would only add noise to the measurement.
+    let probe_video = external_dir.join("probe_video.mp4");
+    if probe_video.exists() {
+        run_video_decode_probe(&probe_video);
+        return;
+    }
 
     let (scene_path, opt_asset_path, font_paths) = if external_scene.exists() {
         // Dev mode — scene and assets are on external storage; no extraction needed.

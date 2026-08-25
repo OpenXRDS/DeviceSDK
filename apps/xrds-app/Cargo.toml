@@ -38,3 +38,6 @@ android_logger = "0.14"
 # ndk 0.9 matches android-activity 0.6 (transitive via winit). Declared explicitly
 # so asset_manager() types are unambiguous in android_main.
 ndk            = { version = "0.9", default-features = false }
+# Hardware video decode (AMediaCodec -> AHardwareBuffer). Android-only, and
+# feature-free: the decoder is target-gated rather than behind a cargo feature.
+xrds-media     = { workspace = true }

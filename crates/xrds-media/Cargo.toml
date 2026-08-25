@@ -23,14 +23,18 @@ playback = ["dep:ffmpeg-next"]
 [dependencies]
 log = "0.4"
 
-# Camera capture. Kept in sync with the versions xrds-net used before extraction.
-[dependencies.nokhwa]
+# Camera and microphone capture — desktop only.
+#
+# Not merely unused on Android but unlinkable there: nokhwa's native backend and
+# cpal's (via oboe) drag in a JNI/C++ stack that fails at link time, which is how
+# this was found. A headset has neither a webcam this crate can open nor a cpal
+# device, so target-gating costs nothing and keeps the Android artifact honest.
+[target.'cfg(not(target_os = "android"))'.dependencies.nokhwa]
 version = "0.10.7"
 default-features = false
 features = ["input-native", "output-threaded"]
 
-# Microphone capture.
-[dependencies.cpal]
+[target.'cfg(not(target_os = "android"))'.dependencies.cpal]
 version = "=0.14.0"
 
 # Transcoding (optional, see the `transcoding` feature).
