@@ -250,6 +250,18 @@ fn resolved_texture_handle_for_material_slot(
 ) -> Option<bevy::asset::Handle<Image>> {
     let texture = texture?;
     let world = world?;
+
+    // A runtime-owned texture wins over the asset catalog. This is the branch that
+    // makes a video frame — which exists only in memory — bindable to a material at
+    // all; every other texture in the SDK resolves to a URI and goes through
+    // `AssetServer::load`. Checked first so that importing a still image whose id
+    // clashes with a live video cannot silently take the surface over.
+    if let Some(handle) =
+        crate::xrds_api::video::video_texture_handle_in_world(world, &texture.texture_asset_id)
+    {
+        return Some(handle);
+    }
+
     let asset_uri = resolve_texture_asset_uri_in_world(world, &texture.texture_asset_id)?;
     let server = world.get_resource::<AssetServer>()?;
 

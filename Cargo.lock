@@ -11566,6 +11566,7 @@ version = "0.1.0"
 dependencies = [
  "cpal 0.14.0",
  "ffmpeg-next",
+ "image",
  "log",
  "nokhwa",
  "opus",

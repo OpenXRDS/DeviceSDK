@@ -583,6 +583,8 @@ mod panel_grab_handle;
 mod player_body;
 #[path = "tests/panel_text.rs"]
 mod panel_text;
+#[path = "tests/video_texture.rs"]
+mod video_texture;
 #[path = "tests/scene_environment.rs"]
 mod scene_environment;
 #[path = "tests/trigger_action.rs"]

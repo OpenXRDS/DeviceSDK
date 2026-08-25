@@ -19,6 +19,17 @@ sudo apt install clang libssl-dev libasound2-dev libudev-dev \
 BoringSSL, and `libgtk-3-dev`/`libwebkit2gtk-4.1-dev` by the editor — `apps/xrds-editor` is a
 workspace member, so a plain `cargo build` compiles its webview and file dialogs too.
 
+The `libav*`/`libsw*` packages are FFmpeg, used by `xrds-media` for transcoding and for
+video playback (`ffmpeg-next` links these libraries directly — nothing shells out to the
+`ffmpeg` command).
+
+On **Windows** the same libraries come from [vcpkg](https://vcpkg.io):
+
+```powershell
+vcpkg install ffmpeg:x64-windows
+$env:VCPKG_ROOT = "C:\path\to\vcpkg"   # ffmpeg-next locates FFmpeg through this
+```
+
 ```shell
 cargo build
 ```

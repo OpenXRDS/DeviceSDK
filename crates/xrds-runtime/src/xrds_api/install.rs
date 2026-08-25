@@ -82,6 +82,7 @@ pub(super) fn install_xrds(app: &mut App) {
     app.init_resource::<XrdsIdIndex>();
     app.init_resource::<XrdsHierarchyIndex>();
     app.init_resource::<XrdsImportedAssetCatalog>();
+    app.init_resource::<crate::xrds_api::video::XrdsVideoTextures>();
     app.init_resource::<XrdsImportedSceneEnvironment>();
     app.init_resource::<XrdsImportedPanelLibrary>();
     app.init_resource::<XrdsPanelElementIndex>();

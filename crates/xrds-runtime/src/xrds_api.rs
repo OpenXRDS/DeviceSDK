@@ -49,6 +49,8 @@ mod raycast;
 mod billboard;
 #[path = "xrds_api/updaters.rs"]
 mod updaters;
+#[path = "xrds_api/video.rs"]
+mod video;
 #[path = "xrds_api/zone.rs"]
 mod zone;
 #[path = "xrds_api/world_ui_pointer.rs"]
@@ -503,7 +505,7 @@ pub(super) struct PendingGltfMorphTargetOverrideRequests {
 /// trait into the lower-level runtime and Bevy scheduling model internally.
 #[allow(unused_variables)]
 pub trait XrdsApp {
-    /// Called once before [`setup`] with direct access to the Bevy [`App`].
+    /// Called once before [`Self::setup`] with direct access to the Bevy `App`.
     ///
     /// Use this to add plugins (e.g. `bevy_egui::EguiPlugin`) or Bevy systems that the
     /// SDK does not otherwise expose.  This fires before XRDS resources are initialised,

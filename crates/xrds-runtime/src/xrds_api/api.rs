@@ -127,7 +127,7 @@ impl XrdsAPI<'_> {
 
     /// Resolve the parent id for any node by its raw XRDS id.
     ///
-    /// Complements [`parent_id_of`] for cases where no typed handle is available
+    /// Complements [`Self::parent_id_of`] for cases where no typed handle is available
     /// (e.g. editor hierarchy panels that work purely with ids).
     pub fn parent_id_of_node(&self, id: XrdsId) -> Option<XrdsId> {
         self.app
@@ -138,7 +138,7 @@ impl XrdsAPI<'_> {
 
     /// Return the child ids for any node by its raw XRDS id.
     ///
-    /// Complements [`child_ids_of`] for cases where no typed handle is available.
+    /// Complements [`Self::child_ids_of`] for cases where no typed handle is available.
     pub fn children_ids_of_node(&self, id: XrdsId) -> Vec<XrdsId> {
         self.app
             .world()
@@ -210,7 +210,7 @@ impl XrdsAPI<'_> {
     /// Mark an entity by XRDS id as pick-up-able.
     ///
     /// Use this variant when you have an [`XrdsId`] rather than a typed handle — for example
-    /// after [`import_scene_document_json`] where the ids come from the document.
+    /// after [`Self::import_scene_document_json`] where the ids come from the document.
     pub fn make_grabbable_by_id(&mut self, id: XrdsId) -> &mut Self {
         let world = self.app.world_mut();
         if let Some(entity) = world.resource::<XrdsIdIndex>().entity_of(id) {
@@ -1414,6 +1414,51 @@ impl XrdsAPI<'_> {
     }
 
     /// Read all texture slots for mesh-based entities.
+
+    /// Register a texture the runtime owns and you fill, addressable by `id` from
+    /// any material texture slot.
+    ///
+    /// This is how a video reaches a surface. Every other texture in the SDK is
+    /// file-backed — an asset id resolved to a URI and loaded — which a video frame,
+    /// existing only in memory, can never be. Bind it exactly like a file texture:
+    ///
+    /// ```ignore
+    /// api.create_video_texture("lobby", 1920, 1080);
+    /// api.set_material_texture_slot(
+    ///     &screen,
+    ///     XrdsMaterialTextureSlotKind::BaseColor,
+    ///     Some(XrdsMaterialTextureRef { texture_asset_id: "lobby".into(), ..Default::default() }),
+    /// );
+    /// ```
+    ///
+    /// Nothing decodes here. Frames are pushed in with
+    /// [`Self::write_video_frame`] from wherever they come from — `xrds-media` on a
+    /// desktop, `MediaCodec` on a headset — so the runtime carries no codec
+    /// dependency and stays shippable to Android.
+    ///
+    /// Registering the same id at the same size again is a no-op, so a caller need
+    /// not track whether it has already done so.
+    pub fn create_video_texture(&mut self, id: impl Into<String>, width: u32, height: u32) -> &mut Self {
+        crate::xrds_api::video::create_video_texture_in_world(self.app.world_mut(), id, width, height);
+        self
+    }
+
+    /// Replace a registered texture's pixels with tightly packed RGBA8.
+    ///
+    /// Returns false if `id` is unknown or the buffer length does not match the
+    /// registered size — the latter would otherwise render as a diagonally sheared
+    /// image, which is hard to trace back to its cause.
+    pub fn write_video_frame(&mut self, id: &str, rgba: &[u8]) -> bool {
+        crate::xrds_api::video::write_video_frame_in_world(self.app.world_mut(), id, rgba)
+    }
+
+    /// Forget a runtime texture. Materials still pointing at `id` fall back to the
+    /// asset catalog, and show nothing if it holds no such asset.
+    pub fn remove_video_texture(&mut self, id: &str) -> &mut Self {
+        crate::xrds_api::video::remove_video_texture_in_world(self.app.world_mut(), id);
+        self
+    }
+
     pub fn material_textures<C>(&self, handle: &Handle<C>) -> Option<XrdsMaterialTextureSlots> {
         material_textures_in_world(self.app.world(), handle)
     }
@@ -1733,7 +1778,7 @@ impl XrdsAPI<'_> {
     ///
     /// The closure receives `&C` and returns an [`XrdsGeometrySource`] describing only the
     /// XRDS-owned geometry/material or asset source. `name`, `transform`, and `visible` are
-    /// filled automatically from the descriptor's [`XrdsObject`] and [`XrdsComponent`]
+    /// filled automatically from the descriptor's `XrdsObject` and [`XrdsComponent`]
     /// implementations.
     pub fn register_surface_interpreter<C, F>(&mut self, interpreter: F) -> &mut Self
     where

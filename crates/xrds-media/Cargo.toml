@@ -14,6 +14,11 @@ test-util = []
 # media sources (VideoSource::EncodedH264, AudioSource). xrds-net itself never
 # depends on a codec library — see docs/done/xrds-net-capture-decoupling.md.
 transcoding = ["dep:ffmpeg-next", "dep:opus"]
+# File -> RGBA frames, for playback rather than transport. Separate from
+# `transcoding` because it is the opposite direction and a different consumer:
+# transcoding feeds the wire, playback feeds a texture. Both happen to need
+# ffmpeg, which is why they share a dependency and not a flag.
+playback = ["dep:ffmpeg-next"]
 
 [dependencies]
 log = "0.4"
@@ -40,3 +45,7 @@ optional = true
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 pretty_env_logger = "0.5.0"
+# Test-only: lets the opt-in decode test write frames out as PNG, so a decode
+# result can be *looked at* rather than inferred from a mean pixel value. Already
+# in the workspace tree via Bevy, so this costs no extra build.
+image = { version = "0.25", default-features = false, features = ["png"] }

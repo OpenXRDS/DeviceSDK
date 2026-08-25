@@ -518,6 +518,51 @@ impl XrdsUpdateContext<'_> {
     }
 
     /// Read all texture slots for mesh-based entities.
+
+    /// Register a texture the runtime owns and you fill, addressable by `id` from
+    /// any material texture slot.
+    ///
+    /// This is how a video reaches a surface. Every other texture in the SDK is
+    /// file-backed — an asset id resolved to a URI and loaded — which a video frame,
+    /// existing only in memory, can never be. Bind it exactly like a file texture:
+    ///
+    /// ```ignore
+    /// api.create_video_texture("lobby", 1920, 1080);
+    /// api.set_material_texture_slot(
+    ///     &screen,
+    ///     XrdsMaterialTextureSlotKind::BaseColor,
+    ///     Some(XrdsMaterialTextureRef { texture_asset_id: "lobby".into(), ..Default::default() }),
+    /// );
+    /// ```
+    ///
+    /// Nothing decodes here. Frames are pushed in with
+    /// [`Self::write_video_frame`] from wherever they come from — `xrds-media` on a
+    /// desktop, `MediaCodec` on a headset — so the runtime carries no codec
+    /// dependency and stays shippable to Android.
+    ///
+    /// Registering the same id at the same size again is a no-op, so a caller need
+    /// not track whether it has already done so.
+    pub fn create_video_texture(&mut self, id: impl Into<String>, width: u32, height: u32) -> &mut Self {
+        crate::xrds_api::video::create_video_texture_in_world(self.world, id, width, height);
+        self
+    }
+
+    /// Replace a registered texture's pixels with tightly packed RGBA8.
+    ///
+    /// Returns false if `id` is unknown or the buffer length does not match the
+    /// registered size — the latter would otherwise render as a diagonally sheared
+    /// image, which is hard to trace back to its cause.
+    pub fn write_video_frame(&mut self, id: &str, rgba: &[u8]) -> bool {
+        crate::xrds_api::video::write_video_frame_in_world(self.world, id, rgba)
+    }
+
+    /// Forget a runtime texture. Materials still pointing at `id` fall back to the
+    /// asset catalog, and show nothing if it holds no such asset.
+    pub fn remove_video_texture(&mut self, id: &str) -> &mut Self {
+        crate::xrds_api::video::remove_video_texture_in_world(self.world, id);
+        self
+    }
+
     pub fn material_textures<C>(&self, handle: &Handle<C>) -> Option<XrdsMaterialTextureSlots> {
         material_textures_in_world(self.world, handle)
     }
@@ -1109,7 +1154,7 @@ impl XrdsUpdateContext<'_> {
     /// Returns how many sequences/timelines it started, so a caller can
     /// tell "nothing was bound" from "it ran".
     ///
-    /// The [`XrdsAPI`](super::api::XrdsAPI) counterpart of this exists for
+    /// The [`XrdsAPI`](crate::xrds_api::XrdsAPI) counterpart of this exists for
     /// setup-time use; this is the `update()`-time equivalent — e.g. an
     /// editor's "preview this trigger" button, which has no other way to
     /// generate a real `ZoneEnter`/`Grabbed`/etc event from a desktop UI.
