@@ -543,8 +543,21 @@ async fn test_client_jpeg_to_h264() {
         ffmpeg::ffi::av_log_set_level(ffmpeg::ffi::AV_LOG_ERROR);
     }
 
-    let jpeg_files = get_jpeg_files("test_output/input_images3/test_frame_%03d.jpg")
-        .expect("Failed to get JPEG files");
+    // Skipped when the fixture is absent, rather than failing.
+    //
+    // `test_output/input_images3/` is not in the repo, so on any fresh clone this
+    // is the *only* path taken. The graceful skip two lines down was already here
+    // and unreachable: `get_jpeg_files` returns `Err` for a missing directory, so
+    // `.expect` fired before `is_empty()` could be consulted. The result was a
+    // permanently red `cargo test --workspace`, which hides the next real
+    // regression far more effectively than it reports this one.
+    let jpeg_files = match get_jpeg_files("test_output/input_images3/test_frame_%03d.jpg") {
+        Ok(files) => files,
+        Err(e) => {
+            println!("⚠️ Skipping: no JPEG fixture ({e})");
+            return;
+        }
+    };
 
     if jpeg_files.is_empty() {
         println!("⚠️ No JPEG files found");
