@@ -197,3 +197,9 @@ pub fn add_plugins<PG: PluginGroup>(base_plugins: PG, app_name: String) -> Plugi
 
     plugin_builder
 }
+
+/// Android video import — an `AHardwareBuffer` sampled as a Vulkan image.
+///
+/// Android only: the whole mechanism is `VK_ANDROID_external_memory_android_hardware_buffer`.
+#[cfg(target_os = "android")]
+pub mod video;
