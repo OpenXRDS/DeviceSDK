@@ -77,6 +77,35 @@ pub enum XrdsAction {
     /// rodio's own `stop` cannot be undone, and an author who stops a looping
     /// ambience expecting to restart it should not be left with permanent silence.
     StopAudio,
+    /// Play the video on the targeted node's material, from its first frame.
+    ///
+    /// **No `clip` field**, for the same reason [`Self::PlayAudio`] has none: the
+    /// Track model addresses actions through `XrdsActionTarget`, so the surface
+    /// showing the video *is* the target and the clip is whichever video asset its
+    /// material names. A second identifier would be a second source of truth.
+    ///
+    /// Video is the one asset kind that never starts on its own. A texture costs a
+    /// file read; a video costs a decoder — a thread on a desktop, a hardware codec
+    /// session on a headset — and GPU work every frame. So a scene that merely
+    /// contains a screen pays nothing until something triggers it, and this is that
+    /// something.
+    ///
+    /// `repeat` is the one thing worth authoring about a video, and it carries a
+    /// field where [`Self::PlayAudio`] carries none for a reason: a field added to
+    /// a *shipped* action is a hard break for older builds, so it goes in now or it
+    /// does not go in. There is deliberately no `volume` — no video path decodes
+    /// audio, and a control that adjusts nothing is worse than an absent one — and
+    /// no `autoplay`, because starting on load is exactly what this action exists to
+    /// replace.
+    PlayVideo {
+        #[serde(default = "default_video_repeat")]
+        repeat: XrdsSceneAnimationRepeatMode,
+    },
+    /// Stop the video on the targeted node's material, releasing its decoder.
+    ///
+    /// The surface keeps its texture and its last frame: stopping a clip stops a
+    /// picture, it does not remove a screen.
+    StopVideo,
     SetVisible(bool),
     /// Moves translation/rotation/scale toward the given values over
     /// `duration_secs`, easing by `ease`. Each of `position`/`rotation`/`scale`
@@ -234,6 +263,11 @@ enum XrdsActionKnown {
     StopEffect,
     PlayAudio,
     StopAudio,
+    PlayVideo {
+        #[serde(default = "default_video_repeat")]
+        repeat: XrdsSceneAnimationRepeatMode,
+    },
+    StopVideo,
     SetVisible(bool),
     SetTransform {
         position: Option<[f32; 3]>,
@@ -275,6 +309,8 @@ impl From<XrdsActionKnown> for XrdsAction {
             XrdsActionKnown::StopEffect => XrdsAction::StopEffect,
             XrdsActionKnown::PlayAudio => XrdsAction::PlayAudio,
             XrdsActionKnown::StopAudio => XrdsAction::StopAudio,
+            XrdsActionKnown::PlayVideo { repeat } => XrdsAction::PlayVideo { repeat },
+            XrdsActionKnown::StopVideo => XrdsAction::StopVideo,
             XrdsActionKnown::SetVisible(visible) => XrdsAction::SetVisible(visible),
             XrdsActionKnown::SetTransform { position, rotation, scale, duration_secs, ease } => {
                 XrdsAction::SetTransform { position, rotation, scale, duration_secs, ease }
@@ -297,6 +333,12 @@ impl From<XrdsActionKnown> for XrdsAction {
 /// Wire tag strings for every real `XrdsAction` variant — the exact tag
 /// values `#[serde(tag = "kind")]` produces, i.e. the Rust identifiers,
 /// since no variant renames `kind`. Add to this whenever a variant is added.
+/// A screen that stops after one showing is the unusual case; looping is what a
+/// video wall, a demo loop or an ambient backdrop wants.
+fn default_video_repeat() -> XrdsSceneAnimationRepeatMode {
+    XrdsSceneAnimationRepeatMode::Loop
+}
+
 const KNOWN_ACTION_KINDS: &[&str] = &[
     "PlayGltfAnimation",
     "StopGltfAnimation",
@@ -304,6 +346,8 @@ const KNOWN_ACTION_KINDS: &[&str] = &[
     "StopEffect",
     "PlayAudio",
     "StopAudio",
+    "PlayVideo",
+    "StopVideo",
     "SetVisible",
     "SetTransform",
     "SetMaterial",

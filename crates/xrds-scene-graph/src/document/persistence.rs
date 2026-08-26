@@ -25,6 +25,7 @@ impl XrdsSceneDocument {
                 XrdsSceneAssetKind::Texture
                     | XrdsSceneAssetKind::EnvironmentMap
                     | XrdsSceneAssetKind::Audio
+                    | XrdsSceneAssetKind::Video
             ) && !has_supported_binary_asset_extension(&asset.uri, asset.kind)
             {
                 return Err(XrdsSceneValidationError::InvalidAssetExtension {
@@ -38,6 +39,8 @@ impl XrdsSceneDocument {
 
         let mut seen = HashSet::new();
         let ids: HashMap<_, _> = self.nodes.iter().map(|node| (node.id, node)).collect();
+
+        let mut video_owner: HashMap<String, XrdsSceneNodeId> = HashMap::new();
 
         for node in &self.nodes {
             if !seen.insert(node.id) {
@@ -78,6 +81,30 @@ impl XrdsSceneDocument {
 
             if let Some(material) = node_material_ref(node) {
                 validate_material_texture_slots(self, node.id, &material.textures)?;
+                for asset_id in video_asset_ids_in_slots(self, &material.textures) {
+                    // One video, one surface.
+                    //
+                    // Two meshes showing one clip would have to share a decoder, so
+                    // they could only ever play in lockstep — and an author who
+                    // binds different clips to different meshes reasonably expects
+                    // independent playback. Rather than have the model mean one
+                    // thing for two copies of a clip and another for one, a video
+                    // belongs to a single surface. Reusing it means copying the file
+                    // and importing it again, which also makes the second decoder
+                    // visible as a second asset rather than hidden.
+                    //
+                    // Unlike a texture, which is cheap to share: a decoder is a
+                    // thread on a desktop and a hardware codec session on a headset.
+                    if let Some(previous) = video_owner.insert(asset_id.clone(), node.id) {
+                        if previous != node.id {
+                            return Err(XrdsSceneValidationError::VideoAssetBoundTwice {
+                                asset_id,
+                                first_node_id: previous,
+                                second_node_id: node.id,
+                            });
+                        }
+                    }
+                }
             }
 
             if let XrdsSceneNodePayload::AudioClip(clip) = &node.payload {
@@ -191,6 +218,12 @@ pub enum XrdsSceneValidationError {
         slot: XrdsSceneMaterialTextureSlotKind,
         asset_id: String,
     },
+    /// A video asset bound to more than one mesh. See the check for why.
+    VideoAssetBoundTwice {
+        asset_id: String,
+        first_node_id: XrdsSceneNodeId,
+        second_node_id: XrdsSceneNodeId,
+    },
     MaterialTextureAssetKindMismatch {
         node_id: XrdsSceneNodeId,
         slot: XrdsSceneMaterialTextureSlotKind,
@@ -287,7 +320,19 @@ fn validate_material_texture_slots(
             });
         };
 
-        if asset.kind != XrdsSceneAssetKind::Texture {
+        // Video counts as a texture here, because to a material that is exactly what
+        // it is: it fills the same slot, named by the same asset id, and only its
+        // contents change. Refusing it made an imported clip bindable in the
+        // Inspector and then rejected on commit — the picker offered something the
+        // document would not accept.
+        //
+        // This is the third gate a video has to pass, after the runtime's slot
+        // resolver and the editor's picker, and it is the authoritative one: the
+        // other two can be right while this refuses the edit.
+        if !matches!(
+            asset.kind,
+            XrdsSceneAssetKind::Texture | XrdsSceneAssetKind::Video
+        ) {
             return Err(XrdsSceneValidationError::MaterialTextureAssetKindMismatch {
                 node_id,
                 slot,
@@ -459,6 +504,36 @@ fn validate_scene_skybox_asset(
     }
 
     Ok(())
+}
+
+/// The video assets a material's slots name, deduplicated.
+///
+/// Deduplicated because one surface may legitimately show a clip in two slots —
+/// base colour and emissive, say — and that is still one surface.
+fn video_asset_ids_in_slots(
+    document: &XrdsSceneDocument,
+    textures: &XrdsSceneMaterialTextureSlots,
+) -> Vec<String> {
+    let mut ids: Vec<String> = Vec::new();
+    // Listed rather than iterated, matching `validate_material_texture_slots` just
+    // above: the struct has one field per slot and no iterator.
+    let slots = [
+        textures.base_color.as_ref(),
+        textures.metallic_roughness.as_ref(),
+        textures.normal.as_ref(),
+        textures.occlusion.as_ref(),
+        textures.emissive.as_ref(),
+    ];
+    for texture in slots.into_iter().flatten() {
+        let asset_id = texture.texture_asset_id.trim();
+        let is_video = document
+            .asset(asset_id)
+            .is_some_and(|asset| asset.kind == XrdsSceneAssetKind::Video);
+        if is_video && !ids.iter().any(|id| id == asset_id) {
+            ids.push(asset_id.to_string());
+        }
+    }
+    ids
 }
 
 fn has_supported_binary_asset_extension(uri: &str, kind: XrdsSceneAssetKind) -> bool {

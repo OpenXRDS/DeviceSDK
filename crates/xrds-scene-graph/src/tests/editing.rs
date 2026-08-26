@@ -342,4 +342,99 @@ fn document_validation_rejects_material_texture_reference_to_missing_or_wrong_ki
             found: XrdsSceneAssetKind::Gltf,
         })
     );
+
+    // ...but a Video is accepted, because to a material that is what it is: it
+    // fills the same slot, named by the same asset id, and only its contents
+    // change. This gate refused it at first, which made an imported clip pickable
+    // in the Inspector and then rejected on commit — the picker offering something
+    // the document would not take.
+    missing_document.assets[0] = XrdsSceneAsset {
+        id: "asset:texture-missing".to_string(),
+        uri: "video/clip.mp4".to_string(),
+        kind: XrdsSceneAssetKind::Video,
+    };
+    assert_eq!(
+        missing_document.validate(),
+        Ok(()),
+        "a video bound to a material texture slot must validate"
+    );
+}
+/// A video belongs to one mesh; a second binding is refused.
+///
+/// Two meshes showing one clip would share a decoder and could only play in
+/// lockstep, while an author binding different clips to different meshes expects
+/// them to be independent. Rather than have the model mean one thing for two copies
+/// of a file and another for one, the clip belongs to a single surface — reusing it
+/// means importing a copy, which makes the second decoder visible as a second asset
+/// instead of hidden.
+///
+/// Two *slots* on the same mesh are still one surface, so that stays legal.
+#[test]
+fn a_video_may_only_be_bound_to_one_mesh() {
+    let clip_ref = || XrdsSceneTextureRef {
+        texture_asset_id: "asset:clip".to_string(),
+        uv: XrdsSceneTextureUvParams::default(),
+        sampler: XrdsSceneTextureSamplerParams::default(),
+    };
+    let screen = |id: u64, textures: XrdsSceneMaterialTextureSlots| XrdsSceneNode {
+        id: XrdsSceneNodeId(id),
+        parent_id: None,
+        name: format!("Screen{id}"),
+        enabled: true,
+        visible: true,
+        transform: XrdsSceneTransform::default(),
+        payload: XrdsSceneNodePayload::Sphere(XrdsSceneSphere {
+            radius: 1.0,
+            material: XrdsSceneMaterial {
+                textures,
+                ..Default::default()
+            },
+            ..Default::default()
+        }),
+        grabbable: false,
+        editor: XrdsEditorMetadata::default(),
+        triggers: Vec::new(),
+        watchers: Vec::new(),
+    };
+
+    let mut document = XrdsSceneDocument {
+        assets: vec![XrdsSceneAsset {
+            id: "asset:clip".to_string(),
+            uri: "video/clip.mp4".to_string(),
+            kind: XrdsSceneAssetKind::Video,
+        }],
+        // One mesh, two slots — still one surface.
+        nodes: vec![screen(
+            1,
+            XrdsSceneMaterialTextureSlots {
+                base_color: Some(clip_ref()),
+                emissive: Some(clip_ref()),
+                ..Default::default()
+            },
+        )],
+        ..Default::default()
+    };
+    assert_eq!(
+        document.validate(),
+        Ok(()),
+        "one surface may show a clip in more than one slot"
+    );
+
+    // A second mesh is refused, naming both so the author can find the one already
+    // using it.
+    document.nodes.push(screen(
+        2,
+        XrdsSceneMaterialTextureSlots {
+            base_color: Some(clip_ref()),
+            ..Default::default()
+        },
+    ));
+    assert_eq!(
+        document.validate(),
+        Err(XrdsSceneValidationError::VideoAssetBoundTwice {
+            asset_id: "asset:clip".to_string(),
+            first_node_id: XrdsSceneNodeId(1),
+            second_node_id: XrdsSceneNodeId(2),
+        })
+    );
 }

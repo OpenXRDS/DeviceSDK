@@ -256,19 +256,21 @@ fn a_payload_less_unrecognized_action_does_not_destroy_the_whole_document() {
 /// `docs/done/xrds-track-model-plan.md` §9.
 #[test]
 fn a_payload_carrying_unrecognized_action_should_not_destroy_the_whole_document() {
-    // The fixture used `PlayAudio` until 2026-08-19, when that stopped being
-    // hypothetical and became a real action — at which point this test failed,
-    // because the kind now parses and its `data` does not match. Swapped for a kind
-    // that is still genuinely unimplemented.
+    // The fixture names a kind that is *deliberately* fictional, and must stay that
+    // way. It has now gone stale twice: `PlayAudio` until 2026-08-19, then
+    // `PlayVideo` until 2026-08-25 — each time a plausible-sounding placeholder
+    // became a real action, and this test failed because the kind then parses and
+    // its `data` does not match. A name no one would ever ship ends that cycle;
+    // `an_unknown_trigger_kind_loads_and_is_inert` below already uses one.
     //
-    // Worth knowing, since the failure showed it: the graceful path covers an
+    // Worth knowing, since the failures showed it: the graceful path covers an
     // unknown *kind*, not a known kind carrying an unexpected payload. Adding a
-    // field to an existing action is therefore a hard break for older builds,
-    // where an unknown action is not. That is why `PlayAudio` ships with no
-    // fields rather than a speculative volume override.
+    // field to an existing action is therefore a hard break for older builds, where
+    // an unknown action is not. That is why `PlayAudio` and `PlayVideo` both ship
+    // with no fields rather than a speculative volume or clip override.
     let json = r#"{
         "assets":[{"target":{"Node":7},"keys":[
-            {"at_secs":0.0,"action":{"kind":"PlayVideo","data":{"clip":"intro.mp4"}}}
+            {"at_secs":0.0,"action":{"kind":"SomeFutureAction","data":{"clip":"intro.mp4"}}}
         ]}]
     }"#;
     let track: XrdsTrack =
@@ -1125,4 +1127,64 @@ fn a_stop_naming_a_missing_track_reports_only_the_missing_track() {
         !titles.iter().any(|t| t == "Stop binding for a Track nothing fires"),
         "{titles:?}"
     );
+}
+
+/// A `PlayVideo` whose `data` omits `repeat` loads, and loops.
+///
+/// Looping is the right default: a screen that keeps playing is a visible mistake,
+/// one that stops after a single showing looks like a broken decoder.
+///
+/// Note precisely what `#[serde(default)]` buys, because it is less than it looks.
+/// The encoding is adjacently tagged, so a struct variant *requires* its `data`
+/// object; the default covers a missing **field**, not a missing `data`. Turning a
+/// field-less action into one with fields is therefore a hard break in this
+/// encoding — `{"kind":"PlayVideo"}` stops parsing — which is the same lesson
+/// `a_payload_carrying_unrecognized_action_should_not_destroy_the_whole_document`
+/// records, and the reason `repeat` went in before this shipped rather than after.
+#[test]
+fn a_play_video_without_a_repeat_field_defaults_to_looping() {
+    let json = r#"{"kind":"PlayVideo","data":{}}"#;
+    let action: XrdsAction = serde_json::from_str(json).expect("must load without `repeat`");
+    assert_eq!(
+        action,
+        XrdsAction::PlayVideo {
+            repeat: XrdsSceneAnimationRepeatMode::Loop
+        }
+    );
+}
+
+/// Turning a field-less action into one with fields kills the whole document.
+///
+/// Pinned down rather than assumed, and the answer was the unwelcome one: a *known*
+/// kind whose `data` is missing does **not** degrade to `XrdsAction::Unknown` — it
+/// fails the parse outright, taking the document with it. The graceful path covers
+/// unknown kinds only, exactly as
+/// `a_payload_carrying_unrecognized_action_should_not_destroy_the_whole_document`
+/// says, and this is the concrete demonstration of the cost.
+///
+/// So `#[serde(default)]` on `repeat` buys less than it appears to: it covers a
+/// missing *field* inside `data`, not a missing `data`. That is why `repeat` went
+/// into `PlayVideo` before it shipped rather than after — the field-less spelling
+/// never reached a saved scene, so nothing has to be migrated.
+///
+/// If a shipped action ever does need a new field, this is the shape of the
+/// problem: not a lossy load, a refused one.
+#[test]
+fn adding_fields_to_a_shipped_action_would_break_older_documents() {
+    let json = r#"{"kind":"PlayVideo"}"#;
+    assert!(
+        serde_json::from_str::<XrdsAction>(json).is_err(),
+        "a known kind with no `data` is refused, not degraded — if this ever starts          passing, the graceful path has been widened and the hard-break warning          above should be revisited"
+    );
+}
+
+/// And an explicit `Once` survives a round trip.
+#[test]
+fn play_video_repeat_round_trips() {
+    let action = XrdsAction::PlayVideo {
+        repeat: XrdsSceneAnimationRepeatMode::Once,
+    };
+    let json = serde_json::to_string(&action).expect("serialise");
+    let back: XrdsAction = serde_json::from_str(&json).expect("deserialise");
+    assert_eq!(action, back, "round trip lost the repeat mode: {json}");
 }
