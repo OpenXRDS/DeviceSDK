@@ -2,6 +2,15 @@
 
 Last updated: 2026-08-26
 
+> **Verified against the code on 2026-08-26.** Every checkable claim below was
+> grepped rather than trusted. That pass found nine wrong or stale statements,
+> two of which contradicted other lines in this same file — a capsule primitive
+> listed as missing while §1 called it done, and a performance overlay listed as
+> complete that does not exist. Claims here are load-bearing: work has twice been
+> started on things that were already built, and the S6 row records a measurement
+> quoted after the thing it measured had moved. Re-check before trusting an
+> unmarked row.
+
 ## Project Goal
 
 Provide a non-expert-first SDK to build XR applications, with:
@@ -12,7 +21,7 @@ Provide a non-expert-first SDK to build XR applications, with:
 
 ## Overall Completion (Estimated)
 
-Estimated overall progress toward a strong SDK basement for XR applications: **95%**.
+Estimated overall progress toward a strong SDK basement for XR applications: **96%**.
 
 ## What 1.0 Means
 
@@ -36,10 +45,10 @@ authoring UI.
 
 ## General 3D Editor Progress
 
-Estimated progress toward a general 3D content editor: **91%**. (Up from 88%:
-the Text3D-rendering and texture-slot-UI gaps that were the two concrete
-blockers here are both closed — see "What still keeps the editor from being
-fully polished" below for what remains.)
+Estimated progress toward a general 3D content editor: **92%**. (Up from 91%:
+video authoring landed with its own inspector section, and the icon set is no
+longer OS-dependent emoji. The remaining blocker is unchanged — the Tailwind/Radix
+migration is partial; see "What still keeps the editor from being fully polished".)
 
 What is complete:
 
@@ -47,7 +56,7 @@ What is complete:
 - Gizmo interaction (translate/rotate/scale), multi-select, copy/paste, undo/redo
 - Play mode with locomotion (flying and grounded), ESC-to-exit HUD
 - Scene save/load from disk and file dialog
-- Primitive creation palette — Cube, Sphere, Cylinder, Plane, Tetrahedron, Camera, 3 light types, Ambient Light, Audio Clip, Interaction Zone, Text 3D, Player Spawn
+- Primitive creation palette — Cube, Sphere, Cylinder, Capsule, Plane, Tetrahedron, Empty, Camera, 3 light types, Ambient Light, Audio Clip, Interaction Zone, Text 3D, Extruded Text, Player Spawn, Effects (Burst/Trail), Panel
 - Material authoring panel — base color, emissive, opacity, roughness, metallic, unlit, double-sided, alpha mode, texture slots
 - Animation playback controls and morph target sliders in inspector
 - Scene environment preview in real-time — fog (linear/exponential/exponential-squared), exposure, IBL, skybox, procedural atmosphere
@@ -61,7 +70,6 @@ What still keeps the editor from being fully polished:
   migration landed for infrastructure and the trigger-action components
   (Stages 1–3); the older shared HUD/library CSS classes and the rest of the
   component tree have not migrated yet.
-- `XrdsCapsule` primitive not yet added (character/physics collider shape).
 - ~~`Video` asset kind still deferred~~ — **shipped 2026-08-26**, both halves,
   device-verified on a Quest 3. See §2.
 
@@ -87,7 +95,7 @@ Resolved since the last update, corrected below:
 | Runtime projection (`xrds-runtime`) | All built-in types, audio playback, environment, export | **90%** |
 | Scene environment policy | IBL + skybox + exposure + atmosphere + fog (linear/exp/exp²); document-driven and runtime-driven | **98%** |
 | Physics | avian3d v0.4; Static/Dynamic/None bodies; per-primitive colliders; grab/throw; raycasting; interaction zone sensors; scene-doc serialized | **90%** |
-| Asset workflow | Gltf, Texture, EnvironmentMap, Audio — catalog, validation, diagnostics, runtime | **92%** |
+| Asset workflow | Gltf, Texture, EnvironmentMap, Audio, Video — catalog, validation (including a codec probe for video), diagnostics, runtime | **94%** |
 | GUI editor | Functional editor with all core panels; text3d and texture-slot UI gaps closed; Panels workspace (in-world UI authoring) added; visual polish (Tailwind/Radix) partial | **92%** |
 | Export pipeline | Export as Application (Windows/Linux/macOS validated). Scene GLB export **retired** — glTF cannot represent panels/triggers/Tracks/anchors, so it wrote a mesh dump that looked like a scene save. glTF *import* unaffected. | **95%** |
 | Docs/examples/test coverage | Round-trip tests for all node types; 3-platform QA passed; regression suite complete | **88%** |
@@ -107,7 +115,7 @@ Resolved since the last update, corrected below:
   Generated IBL is **14x smaller than the maps the SDK ships** (8.41 MB against
   117 MB), using `Rgb9e5Ufloat` — verified rendering on Adreno, where no compressed
   HDR format exists at all.
-- `XrdsSceneAssetKind` has four distinct kinds: `Gltf`, `Texture`, `EnvironmentMap`, `Audio`.
+- `XrdsSceneAssetKind` has five distinct kinds: `Gltf`, `Texture`, `EnvironmentMap`, `Audio`, `Video`.
 - Inspector read/write API complete for camera, all four light types, glTF, all mesh primitives, and material texture slots.
 - GUI editor fully functional: hierarchy (drag-drop reparent), inspector (per-payload sections), palette (drag + double-click), viewport (gizmo, orbit/fly camera, orientation indicator), toolbar (undo/redo, status, shortcuts).
 - Play mode: viewport hides editor panels, shows crosshair + ESC hint HUD; locomotion (flying / grounded).
@@ -117,8 +125,10 @@ Resolved since the last update, corrected below:
 - Asset bundling: relative URI generation (forward slashes), absolute URI pass-through, resolve-against-scene-dir, relative asset copy with subdirectory preservation, absolute asset flattening.
 - Round-trip tests for all light types, Camera, Text3D; regression tests for all non-XR examples.
 - Every XRDS camera automatically becomes the spatial audio listener (`SpatialListener`).
-- SVG icon system integrated into editor panels.
-- Performance stats overlay (FPS, frame time, mesh/vertex/texture counts).
+- Editor icons are stroke SVG (`lucide-react`), coloured by family from the theme's
+  own variables. (This line previously claimed an "SVG icon system"; the icons were
+  emoji until 2026-08-26, drawn by the OS font and therefore different on Windows
+  and Linux.)
 - Physics system (avian3d v0.4): `XrdsPhysicsBody` (Static/Dynamic/None), per-shape colliders (sphere, cuboid, cylinder, half-space, mesh), gravity scale, mass, SweptCcd tunneling prevention.
 - Grab/throw system: XR controller raycast pick-up, kinematic hold, velocity-based throw (clamped 25 m/s).
 - Interaction zones: sensor-based AABB triggers, `XrZoneEnterEvent` / `XrZoneExitEvent`, Sphere and Box shapes.
@@ -203,14 +213,14 @@ Full account, including the route A that was measured and eliminated on device:
   deprecated aliases with a test asserting they still resolve, so the rename is a
   warning rather than a break.
 
-### 4) Panel pointer capture is per-panel, not per-element — policy decided, editor enforcement not yet built
+### 4) ~~Panel pointer capture is per-panel, not per-element~~ — policy decided, both halves built
 
 - A panel with one small interactive element still captures the pointer
   across its whole rectangle (matches how visionOS/Quest system panels
   behave — a window is a window). Settled as policy, not a bug:
   `XrdsWorldSurface::enabled` is already `true` only when the template has an
   interactive element, so an info-only panel never captures at all.
-- **Consequence accepted, not yet enforced in the editor:** a template with
+- **Consequence accepted, and now enforced:** a template with
   an interactive element head-locked to an anchor will capture the pointer
   wherever it sits in the wearer's view, permanently — unlike a world panel,
   which only captures when approached. Decided policy is that a HUD (a
@@ -232,23 +242,16 @@ Full account, including the route A that was measured and eliminated on device:
 re-verified against the code. These are the ones that were still genuinely open, moved
 here so they stay visible:
 
-- **Passthrough / blend-mode toggle — editor half only.** `XrdsXrBlendMode`
-  (`Opaque`/`AlphaBlend`) already exists at `scene/node.rs:20` and the runtime handles
-  `EnvironmentBlendMode` plus the `fb_passthrough` extension. Only the editor toggle is
-  missing, which makes this a small, well-scoped job rather than a feature.
-- **Spatial audio parameters — corrected 2026-08-19: this is *not* an editor half.**
-  The earlier claim here was that the SDK supported these fields and only inspector UI
-  was missing. That is wrong. `XrdsSceneAudioClip` does carry `distance_model`,
-  `min_distance`, `max_distance`, `rolloff_factor` and `hrtf`
-  (`xrds-scene-graph/src/scene/payload.rs`), but the runtime reads **only `spatial:
-  bool`** — `xrds-runtime/src/xrds_api/spawn.rs:926` passes that one flag to Bevy and
-  nothing anywhere touches the other five. They are serialized and inert.
-  `xrds-audio`, the crate that would have honoured them, was deprecated and excluded
-  from the workspace on 2026-08-18 (see the `exclude` note in the root `Cargo.toml`).
-  So the open question is not "wire up the inspector" but **decide whether these
-  fields can be honoured on Bevy's audio at all, and delete them if not** — shipping
-  authorable-but-inert fields is the exact failure mode `player-body-collider-plan.md`
-  was written about.
+- ~~**Passthrough / blend-mode toggle**~~ — **done as S4, 2026-08-19**, device-verified.
+  This entry survived the work that closed it and was still claiming "only the editor
+  toggle is missing" a week later. It was also wrong about the substance: `XR_FB_passthrough`
+  was never requested, so the authored field reached nothing — see the S4 row.
+- ~~**Spatial audio parameters**~~ — **done as S1, 2026-08-19.** The four falloff
+  fields are honoured by the runtime (`spawn.rs` passes `min_distance`,
+  `max_distance`, `rolloff_factor` and the distance model) and `hrtf` was deleted
+  rather than faked. The entry that stood here posed it as an open question —
+  "decide whether these fields can be honoured at all" — after that decision had
+  been made and shipped.
 - **Keyframe curve editor.** The Track/Sequencer system covers timed *action*
   sequencing; interpolating a property along a curve is still unbuilt. Note the original
   item's "export as a glTF animation track" is void — glTF export is retired.
@@ -256,6 +259,8 @@ here so they stay visible:
   OpenXR persist-anchor API. Not started.
 - **Performance budget panel.** Live triangle/draw-call/texture-memory counters in the
   editor. Editor-only instrumentation; Bevy diagnostics already expose the data.
+  **Confirmed still absent 2026-08-26** — no such panel exists in the editor, and
+  Completed Highlights used to claim one did.
 
 LOD groups were also on that list and are already tracked in Gap Analysis below.
 
@@ -286,7 +291,7 @@ Planned in detail in `docs/done/small-phases-plan.md`.
 | # | Item | Crate | Note |
 | --- | --- | --- | --- |
 | S1 | ~~Spatial-audio params: honour or delete~~ | `xrds-components` / `xrds-scene-graph` / `xrds-runtime` | **Done 2026-08-19, verified on desktop and Quest 3.** Four falloff fields honoured, `hrtf` removed. Also fixed a bug it uncovered: `SpatialListener` was attached only on the `XrdsAPI` camera path, so **spatial audio had no listener in XR at all** — every XRDS app on a headset, not just this feature. Backends were evaluated and rejected; stay on `bevy_audio` (`docs/spatial-audio-backend-spike.md`). |
-| S2 | Zone-event `debug!` logging | `xrds-runtime` | Makes the next device pass self-verifying instead of dependent on someone describing what they saw. |
+| S2 | ~~Zone-event logging~~ | `xrds-runtime` | **Done** — `zone.rs::report_unresolved`. Not `debug!` as this row's title assumed: the deployed runtime runs at `Level::INFO`, so a `debug!` line is invisible on a headset, which is exactly where it needs reading. The *first* unresolved collision logs at `info!` once and everything after stays at `debug!`, so a busy scene cannot spam. |
 | S3 | ~~Head-locked interactive-template diagnostic~~ | `xrds-scene-graph` / editor | **Done 2026-08-26.** The SDK half already existed and was tested; only the editor grey-out was missing, and it now refuses interactive templates for a head-locked node rather than reporting the mistake after it is made. |
 | S4 | ~~Passthrough blend-mode toggle~~ | `xrds-openxr` / `xrds-runtime` / editor | **Done 2026-08-19, device-verified on Quest 3** — authored from the editor, cube floating in the real room. Was recorded as "editor only"; in fact `XR_FB_passthrough` was never requested and the authored field reached nothing. Also **not** `EnvironmentBlendMode::ALPHA_BLEND` — that is a global frame-blend parameter and using it bleeds reality through every non-opaque surface. Passthrough is a composition layer beneath the projection; recipe in `docs/done/small-phases-plan.md` S4. |
 | S5 | ~~Naming polish~~ (§3) | `xrds-components` | **Done 2026-08-26.** Half was already resolved and the row had not caught up. The rest — `*Patch` → `*Update` — turned out not to be source-breaking after all: only one public signature ever named such a type, no example did, and deprecated aliases cover the expert-layer `queue_update` callers. |
@@ -300,7 +305,7 @@ Planned in detail in `docs/done/small-phases-plan.md`.
 | **Post-processing depth** (DOF, SSAO, colour grading) | 2–3 *if it is affordable at all* | `XrdsBloom`/`XrdsTonemapping` establish the pattern and Bevy supplies the effects, so the desktop half is mostly authorable-surface plumbing. **On a headset, treat this as doubtful rather than merely unverified.** Procedural atmosphere — one LUT-based sky pass — measured **+18.3 ms/frame on a Quest 3** against a 13.9 ms budget (`docs/done/editor-task-queue-and-hdr-conversion.md`, step 0b). DOF and SSAO are full-screen passes on the same GPU. Spike one on device before committing phases, exactly as 0b did. |
 | ~~**Video asset kind**~~ (§2) | **Done 2026-08-26** | Shipped both halves and device-verified. Route A — asking MediaCodec for a wgpu-importable layout — was measured on a Quest 3 and **eliminated**: `AIMAGE_FORMAT_YUV_420_888` is accepted and sustains full frame rate, yet still yields a Qualcomm vendor-tiled buffer that Vulkan describes only by external format. So the conversion pass (route B) was necessary, and costs 0.18–0.27 ms/frame. The warning that stood here — *do not build the asset-kind half first* — held: the spike answered before any of it was built, and the two halves met at `XrdsMaterialTextureRef` with no material, mesh, shader or renderer learning what video is. |
 | **Keyframe curve editor** (SDK half) | 2: curve/interpolation model → runtime property driver | Distinct from Track/Sequencer, which sequences *actions*, not property curves. The editor UI on top is its own larger job. The original item's "export as a glTF animation track" is void — glTF export is retired. |
-| ~~**Audio authoring in the editor** (S6)~~ | **Done** | Shipped 2026-08-20: `AudioClipSection` in the inspector, audio bridge commands, viewport radius gizmos coloured per source, a falloff preview drawn in dB, and in-editor audition. `autoplay` now defaults false — an authored clip that starts itself the moment a scene loads is the wrong default for authoring. |
+| ~~**Audio authoring in the editor**~~ (Medium-tier S6 — unrelated to the Small tier's S6) | **Done** | Shipped 2026-08-20: `AudioClipSection` in the inspector, audio bridge commands, viewport radius gizmos coloured per source, a falloff preview drawn in dB, and in-editor audition. `autoplay` now defaults false — an authored clip that starts itself the moment a scene loads is the wrong default for authoring. |
 
 ### Large — 4+ phases, each gated on a design decision
 
@@ -330,9 +335,13 @@ question answered first, and for three of the four the design is the larger half
 
 ### Honest total
 
-**The Small tier is complete** (S1–S4 done and device-verified where a device
-applies; S5's rotation half done and its rename half dropped on review — see
-`docs/done/small-phases-plan.md`). That leaves **four** Medium and four Large.
+**The Small tier is complete** — S1–S6 done, device-verified wherever a device
+applies. S5 is worth a note: this paragraph used to say its rename half was
+"dropped on review", and it was not dropped, it was done on 2026-08-26 once
+someone checked what it would actually break. The answer was one public signature.
+
+Video also closed since this was written, which leaves **three** Medium and four
+Large.
 
 What the tier actually cost, and why the sizing was not the useful part: it was
 scoped as polish and produced nine defects, none of which fails a test or looks
