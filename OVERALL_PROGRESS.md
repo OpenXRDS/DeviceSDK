@@ -1,6 +1,6 @@
 # DeviceSDK Overall Progress
 
-Last updated: 2026-08-19
+Last updated: 2026-08-26
 
 ## Project Goal
 
@@ -26,7 +26,7 @@ give an author. That comparison is the definition of done we are using:
 This is deliberately a *parity* bar, not a feature-ambition bar. It says an author
 who knows a conventional 3D engine can sit down with DeviceSDK and not hit a wall
 where a familiar capability is simply absent. It does **not** promise anything
-beyond parity, and rows explicitly deferred as Low priority (Terrain, Video) are
+beyond parity, and rows explicitly deferred as Low priority (Terrain) are
 judged against whether an XR workflow needs them, not against whether Unity has
 them.
 
@@ -62,7 +62,8 @@ What still keeps the editor from being fully polished:
   (Stages 1–3); the older shared HUD/library CSS classes and the rest of the
   component tree have not migrated yet.
 - `XrdsCapsule` primitive not yet added (character/physics collider shape).
-- `Video` asset kind still deferred — no concrete workflow has required it.
+- ~~`Video` asset kind still deferred~~ — **shipped 2026-08-26**, both halves,
+  device-verified on a Quest 3. See §2.
 
 Resolved since the last update, corrected below:
 
@@ -161,10 +162,30 @@ above.
 - `XrdsEffect` (particle effects) — **done**, see `docs/done/vfx-particle-effects-plan.md`.
 - No other primitive gaps currently flagged as blocking
 
-### 2) `Video` asset kind
+### 2) ~~`Video` asset kind~~ — done 2026-08-26
 
-- Deferred until a concrete media/scene workflow requires it
-- Pattern is established (follow `Audio` / `EnvironmentMap`)
+Import a `.mp4`, bind it in the Inspector's VIDEO section, trigger it with a
+`PlayVideo` event. Hardware-decoded on a Quest, ffmpeg on a desktop; the author
+does not choose. Verified on device with an authored scene: a Grabbed trigger
+fires a Track, the clip plays on a cube, **0.18 ms/frame at 1280×720**.
+
+Four decisions worth keeping, because each of them was a fork:
+
+- **H.264 or HEVC in `.mp4`, and import probes the stream.** A container is not a
+  codec: an `.mp4` holding AV1 passes every extension check and then plays nothing
+  on a headset.
+- **Playback is always asked for, never automatic.** A texture costs a file read;
+  a video costs a decoder — a thread on a desktop, a hardware codec session on a
+  headset — plus GPU work every frame. Importing gives a surface; a trigger gives
+  a picture.
+- **One clip, one mesh.** Two meshes would share a decoder and could only play in
+  lockstep. Reusing a clip means importing a copy, which makes the second decoder
+  visible as a second asset rather than hidden.
+- **A Track finishing stops nothing.** Consistent with audio, particles and
+  animations; only an explicit Stop cleans up.
+
+Full account, including the route A that was measured and eliminated on device:
+`docs/video-asset-spike.md`.
 
 ### 3) Remaining naming polish
 
@@ -263,7 +284,7 @@ Planned in detail in `docs/done/small-phases-plan.md`.
 | --- | --- | --- |
 | **LOD system** | **Deferred** — see `docs/deferred/lod-plan.md` | Attempted 2026-08-24 through three phases, device-verified at **59 → 75 fps** on a Quest 3, then removed unbuilt. Two findings changed the judgement. **Bevy already implements the mechanism** (`VisibilityRange`, plugin already running), so this was never greenfield — the work was authoring, and the authoring model was wrong: levels as sibling nodes are each measured from their own position, and coincident levels cannot be inspected in an editor, so the design forced the one arrangement that breaks it. **And there is nothing to swap to**: our primitives are procedural and authors have no hand-modelled low-poly variants, so the measured win came from a synthetic Sphere→Cube→Tetrahedron triple no real scene contains. What is actually wanted is Unreal's model — levels inside the mesh asset — which needs **LOD generation** (decimation at import), its own project. `docs/deferred/lod-plan.md` carries the Bevy mechanics, the measurements, both failed designs and the profile/screen-size proposals. |
 | **Post-processing depth** (DOF, SSAO, colour grading) | 2–3 *if it is affordable at all* | `XrdsBloom`/`XrdsTonemapping` establish the pattern and Bevy supplies the effects, so the desktop half is mostly authorable-surface plumbing. **On a headset, treat this as doubtful rather than merely unverified.** Procedural atmosphere — one LUT-based sky pass — measured **+18.3 ms/frame on a Quest 3** against a 13.9 ms budget (`docs/done/editor-task-queue-and-hdr-conversion.md`, step 0b). DOF and SSAO are full-screen passes on the same GPU. Spike one on device before committing phases, exactly as 0b did. |
-| **Video asset kind** (§2) | **Spike first** — `docs/video-asset-spike.md` — then 3 | The asset-kind half follows `Audio`/`EnvironmentMap` exactly. The reason this kept being deferred — "no video decode path exists" — was true of this workspace and **false of the team's work**: `HMDViewer` already does MediaCodec → AHardwareBuffer → VkImage zero-copy on a Quest 3 at 4096×2048@30, and `xrds-openxr` already bridges Vulkan images into wgpu via `create_texture_from_hal`. One specific thing does not join: MediaCodec's zero-copy output is `AIMAGE_FORMAT_PRIVATE`, so the Vulkan import uses an **external format** needing a Ycbcr conversion and an immutable sampler — neither of which wgpu can express. The spike settles whether the decoder can emit a wgpu-importable format instead, or whether a GPU conversion pass is needed. **Do not build the asset-kind half first**: an importable asset that plays nothing is the authorable-but-inert failure this project keeps repeating. |
+| ~~**Video asset kind**~~ (§2) | **Done 2026-08-26** | Shipped both halves and device-verified. Route A — asking MediaCodec for a wgpu-importable layout — was measured on a Quest 3 and **eliminated**: `AIMAGE_FORMAT_YUV_420_888` is accepted and sustains full frame rate, yet still yields a Qualcomm vendor-tiled buffer that Vulkan describes only by external format. So the conversion pass (route B) was necessary, and costs 0.18–0.27 ms/frame. The warning that stood here — *do not build the asset-kind half first* — held: the spike answered before any of it was built, and the two halves met at `XrdsMaterialTextureRef` with no material, mesh, shader or renderer learning what video is. |
 | **Keyframe curve editor** (SDK half) | 2: curve/interpolation model → runtime property driver | Distinct from Track/Sequencer, which sequences *actions*, not property curves. The editor UI on top is its own larger job. The original item's "export as a glTF animation track" is void — glTF export is retired. |
 | ~~**Audio authoring in the editor** (S6)~~ | **Done** | Shipped 2026-08-20: `AudioClipSection` in the inspector, audio bridge commands, viewport radius gizmos coloured per source, a falloff preview drawn in dB, and in-editor audition. `autoplay` now defaults false — an authored clip that starts itself the moment a scene loads is the wrong default for authoring. |
 
@@ -324,7 +345,7 @@ Features present in engines like Unity, Godot, or Unreal that are not yet in Dev
 | **Post-processing stack** | Medium | Bloom + tonemapping exist (`XrdsBloom`, `XrdsTonemapping`) and exposure is fully authorable; no DOF, SSAO, or color grading |
 | **NavMesh / pathfinding** | Medium | AI agent navigation; needed for NPC-driven XR experiences |
 | **LOD system** | Medium | Performance at scene scale; no automatic LOD generation or selection |
-| **Video playback** | Low | Deferred; pattern established via `Audio` / `EnvironmentMap` |
+| ~~**Video playback**~~ | **Done** | `XrdsSceneAssetKind::Video` (H.264/HEVC in `.mp4`), VIDEO inspector section, `PlayVideo`/`StopVideo` Track actions. MediaCodec → `AHardwareBuffer` → Vulkan Ycbcr conversion → wgpu texture on Android, ffmpeg on desktop. Device-verified at **0.18 ms/frame, 1280×720**. See `docs/video-asset-spike.md`. |
 | ~~**Capsule primitive**~~ | **Done** | `XrdsCapsule` shipped; also now the shape of the player's physics body. |
 | **Networking / multiplayer** | Low | The transport layer (`xrds-net`) is itself hardened and internal-milestone-ready, including a real two-machine WebRTC handshake — see `docs/done/xrds-net-release-readiness.md`. What is still missing is the *game-level* feature: an `XrdsAction` that syncs trigger effects across clients, which needs an authority model decided first (see `docs/xrds-trigger-action-backlog.md`'s Networking entry). Large scope, deferred. |
 | **Terrain system** | Low | Heightmaps, large world; not a near-term XR target |
