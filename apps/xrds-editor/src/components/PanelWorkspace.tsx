@@ -2,6 +2,7 @@ import { acquireViewportHoleSuppression, releaseViewportHoleSuppression } from "
 import { useEffect, useRef, useState } from "react";
 import type { EditorCommand, EditorSnapshot, PanelElementDto, PanelTemplateDto } from "../types/bridge";
 import { elementKindName, elementRowLabel, validKindsForElement } from "../lib/sequencer";
+import { ConfirmDialog } from "./ui/ConfirmDialog";
 import { rgbaToHex, hexToRgba } from "../types/bridge";
 import { widgetFields, fieldValue, withField, withVec2Component, movedTo, alphaOf } from "../lib/panelWidget";
 import type { FieldSpec } from "../lib/panelWidget";
@@ -118,6 +119,8 @@ function PanelLibrary({ templates, openId, onOpen, send }: {
   onOpen: (id: number) => void;
   send: (cmd: EditorCommand) => void;
 }) {
+  const [pendingDeletePanel, setPendingDeletePanel] =
+    useState<{ id: number; name: string } | null>(null);
   const [renaming, setRenaming] = useState<number | null>(null);
   const [draft, setDraft] = useState("");
 
@@ -176,13 +179,23 @@ function PanelLibrary({ templates, openId, onOpen, send }: {
               title="Delete this panel template"
               onClick={e => {
                 e.stopPropagation();
-                if (confirm(`Delete panel "${t.name}"? Anchors linking it will be cleared.`)) {
-                  send({ type: "DeletePanelTemplate", payload: { id: t.id } });
-                }
+                setPendingDeletePanel({ id: t.id, name: t.name });
               }}>✕</button>
           </div>
         ))}
       </div>
+
+      {pendingDeletePanel !== null && (
+        <ConfirmDialog
+          message={`Delete panel "${pendingDeletePanel.name}"?`}
+          detail="Anchors linking it will be cleared."
+          onConfirm={() => {
+            send({ type: "DeletePanelTemplate", payload: { id: pendingDeletePanel.id } });
+            setPendingDeletePanel(null);
+          }}
+          onCancel={() => setPendingDeletePanel(null)}
+        />
+      )}
     </div>
   );
 }

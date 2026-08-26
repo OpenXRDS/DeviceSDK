@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { EditorCommand, EditorSnapshot, NamedTrackDto } from "../types/bridge";
 import { conflictingTracks, fmtTime } from "../lib/sequencer";
+import { ConfirmDialog } from "./ui/ConfirmDialog";
 
 interface Props {
   snapshot: EditorSnapshot;
@@ -16,6 +17,7 @@ interface Props {
  * when there were two execution models; there is now one, so a tab that always
  * held everything and a tab that was always empty would be pure noise. */
 export function SequencerListPanel({ snapshot, send, openTrack, onOpenTrack }: Props) {
+  const [pendingDelete, setPendingDelete] = useState<string | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
 
@@ -122,9 +124,7 @@ export function SequencerListPanel({ snapshot, send, openTrack, onOpenTrack }: P
                   title={`Delete "${t.name}". Bindings that fire it will be cleared.`}
                   onClick={e => {
                     e.stopPropagation();
-                    if (confirm(`Delete Track "${t.name}"? Bindings that fire it will be cleared.`)) {
-                      send({ type: "DeleteTrack", payload: { name: t.name } });
-                    }
+                    setPendingDelete(t.name);
                   }}>✕</button>
               </div>
             );
@@ -133,6 +133,18 @@ export function SequencerListPanel({ snapshot, send, openTrack, onOpenTrack }: P
       )}
 
       {/* Registry-level diagnostics, which belong to no single Track row. */}
+      {pendingDelete !== null && (
+        <ConfirmDialog
+          message={`Delete Track "${pendingDelete}"?`}
+          detail="Bindings that fire it will be cleared."
+          onConfirm={() => {
+            send({ type: "DeleteTrack", payload: { name: pendingDelete } });
+            setPendingDelete(null);
+          }}
+          onCancel={() => setPendingDelete(null)}
+        />
+      )}
+
       {snapshot.track_diagnostics.length > 0 && (
         <div className="flex flex-col gap-1 px-2.5 py-2 border-t border-surface0">
           {snapshot.track_diagnostics.slice(0, 6).map((d, i) => (
