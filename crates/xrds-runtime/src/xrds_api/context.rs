@@ -803,7 +803,7 @@ impl XrdsUpdateContext<'_> {
         handle: &Handle<XrdsCamera>,
         projection: CameraProjectionParams,
     ) {
-        self.queue_update(handle, CameraProjectionPatch { projection });
+        self.queue_update(handle, CameraProjectionUpdate { projection });
     }
 
     /// Queue a perspective camera projection update.
@@ -826,11 +826,11 @@ impl XrdsUpdateContext<'_> {
 
     /// Queue a camera look-at update.
     pub fn set_camera_look_at(&mut self, handle: &Handle<XrdsCamera>, target: Option<[f32; 3]>) {
-        self.queue_update(handle, CameraLookAtPatch { look_at: target });
+        self.queue_update(handle, CameraLookAtUpdate { look_at: target });
     }
 
     /// Read current glTF asset source path and scene index.
-    pub fn gltf_source(&self, handle: &Handle<XrdsGltfAsset>) -> Option<GltfAssetSourcePatch> {
+    pub fn gltf_source(&self, handle: &Handle<XrdsGltfAsset>) -> Option<GltfSource> {
         gltf_source_in_world(self.world, handle)
     }
 
@@ -843,7 +843,7 @@ impl XrdsUpdateContext<'_> {
     ) {
         self.queue_update(
             handle,
-            GltfAssetSourcePatch {
+            GltfSource {
                 gltf_asset_path: gltf_asset_path.into(),
                 scene_index,
             },

@@ -107,14 +107,14 @@ use xrds_components::world::lights::{
 };
 use xrds_components::world::{XrdsAudioClip, XrdsCamera, XrdsGltfAsset, XrdsNode};
 use xrds_components::{
-    AmbientLightParams, CameraKind, CameraLookAtPatch, CameraProjectionParams,
-    CameraProjectionPatch, CapsuleGeometryParams, CubeGeometryParams, CylinderGeometryParams,
+    AmbientLightParams, CameraKind, CameraLookAtUpdate, CameraProjectionParams,
+    CameraProjectionUpdate, CapsuleGeometryParams, CubeGeometryParams, CylinderGeometryParams,
     EffectParams,
     DirectionalLightParams,
-    GltfAssetSourcePatch, NamePatch, OrthographicCameraParams, ParentPatch,
+    GltfSource, NameUpdate, OrthographicCameraParams, ParentUpdate,
     PerspectiveCameraParams, Plane3DGeometryParams, PointLightParams, SphereGeometryParams,
     ExtrudedTextParams, SpotLightParams, TetrahedronGeometryParams, TransformParams,
-    VisibilityPatch,
+    VisibilityUpdate,
     XrdsAssetComponent, XrdsColor, XrdsComponent, XrdsComponentsPlugin, XrdsId, XrdsLinearRgba,
     XrdsMaterialAlphaMode, XrdsMaterialParams, XrdsMaterialPbrParams, XrdsMaterialTextureRef,
     XrdsMaterialTextureSlotKind, XrdsMaterialTextureSlots,

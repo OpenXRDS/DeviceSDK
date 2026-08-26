@@ -259,7 +259,7 @@ impl XrdsAPI<'_> {
     where
         C: XrdsMutableComponent + Send + Sync + 'static,
     {
-        self.queue_update(handle, NamePatch { name: name.into() })
+        self.queue_update(handle, NameUpdate { name: name.into() })
     }
 
     /// Change runtime visibility through XRDS and keep the descriptor state in sync.
@@ -269,7 +269,7 @@ impl XrdsAPI<'_> {
     where
         C: XrdsMutableComponent + Send + Sync + 'static,
     {
-        self.queue_update(handle, VisibilityPatch { visible })
+        self.queue_update(handle, VisibilityUpdate { visible })
     }
 
     /// Queue a descriptor to spawn as a Bevy entity during startup.
@@ -768,7 +768,7 @@ impl XrdsAPI<'_> {
         handle: &Handle<XrdsCamera>,
         projection: CameraProjectionParams,
     ) -> &mut Self {
-        self.queue_update(handle, CameraProjectionPatch { projection })
+        self.queue_update(handle, CameraProjectionUpdate { projection })
     }
 
     /// Queue a perspective camera projection update.
@@ -795,11 +795,11 @@ impl XrdsAPI<'_> {
         handle: &Handle<XrdsCamera>,
         target: Option<[f32; 3]>,
     ) -> &mut Self {
-        self.queue_update(handle, CameraLookAtPatch { look_at: target })
+        self.queue_update(handle, CameraLookAtUpdate { look_at: target })
     }
 
     /// Read current glTF asset source path and scene index.
-    pub fn gltf_source(&self, handle: &Handle<XrdsGltfAsset>) -> Option<GltfAssetSourcePatch> {
+    pub fn gltf_source(&self, handle: &Handle<XrdsGltfAsset>) -> Option<GltfSource> {
         gltf_source_in_world(self.app.world(), handle)
     }
 
@@ -812,7 +812,7 @@ impl XrdsAPI<'_> {
     ) -> &mut Self {
         self.queue_update(
             handle,
-            GltfAssetSourcePatch {
+            GltfSource {
                 gltf_asset_path: gltf_asset_path.into(),
                 scene_index,
             },
@@ -1160,7 +1160,7 @@ impl XrdsAPI<'_> {
     where
         C: XrdsMutableComponent + Send + Sync + 'static,
     {
-        self.queue_update(handle, ParentPatch { parent_id })
+        self.queue_update(handle, ParentUpdate { parent_id })
     }
 
     /// Delete an entity and its XRDS child subtree.
@@ -1763,7 +1763,7 @@ impl XrdsAPI<'_> {
             });
         });
 
-        self.register_updater::<C, ParentPatch, _>(|world, entity, params| {
+        self.register_updater::<C, ParentUpdate, _>(|world, entity, params| {
             let Some(id) = world.resource::<XrdsIdIndex>().id_of(entity) else {
                 return;
             };
@@ -1777,7 +1777,7 @@ impl XrdsAPI<'_> {
                 });
         });
 
-        self.register_updater::<C, NamePatch, _>(|world, entity, params| {
+        self.register_updater::<C, NameUpdate, _>(|world, entity, params| {
             world
                 .entity_mut(entity)
                 .insert(Name::new(params.name.clone()));
@@ -1786,7 +1786,7 @@ impl XrdsAPI<'_> {
             });
         });
 
-        self.register_updater::<C, VisibilityPatch, _>(|world, entity, params| {
+        self.register_updater::<C, VisibilityUpdate, _>(|world, entity, params| {
             world
                 .entity_mut(entity)
                 .insert(build_visibility(params.visible));

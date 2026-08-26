@@ -598,10 +598,10 @@ pub(super) fn set_visibility_in_world<C>(world: &mut World, handle: &Handle<C>, 
 where
     C: XrdsComponent + Send + Sync + 'static,
 {
-    if !apply_surface_patch_now::<C, VisibilityPatch>(
+    if !apply_surface_patch_now::<C, VisibilityUpdate>(
         world,
         handle.entity(),
-        VisibilityPatch { visible },
+        VisibilityUpdate { visible },
     ) {
         world
             .entity_mut(handle.entity())
@@ -734,10 +734,10 @@ pub(super) fn camera_look_at_in_world(
 pub(super) fn gltf_source_in_world(
     world: &World,
     handle: &Handle<XrdsGltfAsset>,
-) -> Option<GltfAssetSourcePatch> {
+) -> Option<GltfSource> {
     world
         .get::<XrdsStored<XrdsGltfAsset>>(handle.entity())
-        .map(|stored| GltfAssetSourcePatch {
+        .map(|stored| GltfSource {
             gltf_asset_path: stored.0.gltf_asset_path.clone(),
             scene_index: stored.0.scene_index,
         })

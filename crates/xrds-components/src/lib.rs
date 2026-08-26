@@ -57,8 +57,13 @@ pub use world_ui::{
     XrWorldSliderChangeEvent, XrWorldToggleEvent,
 };
 pub use patches::{
-    CameraLookAtPatch, CameraProjectionPatch, ExtrudedTextParams, GltfAssetSourcePatch, NamePatch,
-    ParentPatch, TextParams, VisibilityPatch,
+    CameraLookAtUpdate, CameraProjectionUpdate, ExtrudedTextParams, GltfSource, NameUpdate,
+    ParentUpdate, TextParams, VisibilityUpdate,
+};
+#[allow(deprecated)]
+pub use patches::{
+    CameraLookAtPatch, CameraProjectionPatch, GltfAssetSourcePatch, NamePatch, ParentPatch,
+    VisibilityPatch,
 };
 pub use values::{
     CapsuleGeometryParams, CubeGeometryParams, CylinderGeometryParams, EffectParams,

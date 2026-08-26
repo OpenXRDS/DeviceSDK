@@ -26,7 +26,7 @@ fn writing_a_frame_modifies_the_asset_and_announces_it() {
     app.update();
     {
         let world = app.world_mut();
-        let mut events = world.resource_mut::<Events<AssetEvent<Image>>>();
+        let mut events = world.resource_mut::<Messages<AssetEvent<Image>>>();
         events.clear();
     }
 
@@ -37,7 +37,7 @@ fn writing_a_frame_modifies_the_asset_and_announces_it() {
     }
 
     // Tick once: `Assets<T>` accumulates changes and a system drains them into
-    // `Events<AssetEvent<T>>`, so the event does not exist until the schedule runs.
+    // `Messages<AssetEvent<T>>`, so the event does not exist until the schedule runs.
     app.update();
 
     // 1. The data landed.
@@ -51,7 +51,7 @@ fn writing_a_frame_modifies_the_asset_and_announces_it() {
 
     // 2. And Bevy was told. Without this the GPU keeps the previous upload.
     let world = app.world();
-    let events = world.resource::<Events<AssetEvent<Image>>>();
+    let events = world.resource::<Messages<AssetEvent<Image>>>();
     let mut reader = events.get_cursor();
     let modified = reader
         .read(events)
@@ -122,7 +122,7 @@ fn writing_a_frame_marks_the_sampling_material_modified() {
 
     {
         let world = app.world_mut();
-        world.resource_mut::<Events<AssetEvent<XrdsRuntimeMaterial>>>().clear();
+        world.resource_mut::<Messages<AssetEvent<XrdsRuntimeMaterial>>>().clear();
     }
 
     let frame: Vec<u8> = vec![7u8; 4 * 2 * 4];
@@ -133,7 +133,7 @@ fn writing_a_frame_marks_the_sampling_material_modified() {
     app.update();
 
     let world = app.world();
-    let events = world.resource::<Events<AssetEvent<XrdsRuntimeMaterial>>>();
+    let events = world.resource::<Messages<AssetEvent<XrdsRuntimeMaterial>>>();
     let mut reader = events.get_cursor();
     let modified = reader.read(events).any(|e| matches!(e, AssetEvent::Modified { .. }));
     assert!(
@@ -187,7 +187,7 @@ fn a_video_texture_binds_to_any_mesh_and_any_slot() {
 
     {
         let world = app.world_mut();
-        world.resource_mut::<Events<AssetEvent<XrdsRuntimeMaterial>>>().clear();
+        world.resource_mut::<Messages<AssetEvent<XrdsRuntimeMaterial>>>().clear();
     }
     {
         let mut xrds = XrdsAPI::attach(&mut app);
@@ -196,7 +196,7 @@ fn a_video_texture_binds_to_any_mesh_and_any_slot() {
     app.update();
 
     let world = app.world();
-    let events = world.resource::<Events<AssetEvent<XrdsRuntimeMaterial>>>();
+    let events = world.resource::<Messages<AssetEvent<XrdsRuntimeMaterial>>>();
     let mut reader = events.get_cursor();
     assert!(
         reader.read(events).any(|e| matches!(e, AssetEvent::Modified { .. })),

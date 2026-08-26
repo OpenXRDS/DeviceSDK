@@ -11,7 +11,7 @@ where
         });
     });
 
-    registry.register::<C, ParentPatch, _>(|world, entity, params| {
+    registry.register::<C, ParentUpdate, _>(|world, entity, params| {
         let Some(id) = world.resource::<XrdsIdIndex>().id_of(entity) else {
             return;
         };
@@ -25,7 +25,7 @@ where
             });
     });
 
-    registry.register::<C, NamePatch, _>(|world, entity, params| {
+    registry.register::<C, NameUpdate, _>(|world, entity, params| {
         world
             .entity_mut(entity)
             .insert(Name::new(params.name.clone()));
@@ -34,7 +34,7 @@ where
         });
     });
 
-    registry.register::<C, VisibilityPatch, _>(|world, entity, params| {
+    registry.register::<C, VisibilityUpdate, _>(|world, entity, params| {
         world
             .entity_mut(entity)
             .insert(build_visibility(params.visible));
@@ -509,14 +509,14 @@ pub(super) fn register_default_updaters(registry: &mut SurfaceUpdateRegistry) {
     register_default_mutable_updaters(registry);
     register_default_primitive_updaters(registry);
 
-    registry.register::<XrdsCamera, CameraProjectionPatch, _>(|world, entity, patch| {
+    registry.register::<XrdsCamera, CameraProjectionUpdate, _>(|world, entity, patch| {
         let mut entity_mut = world.entity_mut(entity);
         patch.projection.insert_into(&mut entity_mut);
         let _ = with_stored_descriptor_mut::<XrdsCamera, _>(world, entity, |descriptor| {
             descriptor.projection = patch.projection;
         });
     });
-    registry.register::<XrdsCamera, CameraLookAtPatch, _>(|world, entity, params| {
+    registry.register::<XrdsCamera, CameraLookAtUpdate, _>(|world, entity, params| {
         let position = world
             .get::<Transform>(entity)
             .map(|t| t.translation)
@@ -539,7 +539,7 @@ pub(super) fn register_default_updaters(registry: &mut SurfaceUpdateRegistry) {
             }
         });
     });
-    registry.register::<XrdsGltfAsset, GltfAssetSourcePatch, _>(|world, entity, params| {
+    registry.register::<XrdsGltfAsset, GltfSource, _>(|world, entity, params| {
         if let Err(error) = validate_gltf_source(&params.gltf_asset_path, params.scene_index) {
             warn!(
                 "Ignoring invalid glTF update for entity {:?}: {error}",

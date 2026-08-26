@@ -609,7 +609,7 @@ fn live_rename_appears_in_exported_document() {
             .handle_of::<XrdsNode>(XrdsId(100))
             .expect("root node should be indexed");
 
-        xrds.queue_update(&root, NamePatch {
+        xrds.queue_update(&root, NameUpdate {
             name: "Renamed Root".to_string(),
         });
     }
