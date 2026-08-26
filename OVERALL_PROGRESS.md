@@ -187,10 +187,21 @@ Four decisions worth keeping, because each of them was a fork:
 Full account, including the route A that was measured and eliminated on device:
 `docs/video-asset-spike.md`.
 
-### 3) Remaining naming polish
+### 3) ~~Remaining naming polish~~ — done
 
-- `TransformParams::rotation_quat_xyzw` and `rotation_euler_xyz_deg` dual-field clarified but not resolved structurally
-- `*Patch` types (`NamePatch`, `ParentPatch`, etc.) are still ECS-jargon; hidden behind typed helpers
+- ~~`TransformParams` dual rotation field~~ — **resolved 2026-08-19**, and this
+  line was stale for a week. The euler field was deleted, not clarified: every
+  non-example site only ever *wrote* it to keep it in sync, nothing read it, and
+  a shipped example set only the euler field for its grandchild plane — a plain
+  `[-90, 0, 0]` that silently did nothing. Degrees are now a conversion
+  (`with_euler_deg` / `euler_deg`) rather than a second source of truth.
+- ~~`*Patch` ECS jargon~~ — **renamed 2026-08-26** to `*Update`, pairing with the
+  `queue_update` / `register_updater` they are passed to, so
+  `queue_update(&h, NameUpdate { .. })` reads as one idea. `GltfAssetSourcePatch`
+  became `GltfSource`, a plain noun, because it is read as well as written and a
+  getter returning an "update" is its own confusion. Old names remain as
+  deprecated aliases with a test asserting they still resolve, so the rename is a
+  warning rather than a break.
 
 ### 4) Panel pointer capture is per-panel, not per-element — policy decided, editor enforcement not yet built
 
@@ -205,12 +216,15 @@ Full account, including the route A that was measured and eliminated on device:
   which only captures when approached. Decided policy is that a HUD (a
   head-locked `Panel` node) should not be linkable to a template that has any
   interactive element at all; info-only templates (Label/Image) only.
-- **Not yet built:** the template picker (wherever a `Panel` node's
-  `SetPanelInstanceTemplate` target is chosen) should grey out — and refuse —
-  any template with an interactive element when the node is head-locked
-  (parented under a `PlayerAnchor`). No diagnostic or enforcement exists for
-  this today; an author can currently head-lock an interactive template with
-  no warning.
+- ~~**Not yet built**~~ — **done 2026-08-26, both halves.** The claim that "no
+  diagnostic or enforcement exists" was already wrong when written: the SDK
+  diagnostic was built and covered by five tests, including detection through
+  intermediate nodes and a parent-cycle guard. What was genuinely missing was the
+  editor half, and that now exists — the template picker disables any interactive
+  template for a head-locked node, with a note saying why, and the node DTO
+  carries `head_locked` while the template DTO carries `interactive`. Both are
+  computed by the SDK rather than re-derived in TypeScript, so the picker cannot
+  drift from the validator that enforces it.
 
 ### 5) Editor items inherited from the archived EDITOR_TODO list
 
@@ -273,9 +287,9 @@ Planned in detail in `docs/done/small-phases-plan.md`.
 | --- | --- | --- | --- |
 | S1 | ~~Spatial-audio params: honour or delete~~ | `xrds-components` / `xrds-scene-graph` / `xrds-runtime` | **Done 2026-08-19, verified on desktop and Quest 3.** Four falloff fields honoured, `hrtf` removed. Also fixed a bug it uncovered: `SpatialListener` was attached only on the `XrdsAPI` camera path, so **spatial audio had no listener in XR at all** — every XRDS app on a headset, not just this feature. Backends were evaluated and rejected; stay on `bevy_audio` (`docs/spatial-audio-backend-spike.md`). |
 | S2 | Zone-event `debug!` logging | `xrds-runtime` | Makes the next device pass self-verifying instead of dependent on someone describing what they saw. |
-| S3 | Head-locked interactive-template diagnostic | `xrds-scene-graph` | SDK half of §4. Editor grey-out is separate and follows this. |
+| S3 | ~~Head-locked interactive-template diagnostic~~ | `xrds-scene-graph` / editor | **Done 2026-08-26.** The SDK half already existed and was tested; only the editor grey-out was missing, and it now refuses interactive templates for a head-locked node rather than reporting the mistake after it is made. |
 | S4 | ~~Passthrough blend-mode toggle~~ | `xrds-openxr` / `xrds-runtime` / editor | **Done 2026-08-19, device-verified on Quest 3** — authored from the editor, cube floating in the real room. Was recorded as "editor only"; in fact `XR_FB_passthrough` was never requested and the authored field reached nothing. Also **not** `EnvironmentBlendMode::ALPHA_BLEND` — that is a global frame-blend parameter and using it bleeds reality through every non-opaque surface. Passthrough is a composition layer beneath the projection; recipe in `docs/done/small-phases-plan.md` S4. |
-| S5 | Naming polish (§3) | `xrds-scene-graph` | `TransformParams` dual rotation field; `*Patch` ECS jargon. Mechanical but source-breaking. |
+| S5 | ~~Naming polish~~ (§3) | `xrds-components` | **Done 2026-08-26.** Half was already resolved and the row had not caught up. The rest — `*Patch` → `*Update` — turned out not to be source-breaking after all: only one public signature ever named such a type, no example did, and deprecated aliases cover the expert-layer `queue_update` callers. |
 | S6 | ~~Video conversion pass stalls on a fence~~ | `xrds-openxr` | **Done 2026-08-25, device-verified.** The fence now gates command-buffer reuse at the top of the *next* call rather than blocking straight after submit. Measured on a Quest 3 at 1920x800, A/B through the same code path: **0.62 -> 0.27 ms/frame**. The 3.53 ms that motivated this row was measured from a *main-world* system, where blocking stalls the main thread against a busy render thread; B3 had already moved the pass into the render schedule, which recovered most of it before this row was written. The row was worth doing and the argument for its urgency was not — a stale measurement quoted as current, which is the same class of mistake this document keeps recording. **Still not closed:** this submission is not ordered against wgpu's. wgpu chains its own submits with relay semaphores and our raw submit is outside that chain, so a stale or torn frame is possible in both directions. Both windows are a frame wide, which is why it looks fine and why that is not an argument. `wgpu-hal` exposes only `Queue::add_signal_semaphore`, so the wait direction needs something upstream. |
 
 ### Medium — 2–3 phases each
