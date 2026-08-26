@@ -36,6 +36,7 @@ pub fn build_panel_library_dto(doc: &XrdsSceneDocument) -> Vec<PanelTemplateDto>
             opacity: t.background.opacity,
             layout: world_layout_dto(&t.layout),
             elements: t.elements.iter().map(element_dto).collect(),
+            interactive: t.has_interactive_element(),
         })
         .collect()
 }

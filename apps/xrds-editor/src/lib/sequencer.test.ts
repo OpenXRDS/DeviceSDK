@@ -407,7 +407,7 @@ describe("validKindsFor", () => {
     // These target an element's own runtime entity, and a node is not an
     // element — even a Panel node itself. `elementUnavailableReasonFor` covers
     // the element-side rule; this is only the node-side "wrong place" message.
-    const panel = nodeWith({ payload: { type: "Panel", template_id: 1, elements: [] } });
+    const panel = nodeWith({ payload: { type: "Panel", template_id: 1, elements: [], head_locked: false } });
     const kinds = validKindsFor(panel);
     expect(kinds).not.toContain("ButtonPress");
     expect(kinds).not.toContain("ButtonRelease");
@@ -419,7 +419,7 @@ describe("validKindsFor", () => {
     // `Panel` is the one payload that gets a pointer surface at runtime
     // (`apply_panel_backdrop_in_world`), so it is the one whose HoverEnter/
     // HoverExit can ever fire.
-    const panel = nodeWith({ payload: { type: "Panel", template_id: 1, elements: [] } });
+    const panel = nodeWith({ payload: { type: "Panel", template_id: 1, elements: [], head_locked: false } });
     const cube = nodeWith({ payload: { type: "Cube", material: { base_color: [1, 1, 1, 1], metallic: 0, roughness: 0.5, emissive: [0, 0, 0], textures: NO_TEXTURES }, physics_body: "None", gravity_scale: 1, mass: 1 } });
 
     expect(validKindsFor(panel)).toContain("HoverEnter");

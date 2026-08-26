@@ -162,6 +162,7 @@ fn build_payload_dto(
             NodePayloadDto::Panel {
                 template_id: i.template_id.0,
                 elements: crate::panel_library::build_panel_instance_elements_dto(doc, i),
+                head_locked: doc.is_head_locked(id),
             },
 
         _ => NodePayloadDto::Other { kind: payload_kind_name(payload).to_owned() },

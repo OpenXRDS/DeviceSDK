@@ -389,7 +389,7 @@ pub enum EditorCommand {
 ///
 /// **If you change a DTO and do not bump this, you have removed the only thing
 /// that would have told anyone.**
-pub const BRIDGE_VERSION: u32 = 20;
+pub const BRIDGE_VERSION: u32 = 21;
 
 /// State snapshot emitted to the webview after each frame's update.
 /// Grow this incrementally — add fields as each phase is implemented.
@@ -650,7 +650,18 @@ pub enum NodePayloadDto {
     ///
     /// Carries only the id; size, background and elements all live on the
     /// template, and the frontend resolves the name from `panel_library`.
-    Panel { template_id: u64, elements: Vec<PanelInstanceElementDto> },
+    Panel {
+        template_id: u64,
+        elements: Vec<PanelInstanceElementDto>,
+        /// Whether this node is parented under a `PlayerAnchor`, i.e. head-locked.
+        ///
+        /// A head-locked panel is always in front of the wearer, and a panel
+        /// captures the pointer across its whole face — so an interactive template
+        /// head-locked captures it wherever they look, permanently. The Inspector
+        /// uses this to stop offering such templates; `panel_diagnostics` reports
+        /// it as an error if one is already bound.
+        head_locked: bool,
+    },
     Other     { kind: String },
 }
 
@@ -779,6 +790,12 @@ pub struct PanelTemplateDto {
     pub opacity: f32,
     pub layout: WorldLayoutDto,
     pub elements: Vec<PanelElementDto>,
+    /// Whether any element of this template is interactive.
+    ///
+    /// Sent rather than re-derived in the frontend: the SDK owns what "interactive"
+    /// means (`XrdsScenePanelElement::is_interactive`), and a second copy of that
+    /// rule in TypeScript is free to drift from the validator that enforces it.
+    pub interactive: bool,
 }
 
 /// One named element on a panel.

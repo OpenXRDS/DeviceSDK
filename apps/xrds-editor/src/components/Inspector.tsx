@@ -1278,11 +1278,36 @@ function PanelInstanceSection({ id, p, send, snapshot }: {
             * something to display instead of silently snapping to another
             * template and hiding the problem. */}
           {!current && <option value="">— missing template {p.template_id} —</option>}
-          {templates.map(t => (
-            <option key={t.id} value={t.id}>{t.name}</option>
-          ))}
+          {/* An interactive template is not offered to a head-locked panel.
+            *
+            * A panel captures the pointer across its whole face — settled policy,
+            * matching how visionOS and Quest treat a window. A world panel only
+            * captures when you approach it, so the cost is bounded; head-locked it
+            * is not, because the panel is always in front of the wearer. They would
+            * be unable to point at anything else in the scene, for as long as the
+            * panel exists, with nothing on screen saying why.
+            *
+            * `panel_diagnostics` already reports this as an error for a scene that
+            * has one. Not offering it is the other half: stopping it being authored
+            * beats explaining it afterwards. One already bound stays selectable so
+            * the picker still shows the truth. */}
+          {templates.map(t => {
+            const blocked = p.head_locked && t.interactive && t.id !== p.template_id;
+            return (
+              <option key={t.id} value={t.id} disabled={blocked}>
+                {t.name}{blocked ? "  — interactive, not for a HUD" : ""}
+              </option>
+            );
+          })}
         </select>
       </div>
+      {p.head_locked && (
+        <div className="insp-note">
+          Head-locked (under a PlayerAnchor). Only info-only templates
+          (Label / Image) are offered — an interactive one would capture the
+          pointer wherever the wearer looks.
+        </div>
+      )}
       {!current ? (
         <div className="insp-note" style={{ color: "var(--red)" }}>
           ⚠ Template {p.template_id} is not in this document — nothing will spawn.

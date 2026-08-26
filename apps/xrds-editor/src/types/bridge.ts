@@ -35,6 +35,10 @@ export interface PanelTemplateDto {
   opacity: number;
   layout: WorldLayout;
   elements: PanelElementDto[];
+  /** Whether any element is interactive. Computed by the SDK, not re-derived
+   *  here — a second copy of that rule would be free to drift from the
+   *  validator that enforces it. */
+  interactive: boolean;
 }
 
 /** One named element on a panel.
@@ -174,7 +178,9 @@ export type NodePayload =
   // A scene-placed instance of a panel template — the counterpart to an anchor's
   // head-locked link. Only the id travels; the name is resolved from
   // `panel_library` so a rename cannot leave a stale copy behind.
-  | { type: "Panel"; template_id: number; elements: PanelInstanceElementDto[] }
+  | { type: "Panel"; template_id: number; elements: PanelInstanceElementDto[];
+      /** Parented under a `PlayerAnchor`, so it sits in front of the wearer. */
+      head_locked: boolean }
   | { type: "Other";        kind: string };
 
 /** Which editor layout is active.
@@ -476,7 +482,7 @@ export interface TaskDto {
  *  replaced wholesale by the first real snapshot.
  *
  *  Bump this together with the Rust constant whenever a DTO changes. */
-export const BRIDGE_VERSION = 20;
+export const BRIDGE_VERSION = 21;
 
 export interface EditorSnapshot {
   /** See {@link BRIDGE_VERSION}. `0` means a build predating the check. */
