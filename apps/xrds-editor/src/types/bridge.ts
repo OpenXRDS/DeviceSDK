@@ -791,15 +791,8 @@ export function hexToRgba(hex: string, a = 1.0): [number,number,number,number] {
   ];
 }
 
-export const KIND_ICON: Record<string, string> = {
-  Cube: "⬛", Sphere: "⚪", Cylinder: "🥫", Capsule: "💊", Plane: "▭", Tetrahedron: "△",
-  Camera: "📷", DirectionalLight: "☀", PointLight: "💡", SpotLight: "🔦",
-  AmbientLight: "🌤", GltfAsset: "📦", Text: "T", ExtrudedText: "E³", Billboard: "📋",
-  HudText: "HUD", AudioClip: "♪", InteractionZone: "⬡", PlayerSpawn: "🧍", PlayerSpawnZone: "◻",
-  Player: "🎮", PlayerAnchor: "📍",
-  Effect: "✨", EffectBurst: "💥", EffectTrail: "💨",
-  // `Panel` had no entry at all before this — a placed panel showed no icon in
-  // the hierarchy tree. `WorldPanel`'s icon moves here rather than being lost.
-  Panel: "🪟",
-  Empty: "○",
-};
+// KIND_ICON (emoji) was retired in favour of `components/ui/KindIcon`.
+//
+// Emoji are drawn by the OS font, so the same build looked different on Windows
+// and Linux — both of which this editor ships on — and being colour glyphs they
+// could not follow the theme, dim with a disabled row, or take a lane's tint.

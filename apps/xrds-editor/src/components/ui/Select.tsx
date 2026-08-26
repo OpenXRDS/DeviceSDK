@@ -1,3 +1,4 @@
+import * as React from "react";
 import * as RadixSelect from "@radix-ui/react-select";
 import { useEffect, useId, useRef, useState } from "react";
 import { clearOccluder, trackOccluder } from "../../lib/uiOccluders";
@@ -9,7 +10,9 @@ import { clearOccluder, trackOccluder } from "../../lib/uiOccluders";
  * frontend follow-up notes. */
 export interface SelectOption {
   value: string;
-  label: string;
+  /** `ReactNode` so an option can carry an icon beside its text. The trigger
+   *  renders the selected option's label too, so it must be renderable there. */
+  label: React.ReactNode;
   /** Shown, not filtered out, but not selectable — pair with `hint` so the
    * reason is visible right on the option instead of only in a list that's
    * mysteriously shorter than expected. */

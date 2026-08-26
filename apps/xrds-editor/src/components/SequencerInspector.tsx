@@ -1,3 +1,8 @@
+import {
+  CircleHelp, Eye, Film, Heart, Move3d, Paintbrush, Pause, Play, Sparkles,
+  SlidersHorizontal, Square, ToggleLeft, Type, Volume2, VolumeX,
+  type LucideIcon,
+} from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type {
   ActionTarget, ActionValue, EditorCommand, EditorSnapshot, NamedTrackDto, XrdsAction,
@@ -20,14 +25,26 @@ export const ACTION_KINDS = [
   "PlayVideo", "StopVideo",
 ] as const;
 
-export const ACTION_ICONS: Record<string, string> = {
-  SetVisible: "👁", SetTransform: "🎬", SetMaterial: "🎨",
-  ModifyHealth: "❤", PlayGltfAnimation: "🎞", StopGltfAnimation: "⏹",
-  PlayEffect: "💥", StopEffect: "🛑",
-  PlayAudio: "🔊", StopAudio: "🔇",
-  PlayVideo: "▶", StopVideo: "⏸",
-  Unknown: "?",
+/** Per-action icons. Stroke SVG rather than emoji, so a key on a lane can take
+ *  its family's `ACTION_COLOR` tint — a colour glyph cannot be recoloured at all,
+ *  which is why the lane dots and their icons used to disagree. */
+export const ACTION_ICONS: Record<string, LucideIcon> = {
+  SetVisible: Eye, SetTransform: Move3d, SetMaterial: Paintbrush,
+  ModifyHealth: Heart, PlayGltfAnimation: Film, StopGltfAnimation: Square,
+  PlayEffect: Sparkles, StopEffect: Square,
+  PlayAudio: Volume2, StopAudio: VolumeX,
+  PlayVideo: Play, StopVideo: Pause,
+  SetElementText: Type, SetElementValue: SlidersHorizontal, SetElementEnabled: ToggleLeft,
+  Unknown: CircleHelp,
 };
+
+export function ActionIcon({ kind, size = 12 }: { kind: string; size?: number }) {
+  const Icon = ACTION_ICONS[kind] ?? CircleHelp;
+  // Tinted from the same table the lane dots use, so an action's icon and its dot
+  // finally agree — with emoji they could not, since a colour glyph ignores this.
+  return <Icon size={size} style={{ color: ACTION_COLOR[kind] ?? "var(--overlay0)" }} aria-hidden />;
+}
+
 
 /** Lane-category colour, matching the mockup's per-track dot colours — one
  * hue per action family so a key is identifiable at a glance on its lane. */
@@ -37,7 +54,9 @@ export const ACTION_COLOR: Record<string, string> = {
   PlayGltfAnimation: "var(--blue)", StopGltfAnimation: "var(--surface1)",
   PlayEffect: "var(--peach)", StopEffect: "var(--surface1)",
   PlayAudio: "var(--green)", StopAudio: "var(--surface1)",
-  PlayVideo: "var(--sky)", StopVideo: "var(--surface1)",
+  // `--sky` does not exist in this theme; it silently fell back to inherited
+  // colour, which is exactly the kind of thing a CSS variable typo does.
+  PlayVideo: "var(--teal)", StopVideo: "var(--surface1)",
   Unknown: "var(--surface1)",
 };
 
@@ -319,7 +338,14 @@ export function SequencerInspector({
           onValueChange={v => { if (v !== ADD_STEP_SENTINEL) addStep(v); }}
           options={[
             { value: ADD_STEP_SENTINEL, label: "+ event…" },
-            ...ACTION_KINDS.map(kind => ({ value: kind, label: `${ACTION_ICONS[kind]} ${kind}` })),
+            ...ACTION_KINDS.map(kind => ({
+              value: kind,
+              label: (
+                <span className="inline-flex items-center gap-1.5">
+                  <ActionIcon kind={kind} /> {kind}
+                </span>
+              ),
+            })),
           ]}
         />
         <span className="flex-1" />

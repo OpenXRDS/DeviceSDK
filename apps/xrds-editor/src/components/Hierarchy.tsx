@@ -1,6 +1,6 @@
+import { KindIcon } from "./ui/KindIcon";
 import { useState, useEffect, useRef, useMemo } from "react";
 import type { EditorSnapshot, EditorCommand, HierarchyNode, NodeBindingSummary, NodeWatcherSummary } from "../types/bridge";
-import { KIND_ICON } from "../types/bridge";
 
 interface Props {
   snapshot: EditorSnapshot;
@@ -172,7 +172,7 @@ export function Hierarchy({ snapshot, send, onOpenTrack }: Props) {
           </span>
 
           {/* Icon */}
-          <span className="icon">{KIND_ICON[node.kind] ?? "○"}</span>
+          <span className="icon"><KindIcon kind={node.kind} /></span>
 
           {/* Name or rename input */}
           {isRenaming ? (

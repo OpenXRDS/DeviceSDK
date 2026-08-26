@@ -1,5 +1,5 @@
+import { KindIcon } from "./ui/KindIcon";
 import type { EditorSnapshot, EditorCommand } from "../types/bridge";
-import { KIND_ICON } from "../types/bridge";
 import { useResizable } from "../hooks/useResizable";
 
 interface Props {
@@ -29,7 +29,7 @@ export function PlayerPanel({ snapshot, send }: Props) {
       <div className={`panel-resize-handle--h${dragging ? " dragging" : ""}`}
         onPointerDown={onPointerDown} title="Drag to resize" />
       <div className="player-panel-header">
-        <span>{KIND_ICON.Player} Players</span>
+        <span className="inline-flex items-center gap-1.5"><KindIcon kind="Player" /> Players</span>
         <div style={{ display: "flex", gap: 4, marginLeft: "auto" }}>
           <button
             className={`player-panel-clear${show_fov_overlay ? " fov-active" : ""}`}
@@ -56,7 +56,7 @@ export function PlayerPanel({ snapshot, send }: Props) {
                 onClick={() => toggle(a.id)}
                 title={a.player_name ? `Activate: ${a.name} (Player: ${a.player_name})` : `Activate: ${a.name}`}
               >
-                <span className="anchor-icon">{KIND_ICON.PlayerAnchor}</span>
+                <span className="anchor-icon"><KindIcon kind="PlayerAnchor" /></span>
                 <span className="anchor-name">{a.name}</span>
                 {a.player_name && (
                   <span className="anchor-parent">{a.player_name}</span>
