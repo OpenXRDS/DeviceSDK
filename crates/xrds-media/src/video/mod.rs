@@ -10,14 +10,18 @@ mod webcam;
 #[cfg(feature = "playback")]
 mod decode;
 #[cfg(feature = "playback")]
-pub use decode::{probe_video_codec, VideoCodec, VideoDecoder, VideoFrame};
+mod paced;
+#[cfg(feature = "playback")]
+pub use decode::{probe_video_codec, probe_video_size, VideoCodec, VideoDecoder, VideoFrame};
+#[cfg(feature = "playback")]
+pub use paced::PacedVideo;
 
 // Hardware decode, target-gated rather than feature-gated: on Android it is the
 // only decode path worth having, and off Android it cannot compile at all.
 #[cfg(target_os = "android")]
 mod android;
 #[cfg(target_os = "android")]
-pub use android::{HardwareBuffer, HardwareVideoDecoder};
+pub use android::{probe_video_size, HardwareBuffer, HardwareVideoDecoder};
 
 pub use frame_reader::FrameReader;
 pub use jpeg::{find_complete_jpeg, EOI, SOI};

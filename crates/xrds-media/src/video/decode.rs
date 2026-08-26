@@ -43,6 +43,14 @@ pub struct VideoDecoder {
     width: u32,
     height: u32,
     frame_rate: f64,
+    /// Whether the decoder has already been told the stream ended.
+    ///
+    /// It may only be told once. Draining takes several `next_frame` calls — a
+    /// decoder holds a handful of frames past the last packet — and each of those
+    /// calls finds the packet iterator exhausted, so without this the second one
+    /// sends EOF again and ffmpeg answers `Eof`, which surfaced as a spurious
+    /// "End of file" error at the end of every clip.
+    eof_sent: bool,
 }
 
 // Moved to a worker thread, which is the only way it is useful: software decode is
@@ -106,6 +114,7 @@ impl VideoDecoder {
             width,
             height,
             frame_rate,
+            eof_sent: false,
         })
     }
 
@@ -135,11 +144,23 @@ impl VideoDecoder {
             }
 
             let Some((stream, packet)) = self.input.packets().next() else {
-                // Drain: a decoder can hold several frames past the last packet.
-                self.decoder.send_eof()?;
+                // Drain: a decoder can hold several frames past the last packet, so
+                // this branch is reached once per buffered frame plus once more.
+                // EOF is sent on the first of those only.
+                if !self.eof_sent {
+                    self.eof_sent = true;
+                    match self.decoder.send_eof() {
+                        // `Eof` here just means it already knew.
+                        Ok(()) | Err(ffmpeg::Error::Eof) => {}
+                        Err(e) => return Err(e),
+                    }
+                }
                 return if self.decoder.receive_frame(&mut decoded).is_ok() {
                     Ok(Some(self.convert(&mut decoded)?))
                 } else {
+                    // Genuinely finished, and *not* an error: a clip ending is the
+                    // normal case, and reporting it as failure made every playback
+                    // log an error on its last frame.
                     Ok(None)
                 };
             };
@@ -333,6 +354,24 @@ impl std::fmt::Display for VideoCodec {
     }
 }
 
+/// Read a container's frame size without decoding anything.
+///
+/// Needed before playback starts: a video surface has to exist at the clip's
+/// dimensions from the moment a scene loads, or the placeholder has the wrong
+/// aspect and the buffer the first frame writes into is the wrong length.
+pub fn probe_video_size(path: impl AsRef<Path>) -> Result<(u32, u32), ffmpeg::Error> {
+    ffmpeg::init()?;
+    let input = ffmpeg::format::input(&path.as_ref())?;
+    let stream = input
+        .streams()
+        .best(ffmpeg::media::Type::Video)
+        .ok_or(ffmpeg::Error::StreamNotFound)?;
+    let decoder = ffmpeg::codec::context::Context::from_parameters(stream.parameters())?
+        .decoder()
+        .video()?;
+    Ok((decoder.width(), decoder.height()))
+}
+
 /// Read a container's video codec without decoding a frame.
 ///
 /// The extension cannot answer this. An `.mp4` holding AV1 or VP9 imports happily
@@ -351,4 +390,43 @@ pub fn probe_video_codec(path: impl AsRef<Path>) -> Result<VideoCodec, ffmpeg::E
         ffmpeg::codec::Id::HEVC => VideoCodec::Hevc,
         other => VideoCodec::Unsupported(format!("{other:?}")),
     })
+}
+
+#[cfg(test)]
+mod eof_tests {
+    use super::*;
+
+    /// Decoding a clip to its end reports `Ok(None)`, never an error.
+    ///
+    /// Regression: `send_eof` may only be called once, but draining takes several
+    /// `next_frame` calls, so the second one used to re-send it and ffmpeg answered
+    /// `Eof` — surfacing as `ERROR video decode ...: End of file` on the last frame
+    /// of every clip that played to completion. Harmless to the picture and alarming
+    /// in a log, which is the worst combination: it trains people to ignore errors.
+    #[test]
+    fn playing_to_the_end_is_not_an_error() {
+        let clip = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../xrds-net/samples/sample_video_only.mp4");
+        assert!(clip.exists(), "missing fixture {}", clip.display());
+
+        let mut decoder = VideoDecoder::open(&clip).expect("should open");
+        let mut frames = 0u32;
+        loop {
+            match decoder.next_frame() {
+                Ok(Some(_)) => frames += 1,
+                Ok(None) => break,
+                Err(e) => panic!("decode failed after {frames} frames: {e}"),
+            }
+        }
+        assert!(frames > 0, "no frames decoded");
+
+        // And asking again past the end stays quiet, rather than erroring the way a
+        // second `send_eof` would.
+        for _ in 0..3 {
+            assert!(
+                matches!(decoder.next_frame(), Ok(None)),
+                "past end of stream must keep reporting end of stream"
+            );
+        }
+    }
 }

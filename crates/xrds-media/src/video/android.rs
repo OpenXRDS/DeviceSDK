@@ -66,6 +66,60 @@ const MAX_IMAGES: i32 = 5;
 /// Poll rather than block: the caller drives this from its own frame loop.
 const TIMEOUT_NOW: i64 = 0;
 
+/// Read a clip's frame size without starting a decoder.
+///
+/// Deliberately extractor-only. `HardwareVideoDecoder::open` would also answer this,
+/// but it configures and starts an `AMediaCodec` — a hardware decoder session, which
+/// is exactly the expensive thing that must not happen until playback is asked for.
+/// A video surface still needs its dimensions from the moment a scene loads, so the
+/// two are separated.
+pub fn probe_video_size(path: impl AsRef<Path>) -> Result<(u32, u32)> {
+    use std::os::fd::AsRawFd;
+
+    let file = File::open(path.as_ref())?;
+    let length = file.metadata()?.len();
+
+    unsafe {
+        let extractor = sys::AMediaExtractor_new();
+        if extractor.is_null() {
+            return Err(Error::Null("AMediaExtractor_new"));
+        }
+        let result = (|| -> Result<(u32, u32)> {
+            ok(
+                sys::AMediaExtractor_setDataSourceFd(
+                    extractor,
+                    file.as_raw_fd(),
+                    0,
+                    length as i64,
+                ),
+                "AMediaExtractor_setDataSourceFd",
+            )?;
+            for i in 0..sys::AMediaExtractor_getTrackCount(extractor) {
+                let format = sys::AMediaExtractor_getTrackFormat(extractor, i);
+                let mut mime: *const std::os::raw::c_char = std::ptr::null();
+                let is_video = sys::AMediaFormat_getString(
+                    format,
+                    sys::AMEDIAFORMAT_KEY_MIME,
+                    &mut mime,
+                ) && CStr::from_ptr(mime)
+                    .to_string_lossy()
+                    .starts_with("video/");
+                if is_video {
+                    let (mut width, mut height) = (0, 0);
+                    sys::AMediaFormat_getInt32(format, sys::AMEDIAFORMAT_KEY_WIDTH, &mut width);
+                    sys::AMediaFormat_getInt32(format, sys::AMEDIAFORMAT_KEY_HEIGHT, &mut height);
+                    sys::AMediaFormat_delete(format);
+                    return Ok((width as u32, height as u32));
+                }
+                sys::AMediaFormat_delete(format);
+            }
+            Err(Error::NoVideoTrack)
+        })();
+        sys::AMediaExtractor_delete(extractor);
+        result
+    }
+}
+
 /// A decoded frame, still resident in GPU memory.
 ///
 /// Deliberately just a pointer. It is owned by the [`HardwareVideoDecoder`] that
@@ -203,6 +257,10 @@ pub struct HardwareVideoDecoder {
 
     width: u32,
     height: u32,
+
+    /// Restart at end of stream. When false the last frame simply stays.
+    looping: bool,
+    finished: bool,
 }
 
 // Same reasoning as the ffmpeg decoder: these NDK objects are not safe for
@@ -213,7 +271,10 @@ unsafe impl Send for HardwareVideoDecoder {}
 
 impl HardwareVideoDecoder {
     /// Open a video file and start its hardware decoder.
-    pub fn open(path: impl AsRef<Path>) -> Result<Self> {
+    ///
+    /// `looping` restarts at end of stream; otherwise the final frame stays on the
+    /// surface and decoding stops.
+    pub fn open(path: impl AsRef<Path>, looping: bool) -> Result<Self> {
         let path = path.as_ref();
         let file = File::open(path)?;
         let length = file.metadata()?.len();
@@ -291,6 +352,8 @@ impl HardwareVideoDecoder {
                 playback_start: None,
                 width: width as u32,
                 height: height as u32,
+                looping,
+                finished: false,
             })
         }
     }
@@ -310,6 +373,9 @@ impl HardwareVideoDecoder {
     /// hold its last frame, not flicker — and `None` only before the first frame
     /// arrives.
     pub fn next_buffer(&mut self) -> Result<Option<HardwareBuffer>> {
+        if self.finished {
+            return Ok(self.current);
+        }
         self.feed_input()?;
         self.drain_output()?;
         self.acquire_latest()?;
@@ -413,7 +479,13 @@ impl HardwareVideoDecoder {
             )?;
 
             if frame.eos {
-                self.restart()?;
+                if self.looping {
+                    self.restart()?;
+                } else {
+                    // Stop feeding and draining; `current` keeps the last frame, so
+                    // the surface holds the final image rather than going blank.
+                    self.finished = true;
+                }
             }
         }
         Ok(())
