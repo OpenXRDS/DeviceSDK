@@ -1,6 +1,8 @@
 # Post-processing beyond bloom — plan
 
-**Status:** planned, not started. Written 2026-08-26.
+**Status** (2026-08-26): phase 1 (colour grading) **built**. Phase 2 answered by
+reading the code rather than by a device run, and it corrected two claims this
+document made when it was written — see "What phase 2 actually found".
 
 Closes the "Post-processing stack" Gap Analysis row, minus SSAO and auto exposure,
 which are out of scope by decision — both are compute-based, and this project has
@@ -25,93 +27,134 @@ That leaves a much shorter list, and it is a better one: what a headset actually
 needs is **colour control** and **edge quality**, because aliasing is far more
 visible at close range on a low-PPD panel than it is on a monitor.
 
-## What is unknown, and it is not cost
+## What phase 2 actually found
 
-**No post-processing pass has ever been verified in the XR path.** Bloom ships and
-is authorable, but nothing in the tree records it rendering correctly on a headset —
-the only mention is a VFX-plan warning not to *assume* it.
+This section originally said the risk was **multiview**: that the XR path renders
+with `array_size: 2`, so a post-process pass would have to handle a two-layer array
+texture and Bevy's effects are not written for that.
 
-The reason to doubt it is specific: the XR path renders **multiview with
-`array_size: 2`** (`backends/vulkan.rs`). Every post-process pass therefore has to
-operate on a two-layer array texture, and Bevy's effects are not written with that
-in mind. So the first question is not "what does it cost" but "does it produce a
-correct image in both eyes at all".
+**That was wrong.** `session.rs:846` spawns *one ordinary camera per eye*, each with
+its own `RenderTarget::TextureView` onto a swapchain layer. Bevy sees two normal
+single-view cameras; the array lives in the OpenXR swapchain, below Bevy. There is
+no two-layer-array problem for a pass.
 
-The cost question has a prior worth respecting. Procedural atmosphere — *one*
-LUT-based sky pass — measured **+18.3 ms/frame on a Quest 3** against a 13.9 ms
+The real finding is simpler and larger. An XR camera is spawned with exactly:
+
+```rust
+Camera { target: TextureView(handle), order: i }
+OpenXrCameraIndex, Projection::custom, NoCpuCulling,
+NoIndirectDrawing, Camera3d { depth_texture_usages }
+```
+
+No `Hdr`. No `Tonemapping`. No `Bloom` — and `Hdr` is inserted nowhere in
+`xrds-openxr` or `xrds-runtime`. `XrdsBloom` and `XrdsTonemapping` are applied in
+`spawn.rs`, which runs only for cameras spawned through `XrdsAPI`; the OpenXR eye
+cameras are different entities that never see them.
+
+**So bloom and tonemapping have never worked in XR, and could not have.** The only
+accurate statement about this anywhere in the tree turns out to be a passing remark
+in `set_effect_params`: *"the SDK's XR cameras have no HDR/bloom pass"*, which is
+why effect colours are clamped to 1.0.
+
+Two consequences:
+
+- **Colour grading was unaffected**, because it is environment-driven and
+  `sync_managed_scene_color_grading_in_world` queries `With<Camera3d>` — which
+  matches the eye cameras, exactly as exposure, fog and atmosphere do. That is the
+  argument for the environment being its home: bloom's camera-field design is
+  precisely what excludes it from XR.
+- **The phase 3 question changed.** It is no longer "is one pass affordable" but
+  "do XR cameras get `Hdr` at all". Step 0b already priced that: `Hdr` adds a float
+  intermediate render target, **paid once per eye**, before any effect renders.
+  FXAA, SMAA and CAS do not need HDR; bloom does. They are separate decisions now,
+  not one row.
+
+The cost prior still stands for anything that *is* a pass. Procedural atmosphere —
+one LUT-based sky pass — measured **+18.3 ms/frame on a Quest 3** against a 13.9 ms
 budget (`done/editor-task-queue-and-hdr-conversion.md`, step 0b). It rendered
-perfectly and was unaffordable. Whether that is atmosphere-specific or true of
-full-screen passes generally is exactly what nobody has measured.
+perfectly and was unaffordable.
 
 ## Phases
 
-| Phase | Scope | Answers |
+| Phase | Scope | State |
 | --- | --- | --- |
-| 1 | Colour grading — SDK + editor | — (no pass; see below) |
-| 2 | Device probe: does bloom render correctly in both eyes, and what does it cost? | Is the XR post-process path viable at all? |
-| 3 | Anti-aliasing (FXAA / SMAA / CAS), gated on phase 2 | Is edge quality affordable? |
+| 1 | Colour grading — scene environment + editor | ✅ built 2026-08-26 |
+| 2 | Is the XR post-process path viable? | ✅ answered by reading the code — see above |
+| 3 | Anti-aliasing | ✅ built 2026-08-26 — as **MSAA**, not a post-process pass |
 
-### Phase 1 — colour grading
+### Phase 1 — colour grading (built)
 
-**No spike needed, and it is the only item here that needs none.** `ColorGrading`
-is a camera *component* applied just before tonemapping, inside a step the renderer
-already runs. There is no additional full-screen pass, so the atmosphere prior does
-not apply and neither does the multiview question.
+**No spike needed, and it was the only item here that needed none.** `ColorGrading`
+is read *during* tonemapping rather than being a pass of its own, so neither the
+atmosphere cost prior nor anything about the XR render path applies to it.
 
-It is also the deepest authoring surface on the list: three tonal ranges (shadows,
-midtones, highlights) × five controls each (saturation, contrast, gamma, gain,
-lift), plus global exposure, temperature, tint, hue and `post_saturation`. That is
-what an author reaches for when a scene "looks wrong" and no single light is at
-fault.
+It went on the **scene environment**, not the camera — this document originally said
+"inspector section under the camera", which was wrong on convention and, as phase 2
+then showed, would also have excluded it from XR. Every comparable engine puts
+tonemap, bloom and grading on a scene-level environment or volume: Godot's
+`WorldEnvironment`, Unity's Volume overrides, Unreal's Post Process Volume. Ours
+already held `exposure` there, and separating a tonal control from the exposure
+feeding it would have been the odd arrangement.
 
-Shape follows `XrdsBloom`/`XrdsTonemapping` exactly:
+Shipped as `XrdsSceneColorGradingEnvironment`: **temperature, tint, hue (degrees),
+saturation**. Applied through the same managed-marker pattern as exposure and fog,
+so it reaches every `Camera3d` — including the OpenXR eye cameras.
 
-1. `XrdsColorGrading` in `xrds-components`, projected to Bevy's `ColorGrading`.
-2. Scene-graph payload on the camera, round-tripped.
-3. Runtime projection.
-4. Inspector section under the camera, grouped by tonal range.
+Three decisions worth keeping:
 
-**Do not expose all sixteen fields at once.** The reason is on record: this SDK's
-recurring failure is authorable-but-inert, and the second-order version is
-authorable-but-incomprehensible. Ship global exposure/temperature/tint/saturation
-first — the four an author actually turns — and add the per-range sections once
-something asks for them. `XrdsSceneAtmosphereEnvironment` is kept free of physical
-parameters for the same reason.
+- **No `exposure` field**, though Bevy's `ColorGradingGlobal` has one.
+  `XrdsSceneExposureEnvironment` already owns scene exposure; two EV controls would
+  be one quantity with two owners.
+- **Degrees, not radians**, for hue — it is a field an author types.
+- **A neutral grade is treated as absent** and clears any managed component, so
+  "never graded" and "graded back to neutral" are indistinguishable at runtime.
+  They look the same, so they should behave the same.
 
-### Phase 2 — probe the XR post-process path
+Four fields rather than Bevy's sixteen: the per-range sections (shadows / midtones /
+highlights × saturation, contrast, gamma, gain, lift) are additive when something
+asks. Shipping all of them at once would be authorable-but-incomprehensible, the
+second-order form of the failure this project keeps recording.
 
-One APK, bloom on, on device. Two questions, in order:
+### Phase 2 — answered without a device run
 
-1. **Does it render correctly in both eyes?** Multiview is the risk. A pass that
-   writes only layer 0 gives one correct eye and one stale one — which reads as a
-   headset fault, not a rendering bug, and is exactly the class of thing that took
-   three debugging rounds during the video work.
-2. **What does one pass cost?** Same method as step 0b: two APKs from one scene
-   differing only in the effect, frame time from the `handle_events tick frame=N`
-   counter.
+See "What phase 2 actually found". The planned probe — one APK with bloom on —
+would have measured a thing that cannot happen: XR cameras have no `Hdr`, so bloom
+has nothing to bloom. Reading `session.rs:846` cost minutes and answered it
+properly; the APK would have produced a null result and invited the conclusion that
+passes are broken in XR rather than that bloom was never wired to them.
 
-This is deliberately bloom rather than a new effect: it is already implemented and
-authorable, so the probe adds no code to the thing being measured.
+### Phase 3 — anti-aliasing (built, and not the way this planned)
 
-**If bloom is wrong or unaffordable in the XR path, phase 3 does not happen** and
-the row closes at colour grading plus a recorded reason. That is a legitimate
-outcome, and cheaper to discover here than after three effects are built.
+**MSAA was already running.** `bevy_render`'s `CameraPlugin` registers `Msaa` as a
+*required component of `Camera`*, defaulting to `Sample4` — so every camera,
+including the OpenXR eye cameras, has been anti-aliasing at 4× all along. Nothing
+was missing except a way to author it.
 
-### Phase 3 — anti-aliasing, gated on phase 2
+That makes the CAS / FXAA / SMAA plan actively wrong. On a tile-based mobile GPU
+MSAA resolves inside tile memory; a post-process AA pass costs a full-screen pass on
+the budget least able to afford one — where a single pass has already measured at
+more than a whole frame — and produces blurrier edges than the MSAA it would sit on
+top of. Building any of them would have made the image worse and the frame slower.
 
-Aliasing is worse in a headset than on a monitor — low pixels-per-degree, and the
-edges move with the head. If a pass is affordable, this is where the frame time
-buys the most.
+So this shipped as `XrdsSceneAntiAliasingEnvironment`: the **MSAA sample count**,
+which is the knob Unity and Unreal both surface for VR and the real
+quality-versus-frame-time trade on a headset.
 
-Three candidates, cheapest first, all raster (no compute):
+Three things worth keeping:
 
-- **CAS** (`contrast_adaptive_sharpening`) — one cheap pass. Not AA, but it
-  recovers apparent sharpness lost to the compositor's own resampling.
-- **FXAA** — single pass, cheapest true AA.
-- **SMAA** — better edges, more passes.
+- **An enum, not an integer.** `Msaa::from_samples` panics outside {1,2,4,8}, and a
+  scene document is exactly where an arbitrary integer would arrive from.
+- **Clearing restores 4×, it does not remove the component.** `Msaa` is required by
+  `Camera`, so a camera always has one; "no authored anti-aliasing" means the
+  default is back, not that the component is gone. Every other sync in
+  `environment.rs` removes on clear — this one cannot, and the test says so.
+- **8× carries a warning in the editor.** It is frequently unsupported on mobile
+  GPUs.
 
-Pick by measurement, not by preference. Ship one, not three: a settings menu of
-near-identical AA modes is a worse authoring surface than one that works.
+The same four lines of `CameraPlugin` also answered two questions this document had
+been guessing at: `ColorGrading` and `Exposure` are required components of
+`Camera3d` — which is why both already worked on headsets — and `Hdr` is *not*, which
+is independently why bloom is the one effect that cannot.
 
 ## Explicitly out of scope
 
