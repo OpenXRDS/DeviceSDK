@@ -26,6 +26,28 @@ impl From<XrdsClearColorConfig> for ClearColorConfig {
 }
 
 /// XRDS tonemapping mode for scene cameras.
+///
+/// # Flat desktop only — deliberately
+///
+/// This has **no effect in XR**, on a tethered PC headset or a standalone one, and
+/// there is no plan to change that (decided 2026-08-26).
+///
+/// The XR render path spawns its own cameras (`xrds-openxr`, `session.rs`) carrying
+/// `Camera`, `Camera3d`, a custom projection and culling markers — and nothing else.
+/// `XrdsTonemapping` is applied in `xrds-runtime`'s `spawn.rs`, which runs only for
+/// cameras created through `XrdsAPI`; a scene camera's value is dropped outright
+/// when the document becomes runtime nodes. So the eye cameras never see it,
+/// whatever the machine.
+///
+/// PCVR is *not* the exception people expect: it shares the XR path exactly, so a
+/// powerful PC changes nothing here.
+///
+/// What is authorable everywhere, including on a headset, is the scene environment —
+/// exposure, colour grading, fog, IBL, skybox — because that is applied to every
+/// `Camera3d` rather than to one the SDK happened to spawn. Reach for
+/// `XrdsSceneColorGradingEnvironment` when you want tonal control that ships.
+///
+/// See `docs/platform-support.md`.
 #[derive(Debug, Clone, Copy, Default)]
 pub enum XrdsTonemapping {
     #[default]
@@ -57,6 +79,17 @@ impl From<XrdsTonemapping> for Tonemapping {
 }
 
 /// XRDS bloom preset for scene cameras.
+///
+/// # Flat desktop only — deliberately
+///
+/// Same story as [`XrdsTonemapping`], with one extra reason: bloom needs Bevy's
+/// `Hdr`, and XR cameras do not carry it. Giving them one would add a float
+/// intermediate render target **per eye** before a single effect rendered, which is
+/// not a price worth paying for a glow. Decided 2026-08-26; see
+/// `docs/post-processing-plan.md`.
+///
+/// This is why `XrdsEffect` colour components are clamped to 1.0 — with no HDR pass,
+/// values above 1.0 render as flat white rather than as something bright.
 #[derive(Debug, Clone, Copy, Default)]
 pub enum XrdsBloom {
     #[default]

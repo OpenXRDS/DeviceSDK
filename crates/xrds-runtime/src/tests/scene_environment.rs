@@ -1587,3 +1587,137 @@ fn shorter_visibility_produces_denser_fog() {
         "seeing less far must mean thicker fog"
     );
 }
+
+/// A scene's colour grading reaches the camera, and a neutral one does not.
+///
+/// The second half is the point: `ColorGrading` is read during tonemapping whether
+/// or not it changes anything, so a scene that carries a neutral block should not
+/// leave every camera holding a managed component that does nothing. It also keeps
+/// "the author has not graded this scene" and "the author graded it back to
+/// neutral" indistinguishable at runtime, which is correct — they look the same.
+#[test]
+fn scene_colour_grading_reaches_the_camera_unless_it_is_neutral() {
+    use bevy::render::view::ColorGrading;
+    use xrds_scene_graph::XrdsSceneColorGradingEnvironment;
+
+    let mut app = xrds_test_app();
+    {
+        let mut xrds = XrdsAPI::attach(&mut app);
+        xrds.spawn(&XrdsCamera::new().with_name("Main"));
+    }
+    app.update();
+
+    let graded = XrdsSceneColorGradingEnvironment {
+        temperature: 0.3,
+        tint: -0.1,
+        hue_deg: 90.0,
+        saturation: 0.5,
+    };
+    assert!(!graded.is_neutral());
+
+    {
+        let mut xrds = XrdsAPI::attach(&mut app);
+        xrds.set_scene_environment(XrdsSceneEnvironment {
+            color_grading: Some(graded),
+            ..Default::default()
+        });
+    }
+    app.update();
+
+    let applied = app
+        .world_mut()
+        .query::<&ColorGrading>()
+        .iter(app.world())
+        .next()
+        .cloned()
+        .expect("a graded scene should give the camera a ColorGrading");
+    assert_eq!(applied.global.temperature, 0.3);
+    assert_eq!(applied.global.tint, -0.1);
+    // Degrees in the document, radians in Bevy.
+    assert!((applied.global.hue - std::f32::consts::FRAC_PI_2).abs() < 1e-5);
+    assert_eq!(applied.global.post_saturation, 0.5);
+    // Scene exposure owns EV; grading must not also write it.
+    assert_eq!(applied.global.exposure, ColorGrading::default().global.exposure);
+
+    // Neutral is treated as absent, and clears what was there.
+    {
+        let mut xrds = XrdsAPI::attach(&mut app);
+        xrds.set_scene_environment(XrdsSceneEnvironment {
+            color_grading: Some(XrdsSceneColorGradingEnvironment::default()),
+            ..Default::default()
+        });
+    }
+    app.update();
+    assert_eq!(
+        app.world_mut().query::<&ColorGrading>().iter(app.world()).count(),
+        0,
+        "a neutral grade should leave no managed ColorGrading behind"
+    );
+}
+
+/// Authored MSAA reaches the camera, and clearing restores Bevy's default.
+///
+/// The clear half is the one worth asserting. `Msaa` is a *required* component of
+/// `Camera`, so unlike fog or colour grading it cannot simply be removed — a camera
+/// always has one. "No authored anti-aliasing" therefore means 4× back, not absent,
+/// and getting that wrong would leave a scene stuck on whatever it was last set to.
+#[test]
+fn authored_msaa_reaches_the_camera_and_clears_back_to_the_default() {
+    use bevy::render::view::Msaa;
+    use xrds_scene_graph::{XrdsSceneAntiAliasingEnvironment, XrdsSceneMsaa};
+
+    let mut app = xrds_test_app();
+    {
+        let mut xrds = XrdsAPI::attach(&mut app);
+        xrds.spawn(&XrdsCamera::new().with_name("Main"));
+    }
+    app.update();
+
+    {
+        let mut xrds = XrdsAPI::attach(&mut app);
+        xrds.set_scene_environment(XrdsSceneEnvironment {
+            anti_aliasing: Some(XrdsSceneAntiAliasingEnvironment {
+                msaa: XrdsSceneMsaa::Sample2,
+            }),
+            ..Default::default()
+        });
+    }
+    app.update();
+    assert!(
+        app.world_mut().query::<&Msaa>().iter(app.world()).any(|m| *m == Msaa::Sample2),
+        "an authored sample count should reach the camera"
+    );
+
+    // Clearing restores 4x rather than removing a component the camera requires.
+    {
+        let mut xrds = XrdsAPI::attach(&mut app);
+        xrds.set_scene_environment(XrdsSceneEnvironment::default());
+    }
+    app.update();
+    assert!(
+        app.world_mut().query::<&Msaa>().iter(app.world()).all(|m| *m == Msaa::default()),
+        "clearing anti-aliasing should put Bevy's default back, not leave the last value"
+    );
+}
+
+/// Every authorable sample count maps to a real `Msaa`, and none of them panics.
+///
+/// `Msaa::from_samples` panics outside {1,2,4,8}, and a scene document is exactly
+/// where an arbitrary integer would arrive from — which is why the authored type is
+/// an enum. This pins that the enum and Bevy agree.
+#[test]
+fn every_authorable_sample_count_is_one_bevy_accepts() {
+    use bevy::render::view::Msaa;
+    use xrds_scene_graph::XrdsSceneMsaa;
+
+    for (authored, expected) in [
+        (XrdsSceneMsaa::Off, Msaa::Off),
+        (XrdsSceneMsaa::Sample2, Msaa::Sample2),
+        (XrdsSceneMsaa::Sample4, Msaa::Sample4),
+        (XrdsSceneMsaa::Sample8, Msaa::Sample8),
+    ] {
+        assert_eq!(authored.samples(), expected.samples());
+    }
+    assert_eq!(XrdsSceneMsaa::default(), XrdsSceneMsaa::Sample4);
+    assert_eq!(XrdsSceneMsaa::default().samples(), Msaa::default().samples());
+}

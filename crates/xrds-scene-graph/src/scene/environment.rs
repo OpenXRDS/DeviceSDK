@@ -9,6 +9,10 @@ pub struct XrdsSceneEnvironment {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exposure: Option<XrdsSceneExposureEnvironment>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color_grading: Option<XrdsSceneColorGradingEnvironment>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anti_aliasing: Option<XrdsSceneAntiAliasingEnvironment>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fog: Option<XrdsSceneFogEnvironment>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub atmosphere: Option<XrdsSceneAtmosphereEnvironment>,
@@ -43,6 +47,8 @@ impl XrdsSceneEnvironment {
         self.ibl.is_none()
             && self.skybox.is_none()
             && self.exposure.is_none()
+            && self.color_grading.is_none()
+            && self.anti_aliasing.is_none()
             && self.fog.is_none()
             && self.atmosphere.is_none()
     }
@@ -85,6 +91,131 @@ pub struct XrdsSceneSkyboxEnvironment {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum XrdsSceneSkyboxAssetSlot {
     Texture,
+}
+
+/// How many MSAA samples every camera renders with.
+///
+/// An enum rather than a number because Bevy's `Msaa::from_samples` **panics** on
+/// anything outside this set. An authored field that can crash the runtime is not a
+/// field worth having, and a scene document is exactly where an arbitrary integer
+/// would arrive from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum XrdsSceneMsaa {
+    Off,
+    Sample2,
+    /// Bevy's default, and the usual choice for VR.
+    #[default]
+    Sample4,
+    /// Frequently unsupported on mobile GPUs — check on device before shipping it.
+    Sample8,
+}
+
+impl XrdsSceneMsaa {
+    pub fn samples(self) -> u32 {
+        match self {
+            Self::Off => 1,
+            Self::Sample2 => 2,
+            Self::Sample4 => 4,
+            Self::Sample8 => 8,
+        }
+    }
+}
+
+/// Scene-wide anti-aliasing.
+///
+/// # Why MSAA and not FXAA, SMAA or TAA
+///
+/// Because MSAA is already running and is the right answer here. Bevy registers
+/// `Msaa` as a required component of `Camera`, defaulting to 4×, so every camera —
+/// including the OpenXR eye cameras — has been anti-aliasing all along. What was
+/// missing was any way to *author* it.
+///
+/// Adding a post-process AA pass on top would be strictly worse on the platform
+/// that matters: a tile-based mobile GPU resolves MSAA inside tile memory, while
+/// FXAA or SMAA costs a full-screen pass — on a budget where one such pass has
+/// already been measured at more than a whole frame — and produces blurrier edges
+/// than the MSAA it would be layered over.
+///
+/// So this exposes the sample count, which is the knob Unity and Unreal both
+/// surface for VR, and is the real quality-versus-frame-time trade on a headset.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct XrdsSceneAntiAliasingEnvironment {
+    #[serde(default)]
+    pub msaa: XrdsSceneMsaa,
+}
+
+/// Scene-wide colour grading — white balance and hue/saturation.
+///
+/// Lives on the environment rather than the camera because that is where every
+/// comparable engine puts it: Godot's `WorldEnvironment` (tonemap, glow,
+/// adjustments), Unity's Volume overrides (White Balance, Color Adjustments),
+/// Unreal's Post Process Volume. It also sits beside the `exposure` it works with,
+/// and separating a tonal control from the exposure feeding it would be the odd
+/// arrangement.
+///
+/// # Why there is no `exposure` field here
+///
+/// Bevy's `ColorGradingGlobal` has one — an EV offset in stops — and it is
+/// deliberately not exposed. [`XrdsSceneExposureEnvironment`] already owns scene
+/// exposure, and two EV controls in one inspector is a second source of truth for
+/// one quantity. This SDK has paid for that arrangement more than once; the most
+/// recent was a rotation field that could be set and was never read.
+///
+/// # Why only four fields
+///
+/// Bevy's `ColorGrading` also carries per-range sections (shadows / midtones /
+/// highlights, each with saturation, contrast, gamma, gain and lift) — sixteen
+/// controls in total. These four are the ones an author reaches for, and they map
+/// onto what Unity splits into "White Balance" and "Color Adjustments". The rest is
+/// additive when something asks for it. Shipping all sixteen at once would be
+/// authorable-but-incomprehensible, which is the second-order version of the
+/// failure this project keeps recording.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct XrdsSceneColorGradingEnvironment {
+    /// CIE 1931 *x* adjustment. Positive is redder, negative is bluer. Does not
+    /// change brightness.
+    #[serde(default)]
+    pub temperature: f32,
+    /// CIE 1931 *y* adjustment. Positive is more magenta, negative greener. Does
+    /// not change brightness.
+    #[serde(default)]
+    pub tint: f32,
+    /// Hue rotation in degrees.
+    ///
+    /// Degrees rather than Bevy's radians: this is an authored field an author
+    /// types, and the rest of the document is in degrees for the same reason.
+    #[serde(default)]
+    pub hue_deg: f32,
+    /// Saturation after tonemapping. `1.0` is unchanged, `0.0` greyscale.
+    #[serde(default = "one")]
+    pub saturation: f32,
+}
+
+fn one() -> f32 {
+    1.0
+}
+
+impl Default for XrdsSceneColorGradingEnvironment {
+    /// Neutral — the identity grade, so adding the block changes nothing until a
+    /// field is moved.
+    fn default() -> Self {
+        Self {
+            temperature: 0.0,
+            tint: 0.0,
+            hue_deg: 0.0,
+            saturation: 1.0,
+        }
+    }
+}
+
+impl XrdsSceneColorGradingEnvironment {
+    /// Whether this grade would change the image at all.
+    ///
+    /// Used to skip applying a neutral grade, so a scene that carries the block
+    /// without using it costs nothing.
+    pub fn is_neutral(&self) -> bool {
+        self.temperature == 0.0 && self.tint == 0.0 && self.hue_deg == 0.0 && self.saturation == 1.0
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

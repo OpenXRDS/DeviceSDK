@@ -71,6 +71,12 @@ struct XrdsManagedSceneAtmosphereEnvironment;
 struct XrdsManagedSceneExposureEnvironment;
 
 #[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct XrdsManagedSceneAntiAliasingEnvironment;
+
+#[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct XrdsManagedSceneColorGradingEnvironment;
+
+#[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct XrdsManagedSceneFogEnvironment;
 
 /// Stores the per-anchor exposure override (ev100) set by `apply_anchor_exposure_system`.
@@ -104,6 +110,8 @@ pub(super) fn apply_imported_scene_environment_policy_in_world(world: &mut World
     sync_managed_scene_skybox_in_world(world);
     sync_managed_scene_atmosphere_in_world(world);
     sync_managed_scene_exposure_in_world(world);
+    sync_managed_scene_color_grading_in_world(world);
+    sync_managed_scene_anti_aliasing_in_world(world);
     sync_managed_scene_fog_in_world(world);
 }
 
@@ -300,6 +308,136 @@ pub(super) fn sync_managed_scene_exposure_in_world(world: &mut World) {
         world
             .entity_mut(entity)
             .insert((exposure, XrdsManagedSceneExposureEnvironment));
+    }
+}
+
+/// Applies the scene's MSAA sample count to every 3-D camera.
+///
+/// Unlike every other sync here, "clear" **restores Bevy's default rather than
+/// removing the component**. `Msaa` is a required component of `Camera`
+/// (`bevy_render`'s `CameraPlugin` registers it), so a camera always has one and
+/// removing it would either be re-added underneath us or leave the camera missing
+/// something the render view query needs. Putting 4× back is what "no authored
+/// anti-aliasing" actually means.
+fn sync_managed_scene_anti_aliasing_in_world(world: &mut World) {
+    use bevy::render::view::Msaa;
+
+    let authored = imported_scene_environment_in_world(world).and_then(|env| env.anti_aliasing);
+
+    let Some(aa) = authored else {
+        clear_managed_scene_anti_aliasing_in_world(world);
+        return;
+    };
+
+    let msaa = match aa.msaa {
+        xrds_scene_graph::XrdsSceneMsaa::Off => Msaa::Off,
+        xrds_scene_graph::XrdsSceneMsaa::Sample2 => Msaa::Sample2,
+        xrds_scene_graph::XrdsSceneMsaa::Sample4 => Msaa::Sample4,
+        xrds_scene_graph::XrdsSceneMsaa::Sample8 => Msaa::Sample8,
+    };
+
+    let cameras: Vec<Entity> = {
+        let mut query = world.query_filtered::<Entity, With<Camera3d>>();
+        query.iter(world).collect()
+    };
+    for entity in cameras {
+        world
+            .entity_mut(entity)
+            .insert((msaa, XrdsManagedSceneAntiAliasingEnvironment));
+    }
+}
+
+fn clear_managed_scene_anti_aliasing_in_world(world: &mut World) {
+    use bevy::render::view::Msaa;
+
+    let entities: Vec<Entity> = {
+        let mut query = world.query_filtered::<Entity, (
+            With<Camera3d>,
+            With<XrdsManagedSceneAntiAliasingEnvironment>,
+        )>();
+        query.iter(world).collect()
+    };
+    for entity in entities {
+        let mut entity_mut = world.entity_mut(entity);
+        entity_mut.insert(Msaa::default());
+        entity_mut.remove::<XrdsManagedSceneAntiAliasingEnvironment>();
+    }
+}
+
+/// Applies the scene's colour grading to every 3-D camera.
+///
+/// `ColorGrading` is a camera component read during tonemapping, not a
+/// post-process pass — so unlike atmosphere or bloom this costs no additional
+/// full-screen work, which is why it needed no device spike before being built.
+///
+/// A neutral grade is treated as absent: a scene carrying the block without using
+/// it should not have every camera claim a managed component it does not need.
+fn sync_managed_scene_color_grading_in_world(world: &mut World) {
+    use bevy::render::view::ColorGrading;
+
+    let grading = imported_scene_environment_in_world(world)
+        .and_then(|env| env.color_grading)
+        .filter(|g| !g.is_neutral());
+
+    let Some(grading) = grading else {
+        clear_managed_scene_color_grading_in_world(world);
+        return;
+    };
+
+    let mut value = ColorGrading::default();
+    value.global.temperature = grading.temperature;
+    value.global.tint = grading.tint;
+    // Bevy takes radians; the document is in degrees, as everywhere an author types
+    // an angle.
+    value.global.hue = grading.hue_deg.to_radians();
+    value.global.post_saturation = grading.saturation;
+    // `global.exposure` is deliberately left at its default. Scene exposure is
+    // `XrdsSceneExposureEnvironment`, and writing it from here too would give one
+    // quantity two owners.
+
+    let cameras: Vec<(Entity, bool, bool, bool)> = {
+        let mut query = world.query_filtered::<(
+            Entity,
+            Option<&ColorGrading>,
+            Option<&XrdsManagedSceneColorGradingEnvironment>,
+            Option<&XrdsReceivesEnvironment>,
+        ), With<Camera3d>>();
+        query
+            .iter(world)
+            .map(|(entity, existing, managed, receives)| {
+                (entity, existing.is_some(), managed.is_some(), receives.is_some())
+            })
+            .collect()
+    };
+
+    for (entity, has_grading, managed, receives) in cameras {
+        // Same rule as exposure: a camera the app graded itself is left alone
+        // unless it opted in, so runtime-first code is not overwritten by a
+        // document it did not ask for.
+        if has_grading && !managed && !receives {
+            continue;
+        }
+        world
+            .entity_mut(entity)
+            .insert((value.clone(), XrdsManagedSceneColorGradingEnvironment));
+    }
+}
+
+fn clear_managed_scene_color_grading_in_world(world: &mut World) {
+    use bevy::render::view::ColorGrading;
+
+    let entities: Vec<Entity> = {
+        let mut query = world.query_filtered::<Entity, (
+            With<Camera3d>,
+            With<XrdsManagedSceneColorGradingEnvironment>,
+        )>();
+        query.iter(world).collect()
+    };
+
+    for entity in entities {
+        let mut entity_mut = world.entity_mut(entity);
+        entity_mut.remove::<ColorGrading>();
+        entity_mut.remove::<XrdsManagedSceneColorGradingEnvironment>();
     }
 }
 
