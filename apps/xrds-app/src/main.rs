@@ -127,8 +127,6 @@ struct SceneFileApp {
     scene_path:    std::path::PathBuf,
     /// GltfAsset node IDs collected at setup time for P-key animation playback.
     gltf_node_ids: Vec<XrdsSceneNodeId>,
-    /// Head-locked status label spawned in setup(); updated each time animation state changes.
-    hud_handle:    Option<xrds_runtime::Handle<XrdsText>>,
     /// Head-locked shader compilation progress label; cleared when shaders are ready.
     loading_hud:   Option<xrds_runtime::Handle<XrdsText>>,
 }
@@ -269,11 +267,17 @@ impl XrdsApp for SceneFileApp {
             Vec3::new(0.0, 0.0, -1.5),
         ));
 
-        // HUD label — 50 cm in front, 15 cm below centre line.
-        self.hud_handle = Some(api.spawn_hud_label(
-            "P: play/stop  H: haptic L  J: haptic R",
-            Vec3::new(0.0, -0.15, -0.5),
-        ));
+        // No controls HUD.
+        //
+        // There used to be a permanent head-locked label advertising the demo keys
+        // (play/stop, haptics). It was wrong twice over: those are *keyboard*
+        // shortcuts, so they do nothing on a standalone headset where there is no
+        // keyboard; and this app is the runner for authored scenes and exported
+        // apps, not a demo harness, so it was overlaying every scene — including
+        // ones with no animation to play — with something no author asked for.
+        //
+        // The shader-progress label stays: it reports work the app is actually
+        // doing, and removes itself when that work is done.
 
     }
 
@@ -332,17 +336,6 @@ impl XrdsApp for SceneFileApp {
             }
         }
 
-        // Update HUD to reflect current animation state.
-        if let Some(ref hud) = self.hud_handle {
-            let label = if playing { "▶  P: stop  H: haptic L  J: haptic R" }
-                        else       { "⏹  P: play  H: haptic L  J: haptic R" };
-            ctx.set_text_params(hud, TextParams {
-                text:      label.to_string(),
-                font_size: 4.0,
-                color:     [1.0, 1.0, 1.0, 1.0],
-                alignment: xrds_runtime::XrdsTextAlignment::Center,
-            });
-        }
     }
 }
 
@@ -820,7 +813,7 @@ fn main() {
         allow_unapproved_paths: true,
         ..Default::default()
     })
-    .run_xrds(SceneFileApp { scene_path, gltf_node_ids: Vec::new(), hud_handle: None, loading_hud: None })
+    .run_xrds(SceneFileApp { scene_path, gltf_node_ids: Vec::new(), loading_hud: None })
     .expect("runtime error");
 }
 
@@ -1220,7 +1213,7 @@ fn android_main(android_app: winit::platform::android::activity::AndroidApp) {
         font_paths,
         ..Default::default()
     })
-    .run_xrds(SceneFileApp { scene_path, gltf_node_ids: Vec::new(), hud_handle: None, loading_hud: None })
+    .run_xrds(SceneFileApp { scene_path, gltf_node_ids: Vec::new(), loading_hud: None })
     .expect("runtime error");
 }
 
