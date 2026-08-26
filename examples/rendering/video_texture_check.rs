@@ -78,6 +78,8 @@ struct VideoApp {
     shown: u32,
     upload_total: f64,
     started: Option<Instant>,
+    /// Kept so `setup` can register the clip as a scene asset.
+    clip: String,
     /// Released once the screen exists, so the decoder does not play the opening of
     /// the clip to nobody while the window is still being created.
     ready: Arc<AtomicBool>,
@@ -121,7 +123,35 @@ impl XrdsApp for VideoApp {
             );
         }
 
-        api.create_video_texture(VIDEO_ID, self.size.0, self.size.1);
+        // XRDS_VIDEO_VIA_CATALOG=1 takes the authored route instead of the manual
+        // one: register the clip as a scene asset and let importing the document
+        // start playback. Nothing else changes — the slot below still just names an
+        // id — which is the claim worth checking, because "the asset kind works"
+        // and "the manual API works" are different statements and only the first
+        // is what an author gets.
+        let via_catalog = std::env::var("XRDS_VIDEO_VIA_CATALOG").is_ok();
+        if via_catalog {
+            let mut document = xrds::scene_graph::XrdsSceneDocument::default();
+            match document.register_video_asset(VIDEO_ID, self.clip.clone()) {
+                Ok(_) => match api.import_scene_document(&document) {
+                    Ok(_) => {
+                        // Importing gives the surface a texture and starts nothing.
+                        // Playback is always asked for — a scene that merely
+                        // contains a screen should not pay for a decoder.
+                        println!(
+                            "[video] imported '{VIDEO_ID}'; playing: {}",
+                            api.is_video_playing(VIDEO_ID)
+                        );
+                        let started = api.play_video(VIDEO_ID);
+                        println!("[video] play_video: {}", if started { "started" } else { "REFUSED" });
+                    }
+                    Err(e) => println!("[video] scene import failed: {e:?}"),
+                },
+                Err(e) => println!("[video] could not register the asset: {e:?}"),
+            }
+        } else {
+            api.create_video_texture(VIDEO_ID, self.size.0, self.size.1);
+        }
         api.set_material_texture_slot(
             &screen,
             XrdsMaterialTextureSlotKind::BaseColor,
@@ -188,6 +218,10 @@ impl XrdsApp for VideoApp {
 
     fn update(&mut self, ctx: &mut XrdsUpdateContext<'_>) {
         if !self.bound {
+            return;
+        }
+        // The runtime is decoding and writing frames itself.
+        if std::env::var("XRDS_VIDEO_VIA_CATALOG").is_ok() {
             return;
         }
         // XRDS_VIDEO_PATTERN_ONLY=1 stops the frame pump, leaving the checkerboard
@@ -351,6 +385,9 @@ fn main() {
     let _ = Runtime::new(RuntimeParameters::default()).run_xrds(VideoApp {
         frames: Mutex::new(rx),
         size: (w, h),
+        clip: std::fs::canonicalize(&path)
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|_| path.clone()),
         bound: false,
         shown: 0,
         upload_total: 0.0,

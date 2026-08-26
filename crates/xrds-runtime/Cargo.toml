@@ -60,6 +60,12 @@ cbindgen = "0.27.0"
 [target.'cfg(unix)'.dependencies]
 winit = { version = "0.30.5" }
 
+[target.'cfg(not(target_os = "android"))'.dependencies]
+# Software video playback. Not behind a cargo feature: a scene that names a video
+# asset must play it, and a flag that defaults off would reproduce the
+# authorable-but-inert failure this asset kind exists to avoid.
+xrds-media = { workspace = true, features = ["playback"] }
+
 [target.'cfg(target_os = "android")'.dependencies]
 # Hardware video decode. Android-only, and carries no codec library there — the
 # `playback` feature (ffmpeg) is desktop, and capture is target-gated off.

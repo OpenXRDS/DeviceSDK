@@ -886,7 +886,9 @@ fn spawn_video_screen(api: &mut XrdsAPI<'_>, clip: &str) {
 fn run_video_decode_probe(path: &std::path::Path) {
     use xrds_media::video::HardwareVideoDecoder;
 
-    let mut decoder = match HardwareVideoDecoder::open(path) {
+    // Looping: a probe that ends on a frozen final frame is indistinguishable from
+    // one whose decoder died, and telling those apart is the whole point here.
+    let mut decoder = match HardwareVideoDecoder::open(path, true) {
         Ok(decoder) => decoder,
         Err(e) => {
             log::error!("[b1] could not open {}: {e}", path.display());

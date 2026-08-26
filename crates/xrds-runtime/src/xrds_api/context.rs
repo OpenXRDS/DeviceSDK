@@ -558,6 +558,23 @@ impl XrdsUpdateContext<'_> {
 
     /// Forget a runtime texture. Materials still pointing at `id` fall back to the
     /// asset catalog, and show nothing if it holds no such asset.
+    /// Start playing the video asset named `id`. See [`XrdsAPI::play_video`].
+    pub fn play_video(&mut self, id: &str) -> bool {
+        self.play_video_repeating(id, true)
+    }
+
+    /// Start playing `id`, choosing whether it loops. See
+    /// [`XrdsAPI::play_video_repeating`].
+    pub fn play_video_repeating(&mut self, id: &str, looping: bool) -> bool {
+        crate::xrds_api::video::play_video_asset_in_world(self.world, id, looping)
+    }
+
+    /// Stop the video named `id`. See [`XrdsAPI::stop_video`].
+    pub fn stop_video(&mut self, id: &str) -> &mut Self {
+        crate::xrds_api::video::stop_video_asset_in_world(self.world, id);
+        self
+    }
+
     pub fn remove_video_texture(&mut self, id: &str) -> &mut Self {
         crate::xrds_api::video::remove_video_texture_in_world(self.world, id);
         self

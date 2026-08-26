@@ -56,6 +56,11 @@ mod video;
 #[cfg(target_os = "android")]
 #[path = "xrds_api/video_android.rs"]
 mod video_android;
+// Software playback everywhere else. The pair exists so a scene does not have to
+// know which it is running on.
+#[cfg(not(target_os = "android"))]
+#[path = "xrds_api/video_desktop.rs"]
+mod video_desktop;
 #[path = "xrds_api/zone.rs"]
 mod zone;
 #[path = "xrds_api/world_ui_pointer.rs"]

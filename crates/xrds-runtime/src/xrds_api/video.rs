@@ -303,6 +303,125 @@ pub(super) fn external_video_texture_id_in_world(
         .map(|entry| entry.handle.id())
 }
 
+/// Start playing the video asset named `id`, from the imported catalog.
+///
+/// Playback is always asked for, never automatic. A video costs a decoder — a
+/// thread on a desktop, a hardware codec session on a headset — plus GPU work every
+/// frame, so a scene that merely *contains* a screen must not pay for it. Importing
+/// the asset gives the surface a texture; this is what puts a picture on it.
+///
+/// Returns false if no such video asset is in the catalog, or the clip cannot be
+/// opened.
+pub(super) fn play_video_asset_in_world(world: &mut World, id: &str, looping: bool) -> bool {
+    // Already playing this way? Leave it alone.
+    //
+    // A looping Track re-fires its `PlayVideo` every cycle. Starting a fresh decoder
+    // each time restarts the clip from frame one, so a video set to Loop never
+    // reaches its own end and looping appears not to work at all — the clip simply
+    // tracks the Track's period. Playing something that is already playing is not a
+    // request to restart it.
+    //
+    // A *changed* repeat setting does restart, because that is a different request.
+    #[cfg(target_os = "android")]
+    let already = crate::xrds_api::video_android::is_playing_as_in_world(world, id, looping);
+    #[cfg(not(target_os = "android"))]
+    let already = crate::xrds_api::video_desktop::is_playing_as_in_world(world, id, looping);
+    if already {
+        return true;
+    }
+
+    let uri = world
+        .get_resource::<XrdsImportedAssetCatalog>()
+        .and_then(|catalog| {
+            catalog
+                .assets
+                .iter()
+                .find(|asset| {
+                    asset.id == id && asset.kind == XrdsSceneAssetKind::Video
+                })
+                .map(|asset| asset.uri.clone())
+        });
+
+    let Some(uri) = uri else {
+        warn!("play_video: no video asset '{id}' in the catalog");
+        return false;
+    };
+
+    #[cfg(target_os = "android")]
+    {
+        crate::xrds_api::video_android::play_hardware_video_in_world(
+            world,
+            id.to_string(),
+            uri,
+            looping,
+        )
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        crate::xrds_api::video_desktop::play_video_in_world(world, id.to_string(), uri, looping)
+    }
+}
+
+/// The video assets a node's material names, if any.
+///
+/// A `PlayVideo` action targets the *surface*, not the clip — the Track model
+/// addresses actions through a node — so the clip has to be recovered from the
+/// material. Usually one; a material could name the same or different videos in
+/// several slots, and all of them are that surface's videos.
+pub(super) fn video_asset_ids_on_entity(world: &World, entity: Entity) -> Vec<String> {
+    let Some(stored) = world.get::<XrdsStoredMaterial>(entity) else {
+        return Vec::new();
+    };
+    let Some(catalog) = world.get_resource::<XrdsImportedAssetCatalog>() else {
+        return Vec::new();
+    };
+
+    let mut ids = Vec::new();
+    // Listed rather than iterated: the enum has no iterator, and a slot added later
+    // that is missed here would simply never play — silently.
+    for slot in [
+        XrdsMaterialTextureSlotKind::BaseColor,
+        XrdsMaterialTextureSlotKind::MetallicRoughness,
+        XrdsMaterialTextureSlotKind::Normal,
+        XrdsMaterialTextureSlotKind::Occlusion,
+        XrdsMaterialTextureSlotKind::Emissive,
+    ] {
+        let Some(texture) = stored.0.textures.get(slot) else {
+            continue;
+        };
+        let is_video = catalog.assets.iter().any(|asset| {
+            asset.id == texture.texture_asset_id && asset.kind == XrdsSceneAssetKind::Video
+        });
+        if is_video && !ids.contains(&texture.texture_asset_id) {
+            ids.push(texture.texture_asset_id.clone());
+        }
+    }
+    ids
+}
+
+/// Whether the video named `id` is playing.
+pub(super) fn is_video_playing_in_world(world: &World, id: &str) -> bool {
+    #[cfg(target_os = "android")]
+    {
+        crate::xrds_api::video_android::is_playing_in_world(world, id)
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        crate::xrds_api::video_desktop::is_playing_in_world(world, id)
+    }
+}
+
+/// Stop the video named `id`, releasing its decoder.
+///
+/// The surface keeps its texture and its last frame: an author who stops a clip has
+/// stopped a picture, not removed a screen.
+pub(super) fn stop_video_asset_in_world(world: &mut World, id: &str) {
+    #[cfg(target_os = "android")]
+    crate::xrds_api::video_android::stop_hardware_video_in_world(world, id);
+    #[cfg(not(target_os = "android"))]
+    crate::xrds_api::video_desktop::stop_video_in_world(world, id);
+}
+
 pub(super) fn remove_video_texture_in_world(world: &mut World, id: &str) {
     world.resource_mut::<XrdsVideoTextures>().entries.remove(id);
 }

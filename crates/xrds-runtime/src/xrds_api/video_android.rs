@@ -52,6 +52,7 @@ pub(super) struct HardwareVideoRequest {
     pub(super) id: String,
     pub(super) path: PathBuf,
     pub(super) asset_id: AssetId<Image>,
+    pub(super) looping: bool,
 }
 
 /// Decoders and conversion pipelines, one per playing video.
@@ -87,17 +88,18 @@ pub(super) fn play_hardware_video_in_world(
     world: &mut World,
     id: impl Into<String>,
     path: impl Into<PathBuf>,
+    looping: bool,
 ) -> bool {
     let id = id.into();
     let path = path.into();
 
-    // Opened once here purely to learn the frame size, then dropped. The render
-    // world opens its own — a decoder cannot be handed across, and guessing the
-    // size would give the placeholder the wrong aspect until the first frame lands.
-    let (width, height) = match HardwareVideoDecoder::open(&path) {
-        Ok(decoder) => (decoder.width(), decoder.height()),
+    // A header read, not a decoder. Opening `HardwareVideoDecoder` here would
+    // configure and start a second hardware codec session purely to ask how big the
+    // frames are, and the render world opens its own anyway.
+    let (width, height) = match xrds_media::video::probe_video_size(&path) {
+        Ok(size) => size,
         Err(e) => {
-            warn!("hardware video '{id}': cannot open {}: {e}", path.display());
+            warn!("hardware video '{id}': cannot read {}: {e}", path.display());
             return false;
         }
     };
@@ -114,8 +116,36 @@ pub(super) fn play_hardware_video_in_world(
         id,
         path,
         asset_id,
+        looping,
     });
     true
+}
+
+/// Whether `id` currently has a decoder running.
+pub(super) fn is_playing_in_world(world: &World, id: &str) -> bool {
+    world
+        .get_resource::<HardwareVideoRequests>()
+        .is_some_and(|requests| requests.entries.iter().any(|entry| entry.id == id))
+}
+
+/// Whether `id` is playing and already set to `looping`.
+pub(super) fn is_playing_as_in_world(world: &World, id: &str, looping: bool) -> bool {
+    world
+        .get_resource::<HardwareVideoRequests>()
+        .is_some_and(|requests| {
+            requests
+                .entries
+                .iter()
+                .any(|entry| entry.id == id && entry.looping == looping)
+        })
+}
+
+/// Stop a hardware video, dropping its decoder and conversion pipeline.
+pub(super) fn stop_hardware_video_in_world(world: &mut World, id: &str) {
+    world
+        .resource_mut::<HardwareVideoRequests>()
+        .entries
+        .retain(|entry| entry.id != id);
 }
 
 /// Keep every material sampling a hardware video marked modified.
@@ -157,7 +187,7 @@ pub(super) fn update_hardware_video(
 
     for request in &requests.entries {
         if !players.contains_key(&request.id) {
-            let decoder = match HardwareVideoDecoder::open(&request.path) {
+            let decoder = match HardwareVideoDecoder::open(&request.path, request.looping) {
                 Ok(decoder) => decoder,
                 Err(e) => {
                     error!("hardware video '{}': decoder: {e}", request.id);

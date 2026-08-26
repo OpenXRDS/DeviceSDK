@@ -1454,6 +1454,48 @@ impl XrdsAPI<'_> {
 
     /// Forget a runtime texture. Materials still pointing at `id` fall back to the
     /// asset catalog, and show nothing if it holds no such asset.
+    /// Start playing the video asset named `id`.
+    ///
+    /// The asset must be in the scene's catalog — imported in the editor, or
+    /// registered on an [`XrdsSceneDocument`](xrds_scene_graph::XrdsSceneDocument)
+    /// before import. Importing gives the surface a texture; this puts a picture on
+    /// it.
+    ///
+    /// **Never automatic.** A video costs a decoder — a thread on a desktop, a
+    /// hardware codec session on a headset — plus GPU work every frame, so a scene
+    /// that merely contains a screen does not pay for it until something asks. The
+    /// authored equivalent is the `PlayVideo` trigger action.
+    ///
+    /// Hardware-decoded on Android, ffmpeg elsewhere; the caller does not choose.
+    ///
+    /// Returns false if no such video asset exists, or the clip cannot be opened.
+    pub fn play_video(&mut self, id: &str) -> bool {
+        self.play_video_repeating(id, true)
+    }
+
+    /// Start playing the video asset named `id`, choosing whether it loops.
+    ///
+    /// [`Self::play_video`] loops, because a screen that shows something once and
+    /// stops is the unusual case. Passing false leaves the final frame on the
+    /// surface when the clip ends.
+    pub fn play_video_repeating(&mut self, id: &str, looping: bool) -> bool {
+        crate::xrds_api::video::play_video_asset_in_world(self.app.world_mut(), id, looping)
+    }
+
+    /// Whether the video named `id` is currently playing.
+    pub fn is_video_playing(&self, id: &str) -> bool {
+        crate::xrds_api::video::is_video_playing_in_world(self.app.world(), id)
+    }
+
+    /// Stop the video named `id`, releasing its decoder.
+    ///
+    /// The surface keeps its texture and its last frame: stopping a clip stops a
+    /// picture, it does not remove a screen.
+    pub fn stop_video(&mut self, id: &str) -> &mut Self {
+        crate::xrds_api::video::stop_video_asset_in_world(self.app.world_mut(), id);
+        self
+    }
+
     /// Play a video file on the headset's hardware decoder, into the texture named
     /// `id`.
     ///
@@ -1479,10 +1521,14 @@ impl XrdsAPI<'_> {
         id: impl Into<String>,
         path: impl Into<std::path::PathBuf>,
     ) -> bool {
+        // Loops, like `play_video`: a screen that shows something once and stops is
+        // the unusual case. This entry point takes a path rather than an asset id,
+        // so there is no authored `repeat` to consult.
         crate::xrds_api::video_android::play_hardware_video_in_world(
             self.app.world_mut(),
             id,
             path,
+            true,
         )
     }
 

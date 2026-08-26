@@ -204,3 +204,195 @@ fn a_video_texture_binds_to_any_mesh_and_any_slot() {
          way that is far harder to recognise than a frozen video screen"
     );
 }
+
+/// A scene that names a video gets a surface, and no decoder until asked.
+///
+/// This is the contract that separates video from every other asset kind. A texture
+/// costs a file read; a *video* costs a decoder — a thread on a desktop, a hardware
+/// codec session on a headset — plus GPU work every frame. So a scene that merely
+/// contains a screen must not pay for it, and playback is always asked for.
+///
+/// Both halves are asserted, because getting either wrong is silent: no surface
+/// means an authored screen resolves to nothing, and an auto-started decoder means
+/// every scene pays for every clip it mentions.
+///
+/// Desktop only: the Android path needs MediaCodec and a Vulkan device.
+#[cfg(not(target_os = "android"))]
+#[test]
+fn a_named_video_gets_a_surface_but_does_not_start_playing() {
+    use xrds_scene_graph::{XrdsSceneAsset, XrdsSceneAssetKind};
+
+    let clip = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../crates/xrds-net/samples/sample_video_only.mp4");
+    assert!(
+        clip.exists(),
+        "missing fixture {} — this test is then vacuous",
+        clip.display()
+    );
+
+    let mut app = xrds_test_app();
+    crate::xrds_api::helper::merge_imported_asset_catalog(
+        app.world_mut(),
+        &[XrdsSceneAsset {
+            id: "lobby-screen".to_string(),
+            uri: clip.to_string_lossy().into_owned(),
+            kind: XrdsSceneAssetKind::Video,
+        }],
+    );
+
+    // The surface exists, so a material slot naming it resolves...
+    assert!(
+        crate::xrds_api::video::video_texture_handle_in_world(app.world(), "lobby-screen")
+            .is_some(),
+        "importing a Video asset should register its texture, or an authored screen          resolves to nothing"
+    );
+    // ...and nothing is decoding.
+    assert!(
+        !crate::xrds_api::video::is_video_playing_in_world(app.world(), "lobby-screen"),
+        "importing must not start a decoder — a scene containing a screen should not          pay for it until something asks"
+    );
+
+    let mut xrds = XrdsAPI::attach(&mut app);
+    assert!(xrds.play_video("lobby-screen"), "play_video should start the clip");
+    assert!(xrds.is_video_playing("lobby-screen"));
+
+    xrds.stop_video("lobby-screen");
+    assert!(
+        !xrds.is_video_playing("lobby-screen"),
+        "stopping should release the decoder"
+    );
+    assert!(
+        crate::xrds_api::video::video_texture_handle_in_world(app.world(), "lobby-screen")
+            .is_some(),
+        "stopping a clip stops a picture; it does not remove the screen"
+    );
+}
+
+/// An unknown id is refused rather than silently doing nothing.
+#[cfg(not(target_os = "android"))]
+#[test]
+fn playing_a_video_that_is_not_in_the_catalog_is_refused() {
+    let mut app = xrds_test_app();
+    let mut xrds = XrdsAPI::attach(&mut app);
+    assert!(!xrds.play_video("no-such-clip"));
+}
+
+/// `PlayVideo` targets a surface, so the clip must be recoverable from it.
+///
+/// The Track model addresses actions through a node, and a video is not a node —
+/// it is a texture on a material. So the action has to look at what the target's
+/// material names. A resolver that finds nothing makes the action silently do
+/// nothing, which is the failure mode this asset kind is most prone to.
+#[cfg(not(target_os = "android"))]
+#[test]
+fn a_video_is_recoverable_from_the_surface_showing_it() {
+    use xrds_scene_graph::{XrdsSceneAsset, XrdsSceneAssetKind};
+
+    let clip = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../crates/xrds-net/samples/sample_video_only.mp4");
+    assert!(clip.exists(), "missing fixture {}", clip.display());
+
+    let mut app = xrds_test_app();
+    crate::xrds_api::helper::merge_imported_asset_catalog(
+        app.world_mut(),
+        &[XrdsSceneAsset {
+            id: "screen-clip".to_string(),
+            uri: clip.to_string_lossy().into_owned(),
+            kind: XrdsSceneAssetKind::Video,
+        }],
+    );
+
+    let plane = {
+        let mut xrds = XrdsAPI::attach(&mut app);
+        let plane = xrds.spawn(&XrdsPlane3D::new().with_name("Screen"));
+        xrds.set_material_texture_slot(
+            &plane,
+            XrdsMaterialTextureSlotKind::BaseColor,
+            Some(XrdsMaterialTextureRef {
+                texture_asset_id: "screen-clip".to_string(),
+                uv: XrdsMaterialTextureUvParams::default(),
+                sampler: XrdsMaterialTextureSamplerParams::default(),
+            }),
+        );
+        plane.entity()
+    };
+    app.update();
+
+    assert_eq!(
+        crate::xrds_api::video::video_asset_ids_on_entity(app.world(), plane),
+        vec!["screen-clip".to_string()],
+        "PlayVideo on this node must be able to find the clip its material names"
+    );
+
+    // A surface showing an ordinary texture is not a video surface, and PlayVideo
+    // on it should find nothing rather than guess.
+    let bare = {
+        let mut xrds = XrdsAPI::attach(&mut app);
+        xrds.spawn(&XrdsCube::new().with_name("NotAScreen")).entity()
+    };
+    app.update();
+    assert!(crate::xrds_api::video::video_asset_ids_on_entity(app.world(), bare).is_empty());
+}
+
+/// Re-playing a clip that is already playing the same way leaves it alone.
+///
+/// A looping Track re-fires its `PlayVideo` every cycle. If that restarted the
+/// decoder, a video set to Loop would never reach its own end — it would just track
+/// the Track's period, which is exactly what "the loop option does not work" looks
+/// like from the outside. Changing the repeat mode *is* a different request and
+/// does restart.
+#[cfg(not(target_os = "android"))]
+#[test]
+fn replaying_an_already_playing_video_does_not_restart_it() {
+    use xrds_scene_graph::{XrdsSceneAsset, XrdsSceneAssetKind};
+
+    let clip = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../crates/xrds-net/samples/sample_video_only.mp4");
+    assert!(clip.exists(), "missing fixture {}", clip.display());
+
+    let mut app = xrds_test_app();
+    crate::xrds_api::helper::merge_imported_asset_catalog(
+        app.world_mut(),
+        &[XrdsSceneAsset {
+            id: "wall".to_string(),
+            uri: clip.to_string_lossy().into_owned(),
+            kind: XrdsSceneAssetKind::Video,
+        }],
+    );
+
+    assert!(crate::xrds_api::video::play_video_asset_in_world(
+        app.world_mut(),
+        "wall",
+        true
+    ));
+    assert!(crate::xrds_api::video_desktop::is_playing_as_in_world(
+        app.world(),
+        "wall",
+        true
+    ));
+
+    // Same request again — still playing, still looping, and (the point) not
+    // rebuilt.
+    assert!(crate::xrds_api::video::play_video_asset_in_world(
+        app.world_mut(),
+        "wall",
+        true
+    ));
+    assert!(crate::xrds_api::video_desktop::is_playing_as_in_world(
+        app.world(),
+        "wall",
+        true
+    ));
+
+    // A different repeat mode is a different request, and takes effect.
+    assert!(crate::xrds_api::video::play_video_asset_in_world(
+        app.world_mut(),
+        "wall",
+        false
+    ));
+    assert!(crate::xrds_api::video_desktop::is_playing_as_in_world(
+        app.world(),
+        "wall",
+        false
+    ));
+}

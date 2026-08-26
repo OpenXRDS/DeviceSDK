@@ -1911,6 +1911,41 @@ impl Action for XrdsActionRunner {
                 }
                 true
             }
+            XrdsAction::PlayVideo { repeat } => {
+                // Fire-and-forget, like PlayAudio: a Track does not wait for a clip
+                // to finish. Blocking choreography on a film's length would stall a
+                // sequence for a duration nobody authored.
+                let ids = crate::xrds_api::video::video_asset_ids_on_entity(world, self.target);
+                if ids.is_empty() {
+                    warn!(
+ "[trigger-action] PlayVideo on {:?} did nothing — no material slot on that node names a video asset.",
+                        self.target
+                    );
+                }
+                let looping = matches!(
+                    repeat,
+                    xrds_scene_graph::XrdsSceneAnimationRepeatMode::Loop
+                );
+                for id in ids {
+                    if !crate::xrds_api::video::play_video_asset_in_world(world, &id, looping) {
+                        warn!("[trigger-action] PlayVideo could not start '{id}'.");
+                    }
+                }
+                true
+            }
+            XrdsAction::StopVideo => {
+                let ids = crate::xrds_api::video::video_asset_ids_on_entity(world, self.target);
+                if ids.is_empty() {
+                    warn!(
+ "[trigger-action] StopVideo on {:?} did nothing — no material slot on that node names a video asset.",
+                        self.target
+                    );
+                }
+                for id in ids {
+                    crate::xrds_api::video::stop_video_asset_in_world(world, &id);
+                }
+                true
+            }
             XrdsAction::StopGltfAnimation => {
                 for player_entity in
                     animation_player_entities_for_root_in_world(world, self.target)

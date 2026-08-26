@@ -84,6 +84,9 @@ pub(super) fn install_xrds(app: &mut App) {
     app.init_resource::<XrdsImportedAssetCatalog>();
     app.init_resource::<crate::xrds_api::video::XrdsVideoTextures>();
 
+    #[cfg(not(target_os = "android"))]
+    crate::xrds_api::video_desktop::install(app);
+
     // Hardware video (Android). The decode and conversion run in the render world
     // because they need the renderer's Vulkan device and its queue; the main-world
     // half only keeps materials rebinding. See xrds_api/video_android.rs.

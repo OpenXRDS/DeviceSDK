@@ -158,6 +158,43 @@ pub(super) fn merge_imported_asset_catalog(world: &mut World, assets: &[XrdsScen
     let existing_assets = world.resource::<XrdsImportedAssetCatalog>().assets.clone();
     let merged = merge_asset_catalogs(assets, existing_assets);
     world.resource_mut::<XrdsImportedAssetCatalog>().assets = merged;
+    register_video_asset_surfaces(world);
+}
+
+/// Give every video asset a surface, without starting one.
+///
+/// A video is expensive in a way audio is not: playing one means a decoder — a
+/// thread on a desktop, a hardware codec session on a headset — plus GPU work every
+/// frame. So nothing here starts playback. It only registers the texture a material
+/// slot binds to, at the clip's real dimensions, so that an authored screen exists
+/// and reads as "nothing playing yet" rather than resolving to nothing at all.
+///
+/// Playback is always asked for: [`crate::xrds_api::video::play_video_asset_in_world`],
+/// reached from `XrdsAPI::play_video` or a `PlayVideo` trigger action.
+///
+/// The catalog merge is the right place because it is the single point at which the
+/// runtime learns an asset exists, whichever import path brought it in.
+fn register_video_asset_surfaces(world: &mut World) {
+    let videos: Vec<(String, String)> = world
+        .resource::<XrdsImportedAssetCatalog>()
+        .assets
+        .iter()
+        .filter(|asset| asset.kind == XrdsSceneAssetKind::Video)
+        .map(|asset| (asset.id.clone(), asset.uri.clone()))
+        .collect();
+
+    for (id, uri) in videos {
+        if crate::xrds_api::video::video_texture_handle_in_world(world, &id).is_some() {
+            continue;
+        }
+        // Header read only — no decoder is created. See the module note above.
+        match xrds_media::video::probe_video_size(&uri) {
+            Ok((width, height)) => {
+                crate::xrds_api::video::create_video_texture_in_world(world, id, width, height);
+            }
+            Err(e) => warn!("video asset '{id}' ({uri}) could not be read: {e}"),
+        }
+    }
 }
 
 pub(super) fn id_of_in_world<C>(world: &World, handle: &Handle<C>) -> Option<XrdsId> {
