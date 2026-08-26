@@ -104,6 +104,8 @@ pub struct EditorState {
     /// `pending_effect_params` because playback needs the Bevy world, which the
     /// command handlers do not have.
     pub pending_audio_preview:     Option<(XrdsSceneNodeId, bool)>,
+    /// Video preview request from the Inspector: `(asset id, play)`.
+    pub pending_video_preview:     Option<(String, bool)>,
     /// Live falloff/volume edit, applied without respawning the clip so a slider
     /// drag does not cut off the preview being listened to.
     pub pending_audio_falloff:     Option<(XrdsSceneNodeId, xrds_scene_graph::XrdsSceneAudioClip)>,
@@ -161,6 +163,13 @@ pub struct EditorState {
     /// The Track currently being previewed, if any. Its agent lives in the
     /// Bevy world; this is just the name, for the snapshot readout.
     pub track_preview_name: Option<String>,
+    /// The last Track the author previewed, kept after it finishes.
+    ///
+    /// `track_preview_name` is cleared the moment a preview ends on its own, which
+    /// left Stop with nothing to act on — and *after* a preview has finished is
+    /// exactly when Stop is needed, since a Track can leave things running past its
+    /// last key. Cleared only by an explicit Stop.
+    pub last_previewed_track: Option<String>,
     /// The live preview, mirrored out of the world once per frame so the
     /// snapshot builder — which has no world access — can report it. Drives the
     /// transport timecode and the playhead.
@@ -223,6 +232,7 @@ impl Default for EditorState {
             pending_capsule_geometry: None,
             pending_effect_params: None,
             pending_audio_preview: None,
+            pending_video_preview: None,
             pending_audio_falloff: None,
             gizmo_mode: GizmoMode::Translate,
             gizmo_hover: None,
@@ -251,6 +261,7 @@ impl Default for EditorState {
             pending_fire_trigger: None,
             pending_track_preview: None,
             track_preview_name: None,
+            last_previewed_track: None,
             track_preview: None,
             track_conflict: None,
             pending_env_conversions: std::collections::HashMap::new(),

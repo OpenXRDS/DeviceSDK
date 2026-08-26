@@ -134,11 +134,44 @@ pub fn apply_palette_command(
 // ---------------------------------------------------------------------------
 
 pub fn build_asset_catalog(doc: &XrdsSceneDocument) -> Vec<AssetCatalogEntry> {
-    doc.assets.iter().map(|a| AssetCatalogEntry {
-        id: a.id.clone(),
-        name: a.id.clone(),
-        kind: format!("{:?}", a.kind),
-    }).collect()
+    doc.assets
+        .iter()
+        .map(|a| AssetCatalogEntry {
+            id: a.id.clone(),
+            name: a.id.clone(),
+            kind: format!("{:?}", a.kind),
+            bound_to_node: if a.kind == xrds_scene_graph::XrdsSceneAssetKind::Video {
+                video_owner(doc, &a.id)
+            } else {
+                None
+            },
+        })
+        .collect()
+}
+
+/// The node whose material shows `asset_id`, if any.
+///
+/// Mirrors the document's own one-video-one-mesh rule so the picker and the
+/// validator agree; a picker that offers what the validator refuses is the
+/// arrangement that produced `MaterialTextureAssetKindMismatch` on commit.
+fn video_owner(doc: &XrdsSceneDocument, asset_id: &str) -> Option<u64> {
+    doc.nodes.iter().find_map(|node| {
+        // The document's own accessor: `node_material_ref` is crate-private to
+        // xrds-scene-graph, and a node without a material simply has no video.
+        let material = doc.node_material(node.id).ok()?;
+        let slots = [
+            material.textures.base_color.as_ref(),
+            material.textures.metallic_roughness.as_ref(),
+            material.textures.normal.as_ref(),
+            material.textures.occlusion.as_ref(),
+            material.textures.emissive.as_ref(),
+        ];
+        slots
+            .into_iter()
+            .flatten()
+            .any(|t| t.texture_asset_id == asset_id)
+            .then_some(node.id.0)
+    })
 }
 
 // ---------------------------------------------------------------------------

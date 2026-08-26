@@ -276,7 +276,9 @@ export default function App() {
         </div>
         )}
 
-        {!seqMode && !panelMode && <Palette snapshot={snapshot} send={send} />}
+        {!seqMode && !panelMode && (
+          <Palette snapshot={snapshot} send={send} onImportAsset={handleImportAsset} />
+        )}
       </div>
 
       {showShortcuts && <KeyboardShortcutsModal onClose={() => setShowShortcuts(false)} />}

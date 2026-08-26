@@ -1574,6 +1574,7 @@ function PrimitiveSection({ id, mat, assets, physics_body, gravity_scale, mass, 
         onLive={v => { const m = {...local, roughness: v}; setLocal(m); upd(m); }}
         onCommit={v => { const m = {...local, roughness: v}; setLocal(m); commit(m); }}
       />
+      <VideoSlotRow id={id} textures={mat.textures} assets={assets} send={send} />
       <TextureSlotRows id={id} textures={mat.textures} assets={assets} send={send} />
     </div>
   );
@@ -1588,26 +1589,128 @@ function PrimitiveSection({ id, mat, assets, physics_body, gravity_scale, mass, 
  * snapshot keeps current.
  *
  * Shared by both material sections; `MaterialParams` is all it needs. */
+/** VIDEO — a section of its own, above the texture slots.
+ *
+ * Technically a video *is* a texture: it fills a material slot, named by the same
+ * asset id, and only its contents change. That is an implementation truth, not an
+ * authoring one — nobody looking for "play a video on this screen" thinks to open
+ * TEXTURES and read the base-colour dropdown. So the slots keep working as the
+ * expert route, and this is the one an author finds.
+ *
+ * Writes to the base colour slot, which is what "show this video" means for a
+ * surface; the tooltip says so, because it replaces whatever image was there.
+ *
+ * A clip already bound to another mesh is not offered: one video is one surface,
+ * since two meshes would share a decoder and could only ever play in lockstep. */
+function VideoSlotRow({ id, textures, assets, send }: {
+  id: number;
+  textures: MaterialTextures;
+  assets: AssetCatalogEntry[];
+  send: (c: EditorCommand) => void;
+}) {
+  const videos = assets.filter(a => a.kind === "Video");
+  const boundHere = MATERIAL_TEXTURE_SLOTS
+    .map(slot => textures[slot.key])
+    .find(assetId => !!assetId && videos.some(v => v.id === assetId)) ?? null;
+
+  // Nothing to offer and nothing bound: stay out of the way rather than showing an
+  // empty control on every mesh in a scene with no video in it.
+  if (videos.length === 0 && !boundHere) return null;
+
+  const selectable = videos.filter(
+    v => v.bound_to_node === null || v.bound_to_node === undefined || v.id === boundHere,
+  );
+
+  return (
+    <>
+      <div className="text-[10px] text-overlay0 mt-1 mb-0.5">VIDEO</div>
+      <div className="flex items-center gap-1.5 mb-1">
+        <label
+          className="text-[10.5px] text-overlay0 w-[86px] shrink-0"
+          title="Shows this clip on the surface. It fills the base colour slot, replacing whatever image was there while it plays."
+        >
+          Clip
+        </label>
+        <Select
+          value={boundHere ?? TEXTURE_NONE_SENTINEL}
+          onValueChange={v => send({
+            type: "SetNodeMaterialTexture",
+            payload: {
+              id,
+              slot: "BaseColor",
+              texture_asset_id: v === TEXTURE_NONE_SENTINEL ? null : v,
+            },
+          })}
+          options={[
+            { value: TEXTURE_NONE_SENTINEL, label: "— none —" },
+            ...selectable.map(v => ({ value: v.id, label: v.name })),
+          ]}
+        />
+      </div>
+      {boundHere && (
+        <>
+          <div className="flex items-center gap-1.5 mb-1">
+            <label className="text-[10.5px] text-overlay0 w-[86px] shrink-0">Preview</label>
+            <div className="flex gap-1">
+              <button className="tb-btn text-[11px] px-2 py-0.5"
+                title="Play this video on the surface"
+                onClick={() => send({ type: "PreviewVideo", payload: { asset_id: boundHere, playing: true } })}>
+                ▶ Play
+              </button>
+              <button className="tb-btn text-[11px] px-2 py-0.5"
+                title="Stop; the last frame stays on the surface"
+                onClick={() => send({ type: "PreviewVideo", payload: { asset_id: boundHere, playing: false } })}>
+                ■ Stop
+              </button>
+            </div>
+          </div>
+          <div className="insp-note">
+            Preview only. In a running scene a video never starts on its own — add a
+            <b> PlayVideo</b> event in the Sequencer, since a decoder costs a thread
+            or a hardware codec session and every frame of GPU work.
+          </div>
+        </>
+      )}
+    </>
+  );
+}
+
 function TextureSlotRows({ id, textures, assets, send }: {
   id: number;
   textures: MaterialTextures;
   assets: AssetCatalogEntry[];
   send: (c: EditorCommand) => void;
 }) {
-  // Video belongs here, not in a category of its own. A video *is* a texture from
-  // the material's point of view — it fills the same slot, named by the same asset
-  // id — and the only difference is that its contents change. Filtering it out was
-  // the difference between an asset that imports and an asset that can be used.
-  const textureAssets = assets.filter(a => a.kind === "Texture" || a.kind === "Video");
+  // Images only. A video *is* a texture underneath — same slot, same asset id —
+  // but offering it here as well as in VIDEO states the same fact in two places,
+  // and picking it in one silently changed the other. VIDEO is where a clip is
+  // chosen; a slot it occupies shows as taken rather than editable.
+  const textureAssets = assets.filter(a => a.kind === "Texture");
+  const videoInSlot = (assetId: string | null | undefined): string | null =>
+    assetId && assets.some(a => a.id === assetId && a.kind === "Video") ? assetId : null;
   return (
     <>
       <div className="text-[10px] text-overlay0 mt-1 mb-0.5">TEXTURES</div>
       {textureAssets.length === 0 && (
         <div className="text-[10px] text-yellow">
-          ⚠ no texture or video assets imported yet
+          ⚠ no texture assets imported yet
         </div>
       )}
-      {MATERIAL_TEXTURE_SLOTS.map(slot => (
+      {MATERIAL_TEXTURE_SLOTS.map(slot => {
+        // A slot a video is playing into is shown, not offered: editing it here
+        // would silently unbind a clip from a section the author is not looking at.
+        if (videoInSlot(textures[slot.key])) {
+          return (
+            <div key={slot.key} className="flex items-center gap-1.5 mb-1">
+              <label className="text-[10.5px] text-overlay0 w-[86px] shrink-0">{slot.label}</label>
+              <span className="text-[10.5px] text-overlay0 italic"
+                title="This slot is showing a video. Change it in the VIDEO section above.">
+                ▶ video — set in VIDEO
+              </span>
+            </div>
+          );
+        }
+        return (
         <div key={slot.key} className="flex items-center gap-1.5 mb-1">
           <label className="text-[10.5px] text-overlay0 w-[86px] shrink-0">{slot.label}</label>
           <Select
@@ -1622,16 +1725,12 @@ function TextureSlotRows({ id, textures, assets, send }: {
             })}
             options={[
               { value: TEXTURE_NONE_SENTINEL, label: "— none —" },
-              // Marked, because "this slot plays a video" is a materially
-              // different thing to author than "this slot shows a picture".
-              ...textureAssets.map(a => ({
-                value: a.id,
-                label: a.kind === "Video" ? `▶ ${a.name}` : a.name,
-              })),
+              ...textureAssets.map(a => ({ value: a.id, label: a.name })),
             ]}
           />
         </div>
-      ))}
+        );
+      })}
     </>
   );
 }
@@ -1660,6 +1759,7 @@ function MaterialSection({ id, mat, assets, send }: { id: number; mat: MaterialP
       />
       {/* Reads `mat`, not `local`: texture writes are their own command and
         * never part of the drag draft, so the snapshot is the truth. */}
+      <VideoSlotRow id={id} textures={mat.textures} assets={assets} send={send} />
       <TextureSlotRows id={id} textures={mat.textures} assets={assets} send={send} />
     </div>
   );

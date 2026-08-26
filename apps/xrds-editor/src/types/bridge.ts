@@ -16,6 +16,9 @@ export interface AssetCatalogEntry {
   id: string;
   name: string;
   kind: string;
+  /** For a `Video`, the node already showing it — one clip is one surface.
+   *  `null` for every other kind, which may be shared freely. */
+  bound_to_node: number | null;
 }
 
 /** A reusable panel template — the unified model behind HUD panels and
@@ -238,6 +241,8 @@ export type XrdsAction =
   | { kind: "PlayEffect"; data: { count: number | null } }
   | { kind: "StopEffect" }
   | { kind: "PlayAudio" }
+  | { kind: "PlayVideo"; data: { repeat: string } }
+  | { kind: "StopVideo" }
   | { kind: "StopAudio" }
   | { kind: "SetVisible"; data: boolean }
   | {
@@ -471,7 +476,7 @@ export interface TaskDto {
  *  replaced wholesale by the first real snapshot.
  *
  *  Bump this together with the Rust constant whenever a DTO changes. */
-export const BRIDGE_VERSION = 18;
+export const BRIDGE_VERSION = 20;
 
 export interface EditorSnapshot {
   /** See {@link BRIDGE_VERSION}. `0` means a build predating the check. */
@@ -628,6 +633,7 @@ export type EditorCommand =
   | { type: "ClearFog" }
   | { type: "SetXrPassthrough"; payload: { enabled: boolean } }
   | { type: "PreviewAudioClip"; payload: { id: number; playing: boolean } }
+  | { type: "PreviewVideo"; payload: { asset_id: string; playing: boolean } }
   | { type: "SetAudioClipParams"; payload: { id: number; asset_id: string; volume: number;
       looped: boolean; spatial: boolean; autoplay: boolean; distance_model: string;
       min_distance: number; max_distance: number; rolloff_factor: number } }

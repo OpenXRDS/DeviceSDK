@@ -347,6 +347,7 @@ impl XrdsApp for XrdsEditorTauriApp {
                     restore_track_nodes_from_document(ctx, &name, RestoreScope::Everything);
                     if ctx.preview_play_track(&name) {
                         if let Some(mut state) = ctx.resource_mut::<EditorState>() {
+                            state.last_previewed_track = Some(name.clone());
                             state.track_preview_name = Some(name);
                         }
                     } else if let Some(mut state) = ctx.resource_mut::<EditorState>() {
@@ -365,7 +366,19 @@ impl XrdsApp for XrdsEditorTauriApp {
                 }
 
                 Req::Stop => {
-                    let name = ctx.resource::<EditorState>().and_then(|s| s.track_preview_name.clone());
+                    // Falls back to the last previewed Track, because
+                    // `track_preview_name` is cleared the moment a preview ends on
+                    // its own — and after it has ended is precisely when Stop is
+                    // needed. A Track can leave things running past its last key: a
+                    // Trail keeps emitting, and a video keeps playing by design.
+                    // Without the fallback the button was enabled and inert exactly
+                    // then, which is what its own comment in the UI says it must
+                    // not be.
+                    let name = ctx.resource::<EditorState>().and_then(|s| {
+                        s.track_preview_name
+                            .clone()
+                            .or_else(|| s.last_previewed_track.clone())
+                    });
                     ctx.preview_stop_track();
                     // The document is the authority on where a previewed
                     // Track's nodes belong; restore from it by name rather than
@@ -378,6 +391,7 @@ impl XrdsApp for XrdsEditorTauriApp {
                     }
                     if let Some(mut state) = ctx.resource_mut::<EditorState>() {
                         state.track_preview_name = None;
+                        state.last_previewed_track = None;
                     }
                 }
             }
@@ -628,6 +642,31 @@ impl XrdsApp for XrdsEditorTauriApp {
             }
         }
 
+        let pending_video = ctx
+            .resource::<EditorState>()
+            .and_then(|s| s.pending_video_preview.clone());
+        if let Some((asset_id, playing)) = pending_video {
+            let ok = if playing {
+                ctx.play_video(&asset_id)
+            } else {
+                ctx.stop_video(&asset_id);
+                true
+            };
+            if !ok {
+                // Says so rather than leaving a dead button. The likeliest cause is
+                // a clip the runtime has not been told about — an import that has
+                // not reached the runtime catalog yet.
+                if let Some(mut state) = ctx.resource_mut::<EditorState>() {
+                    state.pending_status = Some(format!(
+                        "Could not play '{asset_id}' — check the video imported"
+                    ));
+                }
+            }
+            if let Some(mut state) = ctx.resource_mut::<EditorState>() {
+                state.pending_video_preview = None;
+            }
+        }
+
         // Keep physics paused outside play mode so Dynamic objects stay at authored positions.
         let is_playing = ctx.resource::<EditorState>().map(|s| s.is_playing).unwrap_or(false);
         ctx.set_physics_paused(!is_playing);
@@ -721,7 +760,7 @@ fn effect_params_from_scene(fx: &xrds_scene_graph::XrdsSceneEffect) -> xrds_comp
 }
 
 /// Why a Track's assets are being put back, which decides how much to undo.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum RestoreScope {
     /// Every row, unconditionally — the author pressed Stop, or a new run is
     /// starting and must not inherit the last one's leftovers. Effects are reset
@@ -760,6 +799,8 @@ fn restore_track_nodes_from_document(
         visible: bool,
         material: Option<XrdsSceneMaterial>,
         effect: Option<xrds_scene_graph::XrdsSceneEffect>,
+        /// Video assets this node's material shows, stopped on an explicit Stop.
+        videos: Vec<String>,
     }
 
     let rows: Vec<Row> = ctx
@@ -790,6 +831,11 @@ fn restore_track_nodes_from_document(
                                     XrdsSceneNodePayload::Effect(fx) => Some(fx.clone()),
                                     _ => None,
                                 },
+                                videos: doc
+                                    .node_material(id)
+                                    .ok()
+                                    .map(|m| video_asset_ids_in_material(doc, m))
+                                    .unwrap_or_default(),
                             })
                         }
                         _ => None,
@@ -801,6 +847,23 @@ fn restore_track_nodes_from_document(
 
     for row in rows {
         let id = xrds_runtime::sdk::XrdsId(row.id);
+
+        // Stop on an explicit Stop only.
+        //
+        // This mirrors what the scope already means for effects: `Everything` is
+        // the author pressing Stop (or a fresh run starting), and Stop means clean
+        // up. Leaving a decoder running after that would make video the one thing
+        // the button does not stop.
+        //
+        // `OnCompletion` deliberately does *not* stop it. A Track reaching its end
+        // does not tear down what it started — nothing else is torn down either —
+        // and a screen that keeps playing after the choreography finishes is the
+        // intended behaviour, not a leak.
+        if scope == RestoreScope::Everything {
+            for asset_id in &row.videos {
+                ctx.stop_video(asset_id);
+            }
+        }
 
         if let Some(fx) = &row.effect {
             match scope {
@@ -823,6 +886,35 @@ fn restore_track_nodes_from_document(
             ctx.set_material_params_for_node(id, material.into());
         }
     }
+}
+
+/// The video assets a material's slots name.
+///
+/// Mirrors the document's own slot walk; the struct has one field per slot and no
+/// iterator, so the list is spelled out — a slot added later and missed here would
+/// simply never stop, silently.
+fn video_asset_ids_in_material(
+    doc: &XrdsSceneDocument,
+    material: &XrdsSceneMaterial,
+) -> Vec<String> {
+    let slots = [
+        material.textures.base_color.as_ref(),
+        material.textures.metallic_roughness.as_ref(),
+        material.textures.normal.as_ref(),
+        material.textures.occlusion.as_ref(),
+        material.textures.emissive.as_ref(),
+    ];
+    let mut ids: Vec<String> = Vec::new();
+    for texture in slots.into_iter().flatten() {
+        let asset_id = texture.texture_asset_id.trim();
+        let is_video = doc
+            .asset(asset_id)
+            .is_some_and(|a| a.kind == xrds_scene_graph::XrdsSceneAssetKind::Video);
+        if is_video && !ids.iter().any(|id| id == asset_id) {
+            ids.push(asset_id.to_string());
+        }
+    }
+    ids
 }
 
 fn absolutize_doc_asset_uris(doc: &mut XrdsSceneDocument, scene_dir: &std::path::Path) {

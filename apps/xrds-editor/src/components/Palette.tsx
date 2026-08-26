@@ -6,6 +6,9 @@ import { useResizable } from "../hooks/useResizable";
 interface Props {
   snapshot: EditorSnapshot;
   send: (cmd: EditorCommand) => void;
+  /** Opens the same file dialog as File → Import Asset.
+   *  Lives in App because the dialog is an IPC call, not a command. */
+  onImportAsset: () => void;
 }
 
 interface ItemMeta { label: string; tip: string; }
@@ -66,7 +69,7 @@ const DEFAULT_HEIGHT = 148;
 const MIN_HEIGHT = 84;
 const MAX_HEIGHT = 440;
 
-export function Palette({ snapshot, send }: Props) {
+export function Palette({ snapshot, send, onImportAsset }: Props) {
   const [tab, setTab] = useState<"primitives"|"assets">("primitives");
   const [category, setCategory] = useState<string>(PRIMITIVE_GROUPS[0].label);
   // Handle sits on the palette's own top edge — drag up (away from the
@@ -123,9 +126,19 @@ export function Palette({ snapshot, send }: Props) {
             </button>
           );
         })}
+        {/* Import is here as well as in the File menu: this tab is where an author
+            already is when they notice something missing, and hunting back up to a
+            menu for it is a detour. */}
+        {tab === "assets" && (
+          <button className="tb-btn text-[11px] px-2 py-0.5 mb-1 self-start"
+            title="Import a model, texture, video, audio clip or environment map"
+            onClick={onImportAsset}>
+            + Import Asset…
+          </button>
+        )}
         {tab === "assets" && (
           snapshot.asset_catalog.length === 0
-            ? <span className="pal-empty">No assets imported yet.  Use File → Import Asset…</span>
+            ? <span className="pal-empty">No assets imported yet.</span>
             : snapshot.asset_catalog.map(asset => (
                 <div key={asset.id} className="asset-row"
                      style={{ display:"flex", alignItems:"center", gap:6, width:"100%" }}

@@ -712,6 +712,11 @@ fn default_action_for_kind(kind: &str) -> Option<XrdsAction> {
         "StopEffect" => XrdsAction::StopEffect,
         "PlayAudio" => XrdsAction::PlayAudio,
         "StopAudio" => XrdsAction::StopAudio,
+        // Looping is the default a screen wants; see `default_video_repeat`.
+        "PlayVideo" => XrdsAction::PlayVideo {
+            repeat: XrdsSceneAnimationRepeatMode::Loop,
+        },
+        "StopVideo" => XrdsAction::StopVideo,
         "SetVisible" => XrdsAction::SetVisible(true),
         "SetTransform" => XrdsAction::SetTransform {
             position: Some([0.0, 0.0, 0.0]),
@@ -762,6 +767,13 @@ fn action_to_dto(a: &XrdsAction) -> XrdsActionDto {
         XrdsAction::StopEffect => XrdsActionDto::StopEffect,
         XrdsAction::PlayAudio => XrdsActionDto::PlayAudio,
         XrdsAction::StopAudio => XrdsActionDto::StopAudio,
+        XrdsAction::PlayVideo { repeat } => XrdsActionDto::PlayVideo {
+            repeat: match repeat {
+                XrdsSceneAnimationRepeatMode::Once => "Once".to_string(),
+                XrdsSceneAnimationRepeatMode::Loop => "Loop".to_string(),
+            },
+        },
+        XrdsAction::StopVideo => XrdsActionDto::StopVideo,
         XrdsAction::SetVisible(v) => XrdsActionDto::SetVisible(*v),
         XrdsAction::SetTransform { position, rotation, scale, duration_secs, ease } =>
             XrdsActionDto::SetTransform {
@@ -816,6 +828,16 @@ fn action_from_dto(a: &XrdsActionDto) -> XrdsAction {
         XrdsActionDto::StopEffect => XrdsAction::StopEffect,
         XrdsActionDto::PlayAudio => XrdsAction::PlayAudio,
         XrdsActionDto::StopAudio => XrdsAction::StopAudio,
+        XrdsActionDto::PlayVideo { repeat } => XrdsAction::PlayVideo {
+            // An unrecognised string means a newer editor, or a typo. Looping is
+            // the safer reading: a screen that keeps playing is a visible mistake,
+            // one that stops after a single showing looks like a broken decoder.
+            repeat: match repeat.as_str() {
+                "Once" => XrdsSceneAnimationRepeatMode::Once,
+                _ => XrdsSceneAnimationRepeatMode::Loop,
+            },
+        },
+        XrdsActionDto::StopVideo => XrdsAction::StopVideo,
         XrdsActionDto::SetVisible(v) => XrdsAction::SetVisible(*v),
         XrdsActionDto::SetTransform { position, rotation, scale, duration_secs, ease } =>
             XrdsAction::SetTransform {

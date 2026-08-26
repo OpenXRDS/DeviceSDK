@@ -565,6 +565,13 @@ pub fn apply_inspector_command(
             // in the scene and lose the playhead.
             false
         }
+        EditorCommand::PreviewVideo { asset_id, playing } => {
+            state.pending_video_preview = Some((asset_id.clone(), *playing));
+            // No reimport, for the same reason auditioning audio does not: the point
+            // is to see the clip already bound, and rebuilding the entity would drop
+            // the texture the surface is showing.
+            false
+        }
         EditorCommand::SetAudioClipParams {
             id,
             asset_id,

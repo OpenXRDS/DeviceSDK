@@ -17,6 +17,7 @@ export const ACTION_KINDS = [
   "PlayGltfAnimation", "StopGltfAnimation", "ModifyHealth",
   "PlayEffect", "StopEffect",
   "PlayAudio", "StopAudio",
+  "PlayVideo", "StopVideo",
 ] as const;
 
 export const ACTION_ICONS: Record<string, string> = {
@@ -24,6 +25,7 @@ export const ACTION_ICONS: Record<string, string> = {
   ModifyHealth: "❤", PlayGltfAnimation: "🎞", StopGltfAnimation: "⏹",
   PlayEffect: "💥", StopEffect: "🛑",
   PlayAudio: "🔊", StopAudio: "🔇",
+  PlayVideo: "▶", StopVideo: "⏸",
   Unknown: "?",
 };
 
@@ -35,6 +37,7 @@ export const ACTION_COLOR: Record<string, string> = {
   PlayGltfAnimation: "var(--blue)", StopGltfAnimation: "var(--surface1)",
   PlayEffect: "var(--peach)", StopEffect: "var(--surface1)",
   PlayAudio: "var(--green)", StopAudio: "var(--surface1)",
+  PlayVideo: "var(--sky)", StopVideo: "var(--surface1)",
   Unknown: "var(--surface1)",
 };
 
@@ -71,6 +74,11 @@ export function summarizeAction(a: XrdsAction): string {
     // Spelled out because rodio's own stop is one-way, and the distinction is the
     // reason this action is safe to use on looping ambience.
     case "StopAudio": return "StopAudio (rewind)";
+    // Spelled out because a video is the one asset that never starts by itself:
+    // the decoder is the cost, and this is what pays it.
+    case "PlayVideo":
+      return a.data.repeat === "Once" ? "PlayVideo (once)" : "PlayVideo (loop)";
+    case "StopVideo": return "StopVideo (keeps last frame)";
     // Element actions show their value: on a panel row the value *is* the point,
     // unlike SetMaterial where the detail lives in the editor below.
     case "SetElementText": return `Text "${a.data.text}"`;
@@ -620,6 +628,23 @@ export function SequencerInspector({
 
 
 
+          {draftAction.kind === "PlayVideo" && (
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <label className="text-[10.5px] text-overlay0 w-16">Repeat</label>
+              <Select
+                value={draftAction.data.repeat}
+                onValueChange={v => {
+                  const next: XrdsAction = { kind: "PlayVideo", data: { repeat: v } };
+                  setDraftAction(next);
+                  commitDraft(next, draftAtSecs);
+                }}
+                options={[
+                  { value: "Loop", label: "Loop" },
+                  { value: "Once", label: "Once" },
+                ]}
+              />
+            </div>
+          )}
           {draftAction.kind === "PlayGltfAnimation" && (
             <Field label="GLTF ANIMATION">
               <div className="flex items-center gap-1.5 flex-wrap">

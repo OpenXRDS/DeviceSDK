@@ -224,6 +224,19 @@ pub enum EditorCommand {
     /// Audition a clip in the editor. `playing: false` stops and rewinds, so the
     /// next preview starts from the top.
     PreviewAudioClip { id: u64, playing: bool },
+    // --- Video ---
+    /// Preview a video in the editor viewport. `playing: false` stops it and leaves
+    /// the last frame on the surface.
+    ///
+    /// The audition equivalent for video, and needed for the same reason audio
+    /// needed one: playback is trigger-demanded, so without this an author would
+    /// have to author a Track and enter play mode just to see whether they picked
+    /// the right clip.
+    ///
+    /// Takes the *asset* id rather than a node, unlike `PreviewAudioClip`: a video
+    /// is not a node, it is a texture that any number of surfaces may show.
+    PreviewVideo { asset_id: String, playing: bool },
+
     /// Every field of an audio clip in one command, mirroring `SetEffectParams`.
     /// One command rather than nine keeps the document edit — and therefore the
     /// undo entry — a single step, which is what an author expects from dragging
@@ -376,7 +389,7 @@ pub enum EditorCommand {
 ///
 /// **If you change a DTO and do not bump this, you have removed the only thing
 /// that would have told anyone.**
-pub const BRIDGE_VERSION: u32 = 18;
+pub const BRIDGE_VERSION: u32 = 20;
 
 /// State snapshot emitted to the webview after each frame's update.
 /// Grow this incrementally — add fields as each phase is implemented.
@@ -535,6 +548,13 @@ pub struct AssetCatalogEntry {
     pub id: String,
     pub name: String,
     pub kind: String,
+    /// For a `Video`, the node already showing it — one clip is one surface.
+    ///
+    /// The Inspector uses this to leave an already-bound video out of another
+    /// mesh's slot picker, rather than offering something the document will refuse
+    /// on commit. `None` for every other kind, which may be shared freely.
+    #[serde(default)]
+    pub bound_to_node: Option<u64>,
 }
 
 /// Inspector data for the selected node.
@@ -921,6 +941,20 @@ pub enum XrdsActionDto {
     PlayAudio,
     /// Stop the target audio clip and rewind, so it can be played again.
     StopAudio,
+    /// Play the video on the target node's material. No clip field: the clip is
+    /// whichever video asset the target's material names, as with PlayAudio.
+    ///
+    /// Video never starts on its own — a decoder is a thread or a hardware codec
+    /// session plus GPU work every frame — so this is the only way an authored
+    /// screen begins playing.
+    ///
+    /// `repeat` is "Once" | "Loop" — the same plain-String-for-a-closed-set
+    /// convention `PlayGltfAnimation` uses. No `volume`: no video path decodes
+    /// audio, so the control would adjust nothing.
+    PlayVideo { repeat: String },
+    /// Stop the video on the target node's material, releasing its decoder. The
+    /// surface keeps its last frame.
+    StopVideo,
     SetVisible(bool),
     /// `ease` is "Linear" | "Quad" | "Cubic" — same plain-String-for-a-
     /// closed-set convention as `repeat`/`hand`/`crossing` elsewhere in
