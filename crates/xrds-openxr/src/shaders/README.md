@@ -13,4 +13,4 @@ nothing at build time checks that one matches the other.
 
 `video_convert.*` is the Android video conversion pass: it samples an imported
 `AHardwareBuffer` through a Ycbcr-converting sampler and writes ordinary RGBA that
-wgpu can then own. See `docs/video-asset-spike.md`.
+wgpu can then own. See `docs/done/video-asset-spike.md`.

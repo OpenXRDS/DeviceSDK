@@ -55,7 +55,7 @@
 //!
 //! Closing that gap properly means not using rodio's spatialization at all —
 //! `spatial: false` plus a panner of our own, which is a larger job than this
-//! phase. See `docs/spatial-audio-backend-spike.md`.
+//! phase. See `docs/done/spatial-audio-backend-spike.md`.
 //!
 //! ### An approach that was tried and reverted
 //!

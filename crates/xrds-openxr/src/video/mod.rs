@@ -1,6 +1,6 @@
 //! Android video frames as wgpu textures.
 //!
-//! Route B of `docs/video-asset-spike.md`. `xrds-media` decodes into GPU-resident
+//! Route B of `docs/done/video-asset-spike.md`. `xrds-media` decodes into GPU-resident
 //! `AHardwareBuffer`s; this turns one into a `wgpu::Texture` a material can sample.
 //!
 //! ```ignore

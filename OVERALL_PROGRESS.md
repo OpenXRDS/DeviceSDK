@@ -195,7 +195,7 @@ Four decisions worth keeping, because each of them was a fork:
   animations; only an explicit Stop cleans up.
 
 Full account, including the route A that was measured and eliminated on device:
-`docs/video-asset-spike.md`.
+`docs/done/video-asset-spike.md`.
 
 ### 3) ~~Remaining naming polish~~ — done
 
@@ -290,7 +290,7 @@ Planned in detail in `docs/done/small-phases-plan.md`.
 
 | # | Item | Crate | Note |
 | --- | --- | --- | --- |
-| S1 | ~~Spatial-audio params: honour or delete~~ | `xrds-components` / `xrds-scene-graph` / `xrds-runtime` | **Done 2026-08-19, verified on desktop and Quest 3.** Four falloff fields honoured, `hrtf` removed. Also fixed a bug it uncovered: `SpatialListener` was attached only on the `XrdsAPI` camera path, so **spatial audio had no listener in XR at all** — every XRDS app on a headset, not just this feature. Backends were evaluated and rejected; stay on `bevy_audio` (`docs/spatial-audio-backend-spike.md`). |
+| S1 | ~~Spatial-audio params: honour or delete~~ | `xrds-components` / `xrds-scene-graph` / `xrds-runtime` | **Done 2026-08-19, verified on desktop and Quest 3.** Four falloff fields honoured, `hrtf` removed. Also fixed a bug it uncovered: `SpatialListener` was attached only on the `XrdsAPI` camera path, so **spatial audio had no listener in XR at all** — every XRDS app on a headset, not just this feature. Backends were evaluated and rejected; stay on `bevy_audio` (`docs/done/spatial-audio-backend-spike.md`). |
 | S2 | ~~Zone-event logging~~ | `xrds-runtime` | **Done** — `zone.rs::report_unresolved`. Not `debug!` as this row's title assumed: the deployed runtime runs at `Level::INFO`, so a `debug!` line is invisible on a headset, which is exactly where it needs reading. The *first* unresolved collision logs at `info!` once and everything after stays at `debug!`, so a busy scene cannot spam. |
 | S3 | ~~Head-locked interactive-template diagnostic~~ | `xrds-scene-graph` / editor | **Done 2026-08-26.** The SDK half already existed and was tested; only the editor grey-out was missing, and it now refuses interactive templates for a head-locked node rather than reporting the mistake after it is made. |
 | S4 | ~~Passthrough blend-mode toggle~~ | `xrds-openxr` / `xrds-runtime` / editor | **Done 2026-08-19, device-verified on Quest 3** — authored from the editor, cube floating in the real room. Was recorded as "editor only"; in fact `XR_FB_passthrough` was never requested and the authored field reached nothing. Also **not** `EnvironmentBlendMode::ALPHA_BLEND` — that is a global frame-blend parameter and using it bleeds reality through every non-opaque surface. Passthrough is a composition layer beneath the projection; recipe in `docs/done/small-phases-plan.md` S4. |
@@ -368,7 +368,7 @@ Features present in engines like Unity, Godot, or Unreal that are not yet in Dev
 | **Post-processing stack** | Medium | Bloom + tonemapping exist (`XrdsBloom`, `XrdsTonemapping`) and exposure is fully authorable; no DOF, SSAO, or color grading |
 | **NavMesh / pathfinding** | Medium | AI agent navigation; needed for NPC-driven XR experiences |
 | **LOD system** | Medium | Performance at scene scale; no automatic LOD generation or selection |
-| ~~**Video playback**~~ | **Done** | `XrdsSceneAssetKind::Video` (H.264/HEVC in `.mp4`), VIDEO inspector section, `PlayVideo`/`StopVideo` Track actions. MediaCodec → `AHardwareBuffer` → Vulkan Ycbcr conversion → wgpu texture on Android, ffmpeg on desktop. Device-verified at **0.18 ms/frame, 1280×720**. See `docs/video-asset-spike.md`. |
+| ~~**Video playback**~~ | **Done** | `XrdsSceneAssetKind::Video` (H.264/HEVC in `.mp4`), VIDEO inspector section, `PlayVideo`/`StopVideo` Track actions. MediaCodec → `AHardwareBuffer` → Vulkan Ycbcr conversion → wgpu texture on Android, ffmpeg on desktop. Device-verified at **0.18 ms/frame, 1280×720**. See `docs/done/video-asset-spike.md`. |
 | ~~**Capsule primitive**~~ | **Done** | `XrdsCapsule` shipped; also now the shape of the player's physics body. |
 | **Networking / multiplayer** | Low | The transport layer (`xrds-net`) is itself hardened and internal-milestone-ready, including a real two-machine WebRTC handshake — see `docs/done/xrds-net-release-readiness.md`. What is still missing is the *game-level* feature: an `XrdsAction` that syncs trigger effects across clients, which needs an authority model decided first (see `docs/xrds-trigger-action-backlog.md`'s Networking entry). Large scope, deferred. |
 | **Terrain system** | Low | Heightmaps, large world; not a near-term XR target |

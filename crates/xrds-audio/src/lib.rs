@@ -44,7 +44,7 @@
 //! twelve lines below a warning about exactly that failure mode. The four falloff fields
 //! are now honoured by `xrds-runtime`'s `audio_falloff_system`. `hrtf` has been removed
 //! from the payload: neither `bevy_audio` nor rodio can render binaural audio, and no
-//! flag should promise otherwise. `docs/spatial-audio-backend-spike.md` records the
+//! flag should promise otherwise. `docs/done/spatial-audio-backend-spike.md` records the
 //! verified route if that capability is ever wanted.
 //!
 //! This crate answers one question Bevy cannot: **which output devices exist?**

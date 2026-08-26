@@ -1182,7 +1182,7 @@ pub struct XrdsSceneAudioClip {
     // two per-ear gains; `grep -i hrtf` over its source finds nothing). Shipping a
     // flag that silently does nothing is worse than not offering it. A verified
     // route to real binaural, should it ever be wanted, is written up in
-    // `docs/spatial-audio-backend-spike.md`; re-adding the field is a one-liner
+    // `docs/done/spatial-audio-backend-spike.md`; re-adding the field is a one-liner
     // once the capability behind it exists.
     //
     // Removal is document-compatible: the field was `#[serde(default)]`, so older

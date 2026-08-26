@@ -824,7 +824,7 @@ fn main() {
 
 /// Put a video on a plane in front of the player.
 ///
-/// B3 of docs/video-asset-spike.md, and the point of the whole route: after
+/// B3 of docs/done/video-asset-spike.md, and the point of the whole route: after
 /// `play_hardware_video`, a hardware-decoded frame is just a texture slot. Nothing
 /// below this line knows the pixels came from MediaCodec rather than a PNG.
 #[cfg(target_os = "android")]
@@ -980,7 +980,7 @@ fn android_main(android_app: winit::platform::android::activity::AndroidApp) {
     // Runs only when a clip has been pushed to external storage:
     //   adb push clip.mp4 /sdcard/Android/data/org.openxrds.devicesdk/files/probe_decode.mp4
     //
-    // Phase 1/B1 of docs/video-asset-spike.md. It proves the hardware decoder
+    // Phase 1/B1 of docs/done/video-asset-spike.md. It proves the hardware decoder
     // produces GPU-resident frames on this device before B2 tries to import one
     // into Vulkan — the cheapest point at which that can be wrong. It logs and
     // returns without starting the app: the subject is the decoder, and an XR

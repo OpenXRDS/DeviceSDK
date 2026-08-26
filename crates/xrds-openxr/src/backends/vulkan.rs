@@ -65,7 +65,7 @@ impl OpenXrGraphicsBackend<openxr::Vulkan> for GraphicsInner<openxr::Vulkan> {
             // Zero-copy video on Android: import a MediaCodec/AImageReader
             // AHardwareBuffer as a sampled image. The buffer is vendor-tiled and
             // Vulkan describes it only by external format (measured — see
-            // docs/video-asset-spike.md), so sampling it needs a Ycbcr conversion
+            // docs/done/video-asset-spike.md), so sampling it needs a Ycbcr conversion
             // and the feature enabled below.
             #[cfg(target_os = "android")]
             c"VK_ANDROID_external_memory_android_hardware_buffer",

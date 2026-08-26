@@ -206,7 +206,7 @@ Grouped by the actual method clusters in `xrds_api.rs` (`spawn_*`, the 32
 ## 13. Platform Notes
 
 - Android XR / Quest bringup — summarize and link
-  `docs/android-xr-quest-bringup.md`.
+  `docs/done/android-xr-quest-bringup.md`.
 - Desktop/Linux build notes — the `apt install` list and Linux-editor notes
   already in `README.md`; move here rather than duplicate.
 

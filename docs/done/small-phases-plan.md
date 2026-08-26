@@ -166,7 +166,7 @@ Judged against the parity bar in `OVERALL_PROGRESS.md`:
   of scope for 1.0.
 
 Binaural was evaluated properly rather than left as a guess — see
-**`docs/spatial-audio-backend-spike.md`**. Outcome, in short:
+**`docs/done/spatial-audio-backend-spike.md`**. Outcome, in short:
 
 - **No backend swap.** `fyrox-sound` has the features but drags in `fyrox-core` +
   `fyrox-resource` and a second output stream; `kira` integrates cleanly but its
@@ -229,7 +229,7 @@ units. So the level is monotone and hits silence exactly at `max_distance` — w
 the authored fields promise — but is not a calibrated absolute. Panning is
 unaffected: the sink volume is one scalar across both channels and cannot alter
 their ratio. Closing this properly means abandoning rodio's spatialization for a
-panner of our own; see `docs/spatial-audio-backend-spike.md`.
+panner of our own; see `docs/done/spatial-audio-backend-spike.md`.
 
 ### Watch for this
 

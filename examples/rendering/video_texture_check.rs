@@ -1,6 +1,6 @@
 // A 2-D video playing on a surface in a 3-D scene, through the public API.
 //
-// Phase 0 of docs/video-asset-spike.md. There is no separate render path here and
+// Phase 0 of docs/done/video-asset-spike.md. There is no separate render path here and
 // there does not need to be one: a video screen is an ordinary textured quad, and
 // the only thing that makes it a video is that its texture changes every frame.
 //

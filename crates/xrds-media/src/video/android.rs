@@ -1,6 +1,6 @@
 //! Hardware video decode on Android: file → `AMediaCodec` → `AHardwareBuffer`.
 //!
-//! Phase 1/B1 of `docs/video-asset-spike.md`. The counterpart to [`super::decode`],
+//! Phase 1/B1 of `docs/done/video-asset-spike.md`. The counterpart to [`super::decode`],
 //! which decodes in software via ffmpeg for the desktop. Both end at "a frame you
 //! can put on a surface"; only this one gets there without the CPU touching a pixel.
 //!

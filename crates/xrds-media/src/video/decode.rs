@@ -2,7 +2,7 @@
 //!
 //! The "media import and playback" half of this crate's mandate, which its own
 //! module docs have listed as planned since the capture/transport split. Phase 0 of
-//! `docs/video-asset-spike.md`.
+//! `docs/done/video-asset-spike.md`.
 //!
 //! **Desktop only, and deliberately so.** This decodes in software via ffmpeg and
 //! converts to RGBA on the CPU, which is the wrong shape for a headset: a Quest

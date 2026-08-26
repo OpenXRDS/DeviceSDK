@@ -3,7 +3,7 @@
 //! The Android counterpart to [`super::video`]. That module takes RGBA bytes from
 //! the main world; this one never has bytes at all — the frame is decoded by
 //! MediaCodec into an `AHardwareBuffer`, converted by Vulkan, and handed to Bevy as
-//! an already-resident GPU texture. See `docs/video-asset-spike.md`.
+//! an already-resident GPU texture. See `docs/done/video-asset-spike.md`.
 //!
 //! # Why the work happens in the render world
 //!
