@@ -482,7 +482,7 @@ export interface TaskDto {
  *  replaced wholesale by the first real snapshot.
  *
  *  Bump this together with the Rust constant whenever a DTO changes. */
-export const BRIDGE_VERSION = 21;
+export const BRIDGE_VERSION = 23;
 
 export interface EditorSnapshot {
   /** See {@link BRIDGE_VERSION}. `0` means a build predating the check. */
@@ -558,6 +558,12 @@ export interface NodeBindingSummary {
 export interface EnvironmentDto {
   fog_enabled: boolean;  fog_color: [number,number,number,number]; fog_falloff: FogFalloff;
   exposure_enabled: boolean; ev100: number;
+  color_grading_enabled: boolean;
+  grading_temperature: number; grading_tint: number;
+  grading_hue_deg: number; grading_saturation: number;
+  anti_aliasing_enabled: boolean;
+  /** "Off" | "2x" | "4x" | "8x" */
+  msaa: string;
   ibl_enabled: boolean; ibl_diffuse: string; ibl_specular: string; ibl_intensity: number;
   skybox_enabled: boolean; skybox_asset: string; skybox_brightness: number;
   skybox_yaw_deg: number;
@@ -645,6 +651,10 @@ export type EditorCommand =
       min_distance: number; max_distance: number; rolloff_factor: number } }
   | { type: "SetExposure";  payload: { ev100: number } }
   | { type: "ClearExposure" }
+  | { type: "SetColorGrading"; payload: { temperature: number; tint: number; hue_deg: number; saturation: number } }
+  | { type: "ClearColorGrading" }
+  | { type: "SetAntiAliasing"; payload: { msaa: string } }
+  | { type: "ClearAntiAliasing" }
   | { type: "SetIbl";       payload: { diffuse_asset_id: string; specular_asset_id: string; intensity: number } }
   | { type: "ClearIbl" }
   | { type: "SetSkybox";    payload: { texture_asset_id: string; brightness: number; yaw_deg: number } }

@@ -1,3 +1,4 @@
+import { PlatformBadge } from "./ui/PlatformBadge";
 import { useState, useEffect, useRef, useCallback } from "react";
 import type {
   EditorSnapshot, EditorCommand, NodeInspector, MaterialParams, MaterialTextures,
@@ -887,7 +888,17 @@ function SceneEnvironmentSection({ env, passthrough, assets, send }:
                      fog_falloff:{ mode:"Linear", start:2, end:30 } as FogFalloff,
                      exposure_enabled:false, ev100:BEVY_EV100,
                      ibl_enabled:false, ibl_diffuse:"", ibl_specular:"", ibl_intensity:1000,
-                     skybox_enabled:false, skybox_asset:"", skybox_brightness:1000, skybox_yaw_deg:0, atmosphere_enabled:false };
+                     skybox_enabled:false, skybox_asset:"", skybox_brightness:1000, skybox_yaw_deg:0, atmosphere_enabled:false,
+                     color_grading_enabled:false, grading_temperature:0, grading_tint:0, grading_hue_deg:0, grading_saturation:1,
+                     anti_aliasing_enabled:false, msaa:"4x" };
+
+  const [grade, setGrade] = useState({
+    temperature: e.grading_temperature, tint: e.grading_tint,
+    hue_deg: e.grading_hue_deg, saturation: e.grading_saturation,
+  });
+  /** One place that knows the shape of a grading write, so four sliders cannot
+   *  drift apart — same reasoning as `sendFog`. */
+  const sendGrade = (g: typeof grade) => { setGrade(g); send({ type:"SetColorGrading", payload:g }); };
 
   const [fogColor, setFogColor]     = useState<[number,number,number,number]>(e.fog_color);
   const [fogFalloff, setFogFalloff] = useState<FogFalloff>(e.fog_falloff);
@@ -1024,13 +1035,106 @@ function SceneEnvironmentSection({ env, passthrough, assets, send }:
         )}
       </div>
 
+      {/* Anti-aliasing.
+          MSAA rather than FXAA/SMAA/TAA, and not for lack of options: Bevy makes
+          `Msaa` a required component of every camera at 4x, so this has been
+          running all along and only lacked a way to author it. On a tile-based
+          mobile GPU MSAA resolves in tile memory, while a post-process AA pass
+          costs a full-screen pass on the budget least able to afford one — and
+          gives blurrier edges than the MSAA it would sit on top of.
+
+          This is the knob Unity and Unreal both surface for VR. */}
+      <div className="insp-section">
+        <h4>Anti-Aliasing</h4>
+        <Toggle label="Override" value={e.anti_aliasing_enabled}
+          onChange={on => on
+            ? send({ type:"SetAntiAliasing", payload:{ msaa: e.msaa } })
+            : send({ type:"ClearAntiAliasing" })} />
+        {e.anti_aliasing_enabled ? (
+          <>
+            <div className="insp-row">
+              <label>MSAA</label>
+              <Select value={e.msaa}
+                onValueChange={v => send({ type:"SetAntiAliasing", payload:{ msaa: v } })}
+                options={[
+                  { value:"Off", label:"Off" },
+                  { value:"2x",  label:"2x" },
+                  { value:"4x",  label:"4x — default" },
+                  { value:"8x",  label:"8x" },
+                ]} />
+            </div>
+            {e.msaa === "8x" && (
+              <div className="insp-note" style={{ color:"var(--yellow)" }}>
+                8x is frequently unsupported on mobile GPUs. Check on device before
+                shipping it.
+              </div>
+            )}
+            {e.msaa === "Off" && (
+              <div className="insp-note">
+                Edges will alias. Worth it only when chasing the last millisecond —
+                aliasing is more visible in a headset than on a monitor.
+              </div>
+            )}
+          </>
+        ) : (
+          <div className="insp-note">
+            Using the default, 4x — the usual choice for VR. Override to trade edge
+            quality against frame time.
+          </div>
+        )}
+      </div>
+
+      {/* Colour grading — white balance, hue, saturation.
+          Sits beside Exposure because they are the same job: exposure sets how much
+          light, this sets what colour it is. Every comparable engine groups them —
+          Godot's WorldEnvironment, Unity's Volume, Unreal's Post Process Volume.
+
+          Unlike Atmosphere below, this costs no extra full-screen pass: ColorGrading
+          is read during tonemapping, which already runs. That is why it carries no
+          "desktop" warning. */}
+      <div className="insp-section">
+        <h4>Colour Grading</h4>
+        <Toggle label="Enable" value={e.color_grading_enabled}
+          onChange={on => on
+            ? send({ type:"SetColorGrading", payload:{ temperature: grade.temperature, tint: grade.tint, hue_deg: grade.hue_deg, saturation: grade.saturation } })
+            : send({ type:"ClearColorGrading" })} />
+        {e.color_grading_enabled && (
+          <>
+            <SliderRow label="Temperature" value={grade.temperature} min={-1} max={1} step={0.01}
+              onLive={v  => { isDragging.current = true;  setGrade({ ...grade, temperature: v }); }}
+              onCommit={v => { isDragging.current = false; sendGrade({ ...grade, temperature: v }); }} />
+            <SliderRow label="Tint" value={grade.tint} min={-1} max={1} step={0.01}
+              onLive={v  => { isDragging.current = true;  setGrade({ ...grade, tint: v }); }}
+              onCommit={v => { isDragging.current = false; sendGrade({ ...grade, tint: v }); }} />
+            <SliderRow label="Hue" value={grade.hue_deg} min={-180} max={180} step={1}
+              onLive={v  => { isDragging.current = true;  setGrade({ ...grade, hue_deg: v }); }}
+              onCommit={v => { isDragging.current = false; sendGrade({ ...grade, hue_deg: v }); }} />
+            <SliderRow label="Saturation" value={grade.saturation} min={0} max={2} step={0.01}
+              onLive={v  => { isDragging.current = true;  setGrade({ ...grade, saturation: v }); }}
+              onCommit={v => { isDragging.current = false; sendGrade({ ...grade, saturation: v }); }} />
+            <div className="insp-note">
+              Temperature warms or cools without changing brightness; saturation 0 is
+              greyscale, 1 unchanged.
+            </div>
+          </>
+        )}
+      </div>
+
       {/* Atmosphere — a computed sky rather than an image.
           Placed above Skybox because for an outdoor scene it is usually the better
           answer: the sun comes from the scene's own directional light, so sky and
           shadows agree and moving the light moves the sun. A captured panorama
           cannot do that. See docs/done/editor-task-queue-and-hdr-conversion.md 0b. */}
       <div className="insp-section">
-        <h4>Atmosphere <span style={{color:"var(--overlay0)",fontSize:9,fontWeight:"normal",marginLeft:4}}>procedural sky · desktop</span></h4>
+        {/* The badge used to read "desktop", which was wrong: atmosphere works on
+            PCVR, and PCVR is not desktop. The real line is standalone, and the
+            reason is cost rather than support — it renders correctly and takes
+            more than the whole frame. */}
+        <h4>Atmosphere
+          <span style={{color:"var(--overlay0)",fontSize:9,fontWeight:"normal",marginLeft:4}}>procedural sky</span>
+          <PlatformBadge kind="costly" where="standalone"
+            detail="Renders correctly on a Quest 3 but measured +18.3 ms/frame against a 13.9 ms budget. Fine on desktop and PCVR." />
+        </h4>
         <Toggle label="Enable" value={e.atmosphere_enabled}
           onChange={enabled => send({ type:"SetAtmosphere", payload:{ enabled } })} />
         {e.atmosphere_enabled && (

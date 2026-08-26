@@ -57,6 +57,55 @@ pub fn apply_environment_command(
             });
             true
         }
+        EditorCommand::SetColorGrading { temperature, tint, hue_deg, saturation } => {
+            let grading = xrds_scene_graph::XrdsSceneColorGradingEnvironment {
+                temperature: *temperature,
+                tint: *tint,
+                hue_deg: *hue_deg,
+                saturation: *saturation,
+            };
+            let _ = session.0.edit(|doc| {
+                doc.metadata.environment.get_or_insert_with(Default::default).color_grading =
+                    Some(grading);
+            });
+            true
+        }
+        EditorCommand::ClearColorGrading => {
+            let _ = session.0.edit(|doc| {
+                if let Some(e) = &mut doc.metadata.environment { e.color_grading = None; }
+                if doc.metadata.environment.as_ref().map(|e| e.is_empty()).unwrap_or(false) {
+                    doc.metadata.environment = None;
+                }
+            });
+            true
+        }
+        EditorCommand::SetAntiAliasing { msaa } => {
+            use xrds_scene_graph::XrdsSceneMsaa;
+            let samples = match msaa.as_str() {
+                "Off" => XrdsSceneMsaa::Off,
+                "2x" => XrdsSceneMsaa::Sample2,
+                "8x" => XrdsSceneMsaa::Sample8,
+                // Anything unrecognised lands on the default rather than panicking
+                // or silently disabling AA — a stale frontend must not degrade the
+                // image.
+                _ => XrdsSceneMsaa::Sample4,
+            };
+            let aa = xrds_scene_graph::XrdsSceneAntiAliasingEnvironment { msaa: samples };
+            let _ = session.0.edit(|doc| {
+                doc.metadata.environment.get_or_insert_with(Default::default).anti_aliasing =
+                    Some(aa);
+            });
+            true
+        }
+        EditorCommand::ClearAntiAliasing => {
+            let _ = session.0.edit(|doc| {
+                if let Some(e) = &mut doc.metadata.environment { e.anti_aliasing = None; }
+                if doc.metadata.environment.as_ref().map(|e| e.is_empty()).unwrap_or(false) {
+                    doc.metadata.environment = None;
+                }
+            });
+            true
+        }
         EditorCommand::SetIbl { diffuse_asset_id, specular_asset_id, intensity } => {
             let ibl = XrdsSceneIblEnvironment {
                 diffuse_asset_id:  diffuse_asset_id.clone(),
@@ -123,12 +172,29 @@ pub fn build_environment_dto(session: &EditorSession) -> Option<EnvironmentDto> 
     let exp = env.exposure.as_ref();
     let ibl = env.ibl.as_ref();
     let sky = env.skybox.as_ref();
+    let grade = env.color_grading.as_ref();
+    let aa = env.anti_aliasing.as_ref();
     Some(EnvironmentDto {
         fog_enabled:  fog.is_some(),
         fog_color:    fog.map(|f| f.color).unwrap_or([0.5, 0.6, 0.7, 1.0]),
         fog_falloff:  fog.map(|f| f.falloff.into()).unwrap_or_default(),
         exposure_enabled: exp.is_some(),
         ev100:        exp.map(|e| e.ev100).unwrap_or(0.0),
+        color_grading_enabled: grade.is_some(),
+        grading_temperature: grade.map(|g| g.temperature).unwrap_or(0.0),
+        grading_tint:        grade.map(|g| g.tint).unwrap_or(0.0),
+        grading_hue_deg:     grade.map(|g| g.hue_deg).unwrap_or(0.0),
+        // 1.0, not 0.0: saturation is a multiplier, and defaulting a disabled
+        // control to zero would show the author a greyscale slider position for a
+        // scene that is not greyscale.
+        grading_saturation:  grade.map(|g| g.saturation).unwrap_or(1.0),
+        anti_aliasing_enabled: aa.is_some(),
+        msaa: match aa.map(|a| a.msaa).unwrap_or_default() {
+            xrds_scene_graph::XrdsSceneMsaa::Off => "Off",
+            xrds_scene_graph::XrdsSceneMsaa::Sample2 => "2x",
+            xrds_scene_graph::XrdsSceneMsaa::Sample4 => "4x",
+            xrds_scene_graph::XrdsSceneMsaa::Sample8 => "8x",
+        }.to_string(),
         ibl_enabled:  ibl.is_some(),
         ibl_diffuse:  ibl.map(|i| i.diffuse_asset_id.clone()).unwrap_or_default(),
         ibl_specular: ibl.map(|i| i.specular_asset_id.clone()).unwrap_or_default(),

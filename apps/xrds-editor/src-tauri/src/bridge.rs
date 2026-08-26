@@ -212,6 +212,19 @@ pub enum EditorCommand {
     ClearFog,
     SetExposure   { ev100: f32 },
     ClearExposure,
+    /// Scene-wide colour grading: white balance plus hue and saturation.
+    ///
+    /// One command rather than four, so dragging a slider is one document edit and
+    /// therefore one undo entry — the same reasoning as `SetAudioClipParams`.
+    SetColorGrading { temperature: f32, tint: f32, hue_deg: f32, saturation: f32 },
+    ClearColorGrading,
+    /// MSAA sample count: "Off" | "2x" | "4x" | "8x".
+    ///
+    /// A string over a closed set, matching how `repeat`/`hand`/`crossing` travel
+    /// elsewhere in this file. Not an integer: Bevy panics on a sample count it does
+    /// not support, and an integer is what would let one through.
+    SetAntiAliasing { msaa: String },
+    ClearAntiAliasing,
     SetIbl        { diffuse_asset_id: String, specular_asset_id: String, intensity: f32 },
     ClearIbl,
     /// Scene-wide passthrough: `XrdsXrBlendMode::AlphaBlend` when true, `Opaque`
@@ -389,7 +402,7 @@ pub enum EditorCommand {
 ///
 /// **If you change a DTO and do not bump this, you have removed the only thing
 /// that would have told anyone.**
-pub const BRIDGE_VERSION: u32 = 21;
+pub const BRIDGE_VERSION: u32 = 23;
 
 /// State snapshot emitted to the webview after each frame's update.
 /// Grow this incrementally — add fields as each phase is implemented.
@@ -528,6 +541,21 @@ pub struct EnvironmentDto {
     pub skybox_yaw_deg: f32,
     #[serde(default)]
     pub atmosphere_enabled: bool,
+    #[serde(default)]
+    pub color_grading_enabled: bool,
+    #[serde(default)]
+    pub grading_temperature: f32,
+    #[serde(default)]
+    pub grading_tint: f32,
+    #[serde(default)]
+    pub grading_hue_deg: f32,
+    #[serde(default)]
+    pub grading_saturation: f32,
+    #[serde(default)]
+    pub anti_aliasing_enabled: bool,
+    /// "Off" | "2x" | "4x" | "8x".
+    #[serde(default)]
+    pub msaa: String,
 }
 
 // ---------------------------------------------------------------------------
