@@ -1,6 +1,7 @@
 import { useState } from "react";
+import { ConfirmDialog } from "./ui/ConfirmDialog";
 import type { EditorSnapshot, EditorCommand } from "../types/bridge";
-import { KIND_ICON } from "../types/bridge";
+import { KindIcon } from "./ui/KindIcon";
 import { useResizable } from "../hooks/useResizable";
 
 interface Props {
@@ -65,12 +66,13 @@ const PRIMITIVE_GROUPS = [
   { label: "XR",       items: ["Panel"] },
 ];
 
-const DEFAULT_HEIGHT = 148;
+const DEFAULT_HEIGHT = 200;
 const MIN_HEIGHT = 84;
 const MAX_HEIGHT = 440;
 
 export function Palette({ snapshot, send, onImportAsset }: Props) {
   const [tab, setTab] = useState<"primitives"|"assets">("primitives");
+  const [pendingRemove, setPendingRemove] = useState<string | null>(null);
   const [category, setCategory] = useState<string>(PRIMITIVE_GROUPS[0].label);
   // Handle sits on the palette's own top edge — drag up (away from the
   // bottom of the window) to grow it, same as every other bottom-docked panel.
@@ -122,7 +124,7 @@ export function Palette({ snapshot, send, onImportAsset }: Props) {
               title={meta?.tip}
               onClick={() => spawnPrimitive(kind)}
             >
-              {KIND_ICON[kind] ?? "○"} {meta?.label ?? kind}
+              <KindIcon kind={kind} /> {meta?.label ?? kind}
             </button>
           );
         })}
@@ -136,33 +138,52 @@ export function Palette({ snapshot, send, onImportAsset }: Props) {
             + Import Asset…
           </button>
         )}
+        {/* A grid that fits itself to the panel, rather than a fixed column count.
+            The palette is resizable and the window is wide, so a fixed three would
+            waste space when wide and cramp when narrow. Full-width rows were the
+            worse end of that: one asset per line, most of the line empty.
+
+            The kind badge is gone — the icon already says it, and in a narrow cell
+            the badge was eating the name. It lives in the tooltip now, along with
+            the full name, because imported names are often far longer than any cell
+            (a downloaded clip can carry its entire prompt as a filename). */}
         {tab === "assets" && (
           snapshot.asset_catalog.length === 0
             ? <span className="pal-empty">No assets imported yet.</span>
-            : snapshot.asset_catalog.map(asset => (
-                <div key={asset.id} className="asset-row"
-                     style={{ display:"flex", alignItems:"center", gap:6, width:"100%" }}
-                     onClick={() => spawnAsset(asset.id)}>
-                  <span style={{ fontSize:11, flexShrink:0 }}>
-                    {asset.kind === "Gltf" ? "📦" : asset.kind === "Texture" ? "🖼" : asset.kind === "Audio" ? "♪" : asset.kind === "Video" ? "▶" : "🌄"}
-                  </span>
-                  <span style={{ flex: 1 }}>{asset.name}</span>
-                  <span className="asset-kind">{asset.kind}</span>
-                  <button
-                    className="tb-btn"
-                    style={{ padding: "1px 6px", fontSize: 10, flexShrink: 0 }}
-                    title="Remove asset from project"
-                    onClick={e => {
-                      e.stopPropagation();
-                      if (confirm(`Remove "${asset.id}" and all scene nodes that use it?`)) {
-                        send({ type: "RemoveAsset", payload: { asset_id: asset.id } });
-                      }
-                    }}
-                  >✕</button>
-                </div>
-              ))
+            : <div className="pal-asset-grid">
+                {snapshot.asset_catalog.map(asset => (
+                  <div key={asset.id} className="asset-row"
+                       title={`${asset.name}
+${asset.kind} — click to add to the scene`}
+                       onClick={() => spawnAsset(asset.id)}>
+                    <span className="asset-icon"><KindIcon kind={asset.kind} /></span>
+                    <span className="asset-name">{asset.name}</span>
+                    <button
+                      className="tb-btn asset-del"
+                      title="Remove asset from project"
+                      onClick={e => {
+                        e.stopPropagation();
+                        setPendingRemove(asset.id);
+                      }}
+                    >✕</button>
+                  </div>
+                ))}
+              </div>
         )}
       </div>
+
+      {pendingRemove !== null && (
+        <ConfirmDialog
+          message={`Remove "${pendingRemove}"?`}
+          detail="Every scene node using it will be removed too."
+          confirmLabel="Remove"
+          onConfirm={() => {
+            send({ type: "RemoveAsset", payload: { asset_id: pendingRemove } });
+            setPendingRemove(null);
+          }}
+          onCancel={() => setPendingRemove(null)}
+        />
+      )}
     </div>
   );
 }

@@ -808,9 +808,20 @@ button, input, select, textarea { font-family: inherit; }
 .pal-btn:hover { background: var(--sel); color: var(--bright);
                  border-color: var(--surface1); }
 
-.asset-row { width: 100%; display: flex; align-items: center; gap: 8px;
+/* auto-fill, not a fixed count: the palette resizes, so the number of columns
+   should follow its width rather than be guessed once. */
+.pal-asset-grid { width: 100%; display: grid; gap: 4px;
+                  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); }
+.asset-row { min-width: 0; display: flex; align-items: center; gap: 6px;
              padding: 4px 6px; font-size: 13px; cursor: pointer; border-radius: var(--radius); }
 .asset-row:hover { background: var(--sel); }
+.asset-icon { font-size: 11px; flex-shrink: 0; }
+/* `min-width: 0` on both the cell and this: without it a long name refuses to
+   shrink and blows the column out instead of ellipsising. */
+.asset-name { flex: 1; min-width: 0; overflow: hidden;
+              text-overflow: ellipsis; white-space: nowrap; }
+.asset-del { padding: 1px 6px; font-size: 10px; flex-shrink: 0; opacity: 0; }
+.asset-row:hover .asset-del { opacity: 1; }
 .asset-kind { color: var(--overlay0); font-size: 11.5px; }
 .pal-empty { color: var(--subtext0); font-size: 13px; padding: 6px; }
 
