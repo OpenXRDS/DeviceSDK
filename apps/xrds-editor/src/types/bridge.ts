@@ -268,6 +268,21 @@ export type XrdsAction =
   // could silently apply to a *different* node than its row, invisibly to
   // the cross-Track conflict check.
   | {
+      /** Drives whichever of the three light kinds the target node is. */
+      kind: "SetLight";
+      data: {
+        color: [number, number, number, number] | null;
+        /** Lumens on a point or spot light, lux on a directional one. One field
+         *  for all three kinds, the way Unity and Unreal surface it — the unit
+         *  follows the target. */
+        intensity: number | null;
+        /** Point and spot only; a directional light has no falloff and ignores it. */
+        range: number | null;
+        duration_secs: number;
+        ease: string;
+      };
+    }
+  | {
       kind: "SetMaterial";
       data: {
         base_color: [number, number, number, number] | null;
@@ -488,7 +503,7 @@ export interface TaskDto {
  *  replaced wholesale by the first real snapshot.
  *
  *  Bump this together with the Rust constant whenever a DTO changes. */
-export const BRIDGE_VERSION = 24;
+export const BRIDGE_VERSION = 25;
 
 export interface EditorSnapshot {
   /** See {@link BRIDGE_VERSION}. `0` means a build predating the check. */

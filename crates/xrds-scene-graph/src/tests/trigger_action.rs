@@ -175,6 +175,16 @@ fn track_round_trips_every_surviving_action_variant() {
                         },
                     ),
                     key(
+                        0.5,
+                        XrdsAction::SetLight {
+                            color: Some([1.0, 0.9, 0.7, 1.0]),
+                            intensity: Some(250.0),
+                            range: Some(12.0),
+                            duration_secs: 1.25,
+                            ease: XrdsEaseCurve::CubicInOut,
+                        },
+                    ),
+                    key(
                         0.25,
                         XrdsAction::SetMaterial {
                             base_color: Some([1.0, 0.0, 0.0, 1.0]),
@@ -315,6 +325,19 @@ fn self_duration_is_non_zero_only_for_interpolation() {
     assert_eq!(fade(3.0).self_duration_secs(), 3.0);
     assert_eq!(fade(0.0).self_duration_secs(), 0.0);
     assert_eq!(fade(-2.0).self_duration_secs(), 0.0);
+
+    // And `SetLight`, the third interpolating action. Each new one has to be
+    // added here or its span silently reads as zero.
+    let dim = |secs: f32| XrdsAction::SetLight {
+        color: None,
+        intensity: Some(0.0),
+        range: None,
+        duration_secs: secs,
+        ease: XrdsEaseCurve::Linear,
+    };
+    assert_eq!(dim(4.0).self_duration_secs(), 4.0);
+    assert_eq!(dim(0.0).self_duration_secs(), 0.0);
+    assert_eq!(dim(-1.0).self_duration_secs(), 0.0);
 }
 
 #[test]
@@ -1208,4 +1231,37 @@ fn play_video_repeat_round_trips() {
     let json = serde_json::to_string(&action).expect("serialise");
     let back: XrdsAction = serde_json::from_str(&json).expect("deserialise");
     assert_eq!(action, back, "round trip lost the repeat mode: {json}");
+}
+
+#[test]
+fn a_light_change_that_sets_nothing_is_diagnosed() {
+    // Same shape as the SetMaterial warning: an event with every field unset
+    // applies successfully and changes no pixel, so nothing at runtime reports
+    // it. The diagnostic is the only thing that can.
+    let nothing = XrdsAction::SetLight {
+        color: None,
+        intensity: None,
+        range: None,
+        duration_secs: 2.0,
+        ease: XrdsEaseCurve::Linear,
+    };
+    let d = doc(
+        vec![node_with_binding(1, binding_for("dim"))],
+        vec![named("dim", XrdsTrack { assets: vec![row(1, vec![key(0.0, nothing)])], ..Default::default() })],
+    );
+    assert!(has(&d, "Light change sets nothing"), "got {:?}", titles(&d));
+
+    // A duration alone does not rescue it — the same rule SetMaterial follows.
+    let one_field = XrdsAction::SetLight {
+        color: None,
+        intensity: Some(0.0),
+        range: None,
+        duration_secs: 2.0,
+        ease: XrdsEaseCurve::Linear,
+    };
+    let d = doc(
+        vec![node_with_binding(1, binding_for("dim"))],
+        vec![named("dim", XrdsTrack { assets: vec![row(1, vec![key(0.0, one_field)])], ..Default::default() })],
+    );
+    assert!(!has(&d, "Light change sets nothing"), "got {:?}", titles(&d));
 }

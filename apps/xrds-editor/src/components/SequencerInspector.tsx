@@ -1,5 +1,5 @@
 import {
-  CircleHelp, Eye, Film, Heart, Move3d, Paintbrush, Pause, Play, Sparkles,
+  CircleHelp, Eye, Film, Heart, Lightbulb, Move3d, Paintbrush, Pause, Play, Sparkles,
   SlidersHorizontal, Square, ToggleLeft, Type, Volume2, VolumeX,
   type LucideIcon,
 } from "lucide-react";
@@ -20,7 +20,7 @@ import { Checkbox } from "./ui/Checkbox";
  * `Teleport` is absent because it *was* a zero-duration `SetTransform` — the
  * Mode control below now expresses that as duration 0 vs > 0. */
 export const ACTION_KINDS = [
-  "SetTransform", "SetVisible", "SetMaterial",
+  "SetTransform", "SetVisible", "SetMaterial", "SetLight",
   "PlayGltfAnimation", "StopGltfAnimation", "ModifyHealth",
   "PlayEffect", "StopEffect",
   "PlayAudio", "StopAudio",
@@ -31,7 +31,7 @@ export const ACTION_KINDS = [
  *  its family's `ACTION_COLOR` tint — a colour glyph cannot be recoloured at all,
  *  which is why the lane dots and their icons used to disagree. */
 export const ACTION_ICONS: Record<string, LucideIcon> = {
-  SetVisible: Eye, SetTransform: Move3d, SetMaterial: Paintbrush,
+  SetVisible: Eye, SetTransform: Move3d, SetMaterial: Paintbrush, SetLight: Lightbulb,
   ModifyHealth: Heart, PlayGltfAnimation: Film, StopGltfAnimation: Square,
   PlayEffect: Sparkles, StopEffect: Square,
   PlayAudio: Volume2, StopAudio: VolumeX,
@@ -52,7 +52,7 @@ export function ActionIcon({ kind, size = 12 }: { kind: string; size?: number })
  * hue per action family so a key is identifiable at a glance on its lane. */
 export const ACTION_COLOR: Record<string, string> = {
   SetTransform: "var(--teal)", SetVisible: "var(--mauve)",
-  SetMaterial: "var(--flamingo)", ModifyHealth: "var(--red)",
+  SetMaterial: "var(--flamingo)", SetLight: "var(--yellow)", ModifyHealth: "var(--red)",
   PlayGltfAnimation: "var(--blue)", StopGltfAnimation: "var(--surface1)",
   PlayEffect: "var(--peach)", StopEffect: "var(--surface1)",
   PlayAudio: "var(--green)", StopAudio: "var(--surface1)",
@@ -89,6 +89,10 @@ export function summarizeAction(a: XrdsAction): string {
       return a.data.duration_secs > 0
         ? `Move · ${a.data.duration_secs}s ${easeLabel(a.data.ease)}`
         : "Move (instant)";
+    case "SetLight":
+      return a.data.duration_secs > 0
+        ? `SetLight · ${a.data.duration_secs}s ${easeLabel(a.data.ease)}`
+        : "SetLight";
     case "SetMaterial":
       return a.data.duration_secs > 0
         ? `SetMaterial · ${a.data.duration_secs}s ${easeLabel(a.data.ease)}`
@@ -493,6 +497,79 @@ export function SequencerInspector({
                     patch => ({ kind: "SetTransform", data: { ...draftAction.data, ...patch } }),
                   )}
                 </>
+              )}
+            </>
+          )}
+
+          {draftAction.kind === "SetLight" && (
+            <>
+              {/* Same optional-field shape as SetMaterial: unchecked leaves the
+                * property as the light already had it. `range` is offered
+                * unconditionally because the inspector does not know which of the
+                * three light kinds this row targets — a directional light ignores
+                * it at runtime rather than erroring, which the hint says. */}
+              <Field label="LIGHT" hint="unchecked = leave alone">
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <Checkbox checked={draftAction.data.color !== null} onCheckedChange={on => {
+                    const next: XrdsAction = { kind: "SetLight", data: { ...draftAction.data, color: on ? [1, 1, 1, 1] : null } };
+                    setDraftAction(next);
+                    commitDraft(next, draftAtSecs);
+                  }} />
+                  <label className="text-[10.5px] text-overlay0 w-16">Color</label>
+                  {draftAction.data.color !== null && (
+                    <input type="color" value={rgbToHex(draftAction.data.color)}
+                      className="w-7 h-6 rounded border border-surface0 bg-well p-0 cursor-pointer"
+                      onChange={e => {
+                        const [r, g, b] = hexToRgb(e.target.value);
+                        const c: [number, number, number, number] = [r, g, b, draftAction.data.color![3]];
+                        const next: XrdsAction = { kind: "SetLight", data: { ...draftAction.data, color: c } };
+                        setDraftAction(next);
+                        commitDraft(next, draftAtSecs);
+                      }} />
+                  )}
+                </div>
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <Checkbox checked={draftAction.data.intensity !== null} onCheckedChange={on => {
+                    const next: XrdsAction = { kind: "SetLight", data: { ...draftAction.data, intensity: on ? 1000 : null } };
+                    setDraftAction(next);
+                    commitDraft(next, draftAtSecs);
+                  }} />
+                  <label className="text-[10.5px] text-overlay0 w-16">Intensity</label>
+                  {draftAction.data.intensity !== null && (
+                    <>
+                      <input type="number" step={100} min={0} value={draftAction.data.intensity} className={numCls}
+                        onKeyDown={e => { e.stopPropagation(); if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+                        onChange={e => setDraftAction({ kind: "SetLight", data: { ...draftAction.data, intensity: +e.target.value } })}
+                        onBlur={() => commitDraft(draftAction, draftAtSecs)} />
+                      {/* The unit is not cosmetic: 1000 is a reasonable point
+                        * light and a pitch-dark sun. Saying so here is cheaper
+                        * than an author discovering it on a headset. */}
+                      <span className="text-[10px] text-overlay0">lm · lux if directional</span>
+                    </>
+                  )}
+                </div>
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <Checkbox checked={draftAction.data.range !== null} onCheckedChange={on => {
+                    const next: XrdsAction = { kind: "SetLight", data: { ...draftAction.data, range: on ? 10 : null } };
+                    setDraftAction(next);
+                    commitDraft(next, draftAtSecs);
+                  }} />
+                  <label className="text-[10.5px] text-overlay0 w-16">Range</label>
+                  {draftAction.data.range !== null && (
+                    <>
+                      <input type="number" step={0.5} min={0} value={draftAction.data.range} className={numCls}
+                        onKeyDown={e => { e.stopPropagation(); if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+                        onChange={e => setDraftAction({ kind: "SetLight", data: { ...draftAction.data, range: +e.target.value } })}
+                        onBlur={() => commitDraft(draftAction, draftAtSecs)} />
+                      <span className="text-[10px] text-overlay0">m · ignored by a directional light</span>
+                    </>
+                  )}
+                </div>
+              </Field>
+
+              {durationAndEaseField(
+                draftAction.data.duration_secs, draftAction.data.ease,
+                patch => ({ kind: "SetLight", data: { ...draftAction.data, ...patch } }),
               )}
             </>
           )}

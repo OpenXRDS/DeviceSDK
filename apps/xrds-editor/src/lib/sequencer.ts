@@ -63,7 +63,7 @@ export function fmtTime(secs: number): string {
  * languages: a three-second fade left out here draws as a dot and lets a Track's
  * auto length end before the fade does. */
 export function actionDuration(a: XrdsAction): number {
-  return a.kind === "SetTransform" || a.kind === "SetMaterial"
+  return a.kind === "SetTransform" || a.kind === "SetMaterial" || a.kind === "SetLight"
     ? Math.max(0, a.data.duration_secs)
     : 0;
 }
@@ -231,6 +231,9 @@ export function assetRowAspects(asset: XrdsTrackAssetDto): string[] {
         break;
       case "SetMaterial":
         seen.add("Material");
+        break;
+      case "SetLight":
+        seen.add("Light");
         break;
       case "PlayGltfAnimation":
       case "StopGltfAnimation":
@@ -527,7 +530,7 @@ export function elementRowLabel(element: PanelElementDto): { title: string; sub:
  * `Teleport` is absent because it was a zero-duration `SetTransform`.
  * `Unknown` is never offered — it only ever arrives from a newer editor. */
 export const TRACK_ACTION_KINDS = [
-  "SetTransform", "SetVisible", "SetMaterial",
+  "SetTransform", "SetVisible", "SetMaterial", "SetLight",
   "PlayGltfAnimation", "StopGltfAnimation", "ModifyHealth",
   "PlayEffect", "StopEffect",
   "SetElementText", "SetElementValue", "SetElementEnabled",

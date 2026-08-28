@@ -3,6 +3,9 @@
 **Phase A built 2026-08-28.** `SetMaterial` now takes a duration and an ease
 curve, the same two fields `SetTransform` has always had.
 
+**Phase B built 2026-08-28.** `SetLight` joins them — colour, intensity and range,
+across all three light kinds.
+
 ## Why this instead of a keyframe curve editor
 
 The question that started this was whether the sequencer needed a curve editor —
@@ -93,16 +96,50 @@ hand-written copies. That is the point rather than a tidy-up: an author who has
 learned that a move can be given a time expects a colour change to work the same
 way, and two copies would have drifted the moment one gained a curve.
 
+## Phase B — `SetLight`
+
+Colour, intensity and range, interpolating through the same curve. Third action of
+the pattern, and the first one that cost almost nothing to add — which was the
+point of building the interpolator once.
+
+Four decisions, all of them about the fact that "a light" is three different
+things:
+
+- **One action for all three kinds, not three.** A node is a point, spot or
+  directional light, and the action drives whichever it lands on. The alternative
+  makes an author pick the right variant before knowing which kind they placed.
+- **One `intensity` field, and it is two units.** Lumens on a point or spot light,
+  lux on a directional one. That is genuinely a unit conflation, and it is what
+  Unity and Unreal both do — a single "Intensity" meaning whatever that light type
+  means. The editor says `lm · lux if directional` beside the field, because 1000
+  is a reasonable point light and a pitch-dark sun, and that is not a discovery to
+  make on a headset.
+- **`range` follows the light, not the action.** A directional light has none —
+  the sun does not fall off — so an authored range is dropped rather than written.
+  The tween carries `range: Option<f32>` for the same reason: `None` throughout
+  means a directional tween never touches a property that does not exist, instead
+  of interpolating a phantom zero.
+- **A third tween component, not one generic one.** `XrdsTransformTween`,
+  `XrdsMaterialTween` and `XrdsLightTween` are driven by different setters, and
+  merging them would mean a light change cancelling an unrelated transform change
+  on the same entity.
+
+Two things the tests cover that the feature does not obviously need: `SetLight` on
+a **node that is not a light** must finish rather than block forever on a tween
+that will never be inserted, and a `SetLight` that sets **no field at all** is
+diagnosed — it applies successfully and changes no pixel, so nothing at runtime
+would ever report it.
+
 ## What would come next, if something asks
 
-**`SetLight`** — colour and intensity over time. It is the obvious third, since a
-light is the other thing a scene fades, and the interpolator is already general.
-Not built: nothing has asked for it, and the pattern is now cheap enough to add
-when something does.
+The same shape applies to anything with a numeric value and a runtime setter — fog
+visibility, exposure, a panel element's value. Each is a match arm and a tween
+component, not a new system.
 
-Beyond that, the same shape applies to anything with a numeric value and a
-runtime setter — fog visibility, exposure, a panel element's value. Each is a
-match arm and a tween component, not a new system.
+A spot light's cone angles (`inner_angle`/`outer_angle`) are animatable in
+principle and were deliberately left out: they apply to one of the three kinds, and
+including them would make the action a different shape depending on where it
+landed. Additive when something asks.
 
 ## What stays out
 

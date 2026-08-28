@@ -4302,3 +4302,225 @@ fn the_ease_curves_are_actually_distinct() {
         }
     }
 }
+
+/// A `PointLight` node whose ZoneEnter trigger fires one `SetLight`.
+#[cfg(test)]
+fn light_action_doc(id: u64, action: XrdsAction) -> XrdsSceneDocument {
+    use xrds_scene_graph::XrdsScenePointLight;
+    XrdsSceneDocument {
+        nodes: vec![XrdsSceneNode {
+            id: XrdsSceneNodeId(id),
+            parent_id: None,
+            name: "Lamp".to_string(),
+            enabled: true,
+            visible: true,
+            transform: XrdsSceneTransform::default(),
+            payload: XrdsSceneNodePayload::PointLight(XrdsScenePointLight {
+                color: [1.0, 1.0, 1.0, 1.0],
+                intensity: 1000.0,
+                range: 10.0,
+                ..Default::default()
+            }),
+            grabbable: false,
+            editor: XrdsEditorMetadata::default(),
+            triggers: vec![XrdsTriggerBinding {
+                trigger: XrdsTriggerKind::ZoneEnter,
+                track: Some("dim".to_string()),
+                effect: Default::default(),
+                disabled: false,
+                hand: None,
+            }],
+            watchers: Vec::new(),
+        }],
+        tracks: vec![XrdsNamedTrack {
+            name: "dim".to_string(),
+            track: XrdsTrack {
+                assets: vec![XrdsTrackAsset {
+                    when_finished: Default::default(),
+                    target: XrdsActionTarget::SelfNode,
+                    keys: vec![XrdsTrackKey { at_secs: 0.0, action }],
+                }],
+                ..XrdsTrack::default()
+            },
+        }],
+        ..Default::default()
+    }
+}
+
+/// A light change with no duration applies at once, and leaves the fields it
+/// was not given alone.
+///
+/// The untouched-field half is the one worth asserting: `SetLight` fills its
+/// target from the light's *current* values, so a bug there would quietly reset
+/// range to zero whenever an author animated only the colour.
+#[test]
+fn set_light_with_zero_duration_applies_instantly() {
+    use crate::xrds_api::trigger_action::XrdsLightTween;
+
+    let mut app = xrds_test_app();
+    let id = XrdsId(948);
+    {
+        let mut xrds = XrdsAPI::attach(&mut app);
+        xrds.import_scene_document(&light_action_doc(
+            id.0,
+            XrdsAction::SetLight {
+                color: None,
+                intensity: Some(250.0),
+                range: None,
+                duration_secs: 0.0,
+                ease: XrdsEaseCurve::Linear,
+            },
+        ))
+        .expect("import should succeed");
+    }
+
+    app.world_mut().write_message(xrds_components::XrZoneEnterEvent {
+        zone_id: id,
+        entity_id: id,
+    });
+    pump(&mut app, 3);
+
+    assert_eq!(
+        app.world_mut().query::<&XrdsLightTween>().iter(app.world()).count(),
+        0,
+        "a zero duration must never insert a tween"
+    );
+
+    let light = point_light_of(&mut app, id);
+    assert_eq!(light.intensity, 250.0, "intensity was Some, so it should have been applied");
+    assert_eq!(light.range, 10.0, "range was None, so it should be untouched");
+}
+
+/// A light change with a duration interpolates rather than snapping.
+#[test]
+fn set_light_interpolates_and_lands_on_target() {
+    use crate::xrds_api::trigger_action::XrdsLightTween;
+
+    let mut app = xrds_test_app();
+    let id = XrdsId(949);
+    {
+        let mut xrds = XrdsAPI::attach(&mut app);
+        xrds.import_scene_document(&light_action_doc(
+            id.0,
+            XrdsAction::SetLight {
+                color: None,
+                // Long enough that no plausible run of test frames finishes it.
+                intensity: Some(0.0),
+                range: None,
+                duration_secs: 30.0,
+                ease: XrdsEaseCurve::Linear,
+            },
+        ))
+        .expect("import should succeed");
+    }
+
+    app.world_mut().write_message(xrds_components::XrZoneEnterEvent {
+        zone_id: id,
+        entity_id: id,
+    });
+    pump(&mut app, 3);
+
+    assert_eq!(
+        app.world_mut().query::<&XrdsLightTween>().iter(app.world()).count(),
+        1,
+        "a positive duration should insert exactly one tween"
+    );
+    let intensity = point_light_of(&mut app, id).intensity;
+    assert!(
+        intensity > 500.0,
+        "a few frames into a 30s fade the light must still be near its 1000 lm          start, not at the target; got {intensity}"
+    );
+}
+
+/// A finished light tween clears itself and lands exactly on the target.
+///
+/// Without the removal its agent never completes and a sequenced Track stalls
+/// behind it — a failure that looks like a hang rather than a wrong brightness.
+#[test]
+fn a_finished_light_tween_clears_itself() {
+    use crate::xrds_api::trigger_action::XrdsLightTween;
+
+    let mut app = xrds_test_app();
+    let id = XrdsId(950);
+    {
+        let mut xrds = XrdsAPI::attach(&mut app);
+        xrds.import_scene_document(&light_action_doc(
+            id.0,
+            XrdsAction::SetLight {
+                color: None,
+                intensity: Some(0.0),
+                range: None,
+                // The same 0.05s the transform and material tween tests use.
+                duration_secs: 0.05,
+                ease: XrdsEaseCurve::Linear,
+            },
+        ))
+        .expect("import should succeed");
+    }
+
+    app.world_mut().write_message(xrds_components::XrZoneEnterEvent {
+        zone_id: id,
+        entity_id: id,
+    });
+    pump(&mut app, 240);
+
+    assert_eq!(
+        app.world_mut().query::<&XrdsLightTween>().iter(app.world()).count(),
+        0,
+        "a finished tween must remove itself, or its agent never completes"
+    );
+    assert_eq!(
+        point_light_of(&mut app, id).intensity,
+        0.0,
+        "a tween must land exactly on its target, not merely near it"
+    );
+}
+
+/// `SetLight` on a node that is not a light warns and finishes, rather than
+/// hanging the Track waiting for a tween that was never inserted.
+#[test]
+fn set_light_on_a_non_light_finishes_instead_of_stalling() {
+    use crate::xrds_api::trigger_action::XrdsLightTween;
+
+    let mut app = xrds_test_app();
+    let id = XrdsId(951);
+    {
+        let mut xrds = XrdsAPI::attach(&mut app);
+        xrds.import_scene_document(&material_action_doc(
+            id.0,
+            XrdsAction::SetLight {
+                color: None,
+                intensity: Some(0.0),
+                range: None,
+                duration_secs: 5.0,
+                ease: XrdsEaseCurve::Linear,
+            },
+        ))
+        .expect("import should succeed");
+    }
+
+    app.world_mut().write_message(xrds_components::XrZoneEnterEvent {
+        zone_id: id,
+        entity_id: id,
+    });
+    pump(&mut app, 5);
+
+    assert_eq!(
+        app.world_mut().query::<&XrdsLightTween>().iter(app.world()).count(),
+        0,
+        "a cube is not a light, so no tween should exist — and the action must          report finished rather than block on one that will never appear"
+    );
+}
+
+/// The live `PointLight` of a node, by XRDS id.
+#[cfg(test)]
+fn point_light_of(app: &mut App, id: XrdsId) -> bevy::prelude::PointLight {
+    let entity = app
+        .world()
+        .resource::<crate::xrds_api::XrdsIdIndex>()
+        .entity_of(id)
+        .expect("the node should be live");
+    *app.world()
+        .get::<bevy::prelude::PointLight>(entity)
+        .expect("the node should be a point light")
+}

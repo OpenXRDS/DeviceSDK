@@ -1659,6 +1659,163 @@ pub fn advance_material_tweens(
     }
 }
 
+/// One light's animatable properties, whichever of the three kinds it is.
+///
+/// `range` is `None` for a directional light, which has none — the sun does not
+/// fall off. Reading it as absent rather than as `0.0` is what lets the tween
+/// leave it alone instead of interpolating a real range towards zero on a light
+/// that never had one.
+struct LightValues {
+    color: [f32; 4],
+    /// Lumens on a point or spot light, lux on a directional one.
+    intensity: f32,
+    range: Option<f32>,
+}
+
+/// Read a node's live light values, or `None` if it is not a light at all.
+fn light_values_for_entity_in_world(world: &World, entity: Entity) -> Option<LightValues> {
+    let unpack = |color: Color| {
+        let rgba = color.to_linear();
+        [rgba.red, rgba.green, rgba.blue, rgba.alpha]
+    };
+    if let Some(light) = world.get::<PointLight>(entity) {
+        return Some(LightValues {
+            color: unpack(light.color),
+            intensity: light.intensity,
+            range: Some(light.range),
+        });
+    }
+    if let Some(light) = world.get::<SpotLight>(entity) {
+        return Some(LightValues {
+            color: unpack(light.color),
+            intensity: light.intensity,
+            range: Some(light.range),
+        });
+    }
+    if let Some(light) = world.get::<DirectionalLight>(entity) {
+        return Some(LightValues {
+            color: unpack(light.color),
+            // Brightness under one name across all three kinds — see
+            // `XrdsAction::SetLight`'s doc comment on why the units differ.
+            intensity: light.illuminance,
+            range: None,
+        });
+    }
+    None
+}
+
+/// Write light values back, to whichever kind the entity is.
+fn set_light_values_for_entity_in_world(world: &mut World, entity: Entity, values: &LightValues) {
+    let color = Color::linear_rgba(
+        values.color[0],
+        values.color[1],
+        values.color[2],
+        values.color[3],
+    );
+    if let Some(mut light) = world.get_mut::<PointLight>(entity) {
+        light.color = color;
+        light.intensity = values.intensity;
+        if let Some(range) = values.range {
+            light.range = range;
+        }
+        return;
+    }
+    if let Some(mut light) = world.get_mut::<SpotLight>(entity) {
+        light.color = color;
+        light.intensity = values.intensity;
+        if let Some(range) = values.range {
+            light.range = range;
+        }
+        return;
+    }
+    if let Some(mut light) = world.get_mut::<DirectionalLight>(entity) {
+        light.color = color;
+        light.illuminance = values.intensity;
+    }
+}
+
+/// In-flight state for an interpolated [`XrdsAction::SetLight`].
+///
+/// Third of its kind after [`XrdsTransformTween`] and [`XrdsMaterialTween`], and
+/// deliberately a third component rather than one generic tween: they are driven
+/// by different setters, and a single component would mean one light change
+/// cancelling an unrelated transform change on the same entity.
+///
+/// `range` is `None` throughout for a directional light, so a tween on one never
+/// touches a property it does not have.
+#[derive(Component, Debug, Clone, Copy)]
+pub(crate) struct XrdsLightTween {
+    start_color: [f32; 4],
+    start_intensity: f32,
+    start_range: Option<f32>,
+    target_color: [f32; 4],
+    target_intensity: f32,
+    target_range: Option<f32>,
+    elapsed: f32,
+    duration: f32,
+    ease: XrdsEaseCurve,
+}
+
+/// Advances every in-flight light tween, removing it when finished.
+///
+/// A paused Track freezes its tweens, for the same reason transform and material
+/// tweens are frozen: pausing that left a light still brightening would be a pause
+/// that did not pause.
+pub fn advance_light_tweens(
+    time: Res<Time>,
+    agents: Query<(Entity, &XrdsTrackAgent)>,
+    locks: Res<XrdsTrackAssetLocks>,
+    mut query: Query<(Entity, &mut XrdsLightTween)>,
+    mut commands: Commands,
+) {
+    let frozen: std::collections::HashSet<Entity> = agents
+        .iter()
+        .filter(|(_, agent)| agent.paused)
+        .flat_map(|(agent_entity, _)| locks.entities_held_by(agent_entity))
+        .collect();
+
+    let dt = time.delta_secs();
+    let mut updates: Vec<(Entity, LightValues, bool)> = Vec::new();
+
+    for (entity, mut tween) in &mut query {
+        if frozen.contains(&entity) {
+            continue;
+        }
+        tween.elapsed += dt;
+        let t = (tween.elapsed / tween.duration).clamp(0.0, 1.0);
+        let eased = ease_out(tween.ease, t);
+        let lerp = |a: f32, b: f32| a + (b - a) * eased;
+        updates.push((
+            entity,
+            LightValues {
+                color: [
+                    lerp(tween.start_color[0], tween.target_color[0]),
+                    lerp(tween.start_color[1], tween.target_color[1]),
+                    lerp(tween.start_color[2], tween.target_color[2]),
+                    lerp(tween.start_color[3], tween.target_color[3]),
+                ],
+                intensity: lerp(tween.start_intensity, tween.target_intensity),
+                range: match (tween.start_range, tween.target_range) {
+                    (Some(from), Some(to)) => Some(lerp(from, to)),
+                    _ => None,
+                },
+            },
+            t >= 1.0,
+        ));
+    }
+
+    for (entity, values, done) in updates {
+        commands.queue(move |world: &mut World| {
+            set_light_values_for_entity_in_world(world, entity, &values);
+            if done {
+                if let Ok(mut entity_mut) = world.get_entity_mut(entity) {
+                    entity_mut.remove::<XrdsLightTween>();
+                }
+            }
+        });
+    }
+}
+
 /// Maps `t` in `0.0..=1.0` through the given curve.
 ///
 /// Named `ease_out` while every variant was one; kept under that name so existing
@@ -1748,6 +1905,7 @@ impl Action for XrdsActionRunner {
             XrdsAction::SetMaterial { .. } => {
                 world.get::<XrdsMaterialTween>(self.target).is_none()
             }
+            XrdsAction::SetLight { .. } => world.get::<XrdsLightTween>(self.target).is_none(),
             // Everything else applies instantly in `on_start`. glTF playback
             // is fire-and-forget: the agent finishes as soon as playback is
             // requested rather than waiting for the clip to end. Waiting on
@@ -1893,6 +2051,50 @@ impl Action for XrdsActionRunner {
                     );
                     true
                 }
+            }
+
+            XrdsAction::SetLight {
+                color,
+                intensity,
+                range,
+                duration_secs,
+                ease,
+            } => {
+                let entity = self.target;
+                let Some(start) = light_values_for_entity_in_world(world, entity) else {
+                    log::warn!(
+                        "XrdsAction::SetLight targeted entity {entity:?}, which is not a                          light — ignoring."
+                    );
+                    return true;
+                };
+
+                let target = LightValues {
+                    color: color.unwrap_or(start.color),
+                    intensity: intensity.unwrap_or(start.intensity),
+                    // `range` follows the *light*, not the action: a directional
+                    // light has none, so an authored range is dropped rather than
+                    // written. Zipping with the start value is what keeps that
+                    // decision in one place.
+                    range: start.range.map(|current| range.unwrap_or(current)),
+                };
+
+                if duration_secs <= 0.0 {
+                    set_light_values_for_entity_in_world(world, entity, &target);
+                    return true;
+                }
+
+                world.entity_mut(entity).insert(XrdsLightTween {
+                    start_color: start.color,
+                    start_intensity: start.intensity,
+                    start_range: start.range,
+                    target_color: target.color,
+                    target_intensity: target.intensity,
+                    target_range: target.range,
+                    elapsed: 0.0,
+                    duration: duration_secs,
+                    ease,
+                });
+                false
             }
 
             XrdsAction::SetElementText { text } => {

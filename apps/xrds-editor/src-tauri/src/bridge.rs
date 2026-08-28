@@ -402,7 +402,7 @@ pub enum EditorCommand {
 ///
 /// **If you change a DTO and do not bump this, you have removed the only thing
 /// that would have told anyone.**
-pub const BRIDGE_VERSION: u32 = 24;
+pub const BRIDGE_VERSION: u32 = 25;
 
 /// State snapshot emitted to the webview after each frame's update.
 /// Grow this incrementally — add fields as each phase is implemented.
@@ -1030,6 +1030,19 @@ pub enum XrdsActionDto {
         /// Never interpolates — an image has no halfway point, so it swaps at the
         /// start of the tween however long the duration is.
         texture: Option<ActionTextureDto>,
+    },
+    /// Drives whichever of the three light kinds the target node is. One
+    /// `intensity` for all of them — lumens on a point/spot light, lux on a
+    /// directional one — and `range` is ignored by a directional light. See
+    /// `XrdsAction::SetLight` on the domain side for why it is one action.
+    SetLight {
+        color: Option<[f32; 4]>,
+        intensity: Option<f32>,
+        range: Option<f32>,
+        #[serde(default)]
+        duration_secs: f32,
+        #[serde(default)]
+        ease: String,
     },
     ModifyHealth { delta: ActionValueDto },
     /// Element-scoped actions. Only meaningful on an `Element` asset row -- a

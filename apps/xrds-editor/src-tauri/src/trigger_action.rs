@@ -733,6 +733,18 @@ fn default_action_for_kind(kind: &str) -> Option<XrdsAction> {
             ease: XrdsEaseCurve::default(),
             texture: None,
         },
+        // Intensity alone, and left unset: an author adding this event almost
+        // always wants to change brightness, but the *value* has to be theirs —
+        // a light's sensible intensity differs by three orders of magnitude
+        // between a point light in lumens and the sun in lux, so there is no
+        // default worth guessing.
+        "SetLight" => XrdsAction::SetLight {
+            color: None,
+            intensity: None,
+            range: None,
+            duration_secs: 0.0,
+            ease: XrdsEaseCurve::default(),
+        },
         "ModifyHealth" => XrdsAction::ModifyHealth {
             delta: XrdsActionValue::Fixed(0.0),
         },
@@ -798,6 +810,15 @@ fn action_to_dto(a: &XrdsAction) -> XrdsActionDto {
                 texture_asset_id: t.texture_asset_id.clone(),
             }),
         },
+        XrdsAction::SetLight { color, intensity, range, duration_secs, ease } => {
+            XrdsActionDto::SetLight {
+                color: *color,
+                intensity: *intensity,
+                range: *range,
+                duration_secs: *duration_secs,
+                ease: ease_curve_to_dto(ease),
+            }
+        }
         XrdsAction::ModifyHealth { delta } => XrdsActionDto::ModifyHealth {
             delta: action_value_to_dto(delta),
         },
@@ -866,6 +887,15 @@ fn action_from_dto(a: &XrdsActionDto) -> XrdsAction {
                 texture_asset_id: t.texture_asset_id.clone(),
             }),
         },
+        XrdsActionDto::SetLight { color, intensity, range, duration_secs, ease } => {
+            XrdsAction::SetLight {
+                color: *color,
+                intensity: *intensity,
+                range: *range,
+                duration_secs: *duration_secs,
+                ease: ease_curve_from_dto(ease),
+            }
+        }
         XrdsActionDto::ModifyHealth { delta } => XrdsAction::ModifyHealth {
             delta: action_value_from_dto(delta),
         },

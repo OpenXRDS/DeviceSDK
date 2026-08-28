@@ -156,6 +156,8 @@ pub enum XrdsAction {
     /// before rows were asset-scoped — which meant it could silently apply to
     /// a *different* node than its row, invisibly to the cross-Track conflict
     /// check (see the deleted "Action escapes its asset row" diagnostic).
+    ///
+    /// See [`Self::SetLight`] for the same treatment applied to lights.
     SetMaterial {
         base_color: Option<[f32; 4]>,
         metallic: Option<f32>,
@@ -176,6 +178,38 @@ pub enum XrdsAction {
         /// stacks into sub-lanes.
         #[serde(default)]
         texture: Option<XrdsActionTexture>,
+    },
+    /// Light override, instant or interpolated. Same shape as
+    /// [`SetMaterial`](XrdsAction::SetMaterial) — each field independently
+    /// optional, `None` leaves that property alone — and it drives whichever of the
+    /// three light kinds the target node happens to be.
+    ///
+    /// **One `intensity` field for all three kinds, deliberately.** A point or spot
+    /// light measures brightness in lumens and a directional light in lux, so this
+    /// is two units under one name. The alternative is a per-kind action an author
+    /// must pick correctly before knowing which kind they placed, and every
+    /// comparable engine surfaces a single "Intensity" meaning whatever that light
+    /// type means — Unity and Unreal both do. The unit follows the target.
+    ///
+    /// `range` is ignored by a directional light, which has none: the sun does not
+    /// fall off. Setting it on one is a no-op rather than an error, the same way a
+    /// `SetMaterial` field the target does not have is.
+    ///
+    /// **Cone angles are not here.** A spot light's `inner_angle`/`outer_angle` are
+    /// animatable in principle but apply to exactly one of the three kinds. They
+    /// are additive when something asks; leaving them out keeps this action the
+    /// same shape whichever light it lands on.
+    SetLight {
+        color: Option<[f32; 4]>,
+        /// Lumens on a point or spot light, lux on a directional one.
+        intensity: Option<f32>,
+        /// Point and spot only; a directional light ignores it.
+        range: Option<f32>,
+        /// Seconds to interpolate over. `0.0` applies instantly.
+        #[serde(default)]
+        duration_secs: f32,
+        #[serde(default)]
+        ease: XrdsEaseCurve,
     },
     /// No `target` field, for the same reason as [`SetMaterial`](XrdsAction::SetMaterial).
     ModifyHealth {
@@ -301,6 +335,15 @@ enum XrdsActionKnown {
         #[serde(default)]
         texture: Option<XrdsActionTexture>,
     },
+    SetLight {
+        color: Option<[f32; 4]>,
+        intensity: Option<f32>,
+        range: Option<f32>,
+        #[serde(default)]
+        duration_secs: f32,
+        #[serde(default)]
+        ease: XrdsEaseCurve,
+    },
     ModifyHealth {
         delta: XrdsActionValue,
     },
@@ -349,6 +392,19 @@ impl From<XrdsActionKnown> for XrdsAction {
                     texture,
                 }
             }
+            XrdsActionKnown::SetLight {
+                color,
+                intensity,
+                range,
+                duration_secs,
+                ease,
+            } => XrdsAction::SetLight {
+                color,
+                intensity,
+                range,
+                duration_secs,
+                ease,
+            },
             XrdsActionKnown::ModifyHealth { delta } => {
                 XrdsAction::ModifyHealth { delta }
             }
@@ -382,6 +438,7 @@ const KNOWN_ACTION_KINDS: &[&str] = &[
     "SetVisible",
     "SetTransform",
     "SetMaterial",
+    "SetLight",
     "ModifyHealth",
     "SetElementText",
     "SetElementValue",
@@ -452,7 +509,8 @@ impl XrdsAction {
     pub fn self_duration_secs(&self) -> f32 {
         match self {
             XrdsAction::SetTransform { duration_secs, .. }
-            | XrdsAction::SetMaterial { duration_secs, .. } => duration_secs.max(0.0),
+            | XrdsAction::SetMaterial { duration_secs, .. }
+            | XrdsAction::SetLight { duration_secs, .. } => duration_secs.max(0.0),
             _ => 0.0,
         }
     }
@@ -1167,6 +1225,21 @@ impl XrdsSceneDocument {
                         // normal way to author an instant change — warning on
                         // it would flag correct authoring, which is how you
                         // train people to ignore diagnostics.
+                    }
+
+                    // Same warning as SetMaterial's below, for the same reason:
+                    // an event that sets nothing is always a mistake, and it is
+                    // invisible at runtime — it applies successfully and changes
+                    // no pixel.
+                    if let XrdsAction::SetLight { color, intensity, range, .. } = &key.action {
+                        if color.is_none() && intensity.is_none() && range.is_none() {
+                            out.push(XrdsSceneTriggerDiagnostic {
+                                node_id: None,
+                                severity: Severity::Warning,
+                                title: "Light change sets nothing".to_string(),
+                                detail: format!("{at} leaves every light property unset."),
+                            });
+                        }
                     }
 
                     if let XrdsAction::SetMaterial {
