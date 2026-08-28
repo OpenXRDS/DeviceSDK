@@ -164,6 +164,16 @@ and the video actions stay ungated on purpose — a material is carried by many
 payloads and a video is bound to a texture slot, so a node's payload kind cannot
 answer either, and greying those out on a guess would refuse valid authoring.
 
+## Known defect: overlapping events cancel each other
+
+Two events animating one node at the same time do **not** compose — the second
+tween replaces the first as a component, and the first's animation stops with no
+warning. Measured for `SetLight` and `SetMaterial`, and `SetTransform` has the
+same shape. It is the reason "give each property its own curve" cannot currently
+be answered with two events, which is how it should be answered.
+
+Planned, not built: [`tween-channels-plan.md`](tween-channels-plan.md).
+
 ## What would come next, if something asks
 
 The same shape applies to anything with a numeric value and a runtime setter — fog
