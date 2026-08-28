@@ -32,7 +32,7 @@ Shipped as `XrdsAction::SetMaterial`, and as of 2026-08-28 it interpolates:
 `duration_secs` + `ease`, so "fade an object out via base colour alpha" — the use
 case this entry named — is now literally what it does rather than something an
 author would have had to approximate with a burst of instant events. See
-[`animatable-properties.md`](animatable-properties.md).
+[`done/animatable-properties.md`](done/animatable-properties.md).
 
 ## Morph targets
 
@@ -59,16 +59,34 @@ author would have had to approximate with a burst of instant events. See
   when entering a zone — cutscene-adjacent effects without a scripting
   system.
 
-## UI / HUD
+## Scene environment — fog, exposure, colour grading
 
-- **Sketch:** `XrdsAction::SetUiVisible { target, visible }`,
-  `XrdsAction::SetUiValue { target, value }`.
-- **Wraps:** the existing UI widget modules
-  (`world_ui_button`/`world_ui_slider`/`world_ui_toggle`, referenced in
-  `xrds_api.rs`).
-- **Use case:** show a HUD prompt on zone-enter, update a health-bar
-  widget's value when `ModifyHealth` fires — pairs naturally with the
-  health example already used throughout the design doc.
+- **Sketch:** `XrdsAction::SetFog { visibility, .. }`, `SetExposure { ev100 }`,
+  animated the same way `SetLight` and `SetMaterial` now are.
+- **Wraps:** the managed-marker environment sync in
+  `crates/xrds-runtime/src/xrds_api/environment.rs`, which already applies these
+  to every `Camera3d`.
+- **Blocked on a decision, not on work.** `done/animatable-properties.md` claimed
+  these were "a match arm and a tween component". They are not: **every**
+  `XrdsActionTarget` is a node or a panel element — `SelfNode`, `Node(id)`,
+  `TriggerSource`, `Element { panel, name }` — and the scene environment is
+  neither. An action for it needs a new target kind, which is a decision about
+  what a Track may address.
+- **The question that decides it:** a Track holds *asset locks* so two Tracks
+  cannot fight over the same thing, under the reject-the-newcomer policy. The
+  environment is the one thing every Track would contend for, so giving it a
+  target means either a global lock — where one Track fading the fog blocks every
+  other Track in the scene — or an exception to the policy. Neither is obviously
+  right, which is why this is not started rather than half-built.
+
+## UI / HUD — **shipped**
+
+Shipped as `SetElementText`, `SetElementValue` and `SetElementEnabled`, addressed
+by `XrdsActionTarget::Element { panel, name }` rather than by the `target` field
+this entry sketched. `SetElementValue` interpolates as of 2026-08-28 — a health
+bar filling over time is one event — though only on a Slider: a Toggle has no
+halfway between checked and unchecked. Visibility is `SetVisible` on the panel
+node; there is no separate UI variant of it.
 
 ## Physics
 

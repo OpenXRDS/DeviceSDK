@@ -1577,7 +1577,7 @@ fn runtime_playback_options(playback: &XrdsSceneGltfPlayback) -> XrdsGltfAnimati
 /// do not either. That second case is what the original design missed: it held one
 /// whole `start`/`target` `Transform`, so a second event replaced the first
 /// outright and whatever it was moving stopped where it stood, silently. See
-/// `docs/tween-channels-plan.md`.
+/// `docs/done/tween-channels-plan.md`.
 ///
 /// Rotation gets its own channel rather than sharing the numeric one because it
 /// must **slerp**. Lerping two quaternions component-wise cuts through the inside
@@ -1793,7 +1793,7 @@ fn light_values_for_entity_in_world(world: &World, entity: Entity) -> Option<Lig
 /// this type: two events animating different properties of one light must run at
 /// once, and before channels existed the second event's component insert replaced
 /// the first outright — the first property stopped where it stood, with nothing
-/// reported. See `docs/tween-channels-plan.md`.
+/// reported. See `docs/done/tween-channels-plan.md`.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct XrdsTweenChannel<T> {
     start: T,
@@ -2465,7 +2465,7 @@ impl Action for XrdsActionRunner {
                 // Merge, do not replace. An event owns only the channels it names;
                 // any other property already animating on this light keeps running.
                 // Replacing the component outright is what used to cancel it, with
-                // nothing reported — see `docs/tween-channels-plan.md`.
+                // nothing reported — see `docs/done/tween-channels-plan.md`.
                 let mut tween = world
                     .get::<XrdsLightTween>(entity)
                     .copied()

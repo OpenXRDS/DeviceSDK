@@ -1338,7 +1338,7 @@ mod xrds_scene_graph_light_fixtures {
 }
 
 // Overlapping-tween diagnostics used to live here. They are gone with the check
-// itself: after phase 2 of `docs/tween-channels-plan.md` all three tween families
+// itself: after phase 2 of `docs/done/tween-channels-plan.md` all three tween families
 // hold one channel per property and an event merges rather than replacing, so
 // overlapping events compose and the error would have been a lie. What replaced
 // them are runtime tests that assert the composition directly —
