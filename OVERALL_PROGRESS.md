@@ -345,8 +345,12 @@ applies. S5 is worth a note: this paragraph used to say its rename half was
 "dropped on review", and it was not dropped, it was done on 2026-08-26 once
 someone checked what it would actually break. The answer was one public signature.
 
-Video also closed since this was written, which leaves **three** Medium and four
-Large.
+Video also closed since this was written. **Corrected 2026-08-28:** that
+sentence then said "three Medium remain", and by the table above the number is
+**zero** — every Medium row is now struck through or Deferred, and the tier is
+empty. Four Large remain. This is the third time a count in this file has
+outlived the rows it counted; a total written beside a table it does not read
+from will always drift, so trust the rows.
 
 What the tier actually cost, and why the sizing was not the useful part: it was
 scoped as polish and produced nine defects, none of which fails a test or looks
