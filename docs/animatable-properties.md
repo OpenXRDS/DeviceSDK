@@ -124,11 +124,45 @@ things:
   merging them would mean a light change cancelling an unrelated transform change
   on the same entity.
 
-Two things the tests cover that the feature does not obviously need: `SetLight` on
-a **node that is not a light** must finish rather than block forever on a tween
-that will never be inserted, and a `SetLight` that sets **no field at all** is
-diagnosed — it applies successfully and changes no pixel, so nothing at runtime
-would ever report it.
+A `SetLight` that sets **no field at all** is diagnosed: it applies successfully
+and changes no pixel, so nothing at runtime would ever report it.
+
+### It shipped offerable on any node, which was the whole failure again
+
+`SetLight` could be added to a cube. It saved, previewed, and did nothing —
+authorable-but-inert, in the feature added *to* a document about that failure.
+
+The cause was not a missing idea but an unwired one. `lib/sequencer.ts` already
+exported `actionUnavailableReasonFor`, the guard for exactly this, and **nothing
+in the UI called it** — only its own tests did. The picker used a second,
+divergent copy of the action list declared in the component, which had drifted:
+the tested list was missing the audio and video actions, so the list under test
+was not the list on screen. And `track_diagnostics` already refused glTF actions
+on non-glTF nodes and effect actions on non-effect nodes; the light case was
+simply never added beside them.
+
+Three gates now, matching what glTF and effects always had:
+
+- **The picker greys it out** with the reason beside it, rather than hiding it —
+  `Select` already supported `disabled` + `hint` and its own comment argues for
+  showing the reason. The two action lists are now one.
+- **The document reports an error**, which is the authoritative gate. An editor
+  picker cannot see a hand-edited file or one from another tool — the same lesson
+  the video texture slot taught, where the runtime resolver and the picker were
+  both fixed and the document validator was missed.
+- **The runtime still finishes rather than stalling**, because a Track blocked
+  forever on a tween that will never appear is invisible in a way a wrong
+  brightness is not.
+
+`AmbientLight` is excluded from all three, and it is the trap worth naming: it
+reads like a light and is a *resource* at runtime rather than one of the three
+light components, so grouping it by its name would have put back the exact inert
+event the gates remove.
+
+The same pass gated glTF, effect and audio actions in the picker. `SetMaterial`
+and the video actions stay ungated on purpose — a material is carried by many
+payloads and a video is bound to a texture slot, so a node's payload kind cannot
+answer either, and greying those out on a guess would refuse valid authoring.
 
 ## What would come next, if something asks
 

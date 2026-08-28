@@ -1265,3 +1265,64 @@ fn a_light_change_that_sets_nothing_is_diagnosed() {
     );
     assert!(!has(&d, "Light change sets nothing"), "got {:?}", titles(&d));
 }
+
+#[test]
+fn a_light_action_on_a_non_light_node_is_an_error() {
+    use xrds_scene_graph_light_fixtures::*;
+
+    let dim = || XrdsAction::SetLight {
+        color: None,
+        intensity: Some(0.0),
+        range: None,
+        duration_secs: 1.0,
+        ease: XrdsEaseCurve::Linear,
+    };
+
+    // A cube. The editor now greys this out, but a document can be hand-edited
+    // or come from an older editor, and the document is the authoritative gate —
+    // the same lesson the video texture slot taught.
+    let mut cube = node(1);
+    cube.payload = XrdsSceneNodePayload::Cube(Default::default());
+    cube.triggers = vec![binding_for("dim")];
+    let d = doc(
+        vec![cube],
+        vec![named("dim", XrdsTrack { assets: vec![row(1, vec![key(0.0, dim())])], ..Default::default() })],
+    );
+    assert!(has(&d, "Light action on a non-light node"), "got {:?}", titles(&d));
+
+    // Each of the three real light kinds is accepted.
+    for payload in light_payloads() {
+        let mut light = node(1);
+        light.payload = payload;
+        light.triggers = vec![binding_for("dim")];
+        let d = doc(
+            vec![light],
+            vec![named("dim", XrdsTrack { assets: vec![row(1, vec![key(0.0, dim())])], ..Default::default() })],
+        );
+        assert!(!has(&d, "Light action on a non-light node"), "got {:?}", titles(&d));
+    }
+
+    // And ambient light is not one of them. It reads like a light and is a
+    // resource at runtime, so SetLight finds nothing on it.
+    let mut ambient = node(1);
+    ambient.payload = XrdsSceneNodePayload::AmbientLight(Default::default());
+    ambient.triggers = vec![binding_for("dim")];
+    let d = doc(
+        vec![ambient],
+        vec![named("dim", XrdsTrack { assets: vec![row(1, vec![key(0.0, dim())])], ..Default::default() })],
+    );
+    assert!(has(&d, "Light action on a non-light node"), "got {:?}", titles(&d));
+}
+
+#[cfg(test)]
+mod xrds_scene_graph_light_fixtures {
+    use super::*;
+
+    pub fn light_payloads() -> Vec<XrdsSceneNodePayload> {
+        vec![
+            XrdsSceneNodePayload::PointLight(Default::default()),
+            XrdsSceneNodePayload::SpotLight(Default::default()),
+            XrdsSceneNodePayload::DirectionalLight(Default::default()),
+        ]
+    }
+}

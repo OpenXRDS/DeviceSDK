@@ -858,6 +858,26 @@ impl XrdsSceneDocument {
             .filter(|n| matches!(n.payload, XrdsSceneNodePayload::Effect(_)))
             .map(|n| n.id)
             .collect();
+        // The three light payloads `SetLight` can actually drive.
+        //
+        // `AmbientLight` is deliberately excluded. It reads like a light and is
+        // not one at runtime — it is a resource rather than one of the three light
+        // components the action looks for — so `SetLight` finds nothing on it.
+        // Including it by name would make this check bless the exact inert event
+        // it exists to catch.
+        let light_nodes: std::collections::HashSet<XrdsSceneNodeId> = self
+            .nodes
+            .iter()
+            .filter(|n| {
+                matches!(
+                    n.payload,
+                    XrdsSceneNodePayload::PointLight(_)
+                        | XrdsSceneNodePayload::SpotLight(_)
+                        | XrdsSceneNodePayload::DirectionalLight(_)
+                )
+            })
+            .map(|n| n.id)
+            .collect();
         // Auto-playing effects get their own message. PlayEffect *does* fire them
         // (fire_effect_in_world swaps pacing as needed), so this is not an error —
         // it is the unwanted extra burst at scene load that is worth flagging.
@@ -1197,6 +1217,26 @@ impl XrdsSceneDocument {
                                     title: "Effect also fires itself on load".to_string(),
                                     detail: format!(
  "{at} fires node {id:?}, and that effect also has Auto Play on, so it fires once on its own when the scene loads as well as when this Track runs. Turn Auto Play off if it should only fire from the Track."
+                                    ),
+                                });
+                            }
+                        }
+                    }
+
+                    // Same check as the glTF and effect ones above, and added at
+                    // the same time as `SetLight` itself rather than after
+                    // someone hit it: the action's runtime arm begins by looking
+                    // for a light component, so on any other node it warns to a
+                    // log nobody is reading and changes nothing.
+                    if matches!(key.action, XrdsAction::SetLight { .. }) {
+                        if let XrdsActionTarget::Node(id) = asset.target {
+                            if node_ids.contains(&id) && !light_nodes.contains(&id) {
+                                out.push(XrdsSceneTriggerDiagnostic {
+                                    node_id: None,
+                                    severity: Severity::Error,
+                                    title: "Light action on a non-light node".to_string(),
+                                    detail: format!(
+                                        "{at} sets light properties, but node {id:?} is not a                                          point, spot or directional light — nothing will change."
                                     ),
                                 });
                             }

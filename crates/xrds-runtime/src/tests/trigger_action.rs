@@ -4476,8 +4476,17 @@ fn a_finished_light_tween_clears_itself() {
     );
 }
 
-/// `SetLight` on a node that is not a light warns and finishes, rather than
-/// hanging the Track waiting for a tween that was never inserted.
+/// `SetLight` on a node that is not a light finishes rather than hanging the
+/// Track waiting for a tween that was never inserted.
+///
+/// **This is the last line of defence, not the intended path.** Authoring it is
+/// prevented twice over — the editor greys the action out on a non-light row, and
+/// the document reports "Light action on a non-light node" as an error. Both were
+/// missing when `SetLight` first shipped, so an author could add it to a cube and
+/// get an event that saved, previewed and did nothing. What this test covers is
+/// the case neither gate can reach: a hand-edited document, or one from another
+/// tool. Not stalling matters more than not applying — a wrong brightness is
+/// visible, a Track blocked forever on a tween that will never appear is not.
 #[test]
 fn set_light_on_a_non_light_finishes_instead_of_stalling() {
     use crate::xrds_api::trigger_action::XrdsLightTween;

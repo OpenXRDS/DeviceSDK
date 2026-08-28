@@ -5,27 +5,23 @@ import {
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type {
-  ActionTarget, ActionValue, EditorCommand, EditorSnapshot, NamedTrackDto, XrdsAction,
+  ActionTarget, ActionValue, EditorCommand, EditorSnapshot, HierarchyNode, NamedTrackDto,
+  XrdsAction,
 } from "../types/bridge";
 import { TEXTURE_SLOTS } from "../types/bridge";
 import { EasePicker } from "./ui/EasePicker";
 import { EASE_CHOICES } from "../lib/ease";
+import { TRACK_ACTION_KINDS, actionUnavailableReasonFor } from "../lib/sequencer";
 import { Select } from "./ui/Select";
 import { Checkbox } from "./ui/Checkbox";
 
 /** Action kinds an author may place on a row.
  *
- * `Wait`, `Run` and `FireCustomEvent` are absent because they no longer exist:
- * an event carries its own time, and a Track cannot start another Track.
- * `Teleport` is absent because it *was* a zero-duration `SetTransform` — the
- * Mode control below now expresses that as duration 0 vs > 0. */
-export const ACTION_KINDS = [
-  "SetTransform", "SetVisible", "SetMaterial", "SetLight",
-  "PlayGltfAnimation", "StopGltfAnimation", "ModifyHealth",
-  "PlayEffect", "StopEffect",
-  "PlayAudio", "StopAudio",
-  "PlayVideo", "StopVideo",
-] as const;
+ * Re-exported from `lib/sequencer` rather than declared here. There used to be a
+ * second copy at this spot and the two had already drifted — the lib's list was
+ * missing the audio and video actions, and only the lib's was tested, so the
+ * tested list was not the offered one. */
+export const ACTION_KINDS = TRACK_ACTION_KINDS;
 
 /** Per-action icons. Stroke SVG rather than emoji, so a key on a lane can take
  *  its family's `ACTION_COLOR` tint — a colour glyph cannot be recoloured at all,
@@ -80,6 +76,21 @@ function hexToRgb(hex: string): [number, number, number] {
  *  a curve from a newer editor still reads as something. */
 function easeLabel(ease: string): string {
   return EASE_CHOICES.find(c => c.value === ease)?.label ?? ease;
+}
+
+/** Depth-first lookup of one node in the hierarchy tree.
+ *
+ *  The snapshot carries the hierarchy as a tree, so a node's kind is not directly
+ *  addressable by id; `Hierarchy.tsx` has its own private copy of this walk. Two
+ *  copies of four lines is cheaper than a shared module neither owns, but if a
+ *  third appears it should move to `lib/`. */
+function findHierarchyNode(nodes: HierarchyNode[], id: number): HierarchyNode | null {
+  for (const n of nodes) {
+    if (n.id === id) return n;
+    const found = findHierarchyNode(n.children, id);
+    if (found) return found;
+  }
+  return null;
 }
 
 export function summarizeAction(a: XrdsAction): string {
@@ -239,6 +250,21 @@ export function SequencerInspector({
   // that fails to resolve at runtime.
   const textureAssets = snapshot.asset_catalog.filter(a => a.kind === "Texture");
 
+  // The row a new event would land on — the same choice `addStep` makes, derived
+  // once so the greyed-out menu and the action it guards cannot disagree about
+  // which row is in play.
+  const addAssetIndex = selected?.assetIndex ?? activeAssetIndex ?? 0;
+  const addTarget: ActionTarget =
+    track.assets[addAssetIndex]?.target ?? { type: "SelfNode" };
+  /** The payload kind of the node that row drives, or `undefined` when it cannot
+   *  be resolved — a row pointing at a deleted node, or a target that names no
+   *  node at all. Unresolved means the kind rules stay quiet rather than greying
+   *  out an action on a guess. */
+  const addTargetNodeKind =
+    addTarget.type === "Node"
+      ? findHierarchyNode(snapshot.hierarchy, addTarget.id)?.kind
+      : undefined;
+
   const selectedKey =
     selected === null
       ? null
@@ -277,6 +303,10 @@ export function SequencerInspector({
     // when the Track has no rows yet, since there is nowhere to put it.
     const assetIndex = selected?.assetIndex ?? activeAssetIndex ?? 0;
     if (track.assets.length === 0) return;
+    // The picker greys these out, so this only fires if the two ever disagree.
+    // Refusing here as well means the disagreement is a no-op rather than an
+    // event that saves and then does nothing at runtime.
+    if (actionUnavailableReasonFor(kind, addTarget, addTargetNodeKind) !== null) return;
     // Place a new event just after the last one on that row, so successive
     // adds lay out along the ruler instead of stacking at t=0.
     const row = track.assets[assetIndex];
@@ -394,14 +424,21 @@ export function SequencerInspector({
           onValueChange={v => { if (v !== ADD_STEP_SENTINEL) addStep(v); }}
           options={[
             { value: ADD_STEP_SENTINEL, label: "+ event…" },
-            ...ACTION_KINDS.map(kind => ({
-              value: kind,
-              label: (
-                <span className="inline-flex items-center gap-1.5">
-                  <ActionIcon kind={kind} /> {kind}
-                </span>
-              ),
-            })),
+            ...ACTION_KINDS.map(kind => {
+              const unavailable = actionUnavailableReasonFor(kind, addTarget, addTargetNodeKind);
+              return {
+                value: kind,
+                disabled: unavailable !== null,
+                // Shown greyed with its reason rather than hidden: a short menu
+                // leaves an author guessing why the action they wanted is absent.
+                hint: unavailable ?? undefined,
+                label: (
+                  <span className="inline-flex items-center gap-1.5">
+                    <ActionIcon kind={kind} /> {kind}
+                  </span>
+                ),
+              };
+            }),
           ]}
         />
         <span className="flex-1" />

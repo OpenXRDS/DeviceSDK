@@ -533,6 +533,8 @@ export const TRACK_ACTION_KINDS = [
   "SetTransform", "SetVisible", "SetMaterial", "SetLight",
   "PlayGltfAnimation", "StopGltfAnimation", "ModifyHealth",
   "PlayEffect", "StopEffect",
+  "PlayAudio", "StopAudio",
+  "PlayVideo", "StopVideo",
   "SetElementText", "SetElementValue", "SetElementEnabled",
 ] as const;
 
@@ -550,12 +552,80 @@ export const ELEMENT_ONLY_ACTION_KINDS: ReadonlySet<string> = new Set([
  *  Mirrors what `unavailableReasonFor` does for *trigger* kinds: show the whole
  *  menu and say what each greyed entry needs, rather than hiding entries and
  *  leaving an author to guess why the list is short. */
+/** Node payload kinds a `SetLight` event can drive.
+ *
+ *  `AmbientLight` is deliberately absent. It reads like a light and is not one at
+ *  runtime — Bevy models it as a resource, not a `PointLight`/`SpotLight`/
+ *  `DirectionalLight` component — so `SetLight` finds nothing on it and does
+ *  nothing. Grouping it with the others by its name would reintroduce exactly the
+ *  inert event this table exists to prevent. */
+const LIGHT_NODE_KINDS: ReadonlySet<string> = new Set([
+  "PointLight", "SpotLight", "DirectionalLight",
+]);
+
+/** Actions that need a particular kind of node under them, and what they need.
+ *
+ *  Each entry is an action whose runtime arm begins by looking for a component
+ *  that only one payload provides: no glTF, no animation to play; no light, no
+ *  light to set. Placed on any other row they apply successfully and change
+ *  nothing, which is the failure this project keeps paying for — the event saves,
+ *  round-trips, previews, and is silent.
+ *
+ *  Deliberately **not** listed: `SetMaterial` (the set of payloads carrying a
+ *  material is broad and not derivable from the kind string alone) and
+ *  `PlayVideo`/`StopVideo` (a video is bound to a texture slot, not to a payload
+ *  kind, so a node's kind cannot answer it). Guessing at those would grey out
+ *  valid authoring, which is worse than the gap. */
+const NODE_KIND_ONLY_ACTIONS: { kinds: string[]; needs: ReadonlySet<string>; reason: string }[] = [
+  {
+    kinds: ["SetLight"],
+    needs: LIGHT_NODE_KINDS,
+    reason: "only applies to a point, spot or directional light",
+  },
+  {
+    kinds: ["PlayGltfAnimation", "StopGltfAnimation"],
+    needs: new Set(["GltfAsset"]),
+    reason: "only applies to a glTF node",
+  },
+  {
+    kinds: ["PlayEffect", "StopEffect"],
+    needs: new Set(["EffectBurst", "EffectTrail"]),
+    reason: "only applies to an effect node",
+  },
+  {
+    kinds: ["PlayAudio", "StopAudio"],
+    needs: new Set(["AudioClip"]),
+    reason: "only applies to an audio clip node",
+  },
+];
+
+/** Why `kind` cannot be added to a row with this target, or null when it can.
+ *
+ *  Mirrors what `unavailableReasonFor` does for *trigger* kinds: show the whole
+ *  menu and say what each greyed entry needs, rather than hiding entries and
+ *  leaving an author to guess why the list is short.
+ *
+ *  `nodeKind` is the payload kind of the node the row targets, as the hierarchy
+ *  reports it. Pass `undefined` when it cannot be resolved — a row pointing at a
+ *  node that no longer exists — and the node-kind rules stay silent rather than
+ *  greying out an action on a guess.
+ */
 export function actionUnavailableReasonFor(
   kind: string,
   target: ActionTarget,
+  nodeKind?: string,
 ): string | null {
-  if (!ELEMENT_ONLY_ACTION_KINDS.has(kind)) return null;
-  return target.type === "Element" ? null : "only applies to a panel element row";
+  if (ELEMENT_ONLY_ACTION_KINDS.has(kind)) {
+    return target.type === "Element" ? null : "only applies to a panel element row";
+  }
+  // An Element row is a widget on a panel, not a node payload, so the node-kind
+  // rules below cannot apply to it either.
+  if (target.type === "Element") return null;
+  if (nodeKind === undefined) return null;
+  for (const rule of NODE_KIND_ONLY_ACTIONS) {
+    if (rule.kinds.includes(kind) && !rule.needs.has(nodeKind)) return rule.reason;
+  }
+  return null;
 }
 
 /** Coarse family for a row's target, used only for display grouping. */

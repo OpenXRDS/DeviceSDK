@@ -10,7 +10,7 @@ import {
 import { defaultSnapshot } from "../types/bridge";
 import type {
   EditorSnapshot, NamedTrackDto, NodeBindingSummary, NodeInspector, TriggerBindingDto,
-  XrdsAction, XrdsTrackAssetDto, XrdsTrackKeyDto, PanelElementDto,
+  XrdsAction, XrdsTrackAssetDto, XrdsTrackKeyDto, PanelElementDto, ActionTarget,
 } from "../types/bridge";
 
 // ---------------------------------------------------------------------------
@@ -706,6 +706,56 @@ describe("actionUnavailableReasonFor", () => {
     for (const kind of ["SetElementText", "SetElementValue", "SetElementEnabled"]) {
       expect(actionUnavailableReasonFor(kind, element)).toBeNull();
     }
+  });
+
+  it("offers SetLight on lights and nowhere else", () => {
+    const node: ActionTarget = { type: "Node", id: 7 };
+    for (const kind of ["PointLight", "SpotLight", "DirectionalLight"]) {
+      expect(actionUnavailableReasonFor("SetLight", node, kind)).toBeNull();
+    }
+    for (const kind of ["Cube", "Sphere", "GltfAsset", "Camera", "AudioClip"]) {
+      expect(actionUnavailableReasonFor("SetLight", node, kind)).toMatch(/light/);
+    }
+  });
+
+  it("treats AmbientLight as not a light for SetLight", () => {
+    // The trap this rule exists for. It reads like a light and is not one at
+    // runtime — Bevy models ambient light as a resource, not as one of the three
+    // light components SetLight looks for — so offering it here would put back
+    // the exact inert event the gate removes.
+    expect(actionUnavailableReasonFor("SetLight", { type: "Node", id: 7 }, "AmbientLight"))
+      .toMatch(/light/);
+  });
+
+  it("gates the other payload-specific actions the same way", () => {
+    const node: ActionTarget = { type: "Node", id: 7 };
+    expect(actionUnavailableReasonFor("PlayGltfAnimation", node, "GltfAsset")).toBeNull();
+    expect(actionUnavailableReasonFor("PlayGltfAnimation", node, "Cube")).toMatch(/glTF/);
+    expect(actionUnavailableReasonFor("PlayEffect", node, "EffectBurst")).toBeNull();
+    expect(actionUnavailableReasonFor("PlayEffect", node, "EffectTrail")).toBeNull();
+    expect(actionUnavailableReasonFor("StopEffect", node, "Cube")).toMatch(/effect/);
+    expect(actionUnavailableReasonFor("PlayAudio", node, "AudioClip")).toBeNull();
+    expect(actionUnavailableReasonFor("StopAudio", node, "Cube")).toMatch(/audio/);
+  });
+
+  it("stays silent when the node kind cannot be resolved", () => {
+    // A row pointing at a deleted node. Greying an action out on a guess would
+    // be worse than the gap: it would refuse authoring that may be valid.
+    expect(actionUnavailableReasonFor("SetLight", { type: "Node", id: 7 }, undefined)).toBeNull();
+    expect(actionUnavailableReasonFor("SetLight", { type: "SelfNode" })).toBeNull();
+  });
+
+  it("leaves actions that no payload kind can decide ungated", () => {
+    // SetMaterial and the video actions are deliberately absent from the table:
+    // a material is carried by many payloads and a video is bound to a texture
+    // slot, so a node's kind cannot answer either. Asserted so that adding them
+    // later is a deliberate act with a test to update, not a silent change.
+    const cube: ActionTarget = { type: "Node", id: 7 };
+    expect(actionUnavailableReasonFor("SetMaterial", cube, "Cube")).toBeNull();
+    expect(actionUnavailableReasonFor("SetMaterial", cube, "PointLight")).toBeNull();
+    expect(actionUnavailableReasonFor("PlayVideo", cube, "Cube")).toBeNull();
+    expect(actionUnavailableReasonFor("SetTransform", cube, "PointLight")).toBeNull();
+    expect(actionUnavailableReasonFor("SetVisible", cube, "PointLight")).toBeNull();
   });
 
   it("covers every element action the kind list offers", () => {
