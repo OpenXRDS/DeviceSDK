@@ -195,16 +195,29 @@ pub enum XrdsAction {
     /// fall off. Setting it on one is a no-op rather than an error, the same way a
     /// `SetMaterial` field the target does not have is.
     ///
-    /// **Cone angles are not here.** A spot light's `inner_angle`/`outer_angle` are
-    /// animatable in principle but apply to exactly one of the three kinds. They
-    /// are additive when something asks; leaving them out keeps this action the
-    /// same shape whichever light it lands on.
+    /// `inner_angle`/`outer_angle` are **spot lights only** and follow the same
+    /// rule as `range`: a light that has no such property drops the value rather
+    /// than erroring. They were left out at first on the grounds that a per-kind
+    /// field makes the action a different shape depending on where it lands —
+    /// `range` had already set the opposite precedent, and following it is the
+    /// smaller inconsistency.
+    ///
+    /// **Radians, not degrees**, because that is the unit the spot light payload
+    /// and `SpotLight` itself already use. A second unit for one quantity is the
+    /// mistake this action avoided with `intensity`; introducing degrees here and
+    /// nowhere else would be that mistake with the sign flipped.
     SetLight {
         color: Option<[f32; 4]>,
         /// Lumens on a point or spot light, lux on a directional one.
         intensity: Option<f32>,
         /// Point and spot only; a directional light ignores it.
         range: Option<f32>,
+        /// Spot only, in **radians**. The bright inner cone.
+        #[serde(default)]
+        inner_angle: Option<f32>,
+        /// Spot only, in **radians**. The outer edge the light falls off to.
+        #[serde(default)]
+        outer_angle: Option<f32>,
         /// Seconds to interpolate over. `0.0` applies instantly.
         #[serde(default)]
         duration_secs: f32,
@@ -237,8 +250,18 @@ pub enum XrdsAction {
     /// Clamped to the slider's authored `min`/`max` at apply time — an out-of-range
     /// value is an authoring slip, and clamping keeps the handle on its track
     /// rather than rendering it outside the widget.
+    ///
+    /// **Only a Slider interpolates.** A Toggle has no halfway between checked and
+    /// unchecked, so it applies at the start of the tween whatever the duration —
+    /// the same rule a `SetMaterial` texture swap follows, for the same reason.
     SetElementValue {
         value: f32,
+        /// Seconds to interpolate over. `0.0` applies instantly, which is what
+        /// every document authored before this field deserialises to.
+        #[serde(default)]
+        duration_secs: f32,
+        #[serde(default)]
+        ease: XrdsEaseCurve,
     },
     /// Turns an element's interactivity on or off, leaving it visible.
     ///
@@ -340,6 +363,10 @@ enum XrdsActionKnown {
         intensity: Option<f32>,
         range: Option<f32>,
         #[serde(default)]
+        inner_angle: Option<f32>,
+        #[serde(default)]
+        outer_angle: Option<f32>,
+        #[serde(default)]
         duration_secs: f32,
         #[serde(default)]
         ease: XrdsEaseCurve,
@@ -352,6 +379,10 @@ enum XrdsActionKnown {
     },
     SetElementValue {
         value: f32,
+        #[serde(default)]
+        duration_secs: f32,
+        #[serde(default)]
+        ease: XrdsEaseCurve,
     },
     SetElementEnabled {
         enabled: bool,
@@ -396,12 +427,16 @@ impl From<XrdsActionKnown> for XrdsAction {
                 color,
                 intensity,
                 range,
+                inner_angle,
+                outer_angle,
                 duration_secs,
                 ease,
             } => XrdsAction::SetLight {
                 color,
                 intensity,
                 range,
+                inner_angle,
+                outer_angle,
                 duration_secs,
                 ease,
             },
@@ -409,7 +444,9 @@ impl From<XrdsActionKnown> for XrdsAction {
                 XrdsAction::ModifyHealth { delta }
             }
             XrdsActionKnown::SetElementText { text } => XrdsAction::SetElementText { text },
-            XrdsActionKnown::SetElementValue { value } => XrdsAction::SetElementValue { value },
+            XrdsActionKnown::SetElementValue { value, duration_secs, ease } => {
+                XrdsAction::SetElementValue { value, duration_secs, ease }
+            }
             XrdsActionKnown::SetElementEnabled { enabled } => {
                 XrdsAction::SetElementEnabled { enabled }
             }
@@ -466,18 +503,6 @@ impl<'de> Deserialize<'de> for XrdsAction {
     }
 }
 
-/// Which tween component an interpolating action drives.
-///
-/// Not part of the authored schema — it exists so `track_diagnostics` can tell
-/// which pairs of events can actually interfere with each other. See
-/// `XrdsAction::tween_family`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum XrdsTweenFamily {
-    Transform,
-    Material,
-    Light,
-}
-
 /// Ease curve for interpolated actions — [`XrdsAction::SetTransform`] and
 /// [`XrdsAction::SetMaterial`].
 ///
@@ -522,74 +547,10 @@ impl XrdsAction {
         match self {
             XrdsAction::SetTransform { duration_secs, .. }
             | XrdsAction::SetMaterial { duration_secs, .. }
-            | XrdsAction::SetLight { duration_secs, .. } => duration_secs.max(0.0),
+            | XrdsAction::SetLight { duration_secs, .. }
+            | XrdsAction::SetElementValue { duration_secs, .. } => duration_secs.max(0.0),
             _ => 0.0,
         }
-    }
-
-    /// Which in-flight tween component this action drives, if any.
-    ///
-    /// The runtime keeps one tween component per family on the target entity, so
-    /// two *different* families never interfere — an interpolating `SetLight` and
-    /// an interpolating `SetMaterial` run side by side quite happily. Two events
-    /// of the **same** family do interfere, because the second replaces the first
-    /// as a component. Only the diagnostic below uses this; it is the reason the
-    /// check compares within a family rather than across all interpolating events.
-    pub(crate) fn tween_family(&self) -> Option<XrdsTweenFamily> {
-        match self {
-            XrdsAction::SetTransform { .. } => Some(XrdsTweenFamily::Transform),
-            XrdsAction::SetMaterial { .. } => Some(XrdsTweenFamily::Material),
-            XrdsAction::SetLight { .. } => Some(XrdsTweenFamily::Light),
-            _ => None,
-        }
-    }
-
-    /// The properties this action actually animates, by name.
-    ///
-    /// Only the interpolating ones: a `SetMaterial` texture swap is applied at the
-    /// start of the tween rather than interpolated, so it is already done by the
-    /// time a later event could replace the tween and it cannot be lost. Listing
-    /// it here would make the diagnostic warn about a property that is in no
-    /// danger.
-    pub(crate) fn animated_properties(&self) -> Vec<&'static str> {
-        let mut out = Vec::new();
-        match self {
-            XrdsAction::SetTransform { position, rotation, scale, .. } => {
-                if position.is_some() {
-                    out.push("position");
-                }
-                if rotation.is_some() {
-                    out.push("rotation");
-                }
-                if scale.is_some() {
-                    out.push("scale");
-                }
-            }
-            XrdsAction::SetMaterial { base_color, metallic, roughness, .. } => {
-                if base_color.is_some() {
-                    out.push("base colour");
-                }
-                if metallic.is_some() {
-                    out.push("metallic");
-                }
-                if roughness.is_some() {
-                    out.push("roughness");
-                }
-            }
-            XrdsAction::SetLight { color, intensity, range, .. } => {
-                if color.is_some() {
-                    out.push("colour");
-                }
-                if intensity.is_some() {
-                    out.push("intensity");
-                }
-                if range.is_some() {
-                    out.push("range");
-                }
-            }
-            _ => {}
-        }
-        out
     }
 
     /// Whether this action is valid inside a Track.
@@ -1214,74 +1175,6 @@ impl XrdsSceneDocument {
                     }
                 }
 
-                // Two interpolating events of the same family, overlapping in
-                // time on one row, do not compose: the runtime keeps one tween
-                // component per family on the target, so the later event's insert
-                // *replaces* the earlier one and whatever it was still animating
-                // stops where it stood. Nothing at runtime reports that — the
-                // Track completes normally and one authored fade simply never
-                // happened. See `docs/tween-channels-plan.md` for the fix this
-                // stands in for.
-                //
-                // The rule is deliberately narrow. Overlapping two events that
-                // animate the *same* properties is correct authoring — retiming a
-                // fade so it overtakes the previous one is last-writer-wins, which
-                // is what an author wants. Only properties the earlier event
-                // animates and the later one does not are actually lost, so only
-                // those are reported. A diagnostic that fired on correct authoring
-                // is how you teach people to ignore diagnostics, the same argument
-                // that kept the zero-duration warning out.
-                for (earlier_index, earlier) in asset.keys.iter().enumerate() {
-                    let Some(family) = earlier.action.tween_family() else {
-                        continue;
-                    };
-                    let earlier_duration = earlier.action.self_duration_secs();
-                    if earlier_duration <= 0.0 {
-                        continue;
-                    }
-                    let earlier_props = earlier.action.animated_properties();
-                    if earlier_props.is_empty() {
-                        continue;
-                    }
-                    for later in asset.keys.iter().skip(earlier_index + 1) {
-                        if later.action.tween_family() != Some(family) {
-                            continue;
-                        }
-                        if later.action.self_duration_secs() <= 0.0 {
-                            // An instant change writes the property and inserts no
-                            // tween, so it does not cancel one.
-                            continue;
-                        }
-                        if later.at_secs >= earlier.at_secs + earlier_duration {
-                            continue;
-                        }
-                        let later_props = later.action.animated_properties();
-                        let dropped: Vec<&str> = earlier_props
-                            .iter()
-                            .copied()
-                            .filter(|p| !later_props.contains(p))
-                            .collect();
-                        if dropped.is_empty() {
-                            continue;
-                        }
-                        out.push(XrdsSceneTriggerDiagnostic {
-                            node_id: None,
-                            severity: Severity::Error,
-                            title: "Overlapping events cancel an animation".to_string(),
-                            detail: format!(
-                                "{where_}, {:?}: the event at {:.2}s animates {} over {:.2}s, but                                  another event at {:.2}s starts before it ends and takes over the                                  same tween — so {} stops part-way and never reaches its target.                                  Move the second event to {:.2}s or later, or fold both changes                                  into one event.",
-                                asset.target,
-                                earlier.at_secs,
-                                dropped.join(", "),
-                                earlier_duration,
-                                later.at_secs,
-                                dropped.join(", "),
-                                earlier.at_secs + earlier_duration,
-                            ),
-                        });
-                    }
-                }
-
                 for (k, key) in asset.keys.iter().enumerate() {
                     let at = format!(
                         "{where_}, {:?} @ {:.2}s (event #{k})",
@@ -1412,12 +1305,73 @@ impl XrdsSceneDocument {
                         // train people to ignore diagnostics.
                     }
 
+                    // An authored rotation that resolves to the orientation the
+                    // asset is already in.
+                    //
+                    // Euler angles make this easy to hit by accident and
+                    // impossible to see: (180, 180, 180) is *exactly* the identity
+                    // rotation, because three half-turns about perpendicular axes
+                    // compose to a full turn. An author sets three large numbers,
+                    // nothing moves, and there is nothing to read that explains
+                    // why. Reported after someone hit precisely that.
+                    //
+                    // A **warning**, not an error, and only for `Node` rows: the
+                    // runtime turns from the asset's *current* orientation, which
+                    // an earlier event may have changed, so "as authored" is all
+                    // this can honestly claim.
+                    if let XrdsAction::SetTransform { rotation: Some(degrees), .. } = &key.action {
+                        if let XrdsActionTarget::Node(id) = asset.target {
+                            if let Some(node) = self.node(id) {
+                                let target = glam::Quat::from_euler(
+                                    glam::EulerRot::XYZ,
+                                    degrees[0].to_radians(),
+                                    degrees[1].to_radians(),
+                                    degrees[2].to_radians(),
+                                );
+                                let q = node.transform.rotation_quat_xyzw;
+                                let authored = glam::Quat::from_xyzw(q[0], q[1], q[2], q[3]);
+                                // A quaternion and its negation are the same
+                                // orientation, which `angle_between` already
+                                // accounts for. The threshold is half a degree:
+                                // below that nothing is visible anyway, and it
+                                // absorbs the float error in the Euler conversion
+                                // (measured at ~4e-8 per component for 180°).
+                                if authored.is_normalized()
+                                    && target.angle_between(authored).to_degrees() < 0.5
+                                {
+                                    out.push(XrdsSceneTriggerDiagnostic {
+                                        node_id: None,
+                                        severity: Severity::Warning,
+                                        title: "Rotation target is the current facing".to_string(),
+                                        detail: format!(
+                                            "{at} turns to ({:.0}, {:.0}, {:.0})°, which is the \
+                                             orientation {id:?} already has as authored — so \
+                                             nothing will turn. Euler angles reach this by \
+                                             accident: (180, 180, 180) is exactly no rotation, \
+                                             because three half-turns about perpendicular axes \
+                                             compose to a full turn.",
+                                            degrees[0], degrees[1], degrees[2]
+                                        ),
+                                    });
+                                }
+                            }
+                        }
+                    }
+
                     // Same warning as SetMaterial's below, for the same reason:
                     // an event that sets nothing is always a mistake, and it is
                     // invisible at runtime — it applies successfully and changes
                     // no pixel.
-                    if let XrdsAction::SetLight { color, intensity, range, .. } = &key.action {
-                        if color.is_none() && intensity.is_none() && range.is_none() {
+                    if let XrdsAction::SetLight {
+                        color, intensity, range, inner_angle, outer_angle, ..
+                    } = &key.action
+                    {
+                        if color.is_none()
+                            && intensity.is_none()
+                            && range.is_none()
+                            && inner_angle.is_none()
+                            && outer_angle.is_none()
+                        {
                             out.push(XrdsSceneTriggerDiagnostic {
                                 node_id: None,
                                 severity: Severity::Warning,

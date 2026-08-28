@@ -372,8 +372,14 @@ pub fn apply_inspector_command(
             false
         }
         EditorCommand::SetSpotLight { id, color, intensity, range, inner_angle, outer_angle } => {
+            // Bevy renders a spot light as *nothing at all* when the inner cone is
+            // wider than the outer one, so an inverted pair is not a slightly-wrong
+            // light, it is an invisible one. Clamped here, where the value enters
+            // editor state, so the live preview and the document commit — two
+            // separate readers below — cannot disagree about it.
+            let inner_angle = inner_angle.min(*outer_angle);
             state.pending_spot_light = Some((
-                XrdsSceneNodeId(*id), *color, *intensity, *range, *inner_angle, *outer_angle,
+                XrdsSceneNodeId(*id), *color, *intensity, *range, inner_angle, *outer_angle,
             ));
             false
         }
@@ -1269,5 +1275,46 @@ mod tests {
         let built = merge_material_dto(None, &dto);
         assert_eq!(built.base_color, [0.0, 1.0, 0.0, 1.0]);
         assert_eq!(built.pbr.metallic, 0.5);
+    }
+}
+
+#[cfg(test)]
+mod spot_light_tests {
+    use super::*;
+
+    /// An inverted cone never reaches editor state.
+    ///
+    /// Bevy renders a spot light as nothing at all when the inner cone is wider
+    /// than the outer one, so this is the difference between a light and no light.
+    /// The editor's sliders keep the pair ordered as you drag, but a command can
+    /// also arrive from a script or a replayed session, and both readers of
+    /// `pending_spot_light` — the live preview and the document commit — take it
+    /// on trust.
+    #[test]
+    fn a_spot_light_command_cannot_invert_its_cone() {
+        let mut state = EditorState::default();
+        let mut session = EditorSession(
+            xrds_scene_graph::XrdsSceneDocumentSession::new(
+                xrds_scene_graph::XrdsSceneDocument::default(),
+            )
+            .expect("an empty document is valid"),
+        );
+        let command = EditorCommand::SetSpotLight {
+            id: 1,
+            color: [1.0, 1.0, 1.0, 1.0],
+            intensity: 1000.0,
+            range: 10.0,
+            inner_angle: 1.2,
+            outer_angle: 0.4,
+        };
+        apply_inspector_command(&command, &mut session, &mut state);
+
+        let (_, _, _, _, inner, outer) =
+            state.pending_spot_light.expect("the command should have been recorded");
+        assert!(
+            inner <= outer,
+            "inner {inner} must be clamped to outer {outer}, or the light renders nothing"
+        );
+        assert_eq!(outer, 0.4, "the outer angle the author set must be kept");
     }
 }

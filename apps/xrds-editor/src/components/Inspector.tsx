@@ -1947,9 +1947,39 @@ function SpotLightSection({ id, p, send }: { id: number; p: any; send: (c: Edito
       <ColorRow label="Color" color={c} onLive={v => { setC(v); upd(v,i,r,inn,out); }} onCommit={v => { setC(v); upd(v,i,r,inn,out); commit(); }} />
       <SliderRow label="Intensity" value={i} min={0} max={100000} step={100} onLive={v => { setI(v); upd(c,v,r,inn,out); }} onCommit={v => { setI(v); upd(c,v,r,inn,out); commit(); }} />
       <SliderRow label="Range"     value={r} min={0} max={100}    step={0.1} onLive={v => { setR(v); upd(c,i,v,inn,out); }} onCommit={v => { setR(v); upd(c,i,v,inn,out); commit(); }} />
+      {/* Cone angles. These were read into state and sent on every edit, but had
+        * no rows — so a spot light's cone was stuck on its 0.2/0.5 rad defaults
+        * for good, however it was authored. Found when `SetLight` gained the same
+        * two fields and there was nowhere to compare them against.
+        *
+        * Degrees here, radians on the wire: the payload and Bevy's `SpotLight`
+        * both store radians, and a second unit for one quantity is worse than a
+        * conversion at the one place a human reads it. 90° is Bevy's own ceiling
+        * for a spot cone. */}
+      <SliderRow label="Inner °" value={+degOf(inn).toFixed(1)} min={0} max={+degOf(out).toFixed(1)} step={1}
+        onLive={v   => { const rad = radOf(v); setInn(rad); upd(c,i,r,rad,out); }}
+        onCommit={v => { const rad = radOf(v); setInn(rad); upd(c,i,r,rad,out); commit(); }} />
+      <SliderRow label="Outer °" value={+degOf(out).toFixed(1)} min={0} max={90} step={1}
+        onLive={v   => {
+          const rad = radOf(v);
+          // Dragging the outer cone below the inner one would invert the pair and
+          // black the light out, so the inner follows it down rather than the
+          // author discovering the light has vanished.
+          const nextInn = Math.min(inn, rad);
+          setOut(rad); setInn(nextInn); upd(c,i,r,nextInn,rad);
+        }}
+        onCommit={v => {
+          const rad = radOf(v);
+          const nextInn = Math.min(inn, rad);
+          setOut(rad); setInn(nextInn); upd(c,i,r,nextInn,rad); commit();
+        }} />
     </div>
   );
 }
+
+/** Radians as stored, degrees as read. */
+const degOf = (rad: number) => rad * 180 / Math.PI;
+const radOf = (deg: number) => deg * Math.PI / 180;
 
 function CameraSection({ id, p, send }: { id: number; p: any; send: (c: EditorCommand) => void }) {
   const [fov, setFov]   = useState<number>(p.fov);

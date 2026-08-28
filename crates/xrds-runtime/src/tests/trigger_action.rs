@@ -3782,7 +3782,7 @@ fn set_element_value_clamps_to_the_sliders_authored_range() {
             "Loud",
             900,
             "vol",
-            XrdsAction::SetElementValue { value: 99.0 },
+            XrdsAction::SetElementValue { value: 99.0, duration_secs: 0.0, ease: XrdsEaseCurve::Linear },
         )],
     );
     let panel = app.world().resource::<XrdsIdIndex>().entity_of(XrdsId(900)).expect("indexed");
@@ -3814,7 +3814,7 @@ fn set_element_value_treats_a_toggle_as_the_degenerate_scalar() {
                 "Set",
                 900,
                 "mute",
-                XrdsAction::SetElementValue { value },
+                XrdsAction::SetElementValue { value, duration_secs: 0.0, ease: XrdsEaseCurve::Linear },
             )],
         );
         let panel = app.world().resource::<XrdsIdIndex>().entity_of(XrdsId(900)).expect("ix");
@@ -4367,6 +4367,8 @@ fn set_light_with_zero_duration_applies_instantly() {
                 color: None,
                 intensity: Some(250.0),
                 range: None,
+                inner_angle: None,
+                outer_angle: None,
                 duration_secs: 0.0,
                 ease: XrdsEaseCurve::Linear,
             },
@@ -4407,6 +4409,8 @@ fn set_light_interpolates_and_lands_on_target() {
                 // Long enough that no plausible run of test frames finishes it.
                 intensity: Some(0.0),
                 range: None,
+                inner_angle: None,
+                outer_angle: None,
                 duration_secs: 30.0,
                 ease: XrdsEaseCurve::Linear,
             },
@@ -4450,6 +4454,8 @@ fn a_finished_light_tween_clears_itself() {
                 color: None,
                 intensity: Some(0.0),
                 range: None,
+                inner_angle: None,
+                outer_angle: None,
                 // The same 0.05s the transform and material tween tests use.
                 duration_secs: 0.05,
                 ease: XrdsEaseCurve::Linear,
@@ -4501,6 +4507,8 @@ fn set_light_on_a_non_light_finishes_instead_of_stalling() {
                 color: None,
                 intensity: Some(0.0),
                 range: None,
+                inner_angle: None,
+                outer_angle: None,
                 duration_secs: 5.0,
                 ease: XrdsEaseCurve::Linear,
             },
@@ -4532,4 +4540,686 @@ fn point_light_of(app: &mut App, id: XrdsId) -> bevy::prelude::PointLight {
     *app.world()
         .get::<bevy::prelude::PointLight>(entity)
         .expect("the node should be a point light")
+}
+
+/// A `PointLight` node whose ZoneEnter trigger fires several `SetLight` events.
+#[cfg(test)]
+fn light_actions_doc(id: u64, keys: Vec<XrdsTrackKey>) -> XrdsSceneDocument {
+    use xrds_scene_graph::XrdsScenePointLight;
+    XrdsSceneDocument {
+        nodes: vec![XrdsSceneNode {
+            id: XrdsSceneNodeId(id),
+            parent_id: None,
+            name: "Lamp".to_string(),
+            enabled: true,
+            visible: true,
+            transform: XrdsSceneTransform::default(),
+            payload: XrdsSceneNodePayload::PointLight(XrdsScenePointLight {
+                color: [1.0, 1.0, 1.0, 1.0],
+                intensity: 1000.0,
+                range: 10.0,
+                ..Default::default()
+            }),
+            grabbable: false,
+            editor: XrdsEditorMetadata::default(),
+            triggers: vec![XrdsTriggerBinding {
+                trigger: XrdsTriggerKind::ZoneEnter,
+                track: Some("both".to_string()),
+                effect: Default::default(),
+                disabled: false,
+                hand: None,
+            }],
+            watchers: Vec::new(),
+        }],
+        tracks: vec![XrdsNamedTrack {
+            name: "both".to_string(),
+            track: XrdsTrack {
+                assets: vec![XrdsTrackAsset {
+                    when_finished: Default::default(),
+                    target: XrdsActionTarget::SelfNode,
+                    keys,
+                }],
+                ..XrdsTrack::default()
+            },
+        }],
+        ..Default::default()
+    }
+}
+
+#[cfg(test)]
+fn set_light(color: Option<[f32; 4]>, intensity: Option<f32>, secs: f32) -> XrdsAction {
+    XrdsAction::SetLight {
+        color,
+        intensity,
+        range: None,
+        inner_angle: None,
+        outer_angle: None,
+        duration_secs: secs,
+        ease: XrdsEaseCurve::Linear,
+    }
+}
+
+/// Two events animating different properties of one light run at the same time.
+///
+/// **This is the test the channel model exists for.** Before it, the second
+/// event's component insert replaced the first outright: measured, the colour sat
+/// at white for the whole run while intensity fell, and nothing reported it. The
+/// assertion that matters is that *both* values have moved.
+#[test]
+fn two_overlapping_light_events_animate_different_properties_at_once() {
+    let mut app = xrds_test_app();
+    let id = XrdsId(960);
+    {
+        let mut xrds = XrdsAPI::attach(&mut app);
+        xrds.import_scene_document(&light_actions_doc(
+            id.0,
+            vec![
+                // Long durations so neither can finish during the test — what is
+                // being checked is that both are *running*, not where they land.
+                XrdsTrackKey { at_secs: 0.0, action: set_light(Some([1.0, 0.0, 0.0, 1.0]), None, 30.0) },
+                XrdsTrackKey { at_secs: 0.0, action: set_light(None, Some(0.0), 30.0) },
+            ],
+        ))
+        .expect("import should succeed");
+    }
+
+    app.world_mut().write_message(xrds_components::XrZoneEnterEvent {
+        zone_id: id,
+        entity_id: id,
+    });
+    pump(&mut app, 10);
+
+    let light = point_light_of(&mut app, id);
+    let green = light.color.to_linear().green;
+    assert!(
+        green < 1.0,
+        "the colour fade must be running, not cancelled by the intensity event; \
+         green = {green}"
+    );
+    assert!(
+        light.intensity < 1000.0,
+        "the intensity fade must be running too; got {}",
+        light.intensity
+    );
+}
+
+/// A second event on the *same* property replaces just that channel.
+///
+/// Last-writer-wins per property, which is what retiming a fade means. The colour
+/// channel must be the newer one and the intensity channel beside it untouched.
+#[test]
+fn a_second_event_on_one_property_replaces_only_that_channel() {
+    let mut app = xrds_test_app();
+    let id = XrdsId(961);
+    {
+        let mut xrds = XrdsAPI::attach(&mut app);
+        xrds.import_scene_document(&light_actions_doc(
+            id.0,
+            vec![
+                XrdsTrackKey { at_secs: 0.0, action: set_light(Some([1.0, 0.0, 0.0, 1.0]), None, 30.0) },
+                XrdsTrackKey { at_secs: 0.0, action: set_light(None, Some(0.0), 30.0) },
+                // Same property as the first, towards blue instead of red.
+                XrdsTrackKey { at_secs: 0.0, action: set_light(Some([0.0, 0.0, 1.0, 1.0]), None, 0.05) },
+            ],
+        ))
+        .expect("import should succeed");
+    }
+
+    app.world_mut().write_message(xrds_components::XrZoneEnterEvent {
+        zone_id: id,
+        entity_id: id,
+    });
+    pump(&mut app, 240);
+
+    let light = point_light_of(&mut app, id);
+    let rgb = light.color.to_linear();
+    assert!(
+        rgb.blue > 0.9 && rgb.red < 0.1,
+        "the later colour event must win outright; got r={} b={}",
+        rgb.red,
+        rgb.blue
+    );
+    assert!(
+        light.intensity < 1000.0,
+        "and the intensity fade beside it must still be running; got {}",
+        light.intensity
+    );
+}
+
+/// A short event finishes on its own schedule even when a long one runs beside it.
+///
+/// The reason channels carry a generation. Polling for component *absence* would
+/// keep this event's agent alive until the 30-second channel ended, holding its
+/// row lock for the whole time — long enough to reject another Track under the
+/// reject-the-newcomer policy.
+#[test]
+fn an_events_agent_waits_only_for_its_own_channels() {
+    let mut app = xrds_test_app();
+    let id = XrdsId(962);
+    {
+        let mut xrds = XrdsAPI::attach(&mut app);
+        xrds.import_scene_document(&light_actions_doc(
+            id.0,
+            vec![
+                XrdsTrackKey { at_secs: 0.0, action: set_light(None, Some(0.0), 30.0) },
+                XrdsTrackKey { at_secs: 0.0, action: set_light(Some([1.0, 0.0, 0.0, 1.0]), None, 0.05) },
+            ],
+        ))
+        .expect("import should succeed");
+    }
+
+    app.world_mut().write_message(xrds_components::XrZoneEnterEvent {
+        zone_id: id,
+        entity_id: id,
+    });
+    pump(&mut app, 240);
+
+    // The short colour channel is gone; the long intensity channel is not, so the
+    // component is still there. Distinguishing those two is the point.
+    let entity = app
+        .world()
+        .resource::<crate::xrds_api::XrdsIdIndex>()
+        .entity_of(id)
+        .expect("the node should be live");
+    let tween = app
+        .world()
+        .get::<crate::xrds_api::trigger_action::XrdsLightTween>(entity)
+        .expect("the 30s intensity channel should still be running");
+    assert!(
+        !tween.has_colour_channel(),
+        "the 0.05s colour channel should have finished and cleared itself"
+    );
+
+    // And its agent finished, rather than blocking on the channel beside it.
+    // Exactly one ephemeral agent left: the 30s intensity event. The 0.05s colour
+    // event's agent has finished and been despawned.
+    //
+    // This count is the whole assertion. Polling for component *absence* — what
+    // this did before channels — would leave the colour agent waiting too, because
+    // the component is still present for the intensity channel, and the count
+    // would be 2. One is the fix working; two is the row lock held for thirty
+    // seconds it does not need.
+    let waiting = app
+        .world_mut()
+        .query::<&crate::xrds_api::trigger_action::XrdsSequenceAgent>()
+        .iter(app.world())
+        .count();
+    assert_eq!(
+        waiting, 1,
+        "the short colour event's agent must finish on its own schedule, leaving          only the 30s intensity event still waiting"
+    );
+}
+
+/// An instant event beside a running fade sets its own property and leaves the
+/// fade alone.
+///
+/// Before per-property writes, an instant change re-asserted every value it had
+/// read, which froze whatever was animating next to it.
+#[test]
+fn an_instant_event_does_not_freeze_a_fade_beside_it() {
+    let mut app = xrds_test_app();
+    let id = XrdsId(963);
+    {
+        let mut xrds = XrdsAPI::attach(&mut app);
+        xrds.import_scene_document(&light_actions_doc(
+            id.0,
+            vec![
+                XrdsTrackKey { at_secs: 0.0, action: set_light(Some([1.0, 0.0, 0.0, 1.0]), None, 30.0) },
+                XrdsTrackKey { at_secs: 0.0, action: set_light(None, Some(500.0), 0.0) },
+            ],
+        ))
+        .expect("import should succeed");
+    }
+
+    app.world_mut().write_message(xrds_components::XrZoneEnterEvent {
+        zone_id: id,
+        entity_id: id,
+    });
+    pump(&mut app, 10);
+
+    let light = point_light_of(&mut app, id);
+    assert_eq!(light.intensity, 500.0, "the instant change should have applied");
+    assert!(
+        light.color.to_linear().green < 1.0,
+        "and the colour fade must still be running beside it"
+    );
+}
+
+/// Two events animating different material properties of one node run at once.
+///
+/// The material half of what `two_overlapping_light_events_animate_different_
+/// properties_at_once` asserts for lights. Measured before channels: the colour
+/// sat at white for the whole run while roughness moved, with nothing reported.
+#[test]
+fn two_overlapping_material_events_animate_different_properties_at_once() {
+    let mut app = xrds_test_app();
+    let id = XrdsId(964);
+    let colour = XrdsAction::SetMaterial {
+        base_color: Some([1.0, 0.0, 0.0, 1.0]),
+        metallic: None,
+        roughness: None,
+        duration_secs: 30.0,
+        ease: XrdsEaseCurve::Linear,
+        texture: None,
+    };
+    let rough = XrdsAction::SetMaterial {
+        base_color: None,
+        metallic: None,
+        roughness: Some(0.0),
+        duration_secs: 30.0,
+        ease: XrdsEaseCurve::Linear,
+        texture: None,
+    };
+    {
+        let mut document = material_action_doc(id.0, colour);
+        document.tracks[0]
+            .track
+            .assets[0]
+            .keys
+            .push(XrdsTrackKey { at_secs: 0.0, action: rough });
+        let mut xrds = XrdsAPI::attach(&mut app);
+        xrds.import_scene_document(&document).expect("import should succeed");
+    }
+
+    app.world_mut().write_message(xrds_components::XrZoneEnterEvent {
+        zone_id: id,
+        entity_id: id,
+    });
+    pump(&mut app, 10);
+
+    let params = {
+        let xrds = XrdsAPI::attach(&mut app);
+        let cube = xrds.handle_of::<XrdsCube>(id).unwrap();
+        xrds.material_params(&cube).expect("cube should have a material")
+    };
+    assert!(
+        params.base_color.rgba[1] < 1.0,
+        "the colour fade must be running, not cancelled by the roughness event; \
+         green = {}",
+        params.base_color.rgba[1]
+    );
+    assert!(
+        params.pbr.roughness < 0.5,
+        "the roughness fade must be running too; got {}",
+        params.pbr.roughness
+    );
+}
+
+/// Two events animating different parts of one transform run at once.
+///
+/// `XrdsTransformTween` held a whole start/target `Transform`, so an overlapping
+/// scale event used to drop an in-flight move. This is the case that made phase 2
+/// more than a rename.
+#[test]
+fn two_overlapping_transform_events_animate_different_parts_at_once() {
+    let mut app = xrds_test_app();
+    let id = XrdsId(965);
+    let move_it = XrdsAction::SetTransform {
+        position: Some([10.0, 0.0, 0.0]),
+        rotation: None,
+        scale: None,
+        duration_secs: 30.0,
+        ease: XrdsEaseCurve::Linear,
+    };
+    let grow = XrdsAction::SetTransform {
+        position: None,
+        rotation: None,
+        scale: Some([4.0, 4.0, 4.0]),
+        duration_secs: 30.0,
+        ease: XrdsEaseCurve::Linear,
+    };
+    {
+        let mut document = material_action_doc(id.0, move_it);
+        document.tracks[0]
+            .track
+            .assets[0]
+            .keys
+            .push(XrdsTrackKey { at_secs: 0.0, action: grow });
+        let mut xrds = XrdsAPI::attach(&mut app);
+        xrds.import_scene_document(&document).expect("import should succeed");
+    }
+
+    app.world_mut().write_message(xrds_components::XrZoneEnterEvent {
+        zone_id: id,
+        entity_id: id,
+    });
+    pump(&mut app, 10);
+
+    let entity = app
+        .world()
+        .resource::<crate::xrds_api::XrdsIdIndex>()
+        .entity_of(id)
+        .expect("the node should be live");
+    let transform = *app.world().get::<Transform>(entity).expect("has a transform");
+    assert!(
+        transform.translation.x > 0.0,
+        "the move must be running, not cancelled by the scale event; x = {}",
+        transform.translation.x
+    );
+    assert!(
+        transform.scale.x > 1.0,
+        "the scale must be running too; got {}",
+        transform.scale.x
+    );
+}
+
+/// A texture-only `SetMaterial` with a duration finishes instead of stalling.
+///
+/// A texture never interpolates, so such an event inserts no channels. Waiting on
+/// a tween that was never created would block its agent forever — the failure that
+/// looks like a hang rather than a wrong colour.
+#[test]
+fn a_texture_only_material_event_finishes_rather_than_waiting() {
+    let mut app = xrds_test_app();
+    let id = XrdsId(966);
+    {
+        let mut xrds = XrdsAPI::attach(&mut app);
+        xrds.import_scene_document(&material_action_doc(
+            id.0,
+            XrdsAction::SetMaterial {
+                base_color: None,
+                metallic: None,
+                roughness: None,
+                duration_secs: 30.0,
+                ease: XrdsEaseCurve::Linear,
+                texture: Some(xrds_scene_graph::XrdsActionTexture {
+                    slot: xrds_scene_graph::XrdsSceneMaterialTextureSlotKind::BaseColor,
+                    texture_asset_id: None,
+                }),
+            },
+        ))
+        .expect("import should succeed");
+    }
+
+    app.world_mut().write_message(xrds_components::XrZoneEnterEvent {
+        zone_id: id,
+        entity_id: id,
+    });
+    pump(&mut app, 10);
+
+    let waiting = app
+        .world_mut()
+        .query::<&crate::xrds_api::trigger_action::XrdsSequenceAgent>()
+        .iter(app.world())
+        .count();
+    assert_eq!(waiting, 0, "a texture-only event has nothing to wait for");
+}
+
+/// A `SpotLight` node whose ZoneEnter trigger fires one `SetLight`.
+#[cfg(test)]
+fn spot_action_doc(id: u64, action: XrdsAction) -> XrdsSceneDocument {
+    use xrds_scene_graph::XrdsSceneSpotLight;
+    let mut document = light_actions_doc(id, vec![XrdsTrackKey { at_secs: 0.0, action }]);
+    document.nodes[0].payload = XrdsSceneNodePayload::SpotLight(XrdsSceneSpotLight {
+        color: [1.0, 1.0, 1.0, 1.0],
+        intensity: 1000.0,
+        range: 10.0,
+        inner_angle: 0.2,
+        outer_angle: 0.5,
+        ..Default::default()
+    });
+    document
+}
+
+#[cfg(test)]
+fn spot_light_of(app: &mut App, id: XrdsId) -> bevy::prelude::SpotLight {
+    let entity = app
+        .world()
+        .resource::<crate::xrds_api::XrdsIdIndex>()
+        .entity_of(id)
+        .expect("the node should be live");
+    *app.world()
+        .get::<bevy::prelude::SpotLight>(entity)
+        .expect("the node should be a spot light")
+}
+
+/// Cone angles animate on a spot light.
+#[test]
+fn set_light_animates_a_spot_cone() {
+    let mut app = xrds_test_app();
+    let id = XrdsId(967);
+    {
+        let mut xrds = XrdsAPI::attach(&mut app);
+        xrds.import_scene_document(&spot_action_doc(
+            id.0,
+            XrdsAction::SetLight {
+                color: None,
+                intensity: None,
+                range: None,
+                inner_angle: Some(0.05),
+                outer_angle: Some(0.1),
+                duration_secs: 0.05,
+                ease: XrdsEaseCurve::Linear,
+            },
+        ))
+        .expect("import should succeed");
+    }
+    app.world_mut().write_message(xrds_components::XrZoneEnterEvent {
+        zone_id: id,
+        entity_id: id,
+    });
+    pump(&mut app, 240);
+
+    let light = spot_light_of(&mut app, id);
+    assert!((light.inner_angle - 0.05).abs() < 1e-4, "inner = {}", light.inner_angle);
+    assert!((light.outer_angle - 0.1).abs() < 1e-4, "outer = {}", light.outer_angle);
+}
+
+/// A cone tween never lets the inner angle overtake the outer one.
+///
+/// Bevy renders **nothing at all** when inner > outer, so a tween that crossed
+/// over would blink the light out mid-animation rather than show a narrowing cone.
+/// Reachable without authoring anything odd: widening the inner cone to 0.45 while
+/// the outer is still on its way down from 0.5 puts them the wrong way round for
+/// part of the run.
+#[test]
+fn a_cone_tween_never_inverts_the_light() {
+    let mut app = xrds_test_app();
+    let id = XrdsId(968);
+    {
+        let mut xrds = XrdsAPI::attach(&mut app);
+        xrds.import_scene_document(&spot_action_doc(
+            id.0,
+            XrdsAction::SetLight {
+                color: None,
+                intensity: None,
+                range: None,
+                // Inner opens well past where outer is heading.
+                inner_angle: Some(0.9),
+                outer_angle: Some(0.3),
+                duration_secs: 0.3,
+                ease: XrdsEaseCurve::Linear,
+            },
+        ))
+        .expect("import should succeed");
+    }
+    app.world_mut().write_message(xrds_components::XrZoneEnterEvent {
+        zone_id: id,
+        entity_id: id,
+    });
+
+    // Checked every frame, not just at the end: the crossover is transient.
+    for _ in 0..240 {
+        app.update();
+        let light = spot_light_of(&mut app, id);
+        assert!(
+            light.inner_angle <= light.outer_angle,
+            "inner {} must never exceed outer {}",
+            light.inner_angle,
+            light.outer_angle
+        );
+    }
+}
+
+/// Cone angles are dropped on a light that has no cone.
+#[test]
+fn a_cone_angle_is_ignored_on_a_point_light() {
+    let mut app = xrds_test_app();
+    let id = XrdsId(969);
+    {
+        let mut xrds = XrdsAPI::attach(&mut app);
+        xrds.import_scene_document(&light_actions_doc(
+            id.0,
+            vec![XrdsTrackKey {
+                at_secs: 0.0,
+                action: XrdsAction::SetLight {
+                    color: None,
+                    intensity: None,
+                    range: None,
+                    inner_angle: Some(0.05),
+                    outer_angle: Some(0.1),
+                    duration_secs: 5.0,
+                    ease: XrdsEaseCurve::Linear,
+                },
+            }],
+        ))
+        .expect("import should succeed");
+    }
+    app.world_mut().write_message(xrds_components::XrZoneEnterEvent {
+        zone_id: id,
+        entity_id: id,
+    });
+    pump(&mut app, 10);
+
+    // No channel was created, so the event has nothing to wait for and must have
+    // finished — the same rule a `SetLight` naming nothing follows.
+    let waiting = app
+        .world_mut()
+        .query::<&crate::xrds_api::trigger_action::XrdsSequenceAgent>()
+        .iter(app.world())
+        .count();
+    assert_eq!(waiting, 0, "a point light has no cone, so there is nothing to animate");
+}
+
+/// A slider value interpolates when given a duration.
+#[test]
+fn set_element_value_interpolates_on_a_slider() {
+    use crate::xrds_api::trigger_action::XrdsElementValueTween;
+
+    let mut app = xrds_test_app();
+    let entity = app
+        .world_mut()
+        .spawn(test_slider(0.0, 0.0, 1.0))
+        .id();
+
+    let mut runner = crate::xrds_api::trigger_action::XrdsActionRunner::new(
+        XrdsAction::SetElementValue { value: 1.0, duration_secs: 0.05, ease: XrdsEaseCurve::Linear },
+        entity,
+        None,
+        0,
+        false,
+    );
+    let finished_at_once = {
+        let world = app.world_mut();
+        !bevy_sequential_actions::Action::on_start(&mut runner, Entity::PLACEHOLDER, world)
+    };
+    assert!(finished_at_once, "a positive duration must not finish immediately");
+    assert!(
+        app.world().get::<XrdsElementValueTween>(entity).is_some(),
+        "a positive duration should insert a tween"
+    );
+
+    pump(&mut app, 240);
+    assert!(
+        app.world().get::<XrdsElementValueTween>(entity).is_none(),
+        "a finished tween must remove itself"
+    );
+    let slider = app.world().get::<xrds_components::XrdsWorldSlider>(entity).unwrap();
+    assert!((slider.value - 1.0).abs() < 1e-4, "should land on the target; got {}", slider.value);
+}
+
+/// A Toggle never interpolates, whatever the duration.
+///
+/// There is no halfway between checked and unchecked, so it flips at the start and
+/// the event reports finished at once — waiting on a tween that was never inserted
+/// would block its agent forever.
+#[test]
+fn set_element_value_never_tweens_a_toggle() {
+    use crate::xrds_api::trigger_action::XrdsElementValueTween;
+
+    let mut app = xrds_test_app();
+    let entity = app
+        .world_mut()
+        .spawn(test_toggle(false))
+        .id();
+
+    let mut runner = crate::xrds_api::trigger_action::XrdsActionRunner::new(
+        XrdsAction::SetElementValue { value: 1.0, duration_secs: 5.0, ease: XrdsEaseCurve::Linear },
+        entity,
+        None,
+        0,
+        false,
+    );
+    let finished = bevy_sequential_actions::Action::on_start(&mut runner, Entity::PLACEHOLDER, app.world_mut());
+    assert!(finished, "a Toggle must report finished at once");
+    assert!(
+        app.world().get::<XrdsElementValueTween>(entity).is_none(),
+        "a Toggle must never get a tween"
+    );
+    assert!(
+        app.world().get::<xrds_components::XrdsWorldToggle>(entity).unwrap().checked,
+        "and it must have flipped immediately"
+    );
+}
+
+/// A slider tween stays inside the slider's authored range.
+#[test]
+fn a_slider_tween_is_clamped_to_its_range() {
+    let mut app = xrds_test_app();
+    let entity = app
+        .world_mut()
+        .spawn(test_slider(0.0, 0.0, 0.5))
+        .id();
+
+    let mut runner = crate::xrds_api::trigger_action::XrdsActionRunner::new(
+        XrdsAction::SetElementValue { value: 10.0, duration_secs: 0.05, ease: XrdsEaseCurve::Linear },
+        entity,
+        None,
+        0,
+        false,
+    );
+    bevy_sequential_actions::Action::on_start(&mut runner, Entity::PLACEHOLDER, app.world_mut());
+
+    for _ in 0..240 {
+        app.update();
+        let slider = app.world().get::<xrds_components::XrdsWorldSlider>(entity).unwrap();
+        assert!(
+            slider.value >= slider.min && slider.value <= slider.max,
+            "value {} escaped [{}, {}]",
+            slider.value, slider.min, slider.max
+        );
+    }
+}
+
+/// A bare `XrdsWorldSlider`, for tests that only care about its value.
+///
+/// Built field by field because the component has no `Default` — the real one is
+/// assembled in `spawn.rs` from an authored `XrdsWorldSliderParams`, and the
+/// colours and geometry are irrelevant to a value tween.
+#[cfg(test)]
+fn test_slider(value: f32, min: f32, max: f32) -> xrds_components::XrdsWorldSlider {
+    xrds_components::XrdsWorldSlider {
+        local_position: [0.0, 0.0],
+        size: [0.2, 0.02],
+        min,
+        max,
+        value,
+        track_color: [0.2, 0.2, 0.2, 1.0],
+        fill_color: [0.4, 0.6, 1.0, 1.0],
+        thumb_color: [1.0, 1.0, 1.0, 1.0],
+        thumb_size: 0.02,
+        dragging_hand: None,
+    }
+}
+
+#[cfg(test)]
+fn test_toggle(checked: bool) -> xrds_components::XrdsWorldToggle {
+    xrds_components::XrdsWorldToggle {
+        local_position: [0.0, 0.0],
+        size: [0.06, 0.03],
+        checked,
+        track_off_color: [0.2, 0.2, 0.2, 1.0],
+        track_on_color: [0.4, 0.6, 1.0, 1.0],
+        thumb_color: [1.0, 1.0, 1.0, 1.0],
+    }
 }

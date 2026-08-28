@@ -11,7 +11,7 @@ import type {
 import { TEXTURE_SLOTS } from "../types/bridge";
 import { EasePicker } from "./ui/EasePicker";
 import { EASE_CHOICES } from "../lib/ease";
-import { TRACK_ACTION_KINDS, actionUnavailableReasonFor } from "../lib/sequencer";
+import { TRACK_ACTION_KINDS, actionUnavailableReasonFor, normalizeDegrees } from "../lib/sequencer";
 import { Select } from "./ui/Select";
 import { Checkbox } from "./ui/Checkbox";
 
@@ -128,7 +128,10 @@ export function summarizeAction(a: XrdsAction): string {
     // Element actions show their value: on a panel row the value *is* the point,
     // unlike SetMaterial where the detail lives in the editor below.
     case "SetElementText": return `Text "${a.data.text}"`;
-    case "SetElementValue": return `Value ${a.data.value}`;
+    case "SetElementValue":
+      return a.data.duration_secs > 0
+        ? `Value ${a.data.value} · ${a.data.duration_secs}s ${easeLabel(a.data.ease)}`
+        : `Value ${a.data.value}`;
     case "SetElementEnabled": return a.data.enabled ? "Enable" : "Disable";
     case "Unknown": return "Unrecognized (newer editor)";
   }
@@ -344,6 +347,10 @@ export function SequencerInspector({
   function optionalVec3Field(
     label: string, value: [number, number, number] | null, step: number,
     buildNext: (v: [number, number, number] | null) => XrdsAction,
+    /** Applied to each component when the edit is committed, not while typing —
+     *  wrapping mid-keystroke would fight the author as they type "-" or "35"
+     *  on the way to "350". Only the rotation field passes one. */
+    normalize?: (n: number) => number,
   ) {
     return (
       <div className="flex items-center gap-1.5 flex-wrap" key={label}>
@@ -360,7 +367,68 @@ export function SequencerInspector({
               v[axis] = next;
               setDraftAction(buildNext(v));
             }}
-            onCommit={() => { if (draftAction) commitDraft(draftAction, draftAtSecs); }} />
+            onCommit={() => {
+              if (!draftAction) return;
+              if (!normalize) {
+                commitDraft(draftAction, draftAtSecs);
+                return;
+              }
+              const wrapped = value.map(normalize) as [number, number, number];
+              const next = buildNext(wrapped);
+              setDraftAction(next);
+              commitDraft(next, draftAtSecs);
+            }} />
+        ))}
+      </div>
+    );
+  }
+
+  /** Three sliders under the rotation boxes, one per axis.
+   *
+   *  The range is exactly the authorable range — (-180, 180] — so the control
+   *  cannot express a value the runtime would wrap anyway. That is the argument
+   *  for a slider here and not on position or scale: those are unbounded, and a
+   *  slider over an unbounded quantity has to invent limits.
+   *
+   *  The number boxes stay. A slider is for finding an angle by eye; typing is for
+   *  saying exactly 90. Dragging one updates the draft continuously and commits on
+   *  release, so a drag is one undo entry rather than two hundred.
+   */
+  function rotationSliders(
+    value: [number, number, number],
+    buildNext: (v: [number, number, number]) => XrdsAction,
+  ) {
+    const axes = ["X", "Y", "Z"];
+    return (
+      <div className="flex items-center gap-1.5 flex-wrap">
+        {/* Aligns the sliders under the number boxes, past the checkbox and
+          * label that head the row above. */}
+        <span className="w-[18px]" />
+        <span className="w-16" />
+        {axes.map((axis, i) => (
+          <span key={axis} className="flex items-center gap-1">
+            <label className="text-[9px] text-overlay0 w-2">{axis}</label>
+            <input
+              type="range"
+              min={-180}
+              max={180}
+              step={1}
+              value={value[i]}
+              // 58px is not arbitrary: the row above lays out an 18px checkbox, a
+              // 64px label and three 70px boxes with 6px gaps, so a group of an
+              // 8px axis label, a 4px gap and a 58px slider puts each slider
+              // exactly under its own box.
+              className="w-[58px] accent-[var(--blue)]"
+              title={`${axis}: ${value[i]}°`}
+              onChange={e => {
+                const v = [...value] as [number, number, number];
+                v[i] = +e.target.value;
+                setDraftAction(buildNext(v));
+              }}
+              onPointerUp={() => { if (draftAction) commitDraft(draftAction, draftAtSecs); }}
+              onKeyUp={() => { if (draftAction) commitDraft(draftAction, draftAtSecs); }}
+            />
+          </span>
         ))}
       </div>
     );
@@ -522,10 +590,32 @@ export function SequencerInspector({
               {draftAction.kind === "SetTransform" && (
                 <>
                   <Field label="TRANSFORM" hint="unchecked = leave alone">
+                    {draftAction.data.rotation !== null && (
+                      // Said next to the field, because a value wrapping from 350
+                      // to -10 on blur looks like the editor eating input unless
+                      // you know why. Shown whatever the duration: the wrap happens
+                      // either way, and only the second sentence is about
+                      // interpolation.
+                      <span className="text-[10px] text-overlay0 leading-snug">
+                        Wraps to ±180° — the same facing, written the short way.
+                        {draftAction.data.duration_secs > 0
+                          && " An interpolated turn takes the shorter path, so more than a half turn is two events."}
+                      </span>
+                    )}
                     {optionalVec3Field("Position", draftAction.data.position, 0.1, v =>
                       ({ kind: "SetTransform", data: { ...draftAction.data, position: v } }))}
+                    {/* Wrapped into (-180, 180] on commit — see `normalizeDegrees`.
+                      * Rotation interpolates by slerp, which always takes the
+                      * shorter arc, so an authored 350° turns -10°. Showing that
+                      * as -10 in the box says so at authoring time instead of at
+                      * runtime. A turn of more than 180° is two events. */}
                     {optionalVec3Field("Rotation°", draftAction.data.rotation, 1, v =>
-                      ({ kind: "SetTransform", data: { ...draftAction.data, rotation: v } }))}
+                      ({ kind: "SetTransform", data: { ...draftAction.data, rotation: v } }),
+                      normalizeDegrees)}
+                    {draftAction.data.rotation !== null && rotationSliders(
+                      draftAction.data.rotation,
+                      v => ({ kind: "SetTransform", data: { ...draftAction.data, rotation: v } }),
+                    )}
                     {optionalVec3Field("Scale", draftAction.data.scale, 0.05, v =>
                       ({ kind: "SetTransform", data: { ...draftAction.data, scale: v } }))}
                   </Field>
@@ -602,6 +692,36 @@ export function SequencerInspector({
                     </>
                   )}
                 </div>
+                {/* Degrees in the box, radians on the wire. The payload and Bevy's
+                  * `SpotLight` both store radians, so the action does too rather
+                  * than introducing a second unit for one quantity — but 0.2 rad
+                  * is not a number an author thinks in, so the conversion happens
+                  * here, at the one place a human reads it. */}
+                {(["inner_angle", "outer_angle"] as const).map(field => {
+                  const label = field === "inner_angle" ? "Inner °" : "Outer °";
+                  const value = draftAction.data[field];
+                  const fallback = field === "inner_angle" ? 0.2 : 0.5;
+                  return (
+                    <div className="flex items-center gap-1.5 flex-wrap" key={field}>
+                      <Checkbox checked={value !== null} onCheckedChange={on => {
+                        const next: XrdsAction = { kind: "SetLight", data: { ...draftAction.data, [field]: on ? fallback : null } };
+                        setDraftAction(next);
+                        commitDraft(next, draftAtSecs);
+                      }} />
+                      <label className="text-[10.5px] text-overlay0 w-16">{label}</label>
+                      {value !== null && (
+                        <>
+                          <input type="number" step={1} min={0} max={90}
+                            value={+(value * 180 / Math.PI).toFixed(1)} className={numCls}
+                            onKeyDown={e => { e.stopPropagation(); if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+                            onChange={e => setDraftAction({ kind: "SetLight", data: { ...draftAction.data, [field]: +e.target.value * Math.PI / 180 } })}
+                            onBlur={() => commitDraft(draftAction, draftAtSecs)} />
+                          <span className="text-[10px] text-overlay0">spot lights only</span>
+                        </>
+                      )}
+                    </div>
+                  );
+                })}
               </Field>
 
               {durationAndEaseField(
@@ -806,6 +926,76 @@ export function SequencerInspector({
           )}
 
 
+
+          {/* The four parameterised actions below had no editor at all until
+            * 2026-08-28: they could be added to a row and then never configured,
+            * so each was stuck on whatever `default_action_for_kind` produced —
+            * an empty string, a zero, `false`. Found while giving SetElementValue
+            * a duration, which would otherwise have been one more unreachable
+            * field on an unreachable action. */}
+          {draftAction.kind === "SetElementText" && (
+            <Field label="TEXT">
+              <input type="text" value={draftAction.data.text}
+                className="flex-1 text-[11.5px] text-text px-2 py-1 rounded bg-well border border-surface0 focus:outline focus:outline-1 focus:outline-blue"
+                onKeyDown={e => { e.stopPropagation(); if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+                onChange={e => setDraftAction({ kind: "SetElementText", data: { text: e.target.value } })}
+                onBlur={() => commitDraft(draftAction, draftAtSecs)} />
+            </Field>
+          )}
+
+          {draftAction.kind === "SetElementEnabled" && (
+            <Field label="ENABLED" hint="greyed out, not hidden">
+              <Checkbox label="Interactive" checked={draftAction.data.enabled}
+                onCheckedChange={v => {
+                  const next: XrdsAction = { kind: "SetElementEnabled", data: { enabled: v } };
+                  setDraftAction(next);
+                  commitDraft(next, draftAtSecs);
+                }} />
+            </Field>
+          )}
+
+          {draftAction.kind === "SetElementValue" && (
+            <>
+              <Field label="VALUE" hint="slider value, or non-zero to check a toggle">
+                <input type="number" step={0.05} value={draftAction.data.value} className={numCls}
+                  onKeyDown={e => { e.stopPropagation(); if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+                  onChange={e => setDraftAction({ kind: "SetElementValue", data: { ...draftAction.data, value: +e.target.value } })}
+                  onBlur={() => commitDraft(draftAction, draftAtSecs)} />
+                <span className="text-[10px] text-overlay0 leading-snug">
+                  Clamped to the slider&apos;s own min/max when it runs.
+                </span>
+              </Field>
+              {durationAndEaseField(
+                draftAction.data.duration_secs, draftAction.data.ease,
+                patch => ({ kind: "SetElementValue", data: { ...draftAction.data, ...patch } }),
+              )}
+              {draftAction.data.duration_secs > 0 && (
+                <span className="text-[10px] text-yellow leading-snug px-3">
+                  ⚠ A Toggle has no halfway state, so it flips at the start whatever
+                  the duration. Only a Slider interpolates.
+                </span>
+              )}
+            </>
+          )}
+
+          {draftAction.kind === "PlayEffect" && (
+            <Field label="BURST COUNT" hint="unchecked = the effect's own count">
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <Checkbox checked={draftAction.data.count !== null} onCheckedChange={on => {
+                  const next: XrdsAction = { kind: "PlayEffect", data: { count: on ? 10 : null } };
+                  setDraftAction(next);
+                  commitDraft(next, draftAtSecs);
+                }} />
+                <label className="text-[10.5px] text-overlay0 w-16">Override</label>
+                {draftAction.data.count !== null && (
+                  <input type="number" step={1} min={0} value={draftAction.data.count} className={numCls}
+                    onKeyDown={e => { e.stopPropagation(); if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+                    onChange={e => setDraftAction({ kind: "PlayEffect", data: { count: +e.target.value } })}
+                    onBlur={() => commitDraft(draftAction, draftAtSecs)} />
+                )}
+              </div>
+            </Field>
+          )}
 
           {draftAction.kind === "PlayVideo" && (
             <div className="flex items-center gap-1.5 flex-wrap">

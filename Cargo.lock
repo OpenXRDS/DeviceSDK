@@ -11665,6 +11665,7 @@ dependencies = [
 name = "xrds-scene-graph"
 version = "0.1.0"
 dependencies = [
+ "glam 0.29.3",
  "gltf",
  "serde",
  "serde_json",

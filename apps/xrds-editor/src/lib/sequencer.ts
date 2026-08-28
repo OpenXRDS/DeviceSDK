@@ -50,6 +50,32 @@ export function fmtTime(secs: number): string {
 // Asset rows
 // ---------------------------------------------------------------------------
 
+/** Wrap an authored angle into (-180, 180], the range that describes every
+ *  distinct orientation exactly once.
+ *
+ *  **Wrap, not clamp.** 350° and -10° are the same orientation, so wrapping keeps
+ *  what the author meant; clamping to 180 would silently point the object
+ *  somewhere else.
+ *
+ *  The reason it is worth doing at all is that rotation interpolates by `slerp`,
+ *  which always takes the shorter arc. Measured: a 0 → 350° turn moves **-10°**,
+ *  not +350°. Authoring 350 and seeing it become -10 in the box says that up
+ *  front; authoring 350 and watching the cube go backwards at runtime does not.
+ *
+ *  A turn of more than 180° is therefore not expressible as one event, by
+ *  construction. It is two.
+ */
+export function normalizeDegrees(deg: number): number {
+  if (!Number.isFinite(deg)) return 0;
+  // `% 360` keeps the sign of the input, so -350 lands on -350 and needs the same
+  // treatment as +350; the two branches below handle each side.
+  let wrapped = deg % 360;
+  if (wrapped > 180) wrapped -= 360;
+  if (wrapped <= -180) wrapped += 360;
+  // -0 is a real f64 and renders as "-0" in a number input.
+  return wrapped === 0 ? 0 : wrapped;
+}
+
 /** How long this action itself takes. Non-zero for the actions that interpolate
  * — `SetTransform` and `SetMaterial` — and zero for everything else, including
  * glTF playback, which is deliberately fire-and-forget.
@@ -63,9 +89,15 @@ export function fmtTime(secs: number): string {
  * languages: a three-second fade left out here draws as a dot and lets a Track's
  * auto length end before the fade does. */
 export function actionDuration(a: XrdsAction): number {
-  return a.kind === "SetTransform" || a.kind === "SetMaterial" || a.kind === "SetLight"
-    ? Math.max(0, a.data.duration_secs)
-    : 0;
+  switch (a.kind) {
+    case "SetTransform":
+    case "SetMaterial":
+    case "SetLight":
+    case "SetElementValue":
+      return Math.max(0, a.data.duration_secs);
+    default:
+      return 0;
+  }
 }
 
 // ---------------------------------------------------------------------------

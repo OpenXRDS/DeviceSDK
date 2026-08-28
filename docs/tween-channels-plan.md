@@ -1,6 +1,6 @@
 # Per-property tween channels — plan
 
-**Deferred — see the last section.** Written 2026-08-28 after the question "should colour, intensity
+**Done 2026-08-28.** All three phases. Written the same day, after the question "should colour, intensity
 and range each get their own curve?" turned up a defect underneath it.
 
 ## The question, and the answer that is not the interesting part
@@ -88,15 +88,63 @@ where a shortcut would produce a Track that stalls or a lock released early.
 
 ## Phases
 
-| Phase | Scope |
-| --- | --- |
-| 1 | Channel model + merge-on-insert for **one** tween (`XrdsLightTween`), including per-channel completion and the agent token. Prove the shape on the smallest of the three. |
-| 2 | Apply to `XrdsMaterialTween` and `XrdsTransformTween`. Mechanical once phase 1 settles the design — or it reveals the design does not fit `Transform`, which is the point of doing lights first. |
-| 3 | Editor: nothing, if this is right. The test of the design is that two overlapping events compose with no inspector change at all. If phase 3 turns out to need UI, phases 1–2 chose wrong. |
+| Phase | Scope | State |
+| --- | --- | --- |
+| 1 | Channel model + merge-on-insert for `XrdsLightTween`, with per-channel completion and the agent generation | ✅ built |
+| 2 | The same for `XrdsMaterialTween` and `XrdsTransformTween` | ✅ built |
+| 3 | Editor: nothing, if this is right | ✅ nothing was needed |
 
-Each phase lands with a test that **fails before it** — specifically the table
-above, re-run as an assertion: two overlapping events, two tweens, both properties
-moving.
+### Phase 1 — lights
+
+`XrdsLightTween` holds three independent channels — colour, intensity, range —
+each with its own start, target, elapsed, duration, ease and generation. An event
+**merges**: it overwrites only the channels it names.
+
+Four things worth keeping:
+
+- **The generation is load-bearing, and that was proven rather than assumed.**
+  Reverting `is_finished` to the old component-absence check and re-running the
+  test leaves **2** agents waiting instead of 1 — the short colour event's agent
+  held its row lock for the full thirty seconds of an unrelated intensity fade,
+  long enough to reject another Track under the reject-the-newcomer policy.
+- **A tween writes only the properties it animates.** The first version reused the
+  full-reading setter, which would have let an intensity channel re-assert a stale
+  colour every frame and undo a colour channel beside it — the same composition bug
+  one layer down. `LightWrite` exists to make "leave this alone" expressible.
+- **Instant events write only their own fields too**, so a duration-0 event next to
+  a running fade no longer freezes it.
+- **The component is removed only when every channel is spent.** Removing it when
+  the first finished would drop the others mid-flight: the original bug rebuilt.
+
+### Phase 2 — materials and transforms
+
+Mechanical after phase 1, with two exceptions that were not:
+
+- **Rotation needs its own channel type**, because it must **slerp**. Lerping two
+  quaternions component-wise cuts through the inside of the sphere and speeds up
+  through the middle of the turn. The generic numeric channel would have compiled
+  and rotated wrongly.
+- **A texture-only `SetMaterial` now inserts no channels**, since a texture never
+  interpolates. Before, such an event always got a tween; now it must report
+  finished immediately or its agent waits forever on one that was never created —
+  a failure that looks like a hang rather than a wrong colour. There is a test.
+
+Both composition tests were checked against phase-1 code first and **fail there**
+(`green = 1` — the colour cancelled), which is what makes them worth having.
+
+### Phase 3 — the editor
+
+Nothing. That was the stated test of whether the design was right: two overlapping
+events compose with no inspector change at all.
+
+### The diagnostic is gone
+
+`Overlapping events cancel an animation` was built while this plan was deferred, to
+make the silent failure visible. All three families compose now, so it would report
+an error on authoring that works — worse than the silence it was raised to fix. It
+is deleted, along with `tween_family` and `animated_properties`, which existed only
+to serve it. What replaced it are the runtime tests that assert the composition
+directly.
 
 ## What stays out
 
@@ -109,45 +157,18 @@ moving.
 - **A keyframe curve editor**, still — see
   [`animatable-properties.md`](animatable-properties.md).
 
-## Why this is worth doing rather than documenting
+## Why this was worth doing rather than documenting
 
-The cheap alternative is to write down "overlapping events on one node replace
-rather than compose" and move on. That is wrong here for one reason: the
-limitation is **silent**. An author gets no error, no warning, and a Track that
-reports success — and the thing they lose is the animation they just authored. A
-documented limitation an author can see is a trade; an undocumented one they
-cannot is the failure this project keeps paying for, and it has now been shipped
-three times in the same shape.
+The cheap alternative was to write down "overlapping events on one node replace
+rather than compose" and move on. The reason that was wrong is that the limitation
+was **silent**: no error, no warning, a Track reporting success, and the thing lost
+was the animation just authored.
 
-**Deferred 2026-08-28, with the diagnostic built instead.** The reasoning: the
-harm here is the silence, not the limitation. Sequencing two events instead of
-overlapping them is a modest workaround; losing a fade you authored, with no error
-and a Track reporting success, is not. Nothing has asked for per-property curves —
-the question that started this asked whether the shared curve was *right*, which
-is a different thing — and the diagnostic cost an hour against a redesign of all
-three tween types.
-
-`Overlapping events cancel an animation` is now an **error** on any document where
-it happens, naming the properties that are lost and the earliest time the second
-event could start without losing them.
-
-One correction to the paragraph this replaced, which had the rule wrong: it is
-**not** "two events overlapping and touching the same property set". Overlapping
-two events that animate the *same* property is correct authoring — retiming a fade
-so it overtakes the previous one is last-writer-wins, and nothing is lost. The
-rule that ships is narrower and is the accurate one:
-
-> Report only the properties the earlier event animates and the later one does
-> **not**. Those are the ones that stop part-way.
-
-It is also scoped per tween family, because a light tween and a material tween are
-separate components on the entity and genuinely do run side by side. And an
-instant (`duration 0`) event inserts no tween, so it cancels nothing.
-
-A diagnostic that fires on correct authoring is how you teach people to ignore
-diagnostics — the same argument that kept a zero-duration warning out of this file
-when `Teleport` was deleted.
-
-**This plan stays open.** The diagnostic tells an author what they cannot do; the
-channels work would let them do it. Pull this out when someone wants two
-properties on two curves and being told "no" is the wrong answer.
+It was in fact deferred once, with a diagnostic built instead. Asked why, the
+honest answer was that one of the three reasons did not hold — "nothing has asked
+for per-property curves" was wrong, because the question that found the bug *was*
+the ask, read narrowly. And the diagnostic had converted an invisible failure into
+an enforced restriction: better, but it was forbidding the very thing this plan
+argues is the right way to author two curves. The work followed the same day and
+came to less than the estimate, because phase 1 carried the design and phases 2–3
+mostly carried it out.

@@ -180,6 +180,8 @@ fn track_round_trips_every_surviving_action_variant() {
                             color: Some([1.0, 0.9, 0.7, 1.0]),
                             intensity: Some(250.0),
                             range: Some(12.0),
+                            inner_angle: Some(0.2),
+                            outer_angle: Some(0.5),
                             duration_secs: 1.25,
                             ease: XrdsEaseCurve::CubicInOut,
                         },
@@ -332,6 +334,8 @@ fn self_duration_is_non_zero_only_for_interpolation() {
         color: None,
         intensity: Some(0.0),
         range: None,
+        inner_angle: None,
+        outer_angle: None,
         duration_secs: secs,
         ease: XrdsEaseCurve::Linear,
     };
@@ -1242,6 +1246,8 @@ fn a_light_change_that_sets_nothing_is_diagnosed() {
         color: None,
         intensity: None,
         range: None,
+        inner_angle: None,
+        outer_angle: None,
         duration_secs: 2.0,
         ease: XrdsEaseCurve::Linear,
     };
@@ -1256,6 +1262,8 @@ fn a_light_change_that_sets_nothing_is_diagnosed() {
         color: None,
         intensity: Some(0.0),
         range: None,
+        inner_angle: None,
+        outer_angle: None,
         duration_secs: 2.0,
         ease: XrdsEaseCurve::Linear,
     };
@@ -1274,6 +1282,8 @@ fn a_light_action_on_a_non_light_node_is_an_error() {
         color: None,
         intensity: Some(0.0),
         range: None,
+        inner_angle: None,
+        outer_angle: None,
         duration_secs: 1.0,
         ease: XrdsEaseCurve::Linear,
     };
@@ -1327,139 +1337,109 @@ mod xrds_scene_graph_light_fixtures {
     }
 }
 
+// Overlapping-tween diagnostics used to live here. They are gone with the check
+// itself: after phase 2 of `docs/tween-channels-plan.md` all three tween families
+// hold one channel per property and an event merges rather than replacing, so
+// overlapping events compose and the error would have been a lie. What replaced
+// them are runtime tests that assert the composition directly —
+// `two_overlapping_*_events_animate_different_*_at_once` in `xrds-runtime`.
+
 // ---------------------------------------------------------------------------
-// Overlapping tweens (stand-in for docs/tween-channels-plan.md)
+// Rotation targets that do not turn
 // ---------------------------------------------------------------------------
 
-/// A `SetLight` animating only colour.
-fn light_colour(at: f32, secs: f32) -> XrdsTrackKey {
-    key(at, XrdsAction::SetLight {
-        color: Some([1.0, 0.0, 0.0, 1.0]),
-        intensity: None,
-        range: None,
-        duration_secs: secs,
+const NO_TURN: &str = "Rotation target is the current facing";
+
+fn turn_to(degrees: [f32; 3]) -> XrdsTrackKey {
+    key(0.0, XrdsAction::SetTransform {
+        position: None,
+        rotation: Some(degrees),
+        scale: None,
+        duration_secs: 2.0,
         ease: XrdsEaseCurve::Linear,
     })
 }
 
-/// A `SetLight` animating only intensity.
-fn light_intensity(at: f32, secs: f32) -> XrdsTrackKey {
-    key(at, XrdsAction::SetLight {
-        color: None,
-        intensity: Some(0.0),
-        range: None,
-        duration_secs: secs,
-        ease: XrdsEaseCurve::Linear,
-    })
-}
-
-fn one_row(keys: Vec<XrdsTrackKey>) -> XrdsSceneDocument {
-    let mut light = node(1);
-    light.payload = XrdsSceneNodePayload::PointLight(Default::default());
-    light.triggers = vec![binding_for("t")];
+fn cube_turning(degrees: [f32; 3]) -> XrdsSceneDocument {
+    let mut cube = node(1);
+    cube.payload = XrdsSceneNodePayload::Cube(Default::default());
+    cube.triggers = vec![binding_for("t")];
     doc(
-        vec![light],
-        vec![named("t", XrdsTrack { assets: vec![row(1, keys)], ..Default::default() })],
+        vec![cube],
+        vec![named("t", XrdsTrack { assets: vec![row(1, vec![turn_to(degrees)])], ..Default::default() })],
     )
 }
 
-const OVERLAP: &str = "Overlapping events cancel an animation";
-
 #[test]
-fn overlapping_events_that_drop_an_animation_are_diagnosed() {
-    // The measured case: colour over 30s, intensity starting immediately. The
-    // second event replaces the tween and the colour fade stops at white.
-    let d = one_row(vec![light_colour(0.0, 30.0), light_intensity(0.0, 30.0)]);
-    let found = find(&d, OVERLAP);
+fn a_rotation_of_180_on_every_axis_is_reported_as_no_turn() {
+    // The case that prompted this. Three half-turns about perpendicular axes
+    // compose to a full turn, so (180, 180, 180) is *exactly* the identity — an
+    // author sets three large numbers, nothing moves, and before this there was
+    // nothing to read that said why.
+    let d = cube_turning([180.0, 180.0, 180.0]);
+    let found = find(&d, NO_TURN);
+    assert_eq!(found.severity, XrdsSceneTriggerDiagnosticSeverity::Warning);
     assert!(
-        found.detail.contains("colour"),
-        "the message must name the property that is lost, got: {}",
-        found.detail
-    );
-    assert_eq!(found.severity, XrdsSceneTriggerDiagnosticSeverity::Error);
-    // The editor attributes a diagnostic to a Track by finding `Track "name"` in
-    // its detail text — see `SequencerWorkspace.tsx`'s `diagnostics` memo. A
-    // message missing that prefix still reaches the global list but is never
-    // shown beside the Track it is about, which is most of the point of raising
-    // it. Asserted here because nothing else couples the two.
-    assert!(
-        found.detail.contains(r#"Track "t""#),
-        "the editor matches on the quoted Track name; got: {}",
+        found.detail.contains("180"),
+        "the message should quote the angles the author typed; got: {}",
         found.detail
     );
 }
 
 #[test]
-fn events_that_do_not_overlap_are_not_diagnosed() {
-    // Second starts exactly when the first ends. Not an overlap: the first tween
-    // has already removed itself.
-    let d = one_row(vec![light_colour(0.0, 2.0), light_intensity(2.0, 2.0)]);
-    assert!(!has(&d, OVERLAP), "got {:?}", titles(&d));
+fn a_rotation_of_zero_on_a_default_node_is_reported_too() {
+    // The plainer form of the same mistake.
+    assert!(has(&cube_turning([0.0, 0.0, 0.0]), NO_TURN));
 }
 
 #[test]
-fn overlapping_events_on_the_same_property_are_not_diagnosed() {
-    // Two colour fades overlapping is correct authoring — last-writer-wins is
-    // what retiming a fade means, and nothing is lost. Firing here would be the
-    // diagnostic-that-cries-wolf this rule was written narrow to avoid.
-    let d = one_row(vec![light_colour(0.0, 5.0), light_colour(1.0, 5.0)]);
-    assert!(!has(&d, OVERLAP), "got {:?}", titles(&d));
+fn a_real_turn_is_not_reported() {
+    // Each of these is a genuine change of facing from the default orientation.
+    // Firing on any of them would be an error on correct authoring, which is how
+    // you teach people to ignore diagnostics.
+    for degrees in [
+        [180.0, 0.0, 0.0],
+        [0.0, 180.0, 0.0],
+        [0.0, 0.0, 180.0],
+        [180.0, 180.0, 0.0],
+        [90.0, 90.0, 90.0],
+        [1.0, 0.0, 0.0],
+    ] {
+        let d = cube_turning(degrees);
+        assert!(!has(&d, NO_TURN), "{degrees:?} is a real turn; got {:?}", titles(&d));
+    }
 }
 
 #[test]
-fn an_instant_event_does_not_cancel_an_overlapping_tween() {
-    // Duration 0 writes the property and inserts no tween, so there is nothing to
-    // replace and nothing to lose.
-    let d = one_row(vec![light_colour(0.0, 5.0), light_intensity(1.0, 0.0)]);
-    assert!(!has(&d, OVERLAP), "got {:?}", titles(&d));
-}
-
-#[test]
-fn overlapping_events_of_different_families_are_not_diagnosed() {
-    // A light tween and a material tween are separate components on the entity,
-    // so they genuinely do run side by side. Reporting these would flag authoring
-    // that works.
+fn a_turn_matching_a_nodes_authored_rotation_is_reported() {
+    // Not just the identity: the check is against whatever the node is authored
+    // to be facing. A quarter turn about Y, targeted at a node already a quarter
+    // turn about Y, turns nothing.
+    let quarter = glam::Quat::from_euler(glam::EulerRot::XYZ, 0.0, 90f32.to_radians(), 0.0);
     let mut cube = node(1);
-    cube.payload = XrdsSceneNodePayload::PointLight(Default::default());
+    cube.payload = XrdsSceneNodePayload::Cube(Default::default());
     cube.triggers = vec![binding_for("t")];
-    let material = key(0.0, XrdsAction::SetMaterial {
-        base_color: Some([1.0, 0.0, 0.0, 1.0]),
-        metallic: None,
-        roughness: None,
-        duration_secs: 5.0,
-        ease: XrdsEaseCurve::Linear,
-        texture: None,
-    });
+    cube.transform.rotation_quat_xyzw = [quarter.x, quarter.y, quarter.z, quarter.w];
     let d = doc(
         vec![cube],
         vec![named("t", XrdsTrack {
-            assets: vec![row(1, vec![light_colour(0.0, 5.0), material])],
+            assets: vec![row(1, vec![turn_to([0.0, 90.0, 0.0])])],
             ..Default::default()
         })],
     );
-    assert!(!has(&d, OVERLAP), "got {:?}", titles(&d));
-}
+    assert!(has(&d, NO_TURN), "got {:?}", titles(&d));
 
-#[test]
-fn overlapping_transform_events_are_diagnosed_too() {
-    // The third tween family. `XrdsTransformTween` stores a whole start/target
-    // Transform, so an overlapping scale event drops an in-flight position move
-    // exactly as the light and material cases do.
-    let position = key(0.0, XrdsAction::SetTransform {
-        position: Some([1.0, 0.0, 0.0]),
-        rotation: None,
-        scale: None,
-        duration_secs: 5.0,
-        ease: XrdsEaseCurve::Linear,
-    });
-    let scale = key(1.0, XrdsAction::SetTransform {
-        position: None,
-        rotation: None,
-        scale: Some([2.0, 2.0, 2.0]),
-        duration_secs: 5.0,
-        ease: XrdsEaseCurve::Linear,
-    });
-    let d = one_row(vec![position, scale]);
-    let found = find(&d, OVERLAP);
-    assert!(found.detail.contains("position"), "got: {}", found.detail);
+    // And the same node given a different target is not reported.
+    let mut cube = node(1);
+    cube.payload = XrdsSceneNodePayload::Cube(Default::default());
+    cube.triggers = vec![binding_for("t")];
+    cube.transform.rotation_quat_xyzw = [quarter.x, quarter.y, quarter.z, quarter.w];
+    let d = doc(
+        vec![cube],
+        vec![named("t", XrdsTrack {
+            assets: vec![row(1, vec![turn_to([0.0, 0.0, 0.0])])],
+            ..Default::default()
+        })],
+    );
+    assert!(!has(&d, NO_TURN), "got {:?}", titles(&d));
 }

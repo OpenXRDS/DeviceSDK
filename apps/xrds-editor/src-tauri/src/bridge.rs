@@ -402,7 +402,7 @@ pub enum EditorCommand {
 ///
 /// **If you change a DTO and do not bump this, you have removed the only thing
 /// that would have told anyone.**
-pub const BRIDGE_VERSION: u32 = 25;
+pub const BRIDGE_VERSION: u32 = 26;
 
 /// State snapshot emitted to the webview after each frame's update.
 /// Grow this incrementally — add fields as each phase is implemented.
@@ -1039,6 +1039,12 @@ pub enum XrdsActionDto {
         color: Option<[f32; 4]>,
         intensity: Option<f32>,
         range: Option<f32>,
+        /// Spot lights only, in **radians** — the unit the payload and Bevy's
+        /// `SpotLight` already use. Dropped on a light with no cone.
+        #[serde(default)]
+        inner_angle: Option<f32>,
+        #[serde(default)]
+        outer_angle: Option<f32>,
         #[serde(default)]
         duration_secs: f32,
         #[serde(default)]
@@ -1048,7 +1054,15 @@ pub enum XrdsActionDto {
     /// Element-scoped actions. Only meaningful on an `Element` asset row -- a
     /// node has no text, scalar or enabled state of this kind.
     SetElementText { text: String },
-    SetElementValue { value: f32 },
+    /// Only a Slider interpolates; a Toggle has no halfway state and applies at
+    /// the start of the tween whatever the duration.
+    SetElementValue {
+        value: f32,
+        #[serde(default)]
+        duration_secs: f32,
+        #[serde(default)]
+        ease: String,
+    },
     SetElementEnabled { enabled: bool },
     Unknown,
 }

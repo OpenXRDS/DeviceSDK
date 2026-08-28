@@ -5,7 +5,7 @@ import {
   isHandFilterVisible, keyTopPx, layoutAssetRow, niceStep, rulerTicks, stackKeys, validKindsFor,
   elementUnavailableReasonFor, validKindsForElement, elementRowLabel, unavailableReasonFor,
   targetLabel, actionUnavailableReasonFor, ELEMENT_ONLY_ACTION_KINDS, TRACK_ACTION_KINDS,
-  decodeAddableAsset, encodeAddableAsset,
+  decodeAddableAsset, encodeAddableAsset, normalizeDegrees,
 } from "./sequencer";
 import { defaultSnapshot } from "../types/bridge";
 import type {
@@ -885,5 +885,43 @@ describe("addable asset encoding", () => {
     for (const bad of ["", "nonsense", "el:", "el:3", "el:3:", "node:", "node:abc"]) {
       expect(decodeAddableAsset(bad)).toBeNull();
     }
+  });
+});
+
+describe("normalizeDegrees", () => {
+  it("wraps rather than clamps", () => {
+    // The distinction that matters. 350 and -10 are the same orientation, so
+    // wrapping keeps the author's meaning; clamping to 180 would point the object
+    // somewhere else entirely.
+    expect(normalizeDegrees(350)).toBe(-10);
+    expect(normalizeDegrees(-350)).toBe(10);
+    expect(normalizeDegrees(190)).toBe(-170);
+    expect(normalizeDegrees(720)).toBe(0);
+    expect(normalizeDegrees(-720)).toBe(0);
+  });
+
+  it("leaves values already in range alone", () => {
+    for (const deg of [-179, -90, -1, 0, 1, 90, 179, 180]) {
+      expect(normalizeDegrees(deg)).toBe(deg);
+    }
+  });
+
+  it("puts the half turn at +180, not -180", () => {
+    // Both describe the same orientation; picking one keeps a committed value
+    // stable instead of flipping sign every time it is re-committed.
+    expect(normalizeDegrees(180)).toBe(180);
+    expect(normalizeDegrees(-180)).toBe(180);
+    expect(normalizeDegrees(540)).toBe(180);
+  });
+
+  it("never returns negative zero", () => {
+    // -0 is a real f64 and renders as "-0" in a number input.
+    expect(Object.is(normalizeDegrees(-360), 0)).toBe(true);
+    expect(Object.is(normalizeDegrees(0), 0)).toBe(true);
+  });
+
+  it("survives a non-finite value", () => {
+    // A number input can hand back NaN for an empty or half-typed field.
+    expect(normalizeDegrees(NaN)).toBe(0);
   });
 });

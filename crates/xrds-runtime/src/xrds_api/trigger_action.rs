@@ -1493,6 +1493,14 @@ pub struct XrdsActionRunner {
     /// dropped with a hard error instead of firing `RunawayDetected` again,
     /// guaranteeing the recovery path can never loop through itself.
     is_recovery: bool,
+    /// Set by an interpolated action to the generation of the channels it
+    /// inserted, so `is_finished` waits on those and not on unrelated channels
+    /// running on the same entity. `None` until then, and for every action that
+    /// does not interpolate.
+    ///
+    /// One field rather than one per family: an action is exactly one kind, so it
+    /// can only ever have inserted into one tween.
+    tween_generation: Option<u64>,
 }
 
 impl XrdsActionRunner {
@@ -1509,6 +1517,7 @@ impl XrdsActionRunner {
             source,
             chain_depth,
             is_recovery,
+            tween_generation: None,
         }
     }
 
@@ -1561,41 +1570,66 @@ fn runtime_playback_options(playback: &XrdsSceneGltfPlayback) -> XrdsGltfAnimati
     }
 }
 
-/// Runtime-only state for an in-flight [`XrdsAction::SetTransform`],
-/// inserted on the *target* entity (not the agent) so overlapping/back-
-/// to-back tweens on different targets never collide. Removed by
-/// [`advance_transform_tweens`] once `elapsed >= duration` — its absence
-/// is exactly what `XrdsActionRunner::is_finished` polls for, same pattern
-/// as `Run { wait: true }` polling for its child agent's despawn.
-#[derive(Component, Debug, Clone)]
+/// In-flight state for interpolated [`XrdsAction::SetTransform`] events.
+///
+/// Inserted on the *target* entity rather than the agent, so tweens on different
+/// targets never collide — and, since channels, so tweens on the **same** target
+/// do not either. That second case is what the original design missed: it held one
+/// whole `start`/`target` `Transform`, so a second event replaced the first
+/// outright and whatever it was moving stopped where it stood, silently. See
+/// `docs/tween-channels-plan.md`.
+///
+/// Rotation gets its own channel rather than sharing the numeric one because it
+/// must **slerp**. Lerping two quaternions component-wise cuts through the inside
+/// of the sphere and speeds up through the middle of the turn.
+#[derive(Component, Debug, Clone, Copy, Default)]
 pub(crate) struct XrdsTransformTween {
-    start: Transform,
-    target: Transform,
-    elapsed: f32,
-    duration: f32,
-    ease: XrdsEaseCurve,
+    translation: Option<XrdsTweenChannel<Vec3>>,
+    rotation: Option<XrdsTweenChannel<Quat>>,
+    scale: Option<XrdsTweenChannel<Vec3>>,
 }
 
-/// In-flight state for an interpolated [`XrdsAction::SetMaterial`].
+impl XrdsTransformTween {
+    fn has_generation(&self, generation: u64) -> bool {
+        self.translation.is_some_and(|c| c.generation == generation)
+            || self.rotation.is_some_and(|c| c.generation == generation)
+            || self.scale.is_some_and(|c| c.generation == generation)
+    }
+
+    fn is_empty(&self) -> bool {
+        self.translation.is_none() && self.rotation.is_none() && self.scale.is_none()
+    }
+}
+
+/// In-flight state for interpolated [`XrdsAction::SetMaterial`] events.
 ///
-/// Mirrors [`XrdsTransformTween`] and lives on the *target* entity for the same
-/// reason: a second material change on one entity should replace the first rather
-/// than race it.
+/// Mirrors [`XrdsTransformTween`] and [`XrdsLightTween`], and lives on the
+/// *target* entity for the same reason — with the same correction: the doc comment
+/// here used to say a second material change "should replace the first rather than
+/// race it", and replacing was precisely the bug. Two events animating different
+/// material properties must run at once; only two events animating the *same*
+/// property replace, and now only that channel does.
 ///
-/// Holds plain values rather than a whole `XrdsMaterialParams` because only three
+/// Holds channels rather than a whole `XrdsMaterialParams` because only three
 /// properties interpolate. Keeping the rest out means a tween cannot quietly revert
 /// a texture slot or an alpha mode that something else set while it was running.
-#[derive(Component, Debug, Clone, Copy)]
+#[derive(Component, Debug, Clone, Copy, Default)]
 pub(crate) struct XrdsMaterialTween {
-    start_base_color: [f32; 4],
-    start_metallic: f32,
-    start_roughness: f32,
-    target_base_color: [f32; 4],
-    target_metallic: f32,
-    target_roughness: f32,
-    elapsed: f32,
-    duration: f32,
-    ease: XrdsEaseCurve,
+    base_color: Option<XrdsTweenChannel<[f32; 4]>>,
+    metallic: Option<XrdsTweenChannel<f32>>,
+    roughness: Option<XrdsTweenChannel<f32>>,
+}
+
+impl XrdsMaterialTween {
+    fn has_generation(&self, generation: u64) -> bool {
+        self.base_color.is_some_and(|c| c.generation == generation)
+            || self.metallic.is_some_and(|c| c.generation == generation)
+            || self.roughness.is_some_and(|c| c.generation == generation)
+    }
+
+    fn is_empty(&self) -> bool {
+        self.base_color.is_none() && self.metallic.is_none() && self.roughness.is_none()
+    }
 }
 
 /// Advances every in-flight material tween, removing it when finished.
@@ -1616,41 +1650,79 @@ pub fn advance_material_tweens(
         .collect();
 
     let dt = time.delta_secs();
-    let mut updates: Vec<(Entity, [f32; 4], f32, f32, bool)> = Vec::new();
+    /// What one entity's channels produced this frame. `None` means "leave that
+    /// property alone" — writing all three would let a roughness channel re-assert
+    /// a stale colour every frame and undo a colour channel beside it.
+    struct MaterialWrite {
+        base_color: Option<[f32; 4]>,
+        metallic: Option<f32>,
+        roughness: Option<f32>,
+        spent: bool,
+    }
+    let mut updates: Vec<(Entity, MaterialWrite)> = Vec::new();
 
     for (entity, mut tween) in &mut query {
         if frozen.contains(&entity) {
             continue;
         }
-        tween.elapsed += dt;
-        let t = (tween.elapsed / tween.duration).clamp(0.0, 1.0);
-        let eased = ease_out(tween.ease, t);
-        let lerp = |a: f32, b: f32| a + (b - a) * eased;
-        updates.push((
-            entity,
-            [
-                lerp(tween.start_base_color[0], tween.target_base_color[0]),
-                lerp(tween.start_base_color[1], tween.target_base_color[1]),
-                lerp(tween.start_base_color[2], tween.target_base_color[2]),
-                lerp(tween.start_base_color[3], tween.target_base_color[3]),
-            ],
-            lerp(tween.start_metallic, tween.target_metallic),
-            lerp(tween.start_roughness, tween.target_roughness),
-            t >= 1.0,
-        ));
+        let mut write = MaterialWrite {
+            base_color: None,
+            metallic: None,
+            roughness: None,
+            spent: false,
+        };
+
+        if let Some(channel) = &mut tween.base_color {
+            let (eased, done) = channel.advance(dt);
+            let lerp = |a: f32, b: f32| a + (b - a) * eased;
+            write.base_color = Some([
+                lerp(channel.start[0], channel.target[0]),
+                lerp(channel.start[1], channel.target[1]),
+                lerp(channel.start[2], channel.target[2]),
+                lerp(channel.start[3], channel.target[3]),
+            ]);
+            if done {
+                tween.base_color = None;
+            }
+        }
+        if let Some(channel) = &mut tween.metallic {
+            let (eased, done) = channel.advance(dt);
+            write.metallic = Some(channel.start + (channel.target - channel.start) * eased);
+            if done {
+                tween.metallic = None;
+            }
+        }
+        if let Some(channel) = &mut tween.roughness {
+            let (eased, done) = channel.advance(dt);
+            write.roughness = Some(channel.start + (channel.target - channel.start) * eased);
+            if done {
+                tween.roughness = None;
+            }
+        }
+
+        write.spent = tween.is_empty();
+        updates.push((entity, write));
     }
 
     // Applying goes through a command because writing material params needs
     // `&mut World`, which cannot be held while the tween query is borrowed.
-    for (entity, base_color, metallic, roughness, done) in updates {
+    for (entity, write) in updates {
         commands.queue(move |world: &mut World| {
             if let Some(mut params) = material_params_for_entity_in_world(world, entity) {
-                params.base_color = XrdsColor { rgba: base_color };
-                params.pbr.metallic = metallic;
-                params.pbr.roughness = roughness;
+                if let Some(rgba) = write.base_color {
+                    params.base_color = XrdsColor { rgba };
+                }
+                if let Some(metallic) = write.metallic {
+                    params.pbr.metallic = metallic;
+                }
+                if let Some(roughness) = write.roughness {
+                    params.pbr.roughness = roughness;
+                }
                 set_material_params_for_entity_in_world(world, entity, params);
             }
-            if done {
+            // Only once every channel is spent. Removing on the first to finish
+            // would drop the others mid-flight, which is the bug this replaced.
+            if write.spent {
                 if let Ok(mut entity_mut) = world.get_entity_mut(entity) {
                     entity_mut.remove::<XrdsMaterialTween>();
                 }
@@ -1670,6 +1742,11 @@ struct LightValues {
     /// Lumens on a point or spot light, lux on a directional one.
     intensity: f32,
     range: Option<f32>,
+    /// Spot only, in radians. `None` on the other two kinds, which have no cone —
+    /// the same treatment `range` gets, so a tween on a point light never touches
+    /// an angle that does not exist.
+    inner_angle: Option<f32>,
+    outer_angle: Option<f32>,
 }
 
 /// Read a node's live light values, or `None` if it is not a light at all.
@@ -1683,6 +1760,8 @@ fn light_values_for_entity_in_world(world: &World, entity: Entity) -> Option<Lig
             color: unpack(light.color),
             intensity: light.intensity,
             range: Some(light.range),
+            inner_angle: None,
+            outer_angle: None,
         });
     }
     if let Some(light) = world.get::<SpotLight>(entity) {
@@ -1690,6 +1769,8 @@ fn light_values_for_entity_in_world(world: &World, entity: Entity) -> Option<Lig
             color: unpack(light.color),
             intensity: light.intensity,
             range: Some(light.range),
+            inner_angle: Some(light.inner_angle),
+            outer_angle: Some(light.outer_angle),
         });
     }
     if let Some(light) = world.get::<DirectionalLight>(entity) {
@@ -1699,64 +1780,178 @@ fn light_values_for_entity_in_world(world: &World, entity: Entity) -> Option<Lig
             // `XrdsAction::SetLight`'s doc comment on why the units differ.
             intensity: light.illuminance,
             range: None,
+            inner_angle: None,
+            outer_angle: None,
         });
     }
     None
 }
 
-/// Write light values back, to whichever kind the entity is.
-fn set_light_values_for_entity_in_world(world: &mut World, entity: Entity, values: &LightValues) {
-    let color = Color::linear_rgba(
-        values.color[0],
-        values.color[1],
-        values.color[2],
-        values.color[3],
-    );
+/// One animated property, with its own clock.
+///
+/// The unit of a tween is a *property*, not an event. That is the whole point of
+/// this type: two events animating different properties of one light must run at
+/// once, and before channels existed the second event's component insert replaced
+/// the first outright — the first property stopped where it stood, with nothing
+/// reported. See `docs/tween-channels-plan.md`.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct XrdsTweenChannel<T> {
+    start: T,
+    target: T,
+    elapsed: f32,
+    duration: f32,
+    ease: XrdsEaseCurve,
+    /// Which event owns this channel.
+    ///
+    /// An event's agent must wait for *its own* channels and no others. Without
+    /// this, a colour event finishing at 2s would keep reporting unfinished until
+    /// an unrelated intensity channel ended at 5s, holding its row lock for three
+    /// seconds it does not need — long enough to reject another Track under the
+    /// reject-the-newcomer policy.
+    generation: u64,
+}
+
+impl<T> XrdsTweenChannel<T> {
+    fn new(start: T, target: T, duration: f32, ease: XrdsEaseCurve, generation: u64) -> Self {
+        Self { start, target, elapsed: 0.0, duration, ease, generation }
+    }
+
+    /// Eased progress in `0.0..=1.0`, and whether the channel has finished.
+    fn advance(&mut self, dt: f32) -> (f32, bool) {
+        self.elapsed += dt;
+        let t = (self.elapsed / self.duration).clamp(0.0, 1.0);
+        (ease_out(self.ease, t), t >= 1.0)
+    }
+}
+
+/// Hands out channel generations.
+///
+/// A plain counter rather than a Bevy resource: it is written once per
+/// interpolated event and read never, so a resource would buy scheduling
+/// guarantees nothing needs.
+static NEXT_TWEEN_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+fn next_tween_generation() -> u64 {
+    NEXT_TWEEN_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
+/// In-flight state for interpolated [`XrdsAction::SetLight`] events.
+///
+/// One component per entity holding up to three independent channels, rather than
+/// one component per event: Bevy allows a single component of a type per entity,
+/// so per-event components replace each other — which is exactly the bug this
+/// replaced. Inserting **merges**: an event overwrites only the channels it names
+/// and leaves the rest running.
+///
+/// A channel is `None` when that property is not being animated. `range` is also
+/// `None` throughout for a directional light, which has no falloff.
+#[derive(Component, Debug, Clone, Copy, Default)]
+pub(crate) struct XrdsLightTween {
+    color: Option<XrdsTweenChannel<[f32; 4]>>,
+    intensity: Option<XrdsTweenChannel<f32>>,
+    range: Option<XrdsTweenChannel<f32>>,
+    inner_angle: Option<XrdsTweenChannel<f32>>,
+    outer_angle: Option<XrdsTweenChannel<f32>>,
+}
+
+impl XrdsLightTween {
+    /// Whether any channel from `generation` is still running.
+    ///
+    /// What an event's agent polls, in place of the component-absence check this
+    /// used to use.
+    fn has_generation(&self, generation: u64) -> bool {
+        self.color.is_some_and(|c| c.generation == generation)
+            || self.intensity.is_some_and(|c| c.generation == generation)
+            || self.range.is_some_and(|c| c.generation == generation)
+            || self.inner_angle.is_some_and(|c| c.generation == generation)
+            || self.outer_angle.is_some_and(|c| c.generation == generation)
+    }
+
+    fn is_empty(&self) -> bool {
+        self.color.is_none()
+            && self.intensity.is_none()
+            && self.range.is_none()
+            && self.inner_angle.is_none()
+            && self.outer_angle.is_none()
+    }
+
+    /// Whether a colour channel is still running. Test-only: it is how a test
+    /// tells "this channel finished" from "the whole component is gone", which is
+    /// the distinction the generation exists to make.
+    #[cfg(test)]
+    pub(crate) fn has_colour_channel(&self) -> bool {
+        self.color.is_some()
+    }
+}
+
+/// Values to write to a light, each `None` meaning "leave alone".
+///
+/// Distinct from [`LightValues`], which is a full reading. A tween must write only
+/// the properties it animates: writing all three would let an intensity channel
+/// re-assert a stale colour every frame and undo a colour channel running beside
+/// it — the composition bug again, one layer down.
+#[derive(Default)]
+struct LightWrite {
+    color: Option<[f32; 4]>,
+    intensity: Option<f32>,
+    range: Option<f32>,
+    inner_angle: Option<f32>,
+    outer_angle: Option<f32>,
+}
+
+/// Write only the named properties, to whichever light kind the entity is.
+fn apply_light_write_in_world(world: &mut World, entity: Entity, write: &LightWrite) {
+    let color = write.color.map(|c| Color::linear_rgba(c[0], c[1], c[2], c[3]));
     if let Some(mut light) = world.get_mut::<PointLight>(entity) {
-        light.color = color;
-        light.intensity = values.intensity;
-        if let Some(range) = values.range {
+        if let Some(color) = color {
+            light.color = color;
+        }
+        if let Some(intensity) = write.intensity {
+            light.intensity = intensity;
+        }
+        if let Some(range) = write.range {
             light.range = range;
         }
         return;
     }
     if let Some(mut light) = world.get_mut::<SpotLight>(entity) {
-        light.color = color;
-        light.intensity = values.intensity;
-        if let Some(range) = values.range {
+        if let Some(color) = color {
+            light.color = color;
+        }
+        if let Some(intensity) = write.intensity {
+            light.intensity = intensity;
+        }
+        if let Some(range) = write.range {
             light.range = range;
+        }
+        if let Some(inner) = write.inner_angle {
+            light.inner_angle = inner;
+        }
+        if let Some(outer) = write.outer_angle {
+            light.outer_angle = outer;
+        }
+        // Bevy renders nothing at all when the inner cone is wider than the outer
+        // one, so an interpolation that crosses over would blink the light out
+        // rather than show a narrowing cone. Clamping here keeps the two ordered
+        // for every frame of a tween, whatever order the author authored them in.
+        if light.inner_angle > light.outer_angle {
+            light.inner_angle = light.outer_angle;
         }
         return;
     }
     if let Some(mut light) = world.get_mut::<DirectionalLight>(entity) {
-        light.color = color;
-        light.illuminance = values.intensity;
+        if let Some(color) = color {
+            light.color = color;
+        }
+        if let Some(intensity) = write.intensity {
+            light.illuminance = intensity;
+        }
+        // No `range` arm: a directional light has no falloff. A `range` channel is
+        // never created for one, so there is nothing to drop here.
     }
 }
 
-/// In-flight state for an interpolated [`XrdsAction::SetLight`].
-///
-/// Third of its kind after [`XrdsTransformTween`] and [`XrdsMaterialTween`], and
-/// deliberately a third component rather than one generic tween: they are driven
-/// by different setters, and a single component would mean one light change
-/// cancelling an unrelated transform change on the same entity.
-///
-/// `range` is `None` throughout for a directional light, so a tween on one never
-/// touches a property it does not have.
-#[derive(Component, Debug, Clone, Copy)]
-pub(crate) struct XrdsLightTween {
-    start_color: [f32; 4],
-    start_intensity: f32,
-    start_range: Option<f32>,
-    target_color: [f32; 4],
-    target_intensity: f32,
-    target_range: Option<f32>,
-    elapsed: f32,
-    duration: f32,
-    ease: XrdsEaseCurve,
-}
-
-/// Advances every in-flight light tween, removing it when finished.
+/// Advances every in-flight light channel, removing each as it finishes.
 ///
 /// A paused Track freezes its tweens, for the same reason transform and material
 /// tweens are frozen: pausing that left a light still brightening would be a pause
@@ -1775,44 +1970,119 @@ pub fn advance_light_tweens(
         .collect();
 
     let dt = time.delta_secs();
-    let mut updates: Vec<(Entity, LightValues, bool)> = Vec::new();
+    let mut updates: Vec<(Entity, LightWrite, bool)> = Vec::new();
 
     for (entity, mut tween) in &mut query {
         if frozen.contains(&entity) {
             continue;
         }
-        tween.elapsed += dt;
-        let t = (tween.elapsed / tween.duration).clamp(0.0, 1.0);
-        let eased = ease_out(tween.ease, t);
-        let lerp = |a: f32, b: f32| a + (b - a) * eased;
-        updates.push((
-            entity,
-            LightValues {
-                color: [
-                    lerp(tween.start_color[0], tween.target_color[0]),
-                    lerp(tween.start_color[1], tween.target_color[1]),
-                    lerp(tween.start_color[2], tween.target_color[2]),
-                    lerp(tween.start_color[3], tween.target_color[3]),
-                ],
-                intensity: lerp(tween.start_intensity, tween.target_intensity),
-                range: match (tween.start_range, tween.target_range) {
-                    (Some(from), Some(to)) => Some(lerp(from, to)),
-                    _ => None,
-                },
-            },
-            t >= 1.0,
-        ));
+        let mut write = LightWrite::default();
+
+        if let Some(channel) = &mut tween.color {
+            let (eased, done) = channel.advance(dt);
+            let lerp = |a: f32, b: f32| a + (b - a) * eased;
+            write.color = Some([
+                lerp(channel.start[0], channel.target[0]),
+                lerp(channel.start[1], channel.target[1]),
+                lerp(channel.start[2], channel.target[2]),
+                lerp(channel.start[3], channel.target[3]),
+            ]);
+            if done {
+                tween.color = None;
+            }
+        }
+        if let Some(channel) = &mut tween.intensity {
+            let (eased, done) = channel.advance(dt);
+            write.intensity = Some(channel.start + (channel.target - channel.start) * eased);
+            if done {
+                tween.intensity = None;
+            }
+        }
+        if let Some(channel) = &mut tween.range {
+            let (eased, done) = channel.advance(dt);
+            write.range = Some(channel.start + (channel.target - channel.start) * eased);
+            if done {
+                tween.range = None;
+            }
+        }
+        if let Some(channel) = &mut tween.inner_angle {
+            let (eased, done) = channel.advance(dt);
+            write.inner_angle = Some(channel.start + (channel.target - channel.start) * eased);
+            if done {
+                tween.inner_angle = None;
+            }
+        }
+        if let Some(channel) = &mut tween.outer_angle {
+            let (eased, done) = channel.advance(dt);
+            write.outer_angle = Some(channel.start + (channel.target - channel.start) * eased);
+            if done {
+                tween.outer_angle = None;
+            }
+        }
+
+        updates.push((entity, write, tween.is_empty()));
     }
 
-    for (entity, values, done) in updates {
+    // Applying goes through a command because writing to the light needs
+    // `&mut World`, which cannot be held while the tween query is borrowed.
+    for (entity, write, spent) in updates {
         commands.queue(move |world: &mut World| {
-            set_light_values_for_entity_in_world(world, entity, &values);
-            if done {
+            apply_light_write_in_world(world, entity, &write);
+            // Only once every channel has finished. Removing on the first one to
+            // end would drop the others mid-flight — the original bug, rebuilt.
+            if spent {
                 if let Ok(mut entity_mut) = world.get_entity_mut(entity) {
                     entity_mut.remove::<XrdsLightTween>();
                 }
             }
         });
+    }
+}
+
+/// In-flight state for an interpolated [`XrdsAction::SetElementValue`].
+///
+/// One channel, because an element has one scalar. It is still a channel rather
+/// than a bare tween so that `is_finished` can key on a generation like the other
+/// three, which is what lets a short event finish while a longer one runs on the
+/// same element.
+#[derive(Component, Debug, Clone, Copy)]
+pub(crate) struct XrdsElementValueTween {
+    value: XrdsTweenChannel<f32>,
+}
+
+/// Advances every in-flight slider value, removing the tween when it finishes.
+pub fn advance_element_value_tweens(
+    time: Res<Time>,
+    agents: Query<(Entity, &XrdsTrackAgent)>,
+    locks: Res<XrdsTrackAssetLocks>,
+    mut query: Query<(
+        Entity,
+        &mut xrds_components::XrdsWorldSlider,
+        &mut XrdsElementValueTween,
+    )>,
+    mut commands: Commands,
+) {
+    let frozen: std::collections::HashSet<Entity> = agents
+        .iter()
+        .filter(|(_, agent)| agent.paused)
+        .flat_map(|(agent_entity, _)| locks.entities_held_by(agent_entity))
+        .collect();
+
+    let dt = time.delta_secs();
+    for (entity, mut slider, mut tween) in &mut query {
+        if frozen.contains(&entity) {
+            continue;
+        }
+        let (eased, done) = tween.value.advance(dt);
+        let channel = &tween.value;
+        let raw = channel.start + (channel.target - channel.start) * eased;
+        // Clamped every frame, not only at the target: the start value is read
+        // from the live slider, so a min/max edited mid-flight would otherwise
+        // draw the handle off its track for the rest of the tween.
+        slider.value = raw.clamp(slider.min, slider.max);
+        if done {
+            commands.entity(entity).remove::<XrdsElementValueTween>();
+        }
     }
 }
 
@@ -1873,13 +2143,32 @@ pub fn advance_transform_tweens(
         if frozen.contains(&entity) {
             continue;
         }
-        tween.elapsed += dt;
-        let t = (tween.elapsed / tween.duration).clamp(0.0, 1.0);
-        let eased = ease_out(tween.ease, t);
-        transform.translation = tween.start.translation.lerp(tween.target.translation, eased);
-        transform.rotation = tween.start.rotation.slerp(tween.target.rotation, eased);
-        transform.scale = tween.start.scale.lerp(tween.target.scale, eased);
-        if t >= 1.0 {
+        // Each channel writes only its own field, so a scale tween cannot
+        // re-assert a stale translation and undo a move running beside it.
+        if let Some(channel) = &mut tween.translation {
+            let (eased, done) = channel.advance(dt);
+            transform.translation = channel.start.lerp(channel.target, eased);
+            if done {
+                tween.translation = None;
+            }
+        }
+        if let Some(channel) = &mut tween.rotation {
+            let (eased, done) = channel.advance(dt);
+            transform.rotation = channel.start.slerp(channel.target, eased);
+            if done {
+                tween.rotation = None;
+            }
+        }
+        if let Some(channel) = &mut tween.scale {
+            let (eased, done) = channel.advance(dt);
+            transform.scale = channel.start.lerp(channel.target, eased);
+            if done {
+                tween.scale = None;
+            }
+        }
+        // Only once every channel is spent. Removing on the first to finish would
+        // drop the others mid-flight, which is the bug this replaced.
+        if tween.is_empty() {
             commands.entity(entity).remove::<XrdsTransformTween>();
         }
     }
@@ -1896,16 +2185,43 @@ impl Action for XrdsActionRunner {
             // Each Track key runs as its own one-step agent, so blocking here
             // never delays the Track's advancement — it only keeps this one
             // ephemeral agent alive for the length of the tween.
-            XrdsAction::SetTransform { .. } => {
-                world.get::<XrdsTransformTween>(self.target).is_none()
-            }
+            XrdsAction::SetTransform { .. } => match self.tween_generation {
+                None => true,
+                Some(generation) => world
+                    .get::<XrdsTransformTween>(self.target)
+                    .is_none_or(|tween| !tween.has_generation(generation)),
+            },
             // Same shape as SetTransform: an interpolated material change keeps its
             // ephemeral agent alive for the length of the tween. A zero duration
             // never inserts one, so that case reports finished at once.
-            XrdsAction::SetMaterial { .. } => {
-                world.get::<XrdsMaterialTween>(self.target).is_none()
-            }
-            XrdsAction::SetLight { .. } => world.get::<XrdsLightTween>(self.target).is_none(),
+            XrdsAction::SetMaterial { .. } => match self.tween_generation {
+                None => true,
+                Some(generation) => world
+                    .get::<XrdsMaterialTween>(self.target)
+                    .is_none_or(|tween| !tween.has_generation(generation)),
+            },
+            // Waits on *this event's* channels rather than on the component, so a
+            // two-second colour fade finishes at two seconds even when a
+            // five-second intensity fade is still running beside it on the same
+            // light. Polling for component absence would hold this agent's row
+            // lock for the extra three seconds — long enough to reject another
+            // Track under the reject-the-newcomer policy.
+            // A Toggle target, or a zero duration, records no generation and is
+            // finished at once — see the arm.
+            XrdsAction::SetElementValue { .. } => match self.tween_generation {
+                None => true,
+                Some(generation) => world
+                    .get::<XrdsElementValueTween>(self.target)
+                    .is_none_or(|tween| tween.value.generation != generation),
+            },
+            XrdsAction::SetLight { .. } => match self.tween_generation {
+                // No generation recorded means no tween was inserted: a zero
+                // duration, or a target that is not a light.
+                None => true,
+                Some(generation) => world
+                    .get::<XrdsLightTween>(self.target)
+                    .is_none_or(|tween| !tween.has_generation(generation)),
+            },
             // Everything else applies instantly in `on_start`. glTF playback
             // is fire-and-forget: the agent finishes as soon as playback is
             // requested rather than waiting for the clip to end. Waiting on
@@ -1936,40 +2252,71 @@ impl Action for XrdsActionRunner {
                     );
                     return true;
                 };
-                let target = Transform {
-                    translation: position.map(Vec3::from_array).unwrap_or(start.translation),
-                    rotation: rotation
-                        .map(|r| {
-                            Quat::from_euler(
-                                EulerRot::XYZ,
-                                r[0].to_radians(),
-                                r[1].to_radians(),
-                                r[2].to_radians(),
-                            )
-                        })
-                        .unwrap_or(start.rotation),
-                    scale: scale.map(Vec3::from_array).unwrap_or(start.scale),
-                };
-                // duration_secs <= 0.0 applies instantly rather than
-                // inserting a tween that would need a whole extra frame
-                // (and a divide-by-zero-shaped clamp) to resolve — same
-                // "instant when zero" treatment `Wait`/`advance_timelines`
-                // already give a non-positive duration.
+                let position = position.map(Vec3::from_array);
+                let rotation = rotation.map(|r| {
+                    Quat::from_euler(
+                        EulerRot::XYZ,
+                        r[0].to_radians(),
+                        r[1].to_radians(),
+                        r[2].to_radians(),
+                    )
+                });
+                let scale = scale.map(Vec3::from_array);
+
+                // duration_secs <= 0.0 applies instantly rather than inserting a
+                // tween that would need a whole extra frame (and a
+                // divide-by-zero-shaped clamp) to resolve — same "instant when
+                // zero" treatment `advance_timelines` already gives a non-positive
+                // duration. It writes only the named fields, so an instant scale
+                // change beside a running move no longer freezes the move.
                 if duration_secs <= 0.0 {
                     if let Some(mut transform) = world.get_mut::<Transform>(self.target) {
-                        *transform = target;
+                        if let Some(position) = position {
+                            transform.translation = position;
+                        }
+                        if let Some(rotation) = rotation {
+                            transform.rotation = rotation;
+                        }
+                        if let Some(scale) = scale {
+                            transform.scale = scale;
+                        }
                     }
-                    true
-                } else {
-                    world.entity_mut(self.target).insert(XrdsTransformTween {
-                        start,
-                        target,
-                        elapsed: 0.0,
-                        duration: duration_secs,
-                        ease,
-                    });
-                    false
+                    return true;
                 }
+
+                let generation = next_tween_generation();
+                // Merge rather than replace: an event owns only the channels it
+                // names, and anything else already moving keeps moving.
+                let mut tween = world
+                    .get::<XrdsTransformTween>(self.target)
+                    .copied()
+                    .unwrap_or_default();
+                if let Some(target) = position {
+                    tween.translation = Some(XrdsTweenChannel::new(
+                        start.translation, target, duration_secs, ease, generation,
+                    ));
+                }
+                if let Some(target) = rotation {
+                    tween.rotation = Some(XrdsTweenChannel::new(
+                        start.rotation, target, duration_secs, ease, generation,
+                    ));
+                }
+                if let Some(target) = scale {
+                    tween.scale = Some(XrdsTweenChannel::new(
+                        start.scale, target, duration_secs, ease, generation,
+                    ));
+                }
+
+                if tween.is_empty() {
+                    // Nothing named. The document diagnoses this ("Interpolation
+                    // changes nothing"); here it must finish, or the agent waits on
+                    // a tween that was never inserted.
+                    return true;
+                }
+
+                self.tween_generation = Some(generation);
+                world.entity_mut(self.target).insert(tween);
+                false
             }
 
             XrdsAction::SetMaterial {
@@ -1980,120 +2327,185 @@ impl Action for XrdsActionRunner {
                 ease,
                 texture,
             } => {
-                // No own target any more — always applies to `self.target`,
-                // the entity this key's *row* resolved to, same as every
-                // other action. See the variant's doc comment.
+                // No own target any more — always applies to `self.target`, the
+                // entity this key's *row* resolved to, same as every other action.
+                // See the variant's doc comment.
                 let entity = self.target;
-                if let Some(mut params) = material_params_for_entity_in_world(world, entity) {
-                    if let Some(rgba) = base_color {
-                        params.base_color = XrdsColor { rgba };
-                    }
-                    if let Some(m) = metallic {
-                        params.pbr.metallic = m;
-                    }
-                    if let Some(r) = roughness {
-                        params.pbr.roughness = r;
-                    }
-                    // Only the named slot is touched, so assigning a base
-                    // colour map cannot silently drop an authored normal map.
-                    // `None` clears that slot. The id → uri → `Handle<Image>`
-                    // resolution happens inside the apply below, off the
-                    // imported asset catalog — nothing extra is needed here.
-                    let swapped_texture = texture.is_some();
-                    if let Some(t) = texture {
-                        params.textures.set(
-                            t.slot.into(),
-                            t.texture_asset_id.as_ref().map(|id| XrdsMaterialTextureRef {
-                                texture_asset_id: id.clone(),
-                                uv: Default::default(),
-                                sampler: Default::default(),
-                            }),
-                        );
-                    }
-                    // `duration_secs <= 0.0` is instant — exactly how this action
-                    // behaved before it gained a duration, and what every document
-                    // authored until then still asks for, since the field defaults
-                    // to zero.
-                    if duration_secs <= 0.0 {
-                        set_material_params_for_entity_in_world(world, entity, params);
-                        return true;
-                    }
-
-                    // The texture swap applies now rather than at the end: an image
-                    // has no halfway point, and holding it back would mean fading to
-                    // a colour the new picture never wears.
-                    let mut start_params = material_params_for_entity_in_world(world, entity)
-                        .expect("checked immediately above");
-                    if swapped_texture {
-                        start_params.textures = params.textures.clone();
-                        set_material_params_for_entity_in_world(
-                            world,
-                            entity,
-                            start_params.clone(),
-                        );
-                    }
-
-                    world.entity_mut(entity).insert(XrdsMaterialTween {
-                        start_base_color: start_params.base_color.rgba,
-                        start_metallic: start_params.pbr.metallic,
-                        start_roughness: start_params.pbr.roughness,
-                        target_base_color: params.base_color.rgba,
-                        target_metallic: params.pbr.metallic,
-                        target_roughness: params.pbr.roughness,
-                        elapsed: 0.0,
-                        duration: duration_secs,
-                        ease,
-                    });
-                    false
-                } else {
+                let Some(start) = material_params_for_entity_in_world(world, entity) else {
                     log::warn!(
-                        "XrdsAction::SetMaterial targeted entity {entity:?}, which has no                          material — ignoring."
+                        "XrdsAction::SetMaterial targeted entity {entity:?}, which has no \
+                         material — ignoring."
                     );
-                    true
+                    return true;
+                };
+
+                // A texture swap never interpolates — an image has no halfway
+                // point — so it applies immediately, whatever the duration. Only
+                // the named slot is touched, so assigning a base-colour map cannot
+                // silently drop an authored normal map; `None` clears that slot.
+                // The id → uri → `Handle<Image>` resolution happens inside the
+                // apply, off the imported asset catalog.
+                if let Some(t) = texture {
+                    let mut swapped = start.clone();
+                    swapped.textures.set(
+                        t.slot.into(),
+                        t.texture_asset_id.as_ref().map(|id| XrdsMaterialTextureRef {
+                            texture_asset_id: id.clone(),
+                            uv: Default::default(),
+                            sampler: Default::default(),
+                        }),
+                    );
+                    set_material_params_for_entity_in_world(world, entity, swapped);
                 }
+
+                // `duration_secs <= 0.0` is instant — exactly how this action
+                // behaved before it gained a duration, and what every document
+                // authored until then still asks for, since the field defaults to
+                // zero. Re-read rather than reusing `start`, so the texture write
+                // above is not undone, and write only the named properties so an
+                // instant change beside a running fade does not freeze it.
+                if duration_secs <= 0.0 {
+                    if let Some(mut params) = material_params_for_entity_in_world(world, entity) {
+                        if let Some(rgba) = base_color {
+                            params.base_color = XrdsColor { rgba };
+                        }
+                        if let Some(m) = metallic {
+                            params.pbr.metallic = m;
+                        }
+                        if let Some(r) = roughness {
+                            params.pbr.roughness = r;
+                        }
+                        set_material_params_for_entity_in_world(world, entity, params);
+                    }
+                    return true;
+                }
+
+                let generation = next_tween_generation();
+                // Merge rather than replace: an event owns only the channels it
+                // names, and any other property already fading keeps fading.
+                let mut tween = world
+                    .get::<XrdsMaterialTween>(entity)
+                    .copied()
+                    .unwrap_or_default();
+                if let Some(target) = base_color {
+                    tween.base_color = Some(XrdsTweenChannel::new(
+                        start.base_color.rgba, target, duration_secs, ease, generation,
+                    ));
+                }
+                if let Some(target) = metallic {
+                    tween.metallic = Some(XrdsTweenChannel::new(
+                        start.pbr.metallic, target, duration_secs, ease, generation,
+                    ));
+                }
+                if let Some(target) = roughness {
+                    tween.roughness = Some(XrdsTweenChannel::new(
+                        start.pbr.roughness, target, duration_secs, ease, generation,
+                    ));
+                }
+
+                if tween.is_empty() {
+                    // A texture-only event, or one that names nothing. Either way
+                    // there is nothing to animate, so it must finish rather than
+                    // wait on a tween that was never inserted.
+                    return true;
+                }
+
+                self.tween_generation = Some(generation);
+                world.entity_mut(entity).insert(tween);
+                false
             }
 
             XrdsAction::SetLight {
                 color,
                 intensity,
                 range,
+                inner_angle,
+                outer_angle,
                 duration_secs,
                 ease,
             } => {
                 let entity = self.target;
                 let Some(start) = light_values_for_entity_in_world(world, entity) else {
                     log::warn!(
-                        "XrdsAction::SetLight targeted entity {entity:?}, which is not a                          light — ignoring."
+                        "XrdsAction::SetLight targeted entity {entity:?}, which is not a \
+                         light — ignoring."
                     );
                     return true;
                 };
 
-                let target = LightValues {
-                    color: color.unwrap_or(start.color),
-                    intensity: intensity.unwrap_or(start.intensity),
-                    // `range` follows the *light*, not the action: a directional
-                    // light has none, so an authored range is dropped rather than
-                    // written. Zipping with the start value is what keeps that
-                    // decision in one place.
-                    range: start.range.map(|current| range.unwrap_or(current)),
-                };
+                // `range` follows the *light*, not the action: a directional light
+                // has none, so an authored range is dropped rather than written.
+                // Zipping with the reading keeps that decision in one place.
+                let range = start.range.and(range);
+                // Same rule for the cone: a light without one drops the value
+                // rather than growing a property it does not have.
+                let inner_angle = start.inner_angle.and(inner_angle);
+                let outer_angle = start.outer_angle.and(outer_angle);
 
                 if duration_secs <= 0.0 {
-                    set_light_values_for_entity_in_world(world, entity, &target);
+                    // Writes only the named properties, so an instant colour
+                    // change beside a running intensity fade does not freeze the
+                    // fade by re-asserting a stale value.
+                    apply_light_write_in_world(
+                        world,
+                        entity,
+                        &LightWrite {
+                            color,
+                            intensity,
+                            range,
+                            inner_angle,
+                            outer_angle,
+                        },
+                    );
                     return true;
                 }
 
-                world.entity_mut(entity).insert(XrdsLightTween {
-                    start_color: start.color,
-                    start_intensity: start.intensity,
-                    start_range: start.range,
-                    target_color: target.color,
-                    target_intensity: target.intensity,
-                    target_range: target.range,
-                    elapsed: 0.0,
-                    duration: duration_secs,
-                    ease,
-                });
+                let generation = next_tween_generation();
+
+                // Merge, do not replace. An event owns only the channels it names;
+                // any other property already animating on this light keeps running.
+                // Replacing the component outright is what used to cancel it, with
+                // nothing reported — see `docs/tween-channels-plan.md`.
+                let mut tween = world
+                    .get::<XrdsLightTween>(entity)
+                    .copied()
+                    .unwrap_or_default();
+                if let Some(target) = color {
+                    tween.color = Some(XrdsTweenChannel::new(
+                        start.color, target, duration_secs, ease, generation,
+                    ));
+                }
+                if let Some(target) = intensity {
+                    tween.intensity = Some(XrdsTweenChannel::new(
+                        start.intensity, target, duration_secs, ease, generation,
+                    ));
+                }
+                if let (Some(current), Some(target)) = (start.range, range) {
+                    tween.range = Some(XrdsTweenChannel::new(
+                        current, target, duration_secs, ease, generation,
+                    ));
+                }
+                if let (Some(current), Some(target)) = (start.inner_angle, inner_angle) {
+                    tween.inner_angle = Some(XrdsTweenChannel::new(
+                        current, target, duration_secs, ease, generation,
+                    ));
+                }
+                if let (Some(current), Some(target)) = (start.outer_angle, outer_angle) {
+                    tween.outer_angle = Some(XrdsTweenChannel::new(
+                        current, target, duration_secs, ease, generation,
+                    ));
+                }
+
+                if tween.is_empty() {
+                    // Every field was `None`, so there is nothing to animate. The
+                    // document diagnoses this ("Light change sets nothing"); here
+                    // it must simply finish, or the agent waits on a tween that
+                    // was never inserted.
+                    return true;
+                }
+
+                self.tween_generation = Some(generation);
+                world.entity_mut(entity).insert(tween);
                 false
             }
 
@@ -2123,26 +2535,47 @@ impl Action for XrdsActionRunner {
                 true
             }
 
-            XrdsAction::SetElementValue { value } => {
+            XrdsAction::SetElementValue { value, duration_secs, ease } => {
                 let entity = self.target;
-                // Clamped to the authored range: an out-of-range value is a slip,
-                // and letting it through would draw the handle outside its track.
                 if let Some(mut slider) = world.get_mut::<xrds_components::XrdsWorldSlider>(entity)
                 {
-                    slider.value = value.clamp(slider.min, slider.max);
+                    // Clamped to the authored range: an out-of-range value is a
+                    // slip, and letting it through would draw the handle outside
+                    // its track.
+                    let target = value.clamp(slider.min, slider.max);
+                    if duration_secs <= 0.0 {
+                        slider.value = target;
+                        return true;
+                    }
+                    let start = slider.value;
+                    let generation = next_tween_generation();
+                    self.tween_generation = Some(generation);
+                    world.entity_mut(entity).insert(XrdsElementValueTween {
+                        value: XrdsTweenChannel::new(
+                            start, target, duration_secs, ease, generation,
+                        ),
+                    });
+                    false
                 } else if let Some(mut toggle) =
                     world.get_mut::<xrds_components::XrdsWorldToggle>(entity)
                 {
                     // A Toggle is the degenerate scalar: non-zero is checked. One
                     // action for both means an author cannot pick the wrong one.
+                    //
+                    // It never interpolates, whatever the duration — there is no
+                    // halfway between checked and unchecked. Same rule a texture
+                    // swap follows. Reporting finished immediately matters as much
+                    // as applying: waiting on a tween that was never inserted would
+                    // block the agent forever.
                     toggle.checked = value != 0.0;
+                    true
                 } else {
                     log::warn!(
                         "XrdsAction::SetElementValue targeted {entity:?}, which is neither a \
                          Slider nor a Toggle — ignoring."
                     );
+                    true
                 }
-                true
             }
 
             XrdsAction::SetElementEnabled { enabled } => {

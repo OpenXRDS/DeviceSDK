@@ -278,6 +278,10 @@ export type XrdsAction =
         intensity: number | null;
         /** Point and spot only; a directional light has no falloff and ignores it. */
         range: number | null;
+        /** Spot only, in **radians** — the unit the payload and Bevy's `SpotLight`
+         *  already use. Dropped on a light with no cone. */
+        inner_angle: number | null;
+        outer_angle: number | null;
         duration_secs: number;
         ease: string;
       };
@@ -302,7 +306,15 @@ export type XrdsAction =
   // Element-scoped. Only meaningful on an `Element` asset row — a node has no
   // text, scalar or enabled state of this kind.
   | { kind: "SetElementText"; data: { text: string } }
-  | { kind: "SetElementValue"; data: { value: number } }
+  | {
+      kind: "SetElementValue";
+      data: {
+        value: number;
+        /** Only a Slider interpolates; a Toggle has no halfway state. */
+        duration_secs: number;
+        ease: string;
+      };
+    }
   | { kind: "SetElementEnabled"; data: { enabled: boolean } }
   /** An action this build does not recognize — from a newer editor. Skipped
    *  at runtime and reported by `track_diagnostics`. */
@@ -503,7 +515,7 @@ export interface TaskDto {
  *  replaced wholesale by the first real snapshot.
  *
  *  Bump this together with the Rust constant whenever a DTO changes. */
-export const BRIDGE_VERSION = 25;
+export const BRIDGE_VERSION = 26;
 
 export interface EditorSnapshot {
   /** See {@link BRIDGE_VERSION}. `0` means a build predating the check. */

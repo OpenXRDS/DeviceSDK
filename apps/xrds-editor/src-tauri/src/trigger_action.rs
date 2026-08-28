@@ -742,6 +742,8 @@ fn default_action_for_kind(kind: &str) -> Option<XrdsAction> {
             color: None,
             intensity: None,
             range: None,
+            inner_angle: None,
+            outer_angle: None,
             duration_secs: 0.0,
             ease: XrdsEaseCurve::default(),
         },
@@ -749,7 +751,7 @@ fn default_action_for_kind(kind: &str) -> Option<XrdsAction> {
             delta: XrdsActionValue::Fixed(0.0),
         },
         "SetElementText" => XrdsAction::SetElementText { text: String::new() },
-        "SetElementValue" => XrdsAction::SetElementValue { value: 0.0 },
+        "SetElementValue" => XrdsAction::SetElementValue { value: 0.0, duration_secs: 0.0, ease: XrdsEaseCurve::default() },
         // Defaults to *disabling*: adding this event is almost always to grey
         // something out at a moment, and a default of `true` would look like a
         // no-op the author has to notice and flip.
@@ -810,23 +812,25 @@ fn action_to_dto(a: &XrdsAction) -> XrdsActionDto {
                 texture_asset_id: t.texture_asset_id.clone(),
             }),
         },
-        XrdsAction::SetLight { color, intensity, range, duration_secs, ease } => {
-            XrdsActionDto::SetLight {
-                color: *color,
-                intensity: *intensity,
-                range: *range,
-                duration_secs: *duration_secs,
-                ease: ease_curve_to_dto(ease),
-            }
-        }
+        XrdsAction::SetLight {
+            color, intensity, range, inner_angle, outer_angle, duration_secs, ease,
+        } => XrdsActionDto::SetLight {
+            color: *color,
+            intensity: *intensity,
+            range: *range,
+            inner_angle: *inner_angle,
+            outer_angle: *outer_angle,
+            duration_secs: *duration_secs,
+            ease: ease_curve_to_dto(ease),
+        },
         XrdsAction::ModifyHealth { delta } => XrdsActionDto::ModifyHealth {
             delta: action_value_to_dto(delta),
         },
         XrdsAction::SetElementText { text } => {
             XrdsActionDto::SetElementText { text: text.clone() }
         }
-        XrdsAction::SetElementValue { value } => {
-            XrdsActionDto::SetElementValue { value: *value }
+        XrdsAction::SetElementValue { value, duration_secs, ease } => {
+            XrdsActionDto::SetElementValue { value: *value, duration_secs: *duration_secs, ease: ease_curve_to_dto(ease) }
         }
         XrdsAction::SetElementEnabled { enabled } => {
             XrdsActionDto::SetElementEnabled { enabled: *enabled }
@@ -887,23 +891,25 @@ fn action_from_dto(a: &XrdsActionDto) -> XrdsAction {
                 texture_asset_id: t.texture_asset_id.clone(),
             }),
         },
-        XrdsActionDto::SetLight { color, intensity, range, duration_secs, ease } => {
-            XrdsAction::SetLight {
-                color: *color,
-                intensity: *intensity,
-                range: *range,
-                duration_secs: *duration_secs,
-                ease: ease_curve_from_dto(ease),
-            }
-        }
+        XrdsActionDto::SetLight {
+            color, intensity, range, inner_angle, outer_angle, duration_secs, ease,
+        } => XrdsAction::SetLight {
+            color: *color,
+            intensity: *intensity,
+            range: *range,
+            inner_angle: *inner_angle,
+            outer_angle: *outer_angle,
+            duration_secs: *duration_secs,
+            ease: ease_curve_from_dto(ease),
+        },
         XrdsActionDto::ModifyHealth { delta } => XrdsAction::ModifyHealth {
             delta: action_value_from_dto(delta),
         },
         XrdsActionDto::SetElementText { text } => {
             XrdsAction::SetElementText { text: text.clone() }
         }
-        XrdsActionDto::SetElementValue { value } => {
-            XrdsAction::SetElementValue { value: *value }
+        XrdsActionDto::SetElementValue { value, duration_secs, ease } => {
+            XrdsAction::SetElementValue { value: *value, duration_secs: *duration_secs, ease: ease_curve_from_dto(ease) }
         }
         XrdsActionDto::SetElementEnabled { enabled } => {
             XrdsAction::SetElementEnabled { enabled: *enabled }

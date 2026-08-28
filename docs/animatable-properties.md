@@ -122,7 +122,10 @@ things:
 - **A third tween component, not one generic one.** `XrdsTransformTween`,
   `XrdsMaterialTween` and `XrdsLightTween` are driven by different setters, and
   merging them would mean a light change cancelling an unrelated transform change
-  on the same entity.
+  on the same entity. That argument got stronger afterwards rather than weaker:
+  each of the three now holds one *channel per property*, so the separation is
+  between families that cannot interfere, and within a family only the same
+  property replaces. See [`tween-channels-plan.md`](tween-channels-plan.md).
 
 A `SetLight` that sets **no field at all** is diagnosed: it applies successfully
 and changes no pixel, so nothing at runtime would ever report it.
@@ -164,31 +167,132 @@ and the video actions stay ungated on purpose — a material is carried by many
 payloads and a video is bound to a texture slot, so a node's payload kind cannot
 answer either, and greying those out on a guess would refuse valid authoring.
 
-## Known defect: overlapping events cancel each other
+## Overlapping events compose
 
-Two events animating one node at the same time do **not** compose — the second
-tween replaces the first as a component, and the first's animation stops with no
-warning. Measured for `SetLight` and `SetMaterial`, and `SetTransform` has the
-same shape. It is the reason "give each property its own curve" cannot currently
-be answered with two events, which is how it should be answered.
+Two events animating one node at the same time used not to compose — the second
+tween replaced the first as a component and the first's animation stopped with no
+warning. It was the reason "give each property its own curve" could not be answered
+with two events, which is how it should be answered.
 
-**Diagnosed, not fixed.** `Overlapping events cancel an animation` is an error on
-any document where it happens, naming the properties that are lost. That removes
-the silence, which was the actual harm — the limitation itself is a workaround
-away (sequence the events instead of overlapping them). The fix that would let
-them compose is planned and deferred:
-[`tween-channels-plan.md`](tween-channels-plan.md).
+All three tween families now hold one channel per property, and an event merges
+into them rather than replacing. So colour on one curve and intensity on another is
+authorable as two events, with no new UI — which is the answer to the question that
+found the bug. See [`tween-channels-plan.md`](tween-channels-plan.md).
+
+## Rotation is not like the other properties
+
+Three things surfaced from first use, and none of them was a bug in the tween.
+
+**A turn always takes the shorter way round.** Rotation interpolates by `slerp`,
+which follows the shorter arc between two orientations. Measured: a 0 → 350° turn
+moves **−10°**, not +350°. So more than a half turn is not expressible as one
+event, by construction — it is two.
+
+**The editor wraps an authored angle into (−180, 180] on commit** rather than
+clamping it. The distinction matters: 350° and −10° are the same orientation, so
+wrapping keeps what the author meant, while a `max=180` would have silently
+pointed the object somewhere else. Seeing 350 become −10 in the box says the
+short-path rule up front, instead of leaving it to be discovered at runtime.
+Wrapping happens on commit, not while typing, or it would fight an author on their
+way to typing "350". A half turn resolves to **+180**, not −180, so a committed
+value does not flip sign each time it is re-committed.
+
+**Three sliders sit under the boxes**, one per axis, spanning exactly the
+authorable range. That bound is the argument for a slider here and not on position
+or scale: those are unbounded, and a slider over an unbounded quantity has to
+invent limits. The boxes stay — a slider is for finding an angle by eye, typing is
+for saying exactly 90 — and a drag commits once on release rather than per frame,
+so it is one undo entry.
+
+**(180, 180, 180) is exactly no rotation.** Three half-turns about perpendicular
+axes compose to a full turn; measured at 0.0000° from identity. Every part of it
+behaves normally on its own — (180,0,0), (0,180,0), (180,180,0) and (90,90,90) are
+all a genuine 180° from identity — so only the combination cancels. An author sets
+three large numbers, nothing moves, and there is nothing to read that explains it.
+`Rotation target is the current facing` now warns when an authored rotation
+resolves to the orientation the node already has, comparing quaternions rather than
+the typed numbers so it catches the general case and not just this one. A warning
+rather than an error, and only on `Node` rows: the runtime turns from the *current*
+orientation, which an earlier event may have changed, so "as authored" is all it
+can honestly claim.
+
+## Phase C — the rest of the list
+
+The items this document had been holding as "additive when something asks". Asked
+2026-08-28.
+
+### Spot cone angles
+
+`SetLight` gained `inner_angle` and `outer_angle`. The stated reason for leaving
+them out — a per-kind field makes the action a different shape depending on where
+it lands — did not survive contact with `range`, which is point-and-spot only and
+had already set the opposite precedent. Following it is the smaller inconsistency.
+
+- **Radians on the wire, degrees in the box.** The payload and Bevy's `SpotLight`
+  both store radians, so the action does too; a second unit for one quantity is the
+  mistake avoided with `intensity`. But 0.2 rad is not a number an author thinks
+  in, so the editor converts at the one place a human reads it.
+- **The tween clamps inner to outer every frame.** Bevy renders *nothing at all*
+  when the inner cone is wider than the outer one, so a tween crossing over would
+  blink the light out mid-animation rather than show a narrowing cone. Reachable
+  without authoring anything strange — widening inner to 0.45 while outer is still
+  on its way down from 0.5 puts them the wrong way round for part of the run.
+  Verified by deleting the clamp: inner reached 0.4345 against an outer of 0.4330.
+- **The node inspector had no rows for them either**, which is how this surfaced:
+  asked which lights have a cone, the answer was "spot lights" and then there was
+  nowhere to point. `SpotLightSection` read `inner_angle`/`outer_angle` into state
+  and sent them on every edit, but rendered only Color, Intensity and Range — so a
+  spot light's cone was stuck on its 0.2/0.5 rad defaults for good. Two sliders
+  now, in degrees, with the inner one following the outer down rather than letting
+  an author invert the pair and black the light out. The `SetSpotLight` command
+  clamps as well, because both readers of `pending_spot_light` — the live preview
+  and the document commit — take the pair on trust.
+
+### Slider value
+
+`SetElementValue` gained a duration and an ease. **Only a Slider interpolates**: a
+Toggle has no halfway between checked and unchecked, so it flips at the start
+whatever the duration and reports finished at once — waiting on a tween that was
+never inserted would block its agent forever. Same rule a texture swap follows.
+
+The tween clamps to the slider's `min`/`max` **every frame**, not only at the
+target, because the start value is read from the live slider and a range edited
+mid-flight would otherwise draw the handle off its track for the rest of the run.
+
+### Four actions had no editor at all
+
+Found while building the above, and larger than it: `SetElementText`,
+`SetElementValue`, `SetElementEnabled` and `PlayEffect` all carry parameters and
+**had no editor block in the sequencer inspector**. They could be added to a row
+and then never configured — each stuck for good on whatever
+`default_action_for_kind` produced: an empty string, a zero, `false`, no count.
+
+Giving `SetElementValue` a duration would have been one more unreachable field on
+an unreachable action, so all four now have editors. The others (`StopEffect`,
+`PlayAudio`, `StopAudio`, `StopVideo`) correctly have none, because they carry no
+parameters.
+
+### Fog and exposure are not a match arm
+
+This document claimed they were: *"the same shape applies to anything with a
+numeric value and a runtime setter — fog visibility, exposure"*. **That was
+wrong**, and checking it was the cheapest part of this work.
+
+Every `XrdsActionTarget` is a node or a panel element — `SelfNode`, `Node(id)`,
+`TriggerSource`, `Element { panel, name }`. Fog and exposure live on the *scene
+environment*, which is global and has no target. An action for them needs a new
+target kind, which is a design decision about what a Track can address, not a match
+arm and a tween component.
+
+Not started, and deliberately not started blind. The question it turns on: does a
+Track get to drive global state at all, given that a Track holds *asset locks* to
+stop two Tracks fighting over the same thing, and the environment is one thing that
+every Track would contend for.
 
 ## What would come next, if something asks
 
-The same shape applies to anything with a numeric value and a runtime setter — fog
-visibility, exposure, a panel element's value. Each is a match arm and a tween
-component, not a new system.
-
-A spot light's cone angles (`inner_angle`/`outer_angle`) are animatable in
-principle and were deliberately left out: they apply to one of the three kinds, and
-including them would make the action a different shape depending on where it
-landed. Additive when something asks.
+Anything with a numeric value, a runtime setter, **and a node or element to hang
+it on**. That last clause is the one this document got wrong once; see above.
 
 ## What stays out
 
