@@ -527,10 +527,11 @@ mod tests {
     fn mip_zero_is_an_exact_mirror_lookup() {
         let (w, h) = (64u32, 32u32);
         let mut pano = vec![1.0f32; (w * h * 3) as usize];
-        // A distinct band the mirror lookup must reproduce exactly.
+        // A distinct band across row 0 — the row `Vec3::Y` looks up — which the
+        // mirror lookup must reproduce exactly.
         for x in 0..w {
             for c in 0..3 {
-                pano[((0 * w + x) * 3 + c) as usize] = 42.0;
+                pano[(x * 3 + c) as usize] = 42.0;
             }
         }
         let pyr = EquirectPyramid::build(pano, w, h);

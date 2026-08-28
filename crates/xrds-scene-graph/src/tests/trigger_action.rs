@@ -112,6 +112,8 @@ fn set_base_texture(id: Option<&str>) -> XrdsAction {
         base_color: None,
         metallic: None,
         roughness: None,
+        duration_secs: 0.0,
+        ease: XrdsEaseCurve::default(),
         texture: Some(XrdsActionTexture {
             slot: XrdsSceneMaterialTextureSlotKind::BaseColor,
             texture_asset_id: id.map(str::to_string),
@@ -178,6 +180,8 @@ fn track_round_trips_every_surviving_action_variant() {
                             base_color: Some([1.0, 0.0, 0.0, 1.0]),
                             metallic: Some(0.25),
                             roughness: None,
+                            duration_secs: 0.0,
+                            ease: XrdsEaseCurve::default(),
                             texture: None,
                         },
                     ),
@@ -296,6 +300,21 @@ fn self_duration_is_non_zero_only_for_interpolation() {
     assert_eq!(XrdsAction::StopGltfAnimation.self_duration_secs(), 0.0);
     // A negative authored duration must not produce a negative span.
     assert_eq!(animate(-2.0).self_duration_secs(), 0.0);
+
+    // `SetMaterial` interpolates too. Left out of here, a three-second fade would
+    // draw as an instant dot and a Track's automatic length would end before the
+    // fade did — the action would work while the editor showed it not working.
+    let fade = |secs: f32| XrdsAction::SetMaterial {
+        base_color: Some([1.0, 0.0, 0.0, 1.0]),
+        metallic: None,
+        roughness: None,
+        duration_secs: secs,
+        ease: XrdsEaseCurve::Linear,
+        texture: None,
+    };
+    assert_eq!(fade(3.0).self_duration_secs(), 3.0);
+    assert_eq!(fade(0.0).self_duration_secs(), 0.0);
+    assert_eq!(fade(-2.0).self_duration_secs(), 0.0);
 }
 
 #[test]
@@ -770,6 +789,8 @@ fn diagnostics_flag_a_material_change_that_sets_nothing() {
                             base_color: None,
                             metallic: None,
                             roughness: None,
+                            duration_secs: 0.0,
+                            ease: XrdsEaseCurve::default(),
                             texture: None,
                         },
                     )],

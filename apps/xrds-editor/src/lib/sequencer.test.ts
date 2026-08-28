@@ -248,7 +248,7 @@ describe("assetRowAspects", () => {
     const row = nodeRow(1, "cube", [
       key(0, TELEPORT),
       key(1, animate(0.5)),
-      key(2, { kind: "SetMaterial", data: { base_color: null, metallic: null, roughness: null, texture: null } }),
+      key(2, { kind: "SetMaterial", data: { base_color: null, metallic: null, roughness: null, texture: null, duration_secs: 0, ease: "Linear" } }),
     ]);
     expect(assetRowAspects(row).sort()).toEqual(["Material", "Transform"]);
   });

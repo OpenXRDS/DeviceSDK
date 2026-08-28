@@ -137,11 +137,19 @@ pub enum XrdsAction {
         #[serde(default)]
         ease: XrdsEaseCurve,
     },
-    /// Instant material override. Each field independently optional —
-    /// `None` leaves that property as whatever it already was. No
-    /// interpolated counterpart yet (unlike `SetTransform`) — add one later by
-    /// reusing `SetTransform`'s interpolator infrastructure if a real case
-    /// needs it.
+    /// Material override, instant or interpolated. Each field independently
+    /// optional — `None` leaves that property as whatever it already was.
+    ///
+    /// `duration_secs` is `0.0` by default, which is the instant behaviour this
+    /// action had before 2026-08-28 and what every document authored until then
+    /// still gets. Above zero, `base_color`, `metallic` and `roughness`
+    /// interpolate, reusing `SetTransform`'s interpolator exactly as this comment
+    /// used to propose.
+    ///
+    /// **`texture` never interpolates.** Swapping an image is discrete — there is
+    /// no halfway between two pictures — so it applies at the start of the tween
+    /// regardless of duration. Said here because "everything in this action eases"
+    /// is the reasonable assumption and it is wrong.
     ///
     /// No `target` field: applies to whichever asset row it sits on, same as
     /// every other action. It used to carry its own target — a leftover from
@@ -152,6 +160,11 @@ pub enum XrdsAction {
         base_color: Option<[f32; 4]>,
         metallic: Option<f32>,
         roughness: Option<f32>,
+        /// Seconds to interpolate over. `0.0` applies instantly.
+        #[serde(default)]
+        duration_secs: f32,
+        #[serde(default)]
+        ease: XrdsEaseCurve,
         /// Swaps the image in **one** texture slot. `None` leaves every slot
         /// alone; `Some` with a `texture_asset_id` of `None` *clears* that one
         /// slot.
@@ -282,6 +295,10 @@ enum XrdsActionKnown {
         metallic: Option<f32>,
         roughness: Option<f32>,
         #[serde(default)]
+        duration_secs: f32,
+        #[serde(default)]
+        ease: XrdsEaseCurve,
+        #[serde(default)]
         texture: Option<XrdsActionTexture>,
     },
     ModifyHealth {
@@ -315,8 +332,22 @@ impl From<XrdsActionKnown> for XrdsAction {
             XrdsActionKnown::SetTransform { position, rotation, scale, duration_secs, ease } => {
                 XrdsAction::SetTransform { position, rotation, scale, duration_secs, ease }
             }
-            XrdsActionKnown::SetMaterial { base_color, metallic, roughness, texture } => {
-                XrdsAction::SetMaterial { base_color, metallic, roughness, texture }
+            XrdsActionKnown::SetMaterial {
+                base_color,
+                metallic,
+                roughness,
+                duration_secs,
+                ease,
+                texture,
+            } => {
+                XrdsAction::SetMaterial {
+                    base_color,
+                    metallic,
+                    roughness,
+                    duration_secs,
+                    ease,
+                    texture,
+                }
             }
             XrdsActionKnown::ModifyHealth { delta } => {
                 XrdsAction::ModifyHealth { delta }
@@ -378,18 +409,34 @@ impl<'de> Deserialize<'de> for XrdsAction {
     }
 }
 
-/// Ease curve for [`XrdsAction::SetTransform`]. Each variant is
-/// implicitly ease-*out* only for v1 (matching how these are commonly
-/// shown/labeled in NLE-style tools) — `Linear` has no direction to speak
-/// of, so it's exact either way. `QuadIn`/`QuadInOut`/`CubicIn`/
-/// `CubicInOut` are cheap to add later as new variants if a real case
-/// needs them; not built now since nothing has asked for one yet.
+/// Ease curve for interpolated actions — [`XrdsAction::SetTransform`] and
+/// [`XrdsAction::SetMaterial`].
+///
+/// `Quad` and `Cubic` are ease-**out**, kept under their original names because
+/// documents authored before 2026-08-28 use them. The `In` and `InOut` variants
+/// were added when `SetMaterial` gained a duration: an ease-out-only set means
+/// every change decelerates into its target and starts at full speed, which reads
+/// as wrong for a fade coming *up* from nothing. `Linear` has no direction, so it
+/// is exact either way.
+///
+/// **Every curve here is monotonic**: it runs once from the current value to the
+/// target and stops. In / out / in-out say only *when* the change is fast — at the
+/// start, at the end, or in the middle. `InOut` in particular was read as "goes
+/// out and comes back", which is why the editor now draws each curve rather than
+/// naming it. Returning to a starting value is two events, not one curve.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum XrdsEaseCurve {
     Linear,
+    /// Ease out — starts fast, decelerates in.
     Quad,
     #[default]
     Cubic,
+    /// Ease in — starts slow, accelerates out. What a fade-up wants.
+    QuadIn,
+    CubicIn,
+    /// Slow at both ends.
+    QuadInOut,
+    CubicInOut,
 }
 
 impl XrdsAction {
@@ -404,7 +451,8 @@ impl XrdsAction {
     /// re-deriving it.
     pub fn self_duration_secs(&self) -> f32 {
         match self {
-            XrdsAction::SetTransform { duration_secs, .. } => duration_secs.max(0.0),
+            XrdsAction::SetTransform { duration_secs, .. }
+            | XrdsAction::SetMaterial { duration_secs, .. } => duration_secs.max(0.0),
             _ => 0.0,
         }
     }
@@ -1126,6 +1174,10 @@ impl XrdsSceneDocument {
                         metallic,
                         roughness,
                         texture,
+                        // A duration on its own changes nothing, so it does not
+                        // rescue an event that sets no property — the diagnostic
+                        // below still fires.
+                        ..
                     } = &key.action
                     {
                         if base_color.is_none()

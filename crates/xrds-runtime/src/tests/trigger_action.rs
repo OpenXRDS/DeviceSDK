@@ -1705,6 +1705,8 @@ fn set_material_applies_only_the_provided_fields() {
                             base_color: Some([1.0, 0.0, 0.0, 1.0]),
                             metallic: None,
                             roughness: Some(0.9),
+                            duration_secs: 0.0,
+                            ease: XrdsEaseCurve::default(),
                             texture: None,
                         },
                     }],
@@ -4040,4 +4042,263 @@ fn a_zone_trigger_sourced_from_the_player_still_fires() {
         Some(Vec3::new(1.0, 2.0, 3.0)),
         "a ZoneEnter whose source is the player should run the authored action"
     );
+}
+
+/// A `Cube` node whose ZoneEnter trigger fires one `SetMaterial`.
+///
+/// `import_bound` spawns a node with no material, so the material tests build the
+/// document directly, the way `set_material_applies_only_the_provided_fields` does.
+#[cfg(test)]
+fn material_action_doc(id: u64, action: XrdsAction) -> XrdsSceneDocument {
+    XrdsSceneDocument {
+        nodes: vec![XrdsSceneNode {
+            id: XrdsSceneNodeId(id),
+            parent_id: None,
+            name: "MaterialCube".to_string(),
+            enabled: true,
+            visible: true,
+            transform: XrdsSceneTransform::default(),
+            payload: XrdsSceneNodePayload::Cube(XrdsSceneCube::default()),
+            grabbable: false,
+            editor: XrdsEditorMetadata::default(),
+            triggers: vec![XrdsTriggerBinding {
+                trigger: XrdsTriggerKind::ZoneEnter,
+                track: Some("fade".to_string()),
+                effect: Default::default(),
+                disabled: false,
+                hand: None,
+            }],
+            watchers: Vec::new(),
+        }],
+        tracks: vec![XrdsNamedTrack {
+            name: "fade".to_string(),
+            track: XrdsTrack {
+                assets: vec![XrdsTrackAsset {
+                    when_finished: Default::default(),
+                    target: XrdsActionTarget::SelfNode,
+                    keys: vec![XrdsTrackKey { at_secs: 0.0, action }],
+                }],
+                ..XrdsTrack::default()
+            },
+        }],
+        ..Default::default()
+    }
+}
+
+/// A material change with no duration stays instant — the behaviour every
+/// document authored before `SetMaterial` gained a duration still asks for.
+///
+/// `duration_secs` defaults to `0.0`, so this is not a niche case: it is what an
+/// older scene deserialises to. Getting it wrong would make every material event
+/// authored so far fade instead of snap.
+#[test]
+fn set_material_with_zero_duration_applies_instantly() {
+    use crate::xrds_api::trigger_action::XrdsMaterialTween;
+
+    let mut app = xrds_test_app();
+    let id = XrdsId(945);
+    {
+        let mut xrds = XrdsAPI::attach(&mut app);
+        xrds.import_scene_document(&material_action_doc(
+            id.0,
+            XrdsAction::SetMaterial {
+                base_color: Some([1.0, 0.0, 0.0, 1.0]),
+                metallic: None,
+                roughness: None,
+                duration_secs: 0.0,
+                ease: XrdsEaseCurve::Linear,
+                texture: None,
+            },
+        ))
+        .expect("import should succeed");
+    }
+
+    app.world_mut().write_message(xrds_components::XrZoneEnterEvent {
+        zone_id: id,
+        entity_id: id,
+    });
+    pump(&mut app, 3);
+
+    assert_eq!(
+        app.world_mut()
+            .query::<&XrdsMaterialTween>()
+            .iter(app.world())
+            .count(),
+        0,
+        "a zero duration must never insert a tween"
+    );
+
+    let params = {
+        let xrds = XrdsAPI::attach(&mut app);
+        let cube = xrds.handle_of::<XrdsCube>(id).unwrap();
+        xrds.material_params(&cube).expect("cube should have a material")
+    };
+    assert_eq!(
+        params.base_color.rgba,
+        [1.0, 0.0, 0.0, 1.0],
+        "with no duration the target should already be applied"
+    );
+}
+
+/// A material change with a duration interpolates instead of snapping.
+///
+/// The assertion that matters is the *partway* one. A tween that jumped to its
+/// target on its first frame would satisfy an end-state-only test while doing
+/// nothing it exists for, which is exactly the authorable-but-inert shape this
+/// project keeps paying for.
+#[test]
+fn set_material_interpolates_and_lands_on_target() {
+    use crate::xrds_api::trigger_action::XrdsMaterialTween;
+
+    let mut app = xrds_test_app();
+    let id = XrdsId(946);
+    {
+        let mut xrds = XrdsAPI::attach(&mut app);
+        xrds.import_scene_document(&material_action_doc(
+            id.0,
+            XrdsAction::SetMaterial {
+                // Long enough that no plausible run of test frames finishes it, so
+                // the partway assertion below is about interpolation and not about
+                // how fast this machine happens to be.
+                base_color: Some([1.0, 0.0, 0.0, 1.0]),
+                metallic: None,
+                roughness: None,
+                duration_secs: 30.0,
+                ease: XrdsEaseCurve::Linear,
+                texture: None,
+            },
+        ))
+        .expect("import should succeed");
+    }
+
+    app.world_mut().write_message(xrds_components::XrZoneEnterEvent {
+        zone_id: id,
+        entity_id: id,
+    });
+    pump(&mut app, 3);
+
+    assert_eq!(
+        app.world_mut()
+            .query::<&XrdsMaterialTween>()
+            .iter(app.world())
+            .count(),
+        1,
+        "a positive duration should insert exactly one tween"
+    );
+
+    // Green, not red: a cube's default base colour is white, so red is already 1.0
+    // and asserting on it would pass whether the tween interpolated or snapped.
+    let green = {
+        let xrds = XrdsAPI::attach(&mut app);
+        let cube = xrds.handle_of::<XrdsCube>(id).unwrap();
+        xrds.material_params(&cube)
+            .expect("cube should have a material")
+            .base_color
+            .rgba[1]
+    };
+    assert!(
+        green > 0.5,
+        "a few frames into a 30s fade the colour must still be near its white start,          not at the target; got green = {green}"
+    );
+}
+
+/// A finished tween removes itself, and only then does the Track advance.
+///
+/// Without the removal the agent holding the tween never completes and a sequenced
+/// Track stalls behind it forever — a failure that looks like a hang rather than
+/// like a wrong colour.
+#[test]
+fn a_finished_material_tween_clears_itself() {
+    use crate::xrds_api::trigger_action::XrdsMaterialTween;
+
+    let mut app = xrds_test_app();
+    let id = XrdsId(947);
+    {
+        let mut xrds = XrdsAPI::attach(&mut app);
+        xrds.import_scene_document(&material_action_doc(
+            id.0,
+            XrdsAction::SetMaterial {
+                // The same 0.05s the SetTransform tween test uses, for the same
+                // reason: short enough that a modest number of real frames covers
+                // it on any machine.
+                base_color: Some([1.0, 0.0, 0.0, 1.0]),
+                metallic: None,
+                roughness: None,
+                duration_secs: 0.05,
+                ease: XrdsEaseCurve::Linear,
+                texture: None,
+            },
+        ))
+        .expect("import should succeed");
+    }
+
+    app.world_mut().write_message(xrds_components::XrZoneEnterEvent {
+        zone_id: id,
+        entity_id: id,
+    });
+    pump(&mut app, 240);
+
+    assert_eq!(
+        app.world_mut()
+            .query::<&XrdsMaterialTween>()
+            .iter(app.world())
+            .count(),
+        0,
+        "a finished tween must remove itself, or its agent never completes"
+    );
+
+    let params = {
+        let xrds = XrdsAPI::attach(&mut app);
+        let cube = xrds.handle_of::<XrdsCube>(id).unwrap();
+        xrds.material_params(&cube).expect("cube should have a material")
+    };
+    assert_eq!(
+        params.base_color.rgba,
+        [1.0, 0.0, 0.0, 1.0],
+        "a tween must land exactly on its target, not merely near it"
+    );
+}
+
+/// The seven curves are seven different shapes, not seven names for one.
+///
+/// Checked a quarter of the way through, where the families are furthest apart.
+/// An author who picks a curve and sees no change has no way to tell a broken
+/// pipeline from an effect too subtle to notice, so the distinctness is asserted
+/// here rather than left to the eye.
+#[test]
+fn the_ease_curves_are_actually_distinct() {
+    use crate::xrds_api::trigger_action::ease_out;
+
+    let quarter = |c| ease_out(c, 0.25);
+
+    // Ease *out* is already well past a quarter of the way: it starts fast.
+    assert!(quarter(XrdsEaseCurve::Cubic) > 0.5);
+    assert!(quarter(XrdsEaseCurve::Quad) > 0.4);
+    // Ease *in* has barely left the start: it starts slow.
+    assert!(quarter(XrdsEaseCurve::CubicIn) < 0.02);
+    assert!(quarter(XrdsEaseCurve::QuadIn) < 0.07);
+    // Linear is exactly a quarter, by definition.
+    assert!((quarter(XrdsEaseCurve::Linear) - 0.25).abs() < 1e-6);
+    // In-out is slow at both ends, so a quarter in it lags linear — this is the
+    // curve most often misread as "goes there and comes back". It does not: like
+    // every curve here it is monotonic from start to target.
+    assert!(quarter(XrdsEaseCurve::CubicInOut) < 0.25);
+    assert!(quarter(XrdsEaseCurve::QuadInOut) < 0.25);
+
+    // Monotonic and landing exactly on the target — the property that makes
+    // "returns to its starting value" impossible for any of them.
+    for curve in [
+        XrdsEaseCurve::Linear, XrdsEaseCurve::Quad, XrdsEaseCurve::Cubic,
+        XrdsEaseCurve::QuadIn, XrdsEaseCurve::CubicIn,
+        XrdsEaseCurve::QuadInOut, XrdsEaseCurve::CubicInOut,
+    ] {
+        assert!((ease_out(curve, 0.0) - 0.0).abs() < 1e-6, "{curve:?} must start at 0");
+        assert!((ease_out(curve, 1.0) - 1.0).abs() < 1e-6, "{curve:?} must end at 1");
+        let mut previous = 0.0;
+        for step in 0..=100 {
+            let value = ease_out(curve, step as f32 / 100.0);
+            assert!(value >= previous - 1e-6, "{curve:?} went backwards at t={step}");
+            previous = value;
+        }
+    }
 }

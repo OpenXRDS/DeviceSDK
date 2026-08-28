@@ -8,6 +8,8 @@ import type {
   ActionTarget, ActionValue, EditorCommand, EditorSnapshot, NamedTrackDto, XrdsAction,
 } from "../types/bridge";
 import { TEXTURE_SLOTS } from "../types/bridge";
+import { EasePicker } from "./ui/EasePicker";
+import { EASE_CHOICES } from "../lib/ease";
 import { Select } from "./ui/Select";
 import { Checkbox } from "./ui/Checkbox";
 
@@ -73,14 +75,24 @@ function hexToRgb(hex: string): [number, number, number] {
   return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255];
 }
 
+/** The picker's short label for a curve, for the one-line summaries below —
+ *  "Cubic out" rather than the wire name "Cubic". Falls back to the wire name so
+ *  a curve from a newer editor still reads as something. */
+function easeLabel(ease: string): string {
+  return EASE_CHOICES.find(c => c.value === ease)?.label ?? ease;
+}
+
 export function summarizeAction(a: XrdsAction): string {
   switch (a.kind) {
     case "SetVisible": return `SetVisible(${a.data})`;
     case "SetTransform":
       return a.data.duration_secs > 0
-        ? `Move · ${a.data.duration_secs}s ${a.data.ease}`
+        ? `Move · ${a.data.duration_secs}s ${easeLabel(a.data.ease)}`
         : "Move (instant)";
-    case "SetMaterial": return "SetMaterial";
+    case "SetMaterial":
+      return a.data.duration_secs > 0
+        ? `SetMaterial · ${a.data.duration_secs}s ${easeLabel(a.data.ease)}`
+        : "SetMaterial";
     case "ModifyHealth": return "ModifyHealth";
     case "PlayGltfAnimation": return `PlayGltfAnimation(clip ${a.data.clip_index})`;
     case "StopGltfAnimation": return "StopGltfAnimation";
@@ -320,6 +332,46 @@ export function SequencerInspector({
     );
   }
 
+  /** The duration + ease row, shared by every action that can interpolate.
+   *
+   * It started as SetTransform's alone. Sharing it is the point rather than a
+   * tidy-up: an author who has learned that a move can be given a time expects a
+   * colour change to work the same way, and two hand-written copies would have
+   * drifted the moment one of them gained a curve.
+   */
+  function durationAndEaseField(
+    duration: number, ease: string,
+    buildNext: (patch: { duration_secs?: number; ease?: string }) => XrdsAction,
+  ) {
+    return (
+      <Field label="DURATION" hint="interpolate only">
+        <div className="flex items-center gap-2">
+          <input type="number" step={0.05} min={0} value={duration} className={numCls}
+            onKeyDown={e => { e.stopPropagation(); if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+            onChange={e => setDraftAction(buildNext({ duration_secs: +e.target.value }))}
+            onBlur={() => { if (draftAction) commitDraft(draftAction, draftAtSecs); }} />
+          <span className="text-[10px] text-overlay0">s</span>
+        </div>
+        {duration <= 0 ? (
+          <span className="text-[10px] text-red">⚠ duration ≤ 0 — applies instantly, ease has no effect</span>
+        ) : (
+          /* Shapes rather than names, and no explanatory paragraph: "in-out" was
+           * read as "goes there and comes back", and a thumbnail that rises and
+           * never turns down settles that faster than the sentence which used to
+           * sit here did. */
+          <EasePicker
+            value={ease}
+            onChange={v => {
+              const next = buildNext({ ease: v });
+              setDraftAction(next);
+              commitDraft(next, draftAtSecs);
+            }}
+          />
+        )}
+      </Field>
+    );
+  }
+
   return (
     <div className="seq-ws-inspector">
       <div className="seq-ws-col-head">
@@ -436,33 +488,10 @@ export function SequencerInspector({
                     {optionalVec3Field("Scale", draftAction.data.scale, 0.05, v =>
                       ({ kind: "SetTransform", data: { ...draftAction.data, scale: v } }))}
                   </Field>
-                  <Field label="DURATION" hint="interpolate only">
-                    <div className="flex items-center gap-2">
-                      <input type="number" step={0.05} min={0} value={draftAction.data.duration_secs} className={numCls}
-                        onKeyDown={e => { e.stopPropagation(); if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
-                        onChange={e => setDraftAction({ kind: "SetTransform", data: { ...draftAction.data, duration_secs: +e.target.value } })}
-                        onBlur={() => commitDraft(draftAction, draftAtSecs)} />
-                      <span className="text-[10px] text-overlay0">s</span>
-                      <span className="flex-1" />
-                      <label className="text-[10.5px] text-overlay0">Ease</label>
-                      <Select
-                        value={draftAction.data.ease}
-                        onValueChange={ease => {
-                          const next: XrdsAction = { kind: "SetTransform", data: { ...draftAction.data, ease } };
-                          setDraftAction(next);
-                          commitDraft(next, draftAtSecs);
-                        }}
-                        options={[
-                          { value: "Linear", label: "Linear" },
-                          { value: "Quad", label: "Quad" },
-                          { value: "Cubic", label: "Cubic" },
-                        ]}
-                      />
-                    </div>
-                    {draftAction.data.duration_secs <= 0 && (
-                      <span className="text-[10px] text-red">⚠ duration ≤ 0 — applies instantly, ease has no effect</span>
-                    )}
-                  </Field>
+                  {durationAndEaseField(
+                    draftAction.data.duration_secs, draftAction.data.ease,
+                    patch => ({ kind: "SetTransform", data: { ...draftAction.data, ...patch } }),
+                  )}
                 </>
               )}
             </>
@@ -618,6 +647,16 @@ export function SequencerInspector({
                   </>
                 )}
               </Field>
+
+              {/* A material change can take time, the same way a move can. The
+                * SetMaterial variant's own doc comment proposed this — reuse
+                * SetTransform's interpolator rather than grow a second one — and
+                * that is what the runtime does. A texture swap still applies at
+                * the start: a picture has no halfway point. */}
+              {durationAndEaseField(
+                draftAction.data.duration_secs, draftAction.data.ease,
+                patch => ({ kind: "SetMaterial", data: { ...draftAction.data, ...patch } }),
+              )}
             </>
           )}
 

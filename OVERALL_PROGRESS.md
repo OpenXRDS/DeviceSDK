@@ -1,6 +1,6 @@
 # DeviceSDK Overall Progress
 
-Last updated: 2026-08-26
+Last updated: 2026-08-28
 
 > **Verified against the code on 2026-08-26.** Every checkable claim below was
 > grepped rather than trusted. That pass found nine wrong or stale statements,
@@ -252,9 +252,14 @@ here so they stay visible:
   rather than faked. The entry that stood here posed it as an open question —
   "decide whether these fields can be honoured at all" — after that decision had
   been made and shipped.
-- **Keyframe curve editor.** The Track/Sequencer system covers timed *action*
-  sequencing; interpolating a property along a curve is still unbuilt. Note the original
-  item's "export as a glTF animation track" is void — glTF export is retired.
+- **Keyframe curve editor** — **answered differently, 2026-08-28.** A curve
+  canvas is how you author a value whose *shape* over time matters; nothing here
+  asks for that. What was actually wanted was **animatable properties**, and
+  `SetMaterial` now interpolates (`duration_secs` + `ease`) exactly as
+  `SetTransform` always did, so "fade an object out" is one event rather than a
+  burst of instant ones. The curve editor itself stays out until a real case needs
+  overshoot or hold. See `docs/animatable-properties.md`. The original item's
+  "export as a glTF animation track" is void — glTF export is retired.
 - **Spatial anchor node.** Cross-session persisted anchors; needs a new payload plus an
   OpenXR persist-anchor API. Not started.
 - **Performance budget panel.** Live triangle/draw-call/texture-memory counters in the
@@ -302,9 +307,9 @@ Planned in detail in `docs/done/small-phases-plan.md`.
 | Item | Phases | Where the cost actually is |
 | --- | --- | --- |
 | **LOD system** | **Deferred** — see `docs/deferred/lod-plan.md` | Attempted 2026-08-24 through three phases, device-verified at **59 → 75 fps** on a Quest 3, then removed unbuilt. Two findings changed the judgement. **Bevy already implements the mechanism** (`VisibilityRange`, plugin already running), so this was never greenfield — the work was authoring, and the authoring model was wrong: levels as sibling nodes are each measured from their own position, and coincident levels cannot be inspected in an editor, so the design forced the one arrangement that breaks it. **And there is nothing to swap to**: our primitives are procedural and authors have no hand-modelled low-poly variants, so the measured win came from a synthetic Sphere→Cube→Tetrahedron triple no real scene contains. What is actually wanted is Unreal's model — levels inside the mesh asset — which needs **LOD generation** (decimation at import), its own project. `docs/deferred/lod-plan.md` carries the Bevy mechanics, the measurements, both failed designs and the profile/screen-size proposals. |
-| ~~**Post-processing**~~ | **Done 2026-08-26** | Shipped: **colour grading** (white balance, hue, saturation) and **anti-aliasing** (MSAA sample count), both on the scene environment, both reaching all three targets. Excluded with reasons rather than forgotten: SSAO and auto exposure (compute — Adreno has already rejected one compute path), DOF/motion blur/TAA (XR comfort), bloom and tonemapping (flat-desktop only; XR cameras carry no `Hdr` and adding it costs a float target per eye for a glow). Two planning assumptions died on contact with the code: the multiview risk was not real (Bevy sees one ordinary camera per eye), and **MSAA was already running at 4×** — Bevy makes `Msaa` a required component — so the planned FXAA/SMAA pass would have been slower *and* blurrier than what was already there. `docs/post-processing-plan.md`. |
+| ~~**Post-processing**~~ | **Done 2026-08-26** | Shipped: **colour grading** (white balance, hue, saturation) and **anti-aliasing** (MSAA sample count), both on the scene environment, both reaching all three targets. Excluded with reasons rather than forgotten: SSAO and auto exposure (compute — Adreno has already rejected one compute path), DOF/motion blur/TAA (XR comfort), bloom and tonemapping (flat-desktop only; XR cameras carry no `Hdr` and adding it costs a float target per eye for a glow). Two planning assumptions died on contact with the code: the multiview risk was not real (Bevy sees one ordinary camera per eye), and **MSAA was already running at 4×** — Bevy makes `Msaa` a required component — so the planned FXAA/SMAA pass would have been slower *and* blurrier than what was already there. `docs/done/post-processing-plan.md`. |
 | ~~**Video asset kind**~~ (§2) | **Done 2026-08-26** | Shipped both halves and device-verified. Route A — asking MediaCodec for a wgpu-importable layout — was measured on a Quest 3 and **eliminated**: `AIMAGE_FORMAT_YUV_420_888` is accepted and sustains full frame rate, yet still yields a Qualcomm vendor-tiled buffer that Vulkan describes only by external format. So the conversion pass (route B) was necessary, and costs 0.18–0.27 ms/frame. The warning that stood here — *do not build the asset-kind half first* — held: the spike answered before any of it was built, and the two halves met at `XrdsMaterialTextureRef` with no material, mesh, shader or renderer learning what video is. |
-| **Keyframe curve editor** (SDK half) | 2: curve/interpolation model → runtime property driver | Distinct from Track/Sequencer, which sequences *actions*, not property curves. The editor UI on top is its own larger job. The original item's "export as a glTF animation track" is void — glTF export is retired. |
+| ~~**Keyframe curve editor**~~ → **animatable properties** | **Reframed and part-shipped 2026-08-28** | The row asked for a curve canvas; the need behind it was properties that interpolate, which is a match arm and a tween component rather than a new editing surface. `SetMaterial` shipped with `duration_secs` + `ease` reusing `SetTransform`'s interpolator — the reuse its own doc comment had proposed. Two things fell out worth recording: `self_duration_secs` had to learn about it **in both languages** or a three-second fade would draw as an instant dot, and the ease *names* turned out to be the real defect — "in-out" was read as "goes there and comes back", so the picker now draws each curve instead of naming its polynomial. `SetLight` is the obvious next one and is not built; nothing has asked. The curve canvas itself stays out. `docs/animatable-properties.md`. |
 | ~~**Audio authoring in the editor**~~ (Medium-tier S6 — unrelated to the Small tier's S6) | **Done** | Shipped 2026-08-20: `AudioClipSection` in the inspector, audio bridge commands, viewport radius gizmos coloured per source, a falloff preview drawn in dB, and in-editor audition. `autoplay` now defaults false — an authored clip that starts itself the moment a scene loads is the wrong default for authoring. |
 
 ### Large — 4+ phases, each gated on a design decision
@@ -365,7 +370,7 @@ Features present in engines like Unity, Godot, or Unreal that are not yet in Dev
 | --- | --- | --- |
 | ~~**Particle systems / VFX**~~ | **Done** | `XrdsEffect` with `Burst`/`Trail`, editor authoring, and Track-driven `PlayEffect`/`StopEffect`; device-verified on Quest 3. Backend is `bevy_firework` — `bevy_hanabi` was adopted and rejected after its GPU-compute path rendered nothing on Adreno. See `docs/done/vfx-particle-effects-plan.md`. Remaining: blend modes are a no-op upstream, and there is no curve editor. |
 | **Animation state machine** | Medium | Playback + morph sliders exist; no blend trees, transition graphs, or IK |
-| ~~**Post-processing stack**~~ | **Done** | Exposure, fog, **colour grading** and **anti-aliasing** (MSAA count) are authorable on the scene environment and reach all three targets. `XrdsBloom`/`XrdsTonemapping` are flat-desktop-only by decision — XR cameras carry no `Hdr`. SSAO, auto exposure, DOF, motion blur and TAA excluded with reasons. `docs/post-processing-plan.md`, `docs/platform-support.md`. |
+| ~~**Post-processing stack**~~ | **Done** | Exposure, fog, **colour grading** and **anti-aliasing** (MSAA count) are authorable on the scene environment and reach all three targets. `XrdsBloom`/`XrdsTonemapping` are flat-desktop-only by decision — XR cameras carry no `Hdr`. SSAO, auto exposure, DOF, motion blur and TAA excluded with reasons. `docs/done/post-processing-plan.md`, `docs/platform-support.md`. |
 | **NavMesh / pathfinding** | Medium | AI agent navigation; needed for NPC-driven XR experiences |
 | **LOD system** | Medium | Performance at scene scale; no automatic LOD generation or selection |
 | ~~**Video playback**~~ | **Done** | `XrdsSceneAssetKind::Video` (H.264/HEVC in `.mp4`), VIDEO inspector section, `PlayVideo`/`StopVideo` Track actions. MediaCodec → `AHardwareBuffer` → Vulkan Ycbcr conversion → wgpu texture on Android, ffmpeg on desktop. Device-verified at **0.18 ms/frame, 1280×720**. See `docs/done/video-asset-spike.md`. |

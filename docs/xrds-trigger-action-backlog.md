@@ -26,13 +26,13 @@ match arm.
 - **Use case:** trigger a sound on zone-enter/hit/interaction, the most
   common "small trigger effect" in most interactive scenes.
 
-## Material / appearance
+## Material / appearance — **shipped**
 
-- **Sketch:** `XrdsAction::SetMaterialProperty { target, property, value }`.
-- **Wraps:** the existing material-editing path
-  (`examples/xrds_first/edit_material.rs`).
-- **Use case:** flash/tint an object on hit, fade an object in/out via
-  base color alpha.
+Shipped as `XrdsAction::SetMaterial`, and as of 2026-08-28 it interpolates:
+`duration_secs` + `ease`, so "fade an object out via base colour alpha" — the use
+case this entry named — is now literally what it does rather than something an
+author would have had to approximate with a burst of instant events. See
+[`animatable-properties.md`](animatable-properties.md).
 
 ## Morph targets
 

@@ -402,7 +402,7 @@ pub enum EditorCommand {
 ///
 /// **If you change a DTO and do not bump this, you have removed the only thing
 /// that would have told anyone.**
-pub const BRIDGE_VERSION: u32 = 23;
+pub const BRIDGE_VERSION: u32 = 24;
 
 /// State snapshot emitted to the webview after each frame's update.
 /// Grow this incrementally — add fields as each phase is implemented.
@@ -1018,7 +1018,17 @@ pub enum XrdsActionDto {
         base_color: Option<[f32; 4]>,
         metallic: Option<f32>,
         roughness: Option<f32>,
+        /// Seconds to interpolate over. `0.0` is instant, which is how every
+        /// material event authored before 2026-08-28 behaves.
+        #[serde(default)]
+        duration_secs: f32,
+        /// "Linear" | "Quad" | "Cubic" | "QuadIn" | "CubicIn" | "QuadInOut" | "CubicInOut"
+        #[serde(default)]
+        ease: String,
         /// One texture slot assignment; `None` leaves all slots alone.
+        ///
+        /// Never interpolates — an image has no halfway point, so it swaps at the
+        /// start of the tween however long the duration is.
         texture: Option<ActionTextureDto>,
     },
     ModifyHealth { delta: ActionValueDto },

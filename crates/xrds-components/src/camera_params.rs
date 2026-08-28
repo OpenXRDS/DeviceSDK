@@ -86,7 +86,7 @@ impl From<XrdsTonemapping> for Tonemapping {
 /// `Hdr`, and XR cameras do not carry it. Giving them one would add a float
 /// intermediate render target **per eye** before a single effect rendered, which is
 /// not a price worth paying for a glow. Decided 2026-08-26; see
-/// `docs/post-processing-plan.md`.
+/// `docs/done/post-processing-plan.md`.
 ///
 /// This is why `XrdsEffect` colour components are clamped to 1.0 — with no HDR pass,
 /// values above 1.0 render as flat white rather than as something bright.

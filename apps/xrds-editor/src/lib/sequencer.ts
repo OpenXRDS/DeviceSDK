@@ -50,16 +50,22 @@ export function fmtTime(secs: number): string {
 // Asset rows
 // ---------------------------------------------------------------------------
 
-/** How long this action itself takes. Non-zero only for `SetTransform` — every
- * other action applies instantly, including glTF playback, which is
- * deliberately fire-and-forget.
+/** How long this action itself takes. Non-zero for the actions that interpolate
+ * — `SetTransform` and `SetMaterial` — and zero for everything else, including
+ * glTF playback, which is deliberately fire-and-forget.
  *
  * Mirrors `XrdsAction::self_duration_secs` in Rust: both the ruler span and the
  * dot-vs-bar decision read this, so they cannot disagree about what "instant"
- * means. A `SetTransform` with duration 0 is what the deleted `Teleport` action
- * was, and renders as a dot rather than a bar for exactly that reason. */
+ * means. A duration-0 `SetTransform` is what the deleted `Teleport` action was,
+ * and renders as a dot rather than a bar for exactly that reason.
+ *
+ * When `SetMaterial` gained a duration this function had to gain it too, in both
+ * languages: a three-second fade left out here draws as a dot and lets a Track's
+ * auto length end before the fade does. */
 export function actionDuration(a: XrdsAction): number {
-  return a.kind === "SetTransform" ? Math.max(0, a.data.duration_secs) : 0;
+  return a.kind === "SetTransform" || a.kind === "SetMaterial"
+    ? Math.max(0, a.data.duration_secs)
+    : 0;
 }
 
 // ---------------------------------------------------------------------------

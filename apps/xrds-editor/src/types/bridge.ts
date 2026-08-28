@@ -275,6 +275,12 @@ export type XrdsAction =
         roughness: number | null;
         /** One texture slot assignment; `null` leaves every slot alone. */
         texture: ActionTexture | null;
+        /** Seconds to reach the values above. `0` is instant, which is how this
+         *  action behaved before it could interpolate — and what every document
+         *  authored until then still deserialises to. A texture swap ignores this
+         *  and applies at the start; an image has no halfway point. */
+        duration_secs: number;
+        ease: string;
       };
     }
   | { kind: "ModifyHealth"; data: { delta: ActionValue } }
@@ -482,7 +488,7 @@ export interface TaskDto {
  *  replaced wholesale by the first real snapshot.
  *
  *  Bump this together with the Rust constant whenever a DTO changes. */
-export const BRIDGE_VERSION = 23;
+export const BRIDGE_VERSION = 24;
 
 export interface EditorSnapshot {
   /** See {@link BRIDGE_VERSION}. `0` means a build predating the check. */

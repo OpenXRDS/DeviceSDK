@@ -1576,12 +1576,107 @@ pub(crate) struct XrdsTransformTween {
     ease: XrdsEaseCurve,
 }
 
-/// Maps `t` in `0.0..=1.0` through the given ease-out curve.
-fn ease_out(curve: XrdsEaseCurve, t: f32) -> f32 {
+/// In-flight state for an interpolated [`XrdsAction::SetMaterial`].
+///
+/// Mirrors [`XrdsTransformTween`] and lives on the *target* entity for the same
+/// reason: a second material change on one entity should replace the first rather
+/// than race it.
+///
+/// Holds plain values rather than a whole `XrdsMaterialParams` because only three
+/// properties interpolate. Keeping the rest out means a tween cannot quietly revert
+/// a texture slot or an alpha mode that something else set while it was running.
+#[derive(Component, Debug, Clone, Copy)]
+pub(crate) struct XrdsMaterialTween {
+    start_base_color: [f32; 4],
+    start_metallic: f32,
+    start_roughness: f32,
+    target_base_color: [f32; 4],
+    target_metallic: f32,
+    target_roughness: f32,
+    elapsed: f32,
+    duration: f32,
+    ease: XrdsEaseCurve,
+}
+
+/// Advances every in-flight material tween, removing it when finished.
+///
+/// A paused Track freezes its tweens, exactly as transform tweens are frozen —
+/// otherwise pausing would stop things moving and leave colours sliding.
+pub fn advance_material_tweens(
+    time: Res<Time>,
+    agents: Query<(Entity, &XrdsTrackAgent)>,
+    locks: Res<XrdsTrackAssetLocks>,
+    mut query: Query<(Entity, &mut XrdsMaterialTween)>,
+    mut commands: Commands,
+) {
+    let frozen: std::collections::HashSet<Entity> = agents
+        .iter()
+        .filter(|(_, agent)| agent.paused)
+        .flat_map(|(agent_entity, _)| locks.entities_held_by(agent_entity))
+        .collect();
+
+    let dt = time.delta_secs();
+    let mut updates: Vec<(Entity, [f32; 4], f32, f32, bool)> = Vec::new();
+
+    for (entity, mut tween) in &mut query {
+        if frozen.contains(&entity) {
+            continue;
+        }
+        tween.elapsed += dt;
+        let t = (tween.elapsed / tween.duration).clamp(0.0, 1.0);
+        let eased = ease_out(tween.ease, t);
+        let lerp = |a: f32, b: f32| a + (b - a) * eased;
+        updates.push((
+            entity,
+            [
+                lerp(tween.start_base_color[0], tween.target_base_color[0]),
+                lerp(tween.start_base_color[1], tween.target_base_color[1]),
+                lerp(tween.start_base_color[2], tween.target_base_color[2]),
+                lerp(tween.start_base_color[3], tween.target_base_color[3]),
+            ],
+            lerp(tween.start_metallic, tween.target_metallic),
+            lerp(tween.start_roughness, tween.target_roughness),
+            t >= 1.0,
+        ));
+    }
+
+    // Applying goes through a command because writing material params needs
+    // `&mut World`, which cannot be held while the tween query is borrowed.
+    for (entity, base_color, metallic, roughness, done) in updates {
+        commands.queue(move |world: &mut World| {
+            if let Some(mut params) = material_params_for_entity_in_world(world, entity) {
+                params.base_color = XrdsColor { rgba: base_color };
+                params.pbr.metallic = metallic;
+                params.pbr.roughness = roughness;
+                set_material_params_for_entity_in_world(world, entity, params);
+            }
+            if done {
+                if let Ok(mut entity_mut) = world.get_entity_mut(entity) {
+                    entity_mut.remove::<XrdsMaterialTween>();
+                }
+            }
+        });
+    }
+}
+
+/// Maps `t` in `0.0..=1.0` through the given curve.
+///
+/// Named `ease_out` while every variant was one; kept under that name so existing
+/// call sites and tests read unchanged, though it now covers in and in-out too.
+pub(crate) fn ease_out(curve: XrdsEaseCurve, t: f32) -> f32 {
     match curve {
         XrdsEaseCurve::Linear => t,
         XrdsEaseCurve::Quad => 1.0 - (1.0 - t) * (1.0 - t),
         XrdsEaseCurve::Cubic => 1.0 - (1.0 - t).powi(3),
+        XrdsEaseCurve::QuadIn => t * t,
+        XrdsEaseCurve::CubicIn => t * t * t,
+        // Mirrored halves: accelerate to the midpoint, decelerate out of it.
+        XrdsEaseCurve::QuadInOut => {
+            if t < 0.5 { 2.0 * t * t } else { 1.0 - (-2.0 * t + 2.0).powi(2) / 2.0 }
+        }
+        XrdsEaseCurve::CubicInOut => {
+            if t < 0.5 { 4.0 * t * t * t } else { 1.0 - (-2.0 * t + 2.0).powi(3) / 2.0 }
+        }
     }
 }
 
@@ -1646,6 +1741,12 @@ impl Action for XrdsActionRunner {
             // ephemeral agent alive for the length of the tween.
             XrdsAction::SetTransform { .. } => {
                 world.get::<XrdsTransformTween>(self.target).is_none()
+            }
+            // Same shape as SetTransform: an interpolated material change keeps its
+            // ephemeral agent alive for the length of the tween. A zero duration
+            // never inserts one, so that case reports finished at once.
+            XrdsAction::SetMaterial { .. } => {
+                world.get::<XrdsMaterialTween>(self.target).is_none()
             }
             // Everything else applies instantly in `on_start`. glTF playback
             // is fire-and-forget: the agent finishes as soon as playback is
@@ -1713,7 +1814,14 @@ impl Action for XrdsActionRunner {
                 }
             }
 
-            XrdsAction::SetMaterial { base_color, metallic, roughness, texture } => {
+            XrdsAction::SetMaterial {
+                base_color,
+                metallic,
+                roughness,
+                duration_secs,
+                ease,
+                texture,
+            } => {
                 // No own target any more — always applies to `self.target`,
                 // the entity this key's *row* resolved to, same as every
                 // other action. See the variant's doc comment.
@@ -1733,6 +1841,7 @@ impl Action for XrdsActionRunner {
                     // `None` clears that slot. The id → uri → `Handle<Image>`
                     // resolution happens inside the apply below, off the
                     // imported asset catalog — nothing extra is needed here.
+                    let swapped_texture = texture.is_some();
                     if let Some(t) = texture {
                         params.textures.set(
                             t.slot.into(),
@@ -1743,14 +1852,47 @@ impl Action for XrdsActionRunner {
                             }),
                         );
                     }
-                    set_material_params_for_entity_in_world(world, entity, params);
+                    // `duration_secs <= 0.0` is instant — exactly how this action
+                    // behaved before it gained a duration, and what every document
+                    // authored until then still asks for, since the field defaults
+                    // to zero.
+                    if duration_secs <= 0.0 {
+                        set_material_params_for_entity_in_world(world, entity, params);
+                        return true;
+                    }
+
+                    // The texture swap applies now rather than at the end: an image
+                    // has no halfway point, and holding it back would mean fading to
+                    // a colour the new picture never wears.
+                    let mut start_params = material_params_for_entity_in_world(world, entity)
+                        .expect("checked immediately above");
+                    if swapped_texture {
+                        start_params.textures = params.textures.clone();
+                        set_material_params_for_entity_in_world(
+                            world,
+                            entity,
+                            start_params.clone(),
+                        );
+                    }
+
+                    world.entity_mut(entity).insert(XrdsMaterialTween {
+                        start_base_color: start_params.base_color.rgba,
+                        start_metallic: start_params.pbr.metallic,
+                        start_roughness: start_params.pbr.roughness,
+                        target_base_color: params.base_color.rgba,
+                        target_metallic: params.pbr.metallic,
+                        target_roughness: params.pbr.roughness,
+                        elapsed: 0.0,
+                        duration: duration_secs,
+                        ease,
+                    });
+                    false
                 } else {
                     log::warn!(
-                        "XrdsAction::SetMaterial targeted entity {entity:?}, which has no \
-                         material — ignoring."
+                        "XrdsAction::SetMaterial targeted entity {entity:?}, which has no                          material — ignoring."
                     );
+                    true
                 }
-                true
             }
 
             XrdsAction::SetElementText { text } => {

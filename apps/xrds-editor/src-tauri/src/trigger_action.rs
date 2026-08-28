@@ -729,6 +729,8 @@ fn default_action_for_kind(kind: &str) -> Option<XrdsAction> {
             base_color: None,
             metallic: None,
             roughness: None,
+            duration_secs: 0.0,
+            ease: XrdsEaseCurve::default(),
             texture: None,
         },
         "ModifyHealth" => XrdsAction::ModifyHealth {
@@ -783,10 +785,14 @@ fn action_to_dto(a: &XrdsAction) -> XrdsActionDto {
                 duration_secs: *duration_secs,
                 ease: ease_curve_to_dto(ease),
             },
-        XrdsAction::SetMaterial { base_color, metallic, roughness, texture } => XrdsActionDto::SetMaterial {
+        XrdsAction::SetMaterial {
+            base_color, metallic, roughness, duration_secs, ease, texture,
+        } => XrdsActionDto::SetMaterial {
             base_color: *base_color,
             metallic: *metallic,
             roughness: *roughness,
+            duration_secs: *duration_secs,
+            ease: ease_curve_to_dto(ease),
             texture: texture.as_ref().map(|t| crate::bridge::ActionTextureDto {
                 slot: texture_slot_to_dto(t.slot),
                 texture_asset_id: t.texture_asset_id.clone(),
@@ -847,7 +853,11 @@ fn action_from_dto(a: &XrdsActionDto) -> XrdsAction {
                 duration_secs: *duration_secs,
                 ease: ease_curve_from_dto(ease),
             },
-        XrdsActionDto::SetMaterial { base_color, metallic, roughness, texture } => XrdsAction::SetMaterial {
+        XrdsActionDto::SetMaterial {
+            base_color, metallic, roughness, duration_secs, ease, texture,
+        } => XrdsAction::SetMaterial {
+            duration_secs: *duration_secs,
+            ease: ease_curve_from_dto(ease),
             base_color: *base_color,
             metallic: *metallic,
             roughness: *roughness,
@@ -877,6 +887,10 @@ fn ease_curve_to_dto(e: &XrdsEaseCurve) -> String {
         XrdsEaseCurve::Linear => "Linear".to_string(),
         XrdsEaseCurve::Quad => "Quad".to_string(),
         XrdsEaseCurve::Cubic => "Cubic".to_string(),
+        XrdsEaseCurve::QuadIn => "QuadIn".to_string(),
+        XrdsEaseCurve::CubicIn => "CubicIn".to_string(),
+        XrdsEaseCurve::QuadInOut => "QuadInOut".to_string(),
+        XrdsEaseCurve::CubicInOut => "CubicInOut".to_string(),
     }
 }
 
@@ -884,6 +898,13 @@ fn ease_curve_from_dto(e: &str) -> XrdsEaseCurve {
     match e {
         "Linear" => XrdsEaseCurve::Linear,
         "Quad" => XrdsEaseCurve::Quad,
+        "QuadIn" => XrdsEaseCurve::QuadIn,
+        "CubicIn" => XrdsEaseCurve::CubicIn,
+        "QuadInOut" => XrdsEaseCurve::QuadInOut,
+        "CubicInOut" => XrdsEaseCurve::CubicInOut,
+        // Unrecognised falls to the default rather than erroring: a newer editor's
+        // curve name reaching an older build should degrade to a sensible ease, not
+        // refuse the document.
         _ => XrdsEaseCurve::Cubic,
     }
 }
@@ -1111,6 +1132,33 @@ pub(crate) fn diagnostic_to_dto(d: &XrdsSceneTriggerDiagnostic) -> TriggerDiagno
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every ease curve survives the round trip to the editor and back.
+    ///
+    /// `ease_curve_from_dto` falls back to `Cubic` for an unrecognised name — the
+    /// right behaviour for a document from a newer editor, and a silent one. Miss a
+    /// name here and every curve an author picks collapses to the same fallback:
+    /// the control works, the picker works, and nothing moves differently. This
+    /// test exists because that symptom was reported and had to be ruled out.
+    #[test]
+    fn every_ease_curve_round_trips_through_the_dto() {
+        for curve in [
+            XrdsEaseCurve::Linear,
+            XrdsEaseCurve::Quad,
+            XrdsEaseCurve::Cubic,
+            XrdsEaseCurve::QuadIn,
+            XrdsEaseCurve::CubicIn,
+            XrdsEaseCurve::QuadInOut,
+            XrdsEaseCurve::CubicInOut,
+        ] {
+            let wire = ease_curve_to_dto(&curve);
+            assert_eq!(
+                ease_curve_from_dto(&wire),
+                curve,
+                "'{wire}' did not survive the round trip — it fell back to the default"
+            );
+        }
+    }
 
     /// `reject_bad_name` is the guard every name-taking command routes through.
     /// These assert the two things that make it worth having: it canonicalizes

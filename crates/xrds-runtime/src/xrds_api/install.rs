@@ -387,6 +387,7 @@ pub(super) fn install_xrds(app: &mut App) {
     // already accepted for `evaluate_threshold_watchers` above, not a
     // correctness issue either way.
     app.add_systems(Update, crate::xrds_api::trigger_action::advance_transform_tweens);
+    app.add_systems(Update, crate::xrds_api::trigger_action::advance_material_tweens);
     app.add_systems(Update, crate::xrds_api::world_ui_pointer::world_ui_pointer_system);
     app.add_systems(Startup, crate::xrds_api::world_ui_pointer::spawn_world_ui_cursors_system);
     // Layout runs after the pointer system (so pointer state is fresh) but before the
