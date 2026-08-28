@@ -3,7 +3,7 @@
 ## Context
 
 While bringing up the Android build (see
-[`docs/xrds-net-android-shipping.md`](xrds-net-android-shipping.md)), the first
+[`docs/done/xrds-net-android-shipping.md`](xrds-net-android-shipping.md)), the first
 full link of a real binary (`xrds-app`, not just a library crate) failed with
 `ld.lld: error: duplicate symbol: SSL_use_certificate` and dozens more like it.
 

@@ -2,12 +2,12 @@
 
 **Status:** Done — all three binaries built, registered, and verified with
 a local dry run. The actual two-machine/real-network run itself is tracked
-in `docs/xrds-net-release-readiness.md` Phase 3, not here (that doc stays
+in `docs/done/xrds-net-release-readiness.md` Phase 3, not here (that doc stays
 open until someone runs it).
 
 ## Context
 
-`docs/xrds-net-release-readiness.md` Phase 3 needs a real-network WebRTC
+`docs/done/xrds-net-release-readiness.md` Phase 3 needs a real-network WebRTC
 handshake verified — the one item in that whole plan that couldn't be done
 from this sandbox (no second real-network host). The existing runbook there
 says to hand-modify a *copy* of `examples/webrtc/webrtc_file_stream.rs`
@@ -158,8 +158,8 @@ replace that hand-modification — reusable, not single-use throwaway code.
       This proves the binaries themselves work — it does **not** prove
       the real cross-machine/TURN-relay path works, since both peers were
       still on one machine. That's the actual remaining Phase 3 gap in
-      `docs/xrds-net-release-readiness.md`.
-- [x] Updated `docs/xrds-net-release-readiness.md`'s Phase 3 runbook to
+      `docs/done/xrds-net-release-readiness.md`.
+- [x] Updated `docs/done/xrds-net-release-readiness.md`'s Phase 3 runbook to
       reference these three binaries with concrete commands, replacing the
       "hand-modify a copy of `webrtc_file_stream.rs`" plan.
 - [x] Updated `examples/README.md`'s Extension-First Examples table with

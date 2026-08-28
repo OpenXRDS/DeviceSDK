@@ -1,5 +1,11 @@
 # DeviceSDK — Editor TODO
 
+> **Superseded — archived 2026-08-28.** This is an `xrds-editor` backlog whose
+> items were absorbed into [`EDITOR_TODO.md`](EDITOR_TODO.md), which was itself
+> archived on 2026-08-12 with every status re-verified against the code. Anything
+> still open from either list lives in the root `OVERALL_PROGRESS.md` §5. Kept for
+> the reasoning behind individual items; do not read the checkboxes as current.
+
 Prioritised backlog for `xrds-editor-tauri` and the broader SDK.
 
 Items 1–8 are editor polish. Items 10–12 are the core framework milestones needed before this is a real XR framework.

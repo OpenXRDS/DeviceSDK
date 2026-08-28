@@ -1,5 +1,16 @@
 # HUD System — Design Plan
 
+> **Superseded — annotated 2026-08-28.** The data model in this document —
+> `XrdsHudTemplate`, `XrdsHudItemDef`, `hud_library`, `XrdsHudTemplate::depth` —
+> **was deleted**. See
+> [`xrds-widget-template-plan.md`](xrds-widget-template-plan.md), step A4b-1,
+> which retired the HUD template vocabulary in favour of one unified panel
+> template where a HUD is a panel that happens to be head-locked.
+>
+> Kept because the *design rationale* survived the vocabulary: the argument for
+> instantiating a HUD per player, rather than sharing one, is still the live
+> model. Read this for the why, not for the type names.
+
 ## Problem Statement
 
 A head-locked HUD must be **independent per player** (and per camera/anchor), just as

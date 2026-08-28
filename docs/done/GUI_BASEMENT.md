@@ -1,5 +1,16 @@
 # GUI Editor — SDK Boundary
 
+> **Superseded — annotated 2026-08-28.** This asked whether the SDK was ready to
+> host a GUI editor, and
+> [`editor-readiness-checklist.md`](editor-readiness-checklist.md) (2026-04-15)
+> asks and answers the same question one day earlier, with the same status tables
+> and the same two named gaps. Prefer that one.
+>
+> **One section here is actively wrong**: the closing GUI-framework recommendation
+> of `bevy_egui`. The editor shipped as wry + React — see
+> [`MIGRATION.md`](MIGRATION.md). The API-surface inventory above it is still
+> accurate, which is the only reason this file is kept.
+
 This document defines the architectural boundary between the XRDS SDK (`DeviceSDK`) and a GUI editor application built on top of it.
 
 The SDK's role is to expose stable, application-level contracts.

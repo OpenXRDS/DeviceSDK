@@ -1,5 +1,14 @@
-```markdown
 # Implementation Plan: `moq-sdk` (MoQ Abstraction Layer)
+
+> **Status: deferred, and never started.** Written 2026-07-31 as a draft plan
+> for a `moq-sdk` crate (moq-net / moq-relay / hang). The networking layer went a
+> different way — intent verbs over QUIC/WS sessions, see the `xrds-net-*`
+> documents in `docs/done/` — so nothing here was built and nothing depends on
+> it.
+>
+> It was the only file in `deferred/` with no status header, which made it read
+> like live work. Kept because Media-over-QUIC is a real option if streaming
+> ever needs it; delete it if that stops being true.
 
 ## 1. Project Overview
 **Goal:** Create a high-level, ergonomic Rust crate that abstracts the modular complexity of the moq-dev/moq ecosystem. 
@@ -169,7 +178,5 @@ Build end-to-end local tests to prove it works without external dependencies.
 * [ ] Connect a `ClientBuilder` publisher and a `ClientBuilder` subscriber to the local relay.
 * [ ] Send 100 frames and verify they are received.
 * [ ] Populate the `examples/` directory (`chat_cli.rs`, `video_streamer.rs`, `embedded_relay.rs`).
-
-```
 
 ```

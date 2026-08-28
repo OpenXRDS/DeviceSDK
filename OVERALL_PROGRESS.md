@@ -35,9 +35,16 @@ give an author. That comparison is the definition of done we are using:
 This is deliberately a *parity* bar, not a feature-ambition bar. It says an author
 who knows a conventional 3D engine can sit down with DeviceSDK and not hit a wall
 where a familiar capability is simply absent. It does **not** promise anything
-beyond parity, and rows explicitly deferred as Low priority (Terrain) are
-judged against whether an XR workflow needs them, not against whether Unity has
-them.
+beyond parity.
+
+**Scope decision, 2026-08-28: Terrain and Networking are in.** Both had been
+carved out as Low priority and judged against "does an XR workflow need this" —
+that carve-out is withdrawn, and both are 1.0 rows like any other. **LOD stays
+out**, deferred with its reasons in `docs/deferred/lod-plan.md`; the Gap Analysis
+row said otherwise until today, and the row was wrong, not the deferral.
+
+That leaves exactly one Gap Analysis row that 1.0 does not require: LOD. Every
+other row is either done or scheduled below.
 
 The blueprint below sizes that remaining work. Editor-only halves are called out
 as such, because several rows are finished on the SDK side and missing only
@@ -238,6 +245,13 @@ Full account, including the route A that was measured and eliminated on device:
 
 ### 5) Editor items inherited from the archived EDITOR_TODO list
 
+**Most of this list is closed.** Struck-through entries are done and kept for
+their reasoning; the two still open are the **performance budget panel** and the
+**spatial anchor node**, and the anchor is the same item as the Large-tier row
+below rather than an extra one. Read the strikethroughs, not the bullet count —
+this list was introduced as "still genuinely open" and has not been that for a
+while.
+
 `docs/done/EDITOR_TODO.md` was archived on 2026-08-12 after its statuses were
 re-verified against the code. These are the ones that were still genuinely open, moved
 here so they stay visible:
@@ -252,7 +266,7 @@ here so they stay visible:
   rather than faked. The entry that stood here posed it as an open question —
   "decide whether these fields can be honoured at all" — after that decision had
   been made and shipped.
-- **Keyframe curve editor** — **answered differently, 2026-08-28.** A curve
+- ~~**Keyframe curve editor**~~ — **answered differently, 2026-08-28.** A curve
   canvas is how you author a value whose *shape* over time matters; nothing here
   asks for that. What was actually wanted was **animatable properties**, and
   `SetMaterial` and `SetLight` now interpolate (`duration_secs` + `ease`) exactly
@@ -261,7 +275,8 @@ here so they stay visible:
   overshoot or hold. See `docs/done/animatable-properties.md`. The original item's
   "export as a glTF animation track" is void — glTF export is retired.
 - **Spatial anchor node.** Cross-session persisted anchors; needs a new payload plus an
-  OpenXR persist-anchor API. Not started.
+  OpenXR persist-anchor API. Not started. **The same item as the Large-tier row
+  below**, not a second one — the Large tier's count already includes it.
 - **Performance budget panel.** Live triangle/draw-call/texture-memory counters in the
   editor. Editor-only instrumentation; Bevy diagnostics already expose the data.
   **Confirmed still absent 2026-08-26** — no such panel exists in the editor, and
@@ -335,20 +350,32 @@ question answered first, and for three of the four the design is the larger half
   themselves, where a signature change and its docs move in the same diff.
 - **Android window-lifecycle crash** — unreproduced; see §5.
 - **Particle blend modes** — a no-op upstream in `bevy_firework`, not our code.
-- **Terrain** — Low priority and not an XR-shaped need; judged against workflow,
-  not against Unity parity, per the 1.0 definition.
+- ~~**Terrain**~~ — **moved into scope 2026-08-28.** It sat here as "Low priority
+  and not an XR-shaped need, judged against workflow, not against Unity parity".
+  That judgement is withdrawn; it is a 1.0 row like any other now.
 
 ### Honest total
 
 **The Small tier is complete** — S1–S6 done, device-verified wherever a device
-applies. S5 is worth a note: this paragraph used to say its rename half was
+applies. One residual is *excluded from that claim rather than hidden by it*: S6's
+video conversion pass submits to the Vulkan queue outside wgpu's relay-semaphore
+chain, so a stale or torn frame is possible in both directions. It is not
+schedulable — `wgpu-hal` exposes only `Queue::add_signal_semaphore` and the wait
+direction needs upstream work — so it is **not** a 1.0 blocker and is tracked in
+the S6 row itself. Until 2026-08-28 this paragraph said "complete" while the S6
+row said "still not closed", which is the third summary in this file to outlive
+its own row. S5 is worth a note: this paragraph used to say its rename half was
 "dropped on review", and it was not dropped, it was done on 2026-08-26 once
 someone checked what it would actually break. The answer was one public signature.
 
 Video also closed since this was written. **Corrected 2026-08-28:** that
 sentence then said "three Medium remain", and by the table above the number is
 **zero** — every Medium row is now struck through or Deferred, and the tier is
-empty. Four Large remain. This is the third time a count in this file has
+empty. **Five Large remain** as of 2026-08-28, and they are named here rather
+than counted so the next reader can check rather than trust: animation state
+machine, spatial anchor node, navmesh/pathfinding, networking/multiplayer, and
+Terrain — the last newly in scope and not yet sized. Networking appears in both
+the Large tier and the Gap Analysis; it is one item, counted once. This is the third time a count in this file has
 outlived the rows it counted; a total written beside a table it does not read
 from will always drift, so trust the rows.
 
@@ -362,9 +389,13 @@ running the thing and looking at it.
 Three items from the archived `EDITOR_TODO.md` were recorded as "editor half only"
 and all three were false. Treat the rest of that list as unverified until grepped. The Small tier is days. The Medium tier is
 where most of the value-per-phase sits and compounds with what already exists.
-The Large tier is genuinely large, and three of its four items are blocked on a
-decision rather than on effort — which means the next real milestone after the
-Small tier is a design session, not a sprint.
+The Large tier is genuinely large, and **four of its five items are blocked on a
+decision rather than on effort** — animation state machine (is IK in 1.0?),
+spatial anchors (which platforms is persistence promised on?), navmesh (bake
+in-editor or import a baked mesh?) and networking (authority model). Terrain, new
+to the list on 2026-08-28, needs the same treatment and has not had it. Which
+means the next real milestone after the Small tier is a design session, not a
+sprint.
 
 ## Gap Analysis vs. Mature 3D Engines
 
@@ -376,12 +407,12 @@ Features present in engines like Unity, Godot, or Unreal that are not yet in Dev
 | **Animation state machine** | Medium | Playback + morph sliders exist; no blend trees, transition graphs, or IK |
 | ~~**Post-processing stack**~~ | **Done** | Exposure, fog, **colour grading** and **anti-aliasing** (MSAA count) are authorable on the scene environment and reach all three targets. `XrdsBloom`/`XrdsTonemapping` are flat-desktop-only by decision — XR cameras carry no `Hdr`. SSAO, auto exposure, DOF, motion blur and TAA excluded with reasons. `docs/done/post-processing-plan.md`, `docs/platform-support.md`. |
 | **NavMesh / pathfinding** | Medium | AI agent navigation; needed for NPC-driven XR experiences |
-| **LOD system** | Medium | Performance at scene scale; no automatic LOD generation or selection |
+| ~~**LOD system**~~ | **Deferred — not a 1.0 row** | Built through three phases and device-verified at 59 → 75 fps on a Quest 3, then removed unbuilt: Bevy already implements the mechanism, our primitives are procedural so there is nothing to swap to, and what is actually wanted is LOD *generation* (decimation at import), its own project. `docs/deferred/lod-plan.md`. This row read "Medium priority, open" until 2026-08-28 while the Medium tier had it deferred — and 1.0 is defined off *this* table, so the contradiction was load-bearing. |
 | ~~**Video playback**~~ | **Done** | `XrdsSceneAssetKind::Video` (H.264/HEVC in `.mp4`), VIDEO inspector section, `PlayVideo`/`StopVideo` Track actions. MediaCodec → `AHardwareBuffer` → Vulkan Ycbcr conversion → wgpu texture on Android, ffmpeg on desktop. Device-verified at **0.18 ms/frame, 1280×720**. See `docs/done/video-asset-spike.md`. |
 | ~~**Capsule primitive**~~ | **Done** | `XrdsCapsule` shipped; also now the shape of the player's physics body. |
-| **Networking / multiplayer** | Low | The transport layer (`xrds-net`) is itself hardened and internal-milestone-ready, including a real two-machine WebRTC handshake — see `docs/done/xrds-net-release-readiness.md`. What is still missing is the *game-level* feature: an `XrdsAction` that syncs trigger effects across clients, which needs an authority model decided first (see `docs/xrds-trigger-action-backlog.md`'s Networking entry). Large scope, deferred. |
-| **Terrain system** | Low | Heightmaps, large world; not a near-term XR target |
-| **Atmospheric (coloured) fog** | Far future | Bevy's fourth `FogFalloff`. Linear, exponential and exponential-squared ship today; `Atmospheric` adds wavelength-dependent extinction and sun inscattering — coloured haze that reddens toward the sun. Deliberately not exposed: it takes two `Vec3`s that Bevy's own docs call non-intuitive, and nobody has asked for coloured scattering. The authorable route exists when someone does — `FogFalloff::from_visibility_colors(visibility, extinction_color, inscattering_color)` reduces it to one distance and two colours, so this is purely additive to `XrdsSceneFogFalloff`. Same reasoning that keeps `XrdsSceneAtmosphereEnvironment` free of physical parameters: do not author a physics UI on speculation. |
+| **Networking / multiplayer** | **In scope for 1.0** (2026-08-28) | Was Low and deferred pending an authority model; that carve-out is withdrawn. The authority question still has to be answered first — it is what *sizes* the work, not a reason to leave the row out of 1.0. The transport layer (`xrds-net`) is itself hardened and internal-milestone-ready, including a real two-machine WebRTC handshake — see `docs/done/xrds-net-release-readiness.md`. What is still missing is the *game-level* feature: an `XrdsAction` that syncs trigger effects across clients, which needs an authority model decided first (see `docs/xrds-trigger-action-backlog.md`'s Networking entry). Large scope, deferred. |
+| **Terrain system** | **In scope for 1.0** (2026-08-28) | Heightmaps, large world. Previously carved out as "not a near-term XR target"; that judgement is withdrawn. Not yet sized — needs the same kind of scoping decision the Large tier rows carry, starting with whether terrain is an authored payload or an imported heightmap asset. |
+| **Atmospheric (coloured) fog** | Small and additive — not scheduled | Bevy's fourth `FogFalloff`. Linear, exponential and exponential-squared ship today; `Atmospheric` adds wavelength-dependent extinction and sun inscattering — coloured haze that reddens toward the sun. Deliberately not exposed: it takes two `Vec3`s that Bevy's own docs call non-intuitive, and nobody has asked for coloured scattering. The authorable route exists when someone does — `FogFalloff::from_visibility_colors(visibility, extinction_color, inscattering_color)` reduces it to one distance and two colours, so this is purely additive to `XrdsSceneFogFalloff`. Same reasoning that keeps `XrdsSceneAtmosphereEnvironment` free of physical parameters: do not author a physics UI on speculation. **Read the row name carefully — fog is not missing.** Linear, exponential and exponential-squared all ship and are authorable; this row is only Bevy's fourth falloff, the wavelength-dependent one that reddens haze toward the sun. Retitled from "Far future" on 2026-08-28 because that read as though fog itself were unbuilt. |
 
 Already covered that engines also provide: scene graph, PBR materials, lights,
 cameras, spatial audio, animation playback, physics (rigid body, colliders,
