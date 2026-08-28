@@ -172,7 +172,12 @@ warning. Measured for `SetLight` and `SetMaterial`, and `SetTransform` has the
 same shape. It is the reason "give each property its own curve" cannot currently
 be answered with two events, which is how it should be answered.
 
-Planned, not built: [`tween-channels-plan.md`](tween-channels-plan.md).
+**Diagnosed, not fixed.** `Overlapping events cancel an animation` is an error on
+any document where it happens, naming the properties that are lost. That removes
+the silence, which was the actual harm — the limitation itself is a workaround
+away (sequence the events instead of overlapping them). The fix that would let
+them compose is planned and deferred:
+[`tween-channels-plan.md`](tween-channels-plan.md).
 
 ## What would come next, if something asks
 

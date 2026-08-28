@@ -1326,3 +1326,140 @@ mod xrds_scene_graph_light_fixtures {
         ]
     }
 }
+
+// ---------------------------------------------------------------------------
+// Overlapping tweens (stand-in for docs/tween-channels-plan.md)
+// ---------------------------------------------------------------------------
+
+/// A `SetLight` animating only colour.
+fn light_colour(at: f32, secs: f32) -> XrdsTrackKey {
+    key(at, XrdsAction::SetLight {
+        color: Some([1.0, 0.0, 0.0, 1.0]),
+        intensity: None,
+        range: None,
+        duration_secs: secs,
+        ease: XrdsEaseCurve::Linear,
+    })
+}
+
+/// A `SetLight` animating only intensity.
+fn light_intensity(at: f32, secs: f32) -> XrdsTrackKey {
+    key(at, XrdsAction::SetLight {
+        color: None,
+        intensity: Some(0.0),
+        range: None,
+        duration_secs: secs,
+        ease: XrdsEaseCurve::Linear,
+    })
+}
+
+fn one_row(keys: Vec<XrdsTrackKey>) -> XrdsSceneDocument {
+    let mut light = node(1);
+    light.payload = XrdsSceneNodePayload::PointLight(Default::default());
+    light.triggers = vec![binding_for("t")];
+    doc(
+        vec![light],
+        vec![named("t", XrdsTrack { assets: vec![row(1, keys)], ..Default::default() })],
+    )
+}
+
+const OVERLAP: &str = "Overlapping events cancel an animation";
+
+#[test]
+fn overlapping_events_that_drop_an_animation_are_diagnosed() {
+    // The measured case: colour over 30s, intensity starting immediately. The
+    // second event replaces the tween and the colour fade stops at white.
+    let d = one_row(vec![light_colour(0.0, 30.0), light_intensity(0.0, 30.0)]);
+    let found = find(&d, OVERLAP);
+    assert!(
+        found.detail.contains("colour"),
+        "the message must name the property that is lost, got: {}",
+        found.detail
+    );
+    assert_eq!(found.severity, XrdsSceneTriggerDiagnosticSeverity::Error);
+    // The editor attributes a diagnostic to a Track by finding `Track "name"` in
+    // its detail text — see `SequencerWorkspace.tsx`'s `diagnostics` memo. A
+    // message missing that prefix still reaches the global list but is never
+    // shown beside the Track it is about, which is most of the point of raising
+    // it. Asserted here because nothing else couples the two.
+    assert!(
+        found.detail.contains(r#"Track "t""#),
+        "the editor matches on the quoted Track name; got: {}",
+        found.detail
+    );
+}
+
+#[test]
+fn events_that_do_not_overlap_are_not_diagnosed() {
+    // Second starts exactly when the first ends. Not an overlap: the first tween
+    // has already removed itself.
+    let d = one_row(vec![light_colour(0.0, 2.0), light_intensity(2.0, 2.0)]);
+    assert!(!has(&d, OVERLAP), "got {:?}", titles(&d));
+}
+
+#[test]
+fn overlapping_events_on_the_same_property_are_not_diagnosed() {
+    // Two colour fades overlapping is correct authoring — last-writer-wins is
+    // what retiming a fade means, and nothing is lost. Firing here would be the
+    // diagnostic-that-cries-wolf this rule was written narrow to avoid.
+    let d = one_row(vec![light_colour(0.0, 5.0), light_colour(1.0, 5.0)]);
+    assert!(!has(&d, OVERLAP), "got {:?}", titles(&d));
+}
+
+#[test]
+fn an_instant_event_does_not_cancel_an_overlapping_tween() {
+    // Duration 0 writes the property and inserts no tween, so there is nothing to
+    // replace and nothing to lose.
+    let d = one_row(vec![light_colour(0.0, 5.0), light_intensity(1.0, 0.0)]);
+    assert!(!has(&d, OVERLAP), "got {:?}", titles(&d));
+}
+
+#[test]
+fn overlapping_events_of_different_families_are_not_diagnosed() {
+    // A light tween and a material tween are separate components on the entity,
+    // so they genuinely do run side by side. Reporting these would flag authoring
+    // that works.
+    let mut cube = node(1);
+    cube.payload = XrdsSceneNodePayload::PointLight(Default::default());
+    cube.triggers = vec![binding_for("t")];
+    let material = key(0.0, XrdsAction::SetMaterial {
+        base_color: Some([1.0, 0.0, 0.0, 1.0]),
+        metallic: None,
+        roughness: None,
+        duration_secs: 5.0,
+        ease: XrdsEaseCurve::Linear,
+        texture: None,
+    });
+    let d = doc(
+        vec![cube],
+        vec![named("t", XrdsTrack {
+            assets: vec![row(1, vec![light_colour(0.0, 5.0), material])],
+            ..Default::default()
+        })],
+    );
+    assert!(!has(&d, OVERLAP), "got {:?}", titles(&d));
+}
+
+#[test]
+fn overlapping_transform_events_are_diagnosed_too() {
+    // The third tween family. `XrdsTransformTween` stores a whole start/target
+    // Transform, so an overlapping scale event drops an in-flight position move
+    // exactly as the light and material cases do.
+    let position = key(0.0, XrdsAction::SetTransform {
+        position: Some([1.0, 0.0, 0.0]),
+        rotation: None,
+        scale: None,
+        duration_secs: 5.0,
+        ease: XrdsEaseCurve::Linear,
+    });
+    let scale = key(1.0, XrdsAction::SetTransform {
+        position: None,
+        rotation: None,
+        scale: Some([2.0, 2.0, 2.0]),
+        duration_secs: 5.0,
+        ease: XrdsEaseCurve::Linear,
+    });
+    let d = one_row(vec![position, scale]);
+    let found = find(&d, OVERLAP);
+    assert!(found.detail.contains("position"), "got: {}", found.detail);
+}

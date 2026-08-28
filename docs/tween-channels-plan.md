@@ -1,6 +1,6 @@
 # Per-property tween channels — plan
 
-**Not started.** Written 2026-08-28 after the question "should colour, intensity
+**Deferred — see the last section.** Written 2026-08-28 after the question "should colour, intensity
 and range each get their own curve?" turned up a defect underneath it.
 
 ## The question, and the answer that is not the interesting part
@@ -119,7 +119,35 @@ documented limitation an author can see is a trade; an undocumented one they
 cannot is the failure this project keeps paying for, and it has now been shipped
 three times in the same shape.
 
-If the work is deferred, the minimum honest alternative is a **document
-diagnostic**: two events overlapping in time on one row, touching the same
-property set, is statically detectable and should be an error — the same treatment
-`Light action on a non-light node` already gets.
+**Deferred 2026-08-28, with the diagnostic built instead.** The reasoning: the
+harm here is the silence, not the limitation. Sequencing two events instead of
+overlapping them is a modest workaround; losing a fade you authored, with no error
+and a Track reporting success, is not. Nothing has asked for per-property curves —
+the question that started this asked whether the shared curve was *right*, which
+is a different thing — and the diagnostic cost an hour against a redesign of all
+three tween types.
+
+`Overlapping events cancel an animation` is now an **error** on any document where
+it happens, naming the properties that are lost and the earliest time the second
+event could start without losing them.
+
+One correction to the paragraph this replaced, which had the rule wrong: it is
+**not** "two events overlapping and touching the same property set". Overlapping
+two events that animate the *same* property is correct authoring — retiming a fade
+so it overtakes the previous one is last-writer-wins, and nothing is lost. The
+rule that ships is narrower and is the accurate one:
+
+> Report only the properties the earlier event animates and the later one does
+> **not**. Those are the ones that stop part-way.
+
+It is also scoped per tween family, because a light tween and a material tween are
+separate components on the entity and genuinely do run side by side. And an
+instant (`duration 0`) event inserts no tween, so it cancels nothing.
+
+A diagnostic that fires on correct authoring is how you teach people to ignore
+diagnostics — the same argument that kept a zero-duration warning out of this file
+when `Teleport` was deleted.
+
+**This plan stays open.** The diagnostic tells an author what they cannot do; the
+channels work would let them do it. Pull this out when someone wants two
+properties on two curves and being told "no" is the wrong answer.

@@ -466,6 +466,18 @@ impl<'de> Deserialize<'de> for XrdsAction {
     }
 }
 
+/// Which tween component an interpolating action drives.
+///
+/// Not part of the authored schema — it exists so `track_diagnostics` can tell
+/// which pairs of events can actually interfere with each other. See
+/// `XrdsAction::tween_family`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum XrdsTweenFamily {
+    Transform,
+    Material,
+    Light,
+}
+
 /// Ease curve for interpolated actions — [`XrdsAction::SetTransform`] and
 /// [`XrdsAction::SetMaterial`].
 ///
@@ -513,6 +525,71 @@ impl XrdsAction {
             | XrdsAction::SetLight { duration_secs, .. } => duration_secs.max(0.0),
             _ => 0.0,
         }
+    }
+
+    /// Which in-flight tween component this action drives, if any.
+    ///
+    /// The runtime keeps one tween component per family on the target entity, so
+    /// two *different* families never interfere — an interpolating `SetLight` and
+    /// an interpolating `SetMaterial` run side by side quite happily. Two events
+    /// of the **same** family do interfere, because the second replaces the first
+    /// as a component. Only the diagnostic below uses this; it is the reason the
+    /// check compares within a family rather than across all interpolating events.
+    pub(crate) fn tween_family(&self) -> Option<XrdsTweenFamily> {
+        match self {
+            XrdsAction::SetTransform { .. } => Some(XrdsTweenFamily::Transform),
+            XrdsAction::SetMaterial { .. } => Some(XrdsTweenFamily::Material),
+            XrdsAction::SetLight { .. } => Some(XrdsTweenFamily::Light),
+            _ => None,
+        }
+    }
+
+    /// The properties this action actually animates, by name.
+    ///
+    /// Only the interpolating ones: a `SetMaterial` texture swap is applied at the
+    /// start of the tween rather than interpolated, so it is already done by the
+    /// time a later event could replace the tween and it cannot be lost. Listing
+    /// it here would make the diagnostic warn about a property that is in no
+    /// danger.
+    pub(crate) fn animated_properties(&self) -> Vec<&'static str> {
+        let mut out = Vec::new();
+        match self {
+            XrdsAction::SetTransform { position, rotation, scale, .. } => {
+                if position.is_some() {
+                    out.push("position");
+                }
+                if rotation.is_some() {
+                    out.push("rotation");
+                }
+                if scale.is_some() {
+                    out.push("scale");
+                }
+            }
+            XrdsAction::SetMaterial { base_color, metallic, roughness, .. } => {
+                if base_color.is_some() {
+                    out.push("base colour");
+                }
+                if metallic.is_some() {
+                    out.push("metallic");
+                }
+                if roughness.is_some() {
+                    out.push("roughness");
+                }
+            }
+            XrdsAction::SetLight { color, intensity, range, .. } => {
+                if color.is_some() {
+                    out.push("colour");
+                }
+                if intensity.is_some() {
+                    out.push("intensity");
+                }
+                if range.is_some() {
+                    out.push("range");
+                }
+            }
+            _ => {}
+        }
+        out
     }
 
     /// Whether this action is valid inside a Track.
@@ -1134,6 +1211,74 @@ impl XrdsSceneDocument {
                                 ),
                             }),
                         },
+                    }
+                }
+
+                // Two interpolating events of the same family, overlapping in
+                // time on one row, do not compose: the runtime keeps one tween
+                // component per family on the target, so the later event's insert
+                // *replaces* the earlier one and whatever it was still animating
+                // stops where it stood. Nothing at runtime reports that — the
+                // Track completes normally and one authored fade simply never
+                // happened. See `docs/tween-channels-plan.md` for the fix this
+                // stands in for.
+                //
+                // The rule is deliberately narrow. Overlapping two events that
+                // animate the *same* properties is correct authoring — retiming a
+                // fade so it overtakes the previous one is last-writer-wins, which
+                // is what an author wants. Only properties the earlier event
+                // animates and the later one does not are actually lost, so only
+                // those are reported. A diagnostic that fired on correct authoring
+                // is how you teach people to ignore diagnostics, the same argument
+                // that kept the zero-duration warning out.
+                for (earlier_index, earlier) in asset.keys.iter().enumerate() {
+                    let Some(family) = earlier.action.tween_family() else {
+                        continue;
+                    };
+                    let earlier_duration = earlier.action.self_duration_secs();
+                    if earlier_duration <= 0.0 {
+                        continue;
+                    }
+                    let earlier_props = earlier.action.animated_properties();
+                    if earlier_props.is_empty() {
+                        continue;
+                    }
+                    for later in asset.keys.iter().skip(earlier_index + 1) {
+                        if later.action.tween_family() != Some(family) {
+                            continue;
+                        }
+                        if later.action.self_duration_secs() <= 0.0 {
+                            // An instant change writes the property and inserts no
+                            // tween, so it does not cancel one.
+                            continue;
+                        }
+                        if later.at_secs >= earlier.at_secs + earlier_duration {
+                            continue;
+                        }
+                        let later_props = later.action.animated_properties();
+                        let dropped: Vec<&str> = earlier_props
+                            .iter()
+                            .copied()
+                            .filter(|p| !later_props.contains(p))
+                            .collect();
+                        if dropped.is_empty() {
+                            continue;
+                        }
+                        out.push(XrdsSceneTriggerDiagnostic {
+                            node_id: None,
+                            severity: Severity::Error,
+                            title: "Overlapping events cancel an animation".to_string(),
+                            detail: format!(
+                                "{where_}, {:?}: the event at {:.2}s animates {} over {:.2}s, but                                  another event at {:.2}s starts before it ends and takes over the                                  same tween — so {} stops part-way and never reaches its target.                                  Move the second event to {:.2}s or later, or fold both changes                                  into one event.",
+                                asset.target,
+                                earlier.at_secs,
+                                dropped.join(", "),
+                                earlier_duration,
+                                later.at_secs,
+                                dropped.join(", "),
+                                earlier.at_secs + earlier_duration,
+                            ),
+                        });
                     }
                 }
 
