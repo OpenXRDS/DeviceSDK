@@ -9,7 +9,7 @@ import { rgbaToHex, hexToRgba, MATERIAL_TEXTURE_SLOTS, TRIGGER_EFFECTS } from ".
 import { Select } from "./ui/Select";
 import { Checkbox } from "./ui/Checkbox";
 import { PanelInstanceTriggers } from "./PanelInstanceTriggers";
-import { ALL_TRIGGER_KINDS, isHandFilterVisible, unavailableReasonFor } from "../lib/sequencer";
+import { ALL_TRIGGER_KINDS, isHandFilterVisible, triggerNoteFor, unavailableReasonFor } from "../lib/sequencer";
 
 interface Props {
   snapshot: EditorSnapshot;
@@ -433,7 +433,16 @@ function TriggersSection({ node, snapshot, send, onOpenTrack }: {
         // it doesn't apply" from "missing/broken".
         const kindOptions = ALL_TRIGGER_KINDS.map(k => {
           const reason = unavailableReasonFor(k, node);
-          return { value: k, label: k, disabled: reason !== null, hint: reason ?? undefined };
+          // A blocking reason greys the option out; a note does not. `Custom`
+          // is the one kind that works perfectly and belongs to the expert layer
+          // rather than to the editor — see `triggerNoteFor`.
+          const note = reason === null ? triggerNoteFor(k) : null;
+          return {
+            value: k,
+            label: k,
+            disabled: reason !== null,
+            hint: reason ?? note ?? undefined,
+          };
         });
         return (
           <div key={i} className="hud-library-row flex-col items-stretch gap-2">
@@ -448,6 +457,7 @@ function TriggersSection({ node, snapshot, send, onOpenTrack }: {
                 {kind === "Custom" && (
                   <input type="text" defaultValue={b.trigger.kind === "Custom" ? b.trigger.data : ""}
                     placeholder="event name"
+                    title="Fired by your own Rust through XrdsTriggerKind::Custom. A scene run from the editor alone never fires it."
                     className="w-[100px] text-bright bg-well rounded px-2 py-1 border border-surface0 focus:outline focus:outline-1 focus:outline-blue"
                     key={`${id}-${i}-custom-${b.trigger.kind === "Custom" ? b.trigger.data : ""}`}
                     onKeyDown={e => { e.stopPropagation(); if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}

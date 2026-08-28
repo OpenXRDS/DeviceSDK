@@ -149,6 +149,18 @@ The two directions are not symmetrical, and only one survived:
 - **Track → app code** is gone. Nothing lets a Track call out to expert-layer
   Rust at a moment in its timeline.
 
-Whether that gap matters is a real question and not one this file should answer
-by itself. It is recorded here because the closing argument of this backlog
-depended on a capability that had been removed, and nobody noticed.
+Whether that gap matters is deferred — a far-future question, not a v1.0 one.
+
+**Where the custom trigger belongs, decided 2026-08-28.** `XrdsTriggerKind::Custom`
+is an *expert-layer* concept: application Rust fires it, through the SDK or Bevy
+directly. A scene authored and run from the editor alone never sees it. It stays
+offered in the editor's trigger picker, because binding it in the document and
+firing it from code is a real workflow and the document is where that binding
+belongs — but it now says `fired from your own code, never by the editor` beside
+the option, which is what a GUI-only author needed and did not have.
+
+`RunawayDetected` was offered next to it and is a different case entirely: nothing
+fires it at all. It guarded runaway `Run` chains against `MAX_RUN_CHAIN_DEPTH`, and
+`Run` went with the sequence model — `fire_runaway_detected_in_world` is called
+from nowhere and the depth constant is compared against nothing. It is no longer
+offered, and the test that used to assert it always was now asserts the opposite.

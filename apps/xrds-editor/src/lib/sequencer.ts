@@ -500,11 +500,33 @@ export function unavailableReasonFor(kind: string, node: NodeInspector): string 
       return "set this on a panel element, not on a node";
     case "AnimationComplete":
       return node.payload.type === "GltfAsset" ? null : "needs a glTF asset";
-    case "Custom":
     case "RunawayDetected":
+      // Nothing fires this any more. It guarded runaway `Run` chains against
+      // `MAX_RUN_CHAIN_DEPTH`, and `Run` was deleted with the sequence model —
+      // `fire_runaway_detected_in_world` is now called from nowhere and the depth
+      // constant is compared against nothing. Offered without a word until
+      // 2026-08-28, so a Track could be bound to it and simply never run.
+      return "nothing fires this — the Run chains it guarded were removed";
+    case "Custom":
     default:
       return null;
   }
+}
+
+/** An advisory note for a trigger that works but does not belong to the editor's
+ *  own world — rendered beside the option without disabling it.
+ *
+ *  Distinct from {@link unavailableReasonFor}, which greys an option out. The
+ *  distinction matters for exactly one kind so far: a `Custom` trigger is fired by
+ *  application code through `XrdsTriggerKind::Custom`, so a scene authored and run
+ *  from the editor alone will never see it — but binding it *here* and firing it
+ *  from Rust is a real workflow, and the document is where that binding belongs.
+ *  Disabling it would break that; saying nothing leaves a GUI-only author with a
+ *  trigger that silently never happens. */
+export function triggerNoteFor(kind: string): string | null {
+  return kind === "Custom"
+    ? "fired from your own code, never by the editor"
+    : null;
 }
 
 /** Which `XrdsTriggerKind`s make sense to offer for `node`, based on what can

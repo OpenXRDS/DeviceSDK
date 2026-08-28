@@ -5,7 +5,7 @@ import {
   isHandFilterVisible, keyTopPx, layoutAssetRow, niceStep, rulerTicks, stackKeys, validKindsFor,
   elementUnavailableReasonFor, validKindsForElement, elementRowLabel, unavailableReasonFor,
   targetLabel, actionUnavailableReasonFor, ELEMENT_ONLY_ACTION_KINDS, TRACK_ACTION_KINDS,
-  decodeAddableAsset, encodeAddableAsset, normalizeDegrees,
+  decodeAddableAsset, encodeAddableAsset, normalizeDegrees, triggerNoteFor,
 } from "./sequencer";
 import { defaultSnapshot } from "../types/bridge";
 import type {
@@ -452,10 +452,16 @@ describe("validKindsFor", () => {
     expect(validKindsFor(empty)).not.toContain("AnimationComplete");
   });
 
-  it("always offers Custom and RunawayDetected, on any node", () => {
+  it("offers Custom on any node, and no longer offers RunawayDetected", () => {
     const empty = nodeWith({});
+    // `Custom` depends on nothing about the node — app code fires it, so any
+    // node can carry the binding.
     expect(validKindsFor(empty)).toContain("Custom");
-    expect(validKindsFor(empty)).toContain("RunawayDetected");
+    // This assertion is inverted from what it said until 2026-08-28, and the
+    // inversion is the point: `RunawayDetected` guarded runaway `Run` chains,
+    // `Run` was deleted with the sequence model, and nothing has fired it since.
+    // Offering it let a Track be bound to a trigger that could never happen.
+    expect(validKindsFor(empty)).not.toContain("RunawayDetected");
   });
 
   it("returns a subset of ALL_TRIGGER_KINDS for every node", () => {
@@ -923,5 +929,35 @@ describe("normalizeDegrees", () => {
   it("survives a non-finite value", () => {
     // A number input can hand back NaN for an empty or half-typed field.
     expect(normalizeDegrees(NaN)).toBe(0);
+  });
+});
+
+describe("triggers that the editor cannot fire", () => {
+  const anyNode = {
+    ...defaultSnapshot.selected_node!,
+    grabbable: false,
+    payload: { type: "Cube" },
+  } as unknown as NodeInspector;
+
+  it("greys out RunawayDetected, because nothing fires it any more", () => {
+    // It guarded runaway `Run` chains, and `Run` was deleted with the sequence
+    // model: `fire_runaway_detected_in_world` is called from nowhere. Offered
+    // silently until 2026-08-28, so a Track could be bound to it and never run.
+    expect(unavailableReasonFor("RunawayDetected", anyNode)).toMatch(/nothing fires this/);
+  });
+
+  it("leaves Custom selectable but notes that code fires it", () => {
+    // Not greyed out: binding it in the document and firing it from Rust is a
+    // real workflow, and the document is where the binding belongs. But a
+    // GUI-only author needs telling, or it is a trigger that silently never
+    // happens.
+    expect(unavailableReasonFor("Custom", anyNode)).toBeNull();
+    expect(triggerNoteFor("Custom")).toMatch(/your own code/);
+  });
+
+  it("notes nothing for the kinds the editor can fire itself", () => {
+    for (const kind of ["ZoneEnter", "Grabbed", "ButtonPress", "AnimationComplete"]) {
+      expect(triggerNoteFor(kind)).toBeNull();
+    }
   });
 });
