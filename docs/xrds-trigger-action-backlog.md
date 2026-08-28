@@ -4,12 +4,20 @@ Companion to [`done/xrds-scenegraph-trigger-action-sequencing.md`](done/xrds-sce
 (the design doc) and [`done/xrds-trigger-action-v1.md`](done/xrds-trigger-action-v1.md)
 (what shipped — the whole system, schema through the `xrds-editor` UI, is
 done; nothing is "still ahead" anymore). **Not scheduled** — this is a
-holding area for candidate `XrdsAction` variants beyond the ones already
-shipped (`PlayGltfAnimation`, `StopGltfAnimation`, `SetVisible`, `Teleport`,
-`ModifyHealth`, `Wait`, `FireCustomEvent`, `Run`). Pull an entry out of here
-only when a real use case needs it, per the "don't design for hypothetical
-future requirements" principle — this list exists so the *idea* isn't
-lost, not as a commitment to build all of it.
+holding area for candidate `XrdsAction` variants beyond the ones already shipped.
+Pull an entry out of here only when a real use case needs it, per the "don't
+design for hypothetical future requirements" principle — this list exists so the
+*idea* isn't lost, not as a commitment to build all of it.
+
+**Shipped as of 2026-08-28**, since this list is only useful against an accurate
+one: `SetTransform`, `SetVisible`, `SetMaterial`, `SetLight`, `ModifyHealth`,
+`PlayGltfAnimation`, `StopGltfAnimation`, `PlayEffect`, `StopEffect`, `PlayAudio`,
+`StopAudio`, `PlayVideo`, `StopVideo`, `SetElementText`, `SetElementValue`,
+`SetElementEnabled`. The four this paragraph used to list alongside them —
+`Teleport`, `Wait`, `FireCustomEvent`, `Run` — **were deleted**, not shipped:
+`Teleport` turned out to be a zero-duration `SetTransform`, and the other three
+went when the Track model replaced sequences. See the closing section for what
+their removal cost.
 
 Every entry below wraps an imperative capability that **already exists**
 in `xrds-runtime`/`xrds-net` today — same relationship `PlayGltfAnimation`
@@ -17,14 +25,11 @@ has to `play_gltf_animation_in_world`. None of these require new engine
 capability; they only require an `Action` wrapper + an `XrdsActionRunner`
 match arm.
 
-## Audio
+## Audio — **shipped**
 
-- **Sketch:** `XrdsAction::PlayAudio { clip: XrdsAudioHandle, .. }`,
-  `StopAudio`.
-- **Wraps:** the existing document-level audio workflow
-  (`examples/xrds_first/scene_document_audio_workflow.rs`).
-- **Use case:** trigger a sound on zone-enter/hit/interaction, the most
-  common "small trigger effect" in most interactive scenes.
+Shipped as `PlayAudio` and `StopAudio`, both offered only on an `AudioClip` row.
+`StopAudio` rewinds rather than stopping one-way, which is what makes it safe to
+use on looping ambience.
 
 ## Material / appearance — **shipped**
 
@@ -52,32 +57,40 @@ author would have had to approximate with a burst of instant events. See
 
 ## Camera / anchor properties
 
-- **Sketch:** `XrdsAction::SetCameraFov { fov }`, exposure changes.
+- **Sketch:** `XrdsAction::SetCameraFov { fov }`, and the **per-anchor exposure
+  override** — `XrdsAnchorExposureOverride`, not the scene-wide value.
 - **Wraps:** `apply_anchor_fov_system`/`apply_anchor_exposure_system`
   (`crates/xrds-runtime/src/xrds_api/anchor.rs`).
-- **Use case:** a camera "punch" on a hit reaction, or an exposure shift
-  when entering a zone — cutscene-adjacent effects without a scripting
-  system.
+- **Use case:** a camera "punch" on a hit reaction, or an exposure shift when
+  entering a zone — cutscene-adjacent effects without a scripting system.
+- **Which exposure this is.** The word covers two things in this codebase and
+  only one of them belongs here. `XrdsSceneExposureEnvironment` is the scene-wide
+  EV100 and lives on the environment; `XrdsAnchorExposureOverride` is a component
+  on an anchor and means "this anchor instead", with `None` falling back to the
+  scene value. Only the second has a node to hang an action on, which is exactly
+  why it is a candidate and the scene-wide one is not — see below.
 
-## Scene environment — fog, exposure, colour grading
+## Scene-wide environment settings are **not** getting an action
 
-- **Sketch:** `XrdsAction::SetFog { visibility, .. }`, `SetExposure { ev100 }`,
-  animated the same way `SetLight` and `SetMaterial` now are.
-- **Wraps:** the managed-marker environment sync in
-  `crates/xrds-runtime/src/xrds_api/environment.rs`, which already applies these
-  to every `Camera3d`.
-- **Blocked on a decision, not on work.** `done/animatable-properties.md` claimed
-  these were "a match arm and a tween component". They are not: **every**
-  `XrdsActionTarget` is a node or a panel element — `SelfNode`, `Node(id)`,
-  `TriggerSource`, `Element { panel, name }` — and the scene environment is
-  neither. An action for it needs a new target kind, which is a decision about
-  what a Track may address.
-- **The question that decides it:** a Track holds *asset locks* so two Tracks
-  cannot fight over the same thing, under the reject-the-newcomer policy. The
-  environment is the one thing every Track would contend for, so giving it a
-  target means either a global lock — where one Track fading the fog blocks every
-  other Track in the scene — or an exception to the policy. Neither is obviously
-  right, which is why this is not started rather than half-built.
+**Decided 2026-08-28: no.** Fog, scene exposure and colour grading stay authored
+on the scene environment and are not addressable from a Track.
+
+An earlier entry here proposed them, on the grounds that they are numeric values
+with runtime setters like any other. The reason that was wrong is worth keeping,
+because the same argument will be made again for the next global setting:
+
+Every `XrdsActionTarget` is a node or a panel element — `SelfNode`, `Node(id)`,
+`TriggerSource`, `Element { panel, name }`. A Track addresses *things in the
+scene*, and it holds asset locks on them so two Tracks cannot fight over one
+thing. A scene-wide setting has nothing to address and nothing to lock: giving it
+a target means either a global lock, where one Track fading the fog blocks every
+other Track in the scene, or an exception to the policy that keeps Tracks from
+interfering. Neither buys enough to pay for it.
+
+**The per-anchor exposure override is the exception that proves the rule** — it is
+a component on a node, so it needs no new target kind and no new locking. If a
+scene genuinely needs "the light changes when the player enters here", that is the
+shape it should take.
 
 ## UI / HUD — **shipped**
 
@@ -118,10 +131,24 @@ node; there is no separate UI variant of it.
   grow this variant until that's decided; it's a networking-architecture
   question, not a sequencer-schema one.
 
-## The permanent escape hatch
+## The escape hatch — **there isn't one any more**
 
-`XrdsAction::FireCustomEvent { name: String }` already covers "anything
-not yet modeled" and isn't going anywhere — every entry above is a
-candidate to *promote* out of "fire a custom event and let expert-layer
-Rust handle it" into a first-class, editor-authorable variant, not a
-replacement for the escape hatch itself.
+This section used to say `XrdsAction::FireCustomEvent { name: String }` "already
+covers anything not yet modeled and isn't going anywhere", and that every entry
+above was a candidate to *promote* out of it rather than a replacement for it.
+
+**`FireCustomEvent` no longer exists.** It was deleted along with `Wait` and `Run`
+when the Track model replaced sequences — `XrdsAction`'s own doc comment says so.
+So the framing above is inverted: the entries on this list have no fallback to be
+promoted out of. A Track can do exactly what `XrdsAction` has variants for.
+
+The two directions are not symmetrical, and only one survived:
+
+- **App code → Track** still works. `XrdsTriggerKind::Custom` matches a named
+  trigger an application fires, so app code can start a Track. Untouched.
+- **Track → app code** is gone. Nothing lets a Track call out to expert-layer
+  Rust at a moment in its timeline.
+
+Whether that gap matters is a real question and not one this file should answer
+by itself. It is recorded here because the closing argument of this backlog
+depended on a capability that had been removed, and nobody noticed.

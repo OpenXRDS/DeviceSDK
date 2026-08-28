@@ -284,10 +284,17 @@ environment*, which is global and has no target. An action for them needs a new
 target kind, which is a design decision about what a Track can address, not a match
 arm and a tween component.
 
-Not started, and deliberately not started blind. The question it turns on: does a
-Track get to drive global state at all, given that a Track holds *asset locks* to
-stop two Tracks fighting over the same thing, and the environment is one thing that
-every Track would contend for.
+**Decided 2026-08-28: they are not getting an action at all.** A Track addresses
+things in the scene and holds asset locks on them; a scene-wide setting has nothing
+to address and nothing to lock, so a target for it means either a global lock — one
+Track fading the fog blocking every other Track — or an exception to the policy that
+keeps Tracks from interfering.
+
+Note that "exposure" covers two things here, and only one was ever in question.
+`XrdsSceneExposureEnvironment` is the scene-wide EV100, which is what this
+paragraph refuses. `XrdsAnchorExposureOverride` is a component on an anchor, so it
+has a node to hang on and needs no new target kind; it stays a backlog candidate.
+See `docs/xrds-trigger-action-backlog.md`.
 
 ## What would come next, if something asks
 

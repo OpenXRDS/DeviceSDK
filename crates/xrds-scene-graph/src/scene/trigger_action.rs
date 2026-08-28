@@ -701,9 +701,11 @@ pub enum XrdsTriggerKind {
 
     /// An application-defined trigger, matched by name.
     ///
-    /// The inbound counterpart to `XrdsAction::FireCustomEvent`: that
-    /// lets a sequence call *out* to app code, this lets app code fire a
-    /// sequence *in*. App code defines its own message type, implements
+    /// The **inbound** direction: app code fires a Track. There is no outbound
+    /// counterpart any more — this comment used to name `XrdsAction::FireCustomEvent`
+    /// as one, and that variant was deleted with `Wait` and `Run` when the Track
+    /// model replaced sequences, so nothing lets a Track call out to app code at a
+    /// moment in its timeline. App code defines its own message type, implements
     /// `XrdsTriggerEvent` returning `Custom("its-name")`, and registers
     /// `consume_triggers::<ItsEvent>` — no SDK change needed.
     ///
