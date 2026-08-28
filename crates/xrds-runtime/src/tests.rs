@@ -294,6 +294,7 @@ fn imported_test_document() -> XrdsSceneDocument {
                             ..Default::default()
                         },
                         pbr: XrdsSceneMaterialPbrParams {
+                            cull: Default::default(),
                             metallic: 0.7,
                             roughness: 0.25,
                             reflectance: 0.6,

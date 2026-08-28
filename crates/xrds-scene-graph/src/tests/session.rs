@@ -237,6 +237,7 @@ fn session_material_operations_participate_in_undo_redo() {
         .set_node_material_pbr(
             XrdsSceneNodeId(12),
             XrdsSceneMaterialPbrParams {
+                cull: Default::default(),
                 metallic: 0.9,
                 roughness: 0.15,
                 reflectance: 0.8,

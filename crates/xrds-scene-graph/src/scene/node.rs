@@ -125,6 +125,7 @@ pub enum XrdsSceneRuntimeComponent {
     PointLight(XrdsPointLight),
     SpotLight(XrdsSpotLight),
     AudioClip(XrdsAudioClip),
+    Video360(xrds_components::XrdsVideo360),
     HudText(XrdsHudTextData),
     Text(XrdsText),
     ExtrudedText(XrdsExtrudedText),
@@ -410,6 +411,25 @@ impl XrdsSceneNode {
                     outer_angle: light.outer_angle,
                     shadows: light.shadows,
                 }),
+                material: None,
+                editor,
+                gltf_node_authoring: None,
+            },
+            XrdsSceneNodePayload::Video360(video) => XrdsSceneRuntimeNode {
+                id: self.id.into(),
+                parent_id: self.parent_id.map(Into::into),
+                component: XrdsSceneRuntimeComponent::Video360(xrds_components::XrdsVideo360 {
+                    name: self.name.clone(),
+                    transform,
+                    visible: self.visible,
+                    video_asset_id: video.video_asset_id.clone(),
+                    radius: video.radius,
+                    opacity: video.opacity,
+                    autoplay: video.autoplay,
+                }),
+                // No material: the runtime builds it, because unlit + blend +
+                // the video in the base-colour slot is the arrangement that makes
+                // this work and is not the author's to get wrong.
                 material: None,
                 editor,
                 gltf_node_authoring: None,

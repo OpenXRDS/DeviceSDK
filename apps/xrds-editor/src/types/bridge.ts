@@ -147,6 +147,7 @@ export type NodePayload =
   | { type: "Sphere";   material: MaterialParams; physics_body: string; gravity_scale: number; mass: number }
   | { type: "Cylinder"; material: MaterialParams; physics_body: string; gravity_scale: number; mass: number }
   | { type: "Capsule";  material: MaterialParams; physics_body: string; gravity_scale: number; mass: number; radius: number; length: number }
+  | { type: "Video360"; video_asset_id: string; radius: number; opacity: number; autoplay: boolean }
   | { type: "AudioClip"; asset_id: string; volume: number; looped: boolean; spatial: boolean;
       autoplay: boolean; distance_model: string; min_distance: number; max_distance: number;
       rolloff_factor: number }
@@ -515,7 +516,7 @@ export interface TaskDto {
  *  replaced wholesale by the first real snapshot.
  *
  *  Bump this together with the Rust constant whenever a DTO changes. */
-export const BRIDGE_VERSION = 26;
+export const BRIDGE_VERSION = 27;
 
 export interface EditorSnapshot {
   /** See {@link BRIDGE_VERSION}. `0` means a build predating the check. */
@@ -690,6 +691,8 @@ export type EditorCommand =
   | { type: "ClearAntiAliasing" }
   | { type: "SetIbl";       payload: { diffuse_asset_id: string; specular_asset_id: string; intensity: number } }
   | { type: "ClearIbl" }
+  | { type: "SetVideo360Params"; payload: { id: number; video_asset_id: string; radius: number;
+      opacity: number; autoplay: boolean } }
   | { type: "SetSkybox";    payload: { texture_asset_id: string; brightness: number; yaw_deg: number } }
   | { type: "ClearSkybox" }
   | { type: "SetAtmosphere"; payload: { enabled: boolean } }

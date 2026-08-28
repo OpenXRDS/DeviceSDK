@@ -27,7 +27,7 @@ use xrds_components::world::{XrdsAudioClip, XrdsCamera, XrdsGltfAsset, XrdsNode}
 use xrds_components::{
     CameraProjectionParams, OrthographicCameraParams, PerspectiveCameraParams, TransformParams,
     XrdsColor, XrdsId, XrdsLinearRgba, XrdsMaterialAlphaMode, XrdsMaterialParams,
-    XrdsMaterialPbrParams, XrdsMaterialTextureFilterMode, XrdsMaterialTextureRef,
+    XrdsMaterialCull, XrdsMaterialPbrParams, XrdsMaterialTextureFilterMode, XrdsMaterialTextureRef,
     XrdsMaterialTextureSamplerParams, XrdsMaterialTextureSlotKind, XrdsMaterialTextureSlots,
     XrdsMaterialTextureUvParams,
     XrdsMaterialTextureUvTransformMode,

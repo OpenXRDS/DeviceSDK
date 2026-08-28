@@ -265,6 +265,9 @@ fn spawn_runtime_component(
             Some(spawn_ambient_light_descriptor(commands, c))
         }
         XrdsSceneRuntimeComponent::AudioClip(c) => Some(spawn_audio_clip_descriptor(commands, c)),
+        XrdsSceneRuntimeComponent::Video360(c) => {
+            Some(crate::xrds_api::spawn::spawn_video_360_descriptor(commands, c))
+        }
         XrdsSceneRuntimeComponent::HudText(hud) => {
             Some(spawn_hud_text_for_reimport(commands, hud))
         }

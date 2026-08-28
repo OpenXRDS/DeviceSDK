@@ -471,6 +471,76 @@ pub(super) fn spawn_sphere_descriptor(commands: &mut Commands, sphere: &XrdsSphe
     entity
 }
 
+/// Spawn a 360 video sphere: inside-facing geometry, unlit, video in the base
+/// colour slot.
+///
+/// Every part of the arrangement is set here rather than left to the author,
+/// because each one is invisible when wrong in the same way — a black view — and
+/// they are not distinguishable from each other in a headset. See
+/// `docs/video-360-plan.md`.
+pub(super) fn spawn_video_360_descriptor(
+    commands: &mut Commands,
+    video: &xrds_components::XrdsVideo360,
+) -> Entity {
+    let entity = commands.spawn_empty().id();
+    let descriptor = video.clone();
+    let name = video.name.clone();
+    let transform = video.transform;
+    let visible = video.visible;
+    let radius = video.radius;
+    let opacity = video.opacity.clamp(0.0, 1.0);
+    let asset_id = video.video_asset_id.clone();
+
+    commands.queue(move |world: &mut World| {
+        let mesh = {
+            let mut meshes = world.resource_mut::<Assets<Mesh>>();
+            meshes.add(crate::xrds_api::video_sphere::inside_facing_equirect_sphere(radius))
+        };
+
+        use bevy::camera::visibility::NoFrustumCulling;
+        world.entity_mut(entity).insert((
+            Name::new(name),
+            Mesh3d(mesh),
+            build_transform(&transform),
+            build_visibility_hierarchy_components(visible),
+            XrdsStored(descriptor),
+            // The viewer is *inside* this mesh, so its bounding volume contains
+            // the camera and the sphere would be culled by any test that assumes
+            // otherwise. The same flag every large enclosing primitive here uses.
+            NoFrustumCulling,
+        ));
+
+        let mut material = XrdsMaterialParams {
+            // Unlit: the video is the emission, not a diffuse surface catching
+            // room light. A lit 360 sphere is simply dark.
+            unlit: true,
+            opacity,
+            ..Default::default()
+        };
+        // Blend even at full opacity. Over passthrough the alpha *is* the
+        // mechanism, and an author lowering opacity at runtime on a material that
+        // resolved to Opaque at spawn would see nothing change.
+        material.pbr.alpha_mode = xrds_components::XrdsMaterialAlphaMode::Blend;
+        // Belt and braces with the geometry: the mesh is already wound
+        // inside-facing, so back-face culling shows the interior correctly. This
+        // says so explicitly rather than relying on the reader knowing it.
+        material.pbr.cull = xrds_components::XrdsMaterialCull::Back;
+        if !asset_id.is_empty() {
+            material.textures.set(
+                xrds_components::XrdsMaterialTextureSlotKind::BaseColor,
+                Some(xrds_components::XrdsMaterialTextureRef {
+                    texture_asset_id: asset_id,
+                    uv: Default::default(),
+                    sampler: Default::default(),
+                }),
+            );
+        }
+        apply_authored_material_to_entity(world, entity, material);
+    });
+
+    entity
+}
+
 pub(super) fn spawn_world_panel_descriptor(commands: &mut Commands, panel: &XrdsWorldPanel) -> Entity {
     let entity    = commands.spawn_empty().id();
     let descriptor = panel.clone();

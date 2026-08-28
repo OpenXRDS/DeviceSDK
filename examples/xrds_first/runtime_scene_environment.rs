@@ -119,6 +119,7 @@ impl XrdsApp for RuntimeSceneEnvironmentApp {
                 opacity: 1.0,
                 unlit: false,
                 pbr: XrdsMaterialPbrParams {
+                    cull: Default::default(),
                     metallic: 0.0,
                     roughness: 0.92,
                     reflectance: 0.2,
@@ -144,6 +145,7 @@ impl XrdsApp for RuntimeSceneEnvironmentApp {
                 opacity: 1.0,
                 unlit: false,
                 pbr: XrdsMaterialPbrParams {
+                    cull: Default::default(),
                     metallic: 1.0,
                     roughness: 0.08,
                     reflectance: 0.95,
@@ -169,6 +171,7 @@ impl XrdsApp for RuntimeSceneEnvironmentApp {
                 opacity: 1.0,
                 unlit: false,
                 pbr: XrdsMaterialPbrParams {
+                    cull: Default::default(),
                     metallic: 1.0,
                     roughness: 0.72,
                     reflectance: 0.9,

@@ -107,6 +107,43 @@ impl XrdsSceneDocument {
                 }
             }
 
+            // A `Video360` holds its clip in `video_asset_id`, not in a material
+            // texture slot, so the rule above cannot see it. Without this, two
+            // Video360 nodes — or a Video360 and a mesh — could bind one clip and
+            // nothing would say so. The document is the authoritative gate here:
+            // the editor's picker mirrors this rule, and a picker that disagrees
+            // with the validator is how the video texture slot went wrong before.
+            if let XrdsSceneNodePayload::Video360(video) = &node.payload {
+                let asset_id = video.video_asset_id.trim();
+                if !asset_id.is_empty() {
+                    match self.assets.iter().find(|a| a.id == asset_id) {
+                        None => {
+                            return Err(XrdsSceneValidationError::MissingVideo360Asset {
+                                node_id: node.id,
+                                asset_id: asset_id.to_string(),
+                            });
+                        }
+                        Some(asset) if asset.kind != XrdsSceneAssetKind::Video => {
+                            return Err(XrdsSceneValidationError::Video360AssetKindMismatch {
+                                node_id: node.id,
+                                asset_id: asset_id.to_string(),
+                                found: asset.kind,
+                            });
+                        }
+                        Some(_) => {}
+                    }
+                    if let Some(previous) = video_owner.insert(asset_id.to_string(), node.id) {
+                        if previous != node.id {
+                            return Err(XrdsSceneValidationError::VideoAssetBoundTwice {
+                                asset_id: asset_id.to_string(),
+                                first_node_id: previous,
+                                second_node_id: node.id,
+                            });
+                        }
+                    }
+                }
+            }
+
             if let XrdsSceneNodePayload::AudioClip(clip) = &node.payload {
                 validate_audio_clip_asset(self, node.id, &clip.asset_id)?;
             }
@@ -227,6 +264,17 @@ pub enum XrdsSceneValidationError {
     MaterialTextureAssetKindMismatch {
         node_id: XrdsSceneNodeId,
         slot: XrdsSceneMaterialTextureSlotKind,
+        asset_id: String,
+        found: XrdsSceneAssetKind,
+    },
+    /// A `Video360` node naming an asset the catalog does not have.
+    MissingVideo360Asset {
+        node_id: XrdsSceneNodeId,
+        asset_id: String,
+    },
+    /// A `Video360` node naming an asset that is not a video.
+    Video360AssetKindMismatch {
+        node_id: XrdsSceneNodeId,
         asset_id: String,
         found: XrdsSceneAssetKind,
     },

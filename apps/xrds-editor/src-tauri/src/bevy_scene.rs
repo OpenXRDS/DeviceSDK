@@ -831,11 +831,11 @@ fn restore_track_nodes_from_document(
                                     XrdsSceneNodePayload::Effect(fx) => Some(fx.clone()),
                                     _ => None,
                                 },
-                                videos: doc
-                                    .node_material(id)
-                                    .ok()
-                                    .map(|m| video_asset_ids_in_material(doc, m))
-                                    .unwrap_or_default(),
+                                // Was a material-slot walk, which missed a
+                                // `Video360` entirely: its clip lives in the
+                                // payload, so Stop reported success and left the
+                                // video playing.
+                                videos: doc.video_asset_ids_on_node(id),
                             })
                         }
                         _ => None,
@@ -886,35 +886,6 @@ fn restore_track_nodes_from_document(
             ctx.set_material_params_for_node(id, material.into());
         }
     }
-}
-
-/// The video assets a material's slots name.
-///
-/// Mirrors the document's own slot walk; the struct has one field per slot and no
-/// iterator, so the list is spelled out — a slot added later and missed here would
-/// simply never stop, silently.
-fn video_asset_ids_in_material(
-    doc: &XrdsSceneDocument,
-    material: &XrdsSceneMaterial,
-) -> Vec<String> {
-    let slots = [
-        material.textures.base_color.as_ref(),
-        material.textures.metallic_roughness.as_ref(),
-        material.textures.normal.as_ref(),
-        material.textures.occlusion.as_ref(),
-        material.textures.emissive.as_ref(),
-    ];
-    let mut ids: Vec<String> = Vec::new();
-    for texture in slots.into_iter().flatten() {
-        let asset_id = texture.texture_asset_id.trim();
-        let is_video = doc
-            .asset(asset_id)
-            .is_some_and(|a| a.kind == xrds_scene_graph::XrdsSceneAssetKind::Video);
-        if is_video && !ids.iter().any(|id| id == asset_id) {
-            ids.push(asset_id.to_string());
-        }
-    }
-    ids
 }
 
 fn absolutize_doc_asset_uris(doc: &mut XrdsSceneDocument, scene_dir: &std::path::Path) {

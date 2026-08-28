@@ -67,6 +67,12 @@ fn build_payload_dto(
         XrdsSceneNodePayload::Cylinder(c)   => NodePayloadDto::Cylinder { material: mat_dto(&c.material), physics_body: physics_body_str(c.physics_body), gravity_scale: c.gravity_scale, mass: c.mass },
         XrdsSceneNodePayload::Effect(e)     => NodePayloadDto::Effect   { kind: effect_kind_str(e.kind).to_string(), auto_play: e.auto_play, burst_count: e.burst_count, spawn_rate: e.spawn_rate, lifetime_secs: e.lifetime_secs, size_min: e.size_min, size_max: e.size_max, color_start: e.color_start, color_end: e.color_end, speed_min: e.speed_min, speed_max: e.speed_max, omnidirectional: e.omnidirectional, spread_deg: e.spread_deg, gravity: e.gravity, emission_radius: e.emission_radius, blend: effect_blend_str(e.blend).to_string(), size_end: e.size_end, drag: e.drag, fade_edge: e.fade_edge, fade_scene: e.fade_scene },
         XrdsSceneNodePayload::Capsule(c)    => NodePayloadDto::Capsule  { material: mat_dto(&c.material), physics_body: physics_body_str(c.physics_body), gravity_scale: c.gravity_scale, mass: c.mass, radius: c.radius, length: c.length },
+        XrdsSceneNodePayload::Video360(v)   => NodePayloadDto::Video360 {
+            video_asset_id: v.video_asset_id.clone(),
+            radius: v.radius,
+            opacity: v.opacity,
+            autoplay: v.autoplay,
+        },
         XrdsSceneNodePayload::AudioClip(a)  => NodePayloadDto::AudioClip {
             asset_id: a.asset_id.clone(),
             volume: a.volume,
@@ -192,6 +198,9 @@ fn payload_kind_name(p: &XrdsSceneNodePayload) -> &'static str {
         XrdsSceneNodePayload::ExtrudedText(_) => "ExtrudedText",
         XrdsSceneNodePayload::HudText(_)      => "HudText",
         XrdsSceneNodePayload::AudioClip(_)    => "AudioClip",
+        // Kind string only for now. Palette entry, DTO and Inspector section
+        // are phase 3 of docs/video-360-plan.md.
+        XrdsSceneNodePayload::Video360(_)     => "Video360",
         XrdsSceneNodePayload::InteractionZone(_) => "InteractionZone",
         XrdsSceneNodePayload::PlayerSpawn(_)     => "PlayerSpawn",
         XrdsSceneNodePayload::PlayerSpawnZone(_) => "PlayerSpawnZone",
@@ -370,6 +379,37 @@ pub fn apply_inspector_command(
         EditorCommand::SetDirectionalLight { id, color, illuminance } => {
             state.pending_directional_light = Some((XrdsSceneNodeId(*id), *color, *illuminance));
             false
+        }
+        EditorCommand::SetVideo360Params {
+            id, video_asset_id, radius, opacity, autoplay,
+        } => {
+            let id = XrdsSceneNodeId(*id);
+            let video_asset_id = video_asset_id.clone();
+            // Clamped here rather than trusted: a negative radius inverts the
+            // sphere back to outward-facing — invisible, and indistinguishable
+            // from every other way this node can go blank.
+            let radius = radius.max(0.01);
+            let opacity = opacity.clamp(0.0, 1.0);
+            let autoplay = *autoplay;
+            match session.0.edit(|doc| {
+                if let Some(node) = doc.node_mut(id) {
+                    if let XrdsSceneNodePayload::Video360(v) = &mut node.payload {
+                        v.video_asset_id = video_asset_id;
+                        v.radius = radius;
+                        v.opacity = opacity;
+                        v.autoplay = autoplay;
+                    }
+                }
+            }) {
+                Ok(()) => true,
+                Err(e) => {
+                    // Surfaced, not swallowed: the likely failure is binding a clip
+                    // another node already shows, and that refusal is the one the
+                    // author most needs to see.
+                    error!("[video360] SetVideo360Params rejected: {e:?}");
+                    false
+                }
+            }
         }
         EditorCommand::SetSpotLight { id, color, intensity, range, inner_angle, outer_angle } => {
             // Bevy renders a spot light as *nothing at all* when the inner cone is
@@ -1007,6 +1047,7 @@ fn scene_material_from_dto(dto: &MaterialParamsDto) -> XrdsSceneMaterial {
         base_color: dto.base_color,
         emissive: [dto.emissive[0], dto.emissive[1], dto.emissive[2], 1.0],
         pbr: XrdsSceneMaterialPbrParams {
+            cull: Default::default(),
             metallic: dto.metallic,
             roughness: dto.roughness,
             ..Default::default()
@@ -1205,6 +1246,7 @@ mod tests {
             opacity: 0.25,
             unlit: true,
             pbr: xrds_scene_graph::XrdsSceneMaterialPbrParams {
+                cull: Default::default(),
                 metallic: 0.1,
                 roughness: 0.9,
                 double_sided: true,

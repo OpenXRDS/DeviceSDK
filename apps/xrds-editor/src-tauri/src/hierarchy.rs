@@ -62,6 +62,9 @@ fn payload_kind(payload: &XrdsSceneNodePayload) -> &'static str {
         XrdsSceneNodePayload::ExtrudedText(_) => "ExtrudedText",
         XrdsSceneNodePayload::HudText(_)      => "HudText",
         XrdsSceneNodePayload::AudioClip(_)    => "AudioClip",
+        // Kind string only for now. Palette entry, DTO and Inspector section
+        // are phase 3 of docs/video-360-plan.md.
+        XrdsSceneNodePayload::Video360(_)     => "Video360",
         XrdsSceneNodePayload::InteractionZone(_) => "InteractionZone",
         XrdsSceneNodePayload::PlayerSpawn(_)     => "PlayerSpawn",
         XrdsSceneNodePayload::PlayerSpawnZone(_) => "PlayerSpawnZone",

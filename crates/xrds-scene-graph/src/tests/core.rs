@@ -61,6 +61,7 @@ fn cube_descriptor_conversion_preserves_material_override() {
         opacity: 0.75,
         unlit: true,
         pbr: XrdsMaterialPbrParams {
+            cull: Default::default(),
             metallic: 0.8,
             roughness: 0.2,
             reflectance: 0.65,
@@ -175,6 +176,7 @@ fn runtime_projection_preserves_material_for_mesh_nodes() {
                 opacity: 0.7,
                 unlit: true,
                 pbr: XrdsSceneMaterialPbrParams {
+                    cull: Default::default(),
                     metallic: 0.6,
                     roughness: 0.3,
                     reflectance: 0.7,
@@ -706,4 +708,196 @@ fn sanitizing_repairs_rather_than_rejects_for_live_editing() {
     // A already-valid value is left exactly alone.
     let good = XrdsSceneFogFalloff::Exponential { visibility: 80.0 };
     assert_eq!(good.sanitized(), good);
+}
+
+// ---------------------------------------------------------------------------
+// Video360 asset binding
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+fn video_360_doc(nodes: Vec<(u64, &str)>, assets: Vec<XrdsSceneAsset>) -> XrdsSceneDocument {
+    XrdsSceneDocument {
+        nodes: nodes
+            .into_iter()
+            .map(|(id, asset_id)| XrdsSceneNode {
+                id: XrdsSceneNodeId(id),
+                parent_id: None,
+                name: format!("Dome{id}"),
+                enabled: true,
+                visible: true,
+                transform: XrdsSceneTransform::default(),
+                payload: XrdsSceneNodePayload::Video360(XrdsSceneVideo360 {
+                    video_asset_id: asset_id.to_string(),
+                    ..Default::default()
+                }),
+                grabbable: false,
+                editor: XrdsEditorMetadata::default(),
+                triggers: Vec::new(),
+                watchers: Vec::new(),
+            })
+            .collect(),
+        assets,
+        ..Default::default()
+    }
+}
+
+#[cfg(test)]
+fn video_asset(id: &str) -> XrdsSceneAsset {
+    XrdsSceneAsset {
+        id: id.to_string(),
+        uri: format!("videos/{id}.mp4"),
+        kind: XrdsSceneAssetKind::Video,
+    }
+}
+
+/// One clip, one surface — enforced for `Video360` too.
+///
+/// The rule already existed but read only material texture slots, and a
+/// `Video360` keeps its clip in the payload. Without this, two spheres could share
+/// one decoder and would have to play in lockstep, which is the arrangement the
+/// rule exists to prevent.
+#[test]
+fn a_video_cannot_be_bound_to_two_video_360_nodes() {
+    let doc = video_360_doc(vec![(1, "clip"), (2, "clip")], vec![video_asset("clip")]);
+    match doc.validate() {
+        Err(XrdsSceneValidationError::VideoAssetBoundTwice { asset_id, .. }) => {
+            assert_eq!(asset_id, "clip");
+        }
+        other => panic!("expected VideoAssetBoundTwice, got {other:?}"),
+    }
+}
+
+/// Two spheres with two clips is fine — the rule is about sharing, not about
+/// having more than one 360 node.
+#[test]
+fn two_video_360_nodes_with_their_own_clips_are_valid() {
+    let doc = video_360_doc(
+        vec![(1, "a"), (2, "b")],
+        vec![video_asset("a"), video_asset("b")],
+    );
+    assert!(doc.validate().is_ok(), "got {:?}", doc.validate());
+}
+
+/// A clip the catalog does not have is refused rather than resolving to nothing.
+#[test]
+fn a_video_360_naming_an_unknown_asset_is_refused() {
+    let doc = video_360_doc(vec![(1, "ghost")], vec![]);
+    assert!(matches!(
+        doc.validate(),
+        Err(XrdsSceneValidationError::MissingVideo360Asset { .. })
+    ));
+}
+
+/// An asset of the wrong kind is refused too — the failure would otherwise be a
+/// still image on a 360 sphere, which looks like a video that will not play.
+#[test]
+fn a_video_360_naming_a_texture_is_refused() {
+    let doc = video_360_doc(
+        vec![(1, "pic")],
+        vec![XrdsSceneAsset {
+            id: "pic".to_string(),
+            uri: "textures/pic.png".to_string(),
+            kind: XrdsSceneAssetKind::Texture,
+        }],
+    );
+    assert!(matches!(
+        doc.validate(),
+        Err(XrdsSceneValidationError::Video360AssetKindMismatch { .. })
+    ));
+}
+
+/// An empty clip id is allowed: a node placed before its video is imported is a
+/// normal authoring state, not an error.
+#[test]
+fn a_video_360_with_no_clip_yet_is_valid() {
+    let doc = video_360_doc(vec![(1, "")], vec![]);
+    assert!(doc.validate().is_ok(), "got {:?}", doc.validate());
+}
+
+/// A `Video360`'s clip is found by the document's own video accessor.
+///
+/// **This is the check four separate call sites needed and none had.** A video
+/// lives in one of two places — a material texture slot, or a `Video360` payload —
+/// and every piece of code that walked only material slots failed silently: the
+/// validator stopped enforcing one-clip-one-surface, the asset picker offered a
+/// bound clip as free, and the track-preview Stop button reported success while
+/// leaving a 360 video playing.
+#[test]
+fn the_video_accessor_finds_a_clip_in_a_video_360_payload() {
+    let doc = video_360_doc(vec![(1, "clip")], vec![video_asset("clip")]);
+    assert_eq!(
+        doc.video_asset_ids_on_node(XrdsSceneNodeId(1)),
+        vec!["clip".to_string()],
+        "a Video360 keeps its clip in the payload, not in a material slot"
+    );
+}
+
+/// And in a material slot, which is the case that already worked.
+#[test]
+fn the_video_accessor_still_finds_a_clip_in_a_material_slot() {
+    let mut cube = XrdsSceneNode {
+        id: XrdsSceneNodeId(1),
+        parent_id: None,
+        name: "Screen".to_string(),
+        enabled: true,
+        visible: true,
+        transform: XrdsSceneTransform::default(),
+        payload: XrdsSceneNodePayload::Cube(XrdsSceneCube::default()),
+        grabbable: false,
+        editor: XrdsEditorMetadata::default(),
+        triggers: Vec::new(),
+        watchers: Vec::new(),
+    };
+    if let XrdsSceneNodePayload::Cube(c) = &mut cube.payload {
+        c.material.textures.base_color = Some(XrdsSceneTextureRef {
+            texture_asset_id: "clip".to_string(),
+            uv: Default::default(),
+            sampler: Default::default(),
+        });
+    }
+    let doc = XrdsSceneDocument {
+        nodes: vec![cube],
+        assets: vec![video_asset("clip")],
+        ..Default::default()
+    };
+    assert_eq!(
+        doc.video_asset_ids_on_node(XrdsSceneNodeId(1)),
+        vec!["clip".to_string()]
+    );
+}
+
+/// A texture in a slot is not a video, and must not be reported as one — stopping
+/// "video" playback on an ordinary texture would be a no-op at best.
+#[test]
+fn the_video_accessor_ignores_non_video_assets() {
+    let mut cube = XrdsSceneNode {
+        id: XrdsSceneNodeId(1),
+        parent_id: None,
+        name: "Screen".to_string(),
+        enabled: true,
+        visible: true,
+        transform: XrdsSceneTransform::default(),
+        payload: XrdsSceneNodePayload::Cube(XrdsSceneCube::default()),
+        grabbable: false,
+        editor: XrdsEditorMetadata::default(),
+        triggers: Vec::new(),
+        watchers: Vec::new(),
+    };
+    if let XrdsSceneNodePayload::Cube(c) = &mut cube.payload {
+        c.material.textures.base_color = Some(XrdsSceneTextureRef {
+            texture_asset_id: "pic".to_string(),
+            uv: Default::default(),
+            sampler: Default::default(),
+        });
+    }
+    let doc = XrdsSceneDocument {
+        nodes: vec![cube],
+        assets: vec![XrdsSceneAsset {
+            id: "pic".to_string(),
+            uri: "textures/pic.png".to_string(),
+            kind: XrdsSceneAssetKind::Texture,
+        }],
+        ..Default::default()
+    };
+    assert!(doc.video_asset_ids_on_node(XrdsSceneNodeId(1)).is_empty());
 }

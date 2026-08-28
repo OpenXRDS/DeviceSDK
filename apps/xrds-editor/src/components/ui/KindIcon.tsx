@@ -41,6 +41,7 @@ const KIND_ICONS: Record<string, LucideIcon> = {
   Billboard: Image,
   HudText: PanelTop,
   AudioClip: Music,
+  Video360: Video,
   InteractionZone: Hexagon,
   PlayerSpawn: PersonStanding,
   PlayerSpawnZone: SquareDashed,
@@ -99,7 +100,7 @@ const KIND_COLOR: Record<string, string> = {
   GltfAsset: "var(--flamingo)", Gltf: "var(--flamingo)",
   Texture: "var(--mauve)",
   AudioClip: "var(--green)", Audio: "var(--green)",
-  Video: "var(--teal)",
+  Video: "var(--teal)", Video360: "var(--teal)",
   EnvironmentMap: "var(--peach)",
 
   Empty: "var(--overlay0)",

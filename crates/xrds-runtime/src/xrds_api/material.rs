@@ -134,6 +134,14 @@ pub(super) fn runtime_material_from_authored_in_world(
             metallic: params.pbr.metallic.clamp(0.0, 1.0),
             reflectance: params.pbr.reflectance.clamp(0.0, 1.0),
             double_sided: params.pbr.double_sided,
+            // The half that was missing: `double_sided` above only flips the
+            // normal, so without this a back face is lit correctly and then
+            // culled anyway.
+            cull_mode: match params.pbr.cull {
+                xrds_components::XrdsMaterialCull::Back => Some(bevy::render::render_resource::Face::Back),
+                xrds_components::XrdsMaterialCull::Front => Some(bevy::render::render_resource::Face::Front),
+                xrds_components::XrdsMaterialCull::None => None,
+            },
             alpha_mode,
             unlit: params.unlit,
             ..default()

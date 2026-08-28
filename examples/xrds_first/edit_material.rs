@@ -86,6 +86,7 @@ impl XrdsApp for EditMaterialApp {
                 opacity: 1.0,
                 unlit: false,
                 pbr: xrds::sdk::XrdsMaterialPbrParams {
+                    cull: Default::default(),
                     metallic: 0.0,
                     roughness: 0.92,
                     reflectance: 0.35,

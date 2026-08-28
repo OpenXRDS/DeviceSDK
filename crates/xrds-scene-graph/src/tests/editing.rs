@@ -145,6 +145,7 @@ fn document_material_workflow_updates_mesh_nodes_and_rejects_materialless_nodes(
                 opacity: 1.4,
                 unlit: false,
                 pbr: XrdsSceneMaterialPbrParams {
+                    cull: Default::default(),
                     metallic: 1.4,
                     roughness: -0.2,
                     reflectance: 1.3,

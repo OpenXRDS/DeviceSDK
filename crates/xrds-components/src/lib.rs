@@ -43,6 +43,7 @@ pub use light_params::{
     AmbientLightParams, DirectionalLightParams, LightKind, PointLightParams, SpotLightParams,
 };
 pub use world::audio::{XrdsAudioClip, XrdsAudioDistanceModel};
+pub use world::video360::XrdsVideo360;
 pub use world_ui::{
     XrdsWorldButton, XrdsWorldButtonParams, XrdsWorldButtonState,
     XrdsWorldElementDisabled,
@@ -69,6 +70,7 @@ pub use values::{
     CapsuleGeometryParams, CubeGeometryParams, CylinderGeometryParams, EffectParams,
     Plane3DGeometryParams,
     SphereGeometryParams, TetrahedronGeometryParams, TransformParams, XrdsMaterialAlphaMode,
+    XrdsMaterialCull,
     XrdsMaterialParams,
     XrdsMaterialPbrParams, XrdsMaterialTextureFilterMode, XrdsMaterialTextureRef,
     XrdsMaterialTextureSamplerParams, XrdsMaterialTextureSlotKind, XrdsMaterialTextureSlots,

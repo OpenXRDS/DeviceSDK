@@ -735,6 +735,104 @@ function FalloffCurve({ model, min, max, rolloff }:
   );
 }
 
+/** A 360 video surface.
+ *
+ *  Only four fields, and `opacity` is the one that is not guessable: below 1.0 is
+ *  what lets passthrough show through the sphere, because the app layer's alpha is
+ *  what reveals the room beneath it. The hint says so, since an author who does not
+ *  know that will read the slider as a dimmer.
+ *
+ *  The clip picker offers only videos **no other node already shows** — one clip is
+ *  one surface, a rule the document enforces, so offering a bound clip here would
+ *  produce a change the validator then refuses.
+ */
+function Video360Section({ id, v, assets, send }: {
+  id: number;
+  v: Extract<NodePayload, { type: "Video360" }>;
+  assets: AssetCatalogEntry[];
+  send: (c: EditorCommand) => void;
+}) {
+  const commit = (patch: Partial<typeof v>) => send({
+    type: "SetVideo360Params",
+    payload: {
+      id,
+      video_asset_id: patch.video_asset_id ?? v.video_asset_id,
+      radius:         patch.radius         ?? v.radius,
+      opacity:        patch.opacity        ?? v.opacity,
+      autoplay:       patch.autoplay       ?? v.autoplay,
+    },
+  });
+
+  const videos = assets.filter(a =>
+    a.kind === "Video" && (a.bound_to_node === null || a.bound_to_node === id));
+
+  return (
+    <div className="insp-section">
+      <h4>360 Video</h4>
+      <div className="insp-row">
+        <label>Clip</label>
+        <Select
+          value={v.video_asset_id}
+          onValueChange={value => commit({ video_asset_id: value })}
+          options={videos.map(a => ({ value: a.id, label: a.name }))}
+          placeholder={videos.length === 0 ? "no free video asset" : "pick a clip"}
+        />
+      </div>
+      <SliderRow label="Radius" value={v.radius} min={1} max={200} step={1}
+        onLive={value => commit({ radius: value })}
+        onCommit={value => commit({ radius: value })} />
+      <SliderRow label="Opacity" value={v.opacity} min={0} max={1} step={0.01}
+        onLive={value => commit({ opacity: value })}
+        onCommit={value => commit({ opacity: value })} />
+      <div className="text-[10px] text-overlay0 leading-snug px-1 pb-1">
+        Below 1.0 lets passthrough show through the video. 0.8 is a good start.
+      </div>
+      <div className="insp-row">
+        <Checkbox label="Play on load" checked={v.autoplay}
+          onCheckedChange={value => commit({ autoplay: value })} />
+      </div>
+      {/* The same audition every other video surface gets. Without it the only way
+        * to check you picked the right clip — or that the sphere is facing the
+        * right way, which is the thing you cannot tell from a still frame — is to
+        * author a Track and enter play mode.
+        *
+        * `PreviewVideo` takes the *asset* id rather than a node, because a video is
+        * a texture rather than a node; that suits a Video360 unchanged. */}
+      {v.video_asset_id !== "" && (
+        <>
+          <div className="flex items-center gap-1.5 mb-1">
+            <label className="text-[10.5px] text-overlay0 w-[86px] shrink-0">Preview</label>
+            <div className="flex gap-1">
+              <button className="tb-btn text-[11px] px-2 py-0.5"
+                title="Play this video on the sphere"
+                onClick={() => send({ type: "PreviewVideo", payload: { asset_id: v.video_asset_id, playing: true } })}>
+                ▶ Play
+              </button>
+              <button className="tb-btn text-[11px] px-2 py-0.5"
+                title="Stop; the last frame stays on the sphere"
+                onClick={() => send({ type: "PreviewVideo", payload: { asset_id: v.video_asset_id, playing: false } })}>
+                ■ Stop
+              </button>
+            </div>
+          </div>
+          <div className="insp-note">
+            Preview only. In a running scene a video never starts on its own unless
+            <b> Play on load</b> is ticked — add a <b>PlayVideo</b> event in the
+            Sequencer, since a decoder costs a thread or a hardware codec session
+            and every frame of GPU work.
+          </div>
+        </>
+      )}
+      {videos.length === 0 && (
+        <div className="text-[10px] text-yellow leading-snug px-1 pb-1">
+          ⚠ Every imported video is already bound to another node. One clip is one
+          surface — import another copy to use it twice.
+        </div>
+      )}
+    </div>
+  );
+}
+
 function AudioClipSection({ id, a, assets, send }: {
   id: number;
   a: Extract<NodePayload, { type: "AudioClip" }>;
@@ -1315,6 +1413,9 @@ function PayloadSection({ node, send, isPlaying, snapshot }: { node: NodeInspect
   }
   if (payload.type === "AudioClip") {
     return <AudioClipSection id={id} a={payload} assets={snapshot.asset_catalog} send={send} />;
+  }
+  if (payload.type === "Video360") {
+    return <Video360Section id={id} v={payload} assets={snapshot.asset_catalog} send={send} />;
   }
   // Tetrahedron is mapped to Cube DTO on the Rust side
   if (payload.type === "Cube" || payload.type === "Sphere" || payload.type === "Cylinder" ||

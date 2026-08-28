@@ -156,6 +156,7 @@ fn baseline_material() -> XrdsSceneMaterial {
             ..Default::default()
         },
         pbr: XrdsSceneMaterialPbrParams {
+            cull: Default::default(),
             double_sided: true,
             ..Default::default()
         },
@@ -181,6 +182,7 @@ fn rotated_material() -> XrdsSceneMaterial {
             ..Default::default()
         },
         pbr: XrdsSceneMaterialPbrParams {
+            cull: Default::default(),
             double_sided: true,
             ..Default::default()
         },

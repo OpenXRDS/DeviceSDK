@@ -296,12 +296,36 @@ impl Default for XrdsMaterialAlphaMode {
     }
 }
 
+/// Which side of a surface is drawn.
+///
+/// Separate from [`XrdsMaterialPbrParams::double_sided`], and the pair is easy to
+/// confuse, so: `double_sided` decides whether a back face is *lit* correctly —
+/// it flips the normal — while this decides whether a back face is *drawn at all*.
+/// Bevy models them as two independent fields and so does Godot ("Cull Mode" plus
+/// a shading flag). Setting only `double_sided` fixes the lighting of a face that
+/// is still culled, which is what it did here until 2026-08-28.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum XrdsMaterialCull {
+    /// Draw front faces only. The default, and what a closed solid wants.
+    #[default]
+    Back,
+    /// Draw back faces only — the inside of a mesh, seen from within it. What a
+    /// 360 video sphere or an interior projection wants.
+    Front,
+    /// Draw both. For open surfaces with no inside or outside: foliage, cloth, a
+    /// plane meant to be readable from behind.
+    None,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct XrdsMaterialPbrParams {
     pub metallic: f32,
     pub roughness: f32,
     pub reflectance: f32,
+    /// Flips the normal on a back face so it lights correctly. Does **not** make
+    /// the back face visible — see [`XrdsMaterialCull`].
     pub double_sided: bool,
+    pub cull: XrdsMaterialCull,
     pub alpha_mode: XrdsMaterialAlphaMode,
     pub alpha_cutoff: f32,
 }
@@ -313,6 +337,7 @@ impl Default for XrdsMaterialPbrParams {
             roughness: 0.5,
             reflectance: 0.5,
             double_sided: false,
+            cull: XrdsMaterialCull::Back,
             alpha_mode: XrdsMaterialAlphaMode::Auto,
             alpha_cutoff: 0.5,
         }

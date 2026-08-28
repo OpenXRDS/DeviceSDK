@@ -1,6 +1,64 @@
 use super::*;
 
 impl XrdsSceneDocument {
+    /// Every video asset this node shows, wherever it keeps it.
+    ///
+    /// **Use this rather than walking material slots.** A video can live in two
+    /// places — a material texture slot on any mesh, or the payload of a
+    /// [`XrdsSceneNodePayload::Video360`] — and code that knows only about the
+    /// first has been written four separate times in this project, each time
+    /// producing a silent failure:
+    ///
+    /// - the document validator, which stopped enforcing one-clip-one-surface;
+    /// - the editor's asset picker, which offered a bound clip as free;
+    /// - the track-preview Stop, which left a 360 video playing after the Stop
+    ///   button reported success;
+    /// - and `video_asset_ids_on_entity` on the runtime side, which survives only
+    ///   because a `Video360` entity happens to be given a material at spawn.
+    ///
+    /// The slot list is spelled out because `XrdsSceneMaterialTextures` has one
+    /// field per slot and no iterator; a slot added later and missed here would
+    /// silently never play or never stop.
+    pub fn video_asset_ids_on_node(&self, node_id: XrdsSceneNodeId) -> Vec<String> {
+        let Some(node) = self.node(node_id) else {
+            return Vec::new();
+        };
+        let mut ids: Vec<String> = Vec::new();
+        let mut push_if_video = |candidate: &str, ids: &mut Vec<String>| {
+            let candidate = candidate.trim();
+            if candidate.is_empty() || ids.iter().any(|id| id == candidate) {
+                return;
+            }
+            let is_video = self
+                .asset(candidate)
+                .is_some_and(|a| a.kind == XrdsSceneAssetKind::Video);
+            if is_video {
+                ids.push(candidate.to_string());
+            }
+        };
+
+        if let crate::XrdsSceneNodePayload::Video360(video) = &node.payload {
+            push_if_video(&video.video_asset_id, &mut ids);
+        }
+
+        if let Some(material) = node_material_ref(node) {
+            for texture in [
+                material.textures.base_color.as_ref(),
+                material.textures.metallic_roughness.as_ref(),
+                material.textures.normal.as_ref(),
+                material.textures.occlusion.as_ref(),
+                material.textures.emissive.as_ref(),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                push_if_video(&texture.texture_asset_id, &mut ids);
+            }
+        }
+
+        ids
+    }
+
     pub fn node_material(
         &self,
         node_id: XrdsSceneNodeId,

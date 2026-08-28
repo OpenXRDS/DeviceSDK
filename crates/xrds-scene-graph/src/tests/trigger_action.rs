@@ -1443,3 +1443,18 @@ fn a_turn_matching_a_nodes_authored_rotation_is_reported() {
     );
     assert!(!has(&d, NO_TURN), "got {:?}", titles(&d));
 }
+
+/// A material authored before `cull` existed still loads, culling back faces.
+///
+/// The field is `#[serde(default)]`, which is the whole reason adding it did not
+/// need a migration — but "defaults correctly" is a claim about serde's behaviour
+/// on a real document, not about the struct's `Default` impl, so it is asserted
+/// against JSON that genuinely lacks the key.
+#[test]
+fn a_material_without_a_cull_field_loads_as_back_face_culling() {
+    let json = r#"{"metallic":0.0,"roughness":0.5,"reflectance":0.5,"double_sided":false,
+                   "alpha_mode":"Auto","alpha_cutoff":0.5}"#;
+    let restored: XrdsSceneMaterialPbrParams =
+        serde_json::from_str(json).expect("a document without `cull` must still load");
+    assert_eq!(restored.cull, XrdsSceneMaterialCull::Back);
+}

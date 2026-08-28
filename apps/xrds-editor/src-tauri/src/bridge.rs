@@ -266,6 +266,15 @@ pub enum EditorCommand {
         max_distance: f32,
         rolloff_factor: f32,
     },
+    /// One command for every field, so a slider drag is one undo entry — the same
+    /// reasoning as `SetAudioClipParams`.
+    SetVideo360Params {
+        id: u64,
+        video_asset_id: String,
+        radius: f32,
+        opacity: f32,
+        autoplay: bool,
+    },
     SetSkybox     { texture_asset_id: String, brightness: f32, yaw_deg: f32 },
     ClearSkybox,
     /// Procedural sky. No parameters yet — Earth defaults, see
@@ -402,7 +411,7 @@ pub enum EditorCommand {
 ///
 /// **If you change a DTO and do not bump this, you have removed the only thing
 /// that would have told anyone.**
-pub const BRIDGE_VERSION: u32 = 26;
+pub const BRIDGE_VERSION: u32 = 27;
 
 /// State snapshot emitted to the webview after each frame's update.
 /// Grow this incrementally — add fields as each phase is implemented.
@@ -649,6 +658,14 @@ pub enum NodePayloadDto {
     /// An authored audio clip. Until 2026-08-19 this fell through to `Other`, so a
     /// placed audio node showed nothing at all in the inspector — its volume, loop,
     /// spatial flag and entire distance-falloff curve were reachable only from Rust.
+    /// A 360 video surface. `opacity` is the field that matters most and is the
+    /// least guessable: below 1.0 is what lets passthrough show through it.
+    Video360 {
+        video_asset_id: String,
+        radius: f32,
+        opacity: f32,
+        autoplay: bool,
+    },
     AudioClip {
         asset_id: String,
         volume: f32,

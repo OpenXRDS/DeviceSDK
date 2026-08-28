@@ -1094,3 +1094,138 @@ fn importing_a_document_without_panels_clears_a_previous_registry() {
     };
     assert!(exported.panels.is_empty(), "stale templates came back: {:?}", exported.panels);
 }
+
+/// `cull` reaches Bevy's `cull_mode`, and does so independently of `double_sided`.
+///
+/// The two are easy to conflate and were, until 2026-08-28: `double_sided` was
+/// plumbed and `cull_mode` was left at its default, so a back face was lit
+/// correctly and then culled anyway. Anything that renders the *inside* of a mesh
+/// — a 360 video sphere, an interior projection — needs the second half.
+#[test]
+fn material_cull_reaches_the_runtime_material() {
+    use xrds_components::{XrdsMaterialCull, XrdsMaterialParams};
+    use bevy::render::render_resource::Face;
+
+    let cases = [
+        (XrdsMaterialCull::Back, Some(Face::Back)),
+        (XrdsMaterialCull::Front, Some(Face::Front)),
+        (XrdsMaterialCull::None, None),
+    ];
+    for (authored, expected) in cases {
+        let mut params = XrdsMaterialParams::default();
+        params.pbr.cull = authored;
+        // Deliberately left false: the point is that these are independent.
+        params.pbr.double_sided = false;
+
+        let runtime_material =
+            crate::xrds_api::material::runtime_material_from_authored_in_world(None, params);
+        assert_eq!(
+            runtime_material.base.cull_mode, expected,
+            "{authored:?} should reach Bevy as {expected:?}"
+        );
+        assert!(
+            !runtime_material.base.double_sided,
+            "cull must not imply double_sided — they are separate fields in Bevy"
+        );
+    }
+}
+
+/// A `Video360` node in a document becomes a live inside-facing sphere.
+///
+/// The end-to-end path, because every piece of it is silent when wrong: an
+/// outward sphere is invisible, a lit one is black, and an opaque one hides the
+/// passthrough it was meant to sit over. None of those is distinguishable from
+/// the others in a headset, so they are separated here.
+#[test]
+fn a_video_360_node_spawns_an_inside_facing_unlit_sphere() {
+    use xrds_scene_graph::{XrdsSceneNodePayload, XrdsSceneVideo360};
+
+    let mut app = xrds_test_app();
+    let id = XrdsSceneNodeId(4200);
+    let document = XrdsSceneDocument {
+        nodes: vec![XrdsSceneNode {
+            id,
+            parent_id: None,
+            name: "Dome".to_string(),
+            enabled: true,
+            visible: true,
+            transform: XrdsSceneTransform::default(),
+            payload: XrdsSceneNodePayload::Video360(XrdsSceneVideo360 {
+                video_asset_id: "clip".to_string(),
+                radius: 40.0,
+                opacity: 0.8,
+                autoplay: false,
+            }),
+            grabbable: false,
+            editor: Default::default(),
+            triggers: Vec::new(),
+            watchers: Vec::new(),
+        }],
+        // The clip has to be in the catalog: the document refuses a Video360
+        // naming an asset it does not have, which is the check that stops a
+        // silently blank sphere.
+        assets: vec![xrds_scene_graph::XrdsSceneAsset {
+            id: "clip".to_string(),
+            uri: "videos/clip.mp4".to_string(),
+            kind: xrds_scene_graph::XrdsSceneAssetKind::Video,
+        }],
+        ..Default::default()
+    };
+
+    {
+        let mut xrds = XrdsAPI::attach(&mut app);
+        xrds.import_scene_document(&document).expect("import should succeed");
+    }
+    app.update();
+
+    let entity = app
+        .world()
+        .resource::<crate::xrds_api::XrdsIdIndex>()
+        .entity_of(XrdsId(4200))
+        .expect("the node should be live");
+
+    // The mesh exists and is the generated sphere, not a Bevy primitive.
+    let mesh_handle = app
+        .world()
+        .get::<Mesh3d>(entity)
+        .expect("a Video360 node should have a mesh")
+        .0
+        .clone();
+    let meshes = app.world().resource::<Assets<Mesh>>();
+    let mesh = meshes.get(&mesh_handle).expect("the mesh should be loaded");
+
+    let positions = match mesh.attribute(Mesh::ATTRIBUTE_POSITION).unwrap() {
+        bevy::mesh::VertexAttributeValues::Float32x3(v) => v.clone(),
+        other => panic!("unexpected position format: {other:?}"),
+    };
+    for p in &positions {
+        let r = (p[0] * p[0] + p[1] * p[1] + p[2] * p[2]).sqrt();
+        assert!(
+            (r - 40.0).abs() < 0.01,
+            "the authored radius should reach the geometry; got {r}"
+        );
+    }
+
+    // Unlit and blended, which is what makes it a video rather than a surface —
+    // and what lets passthrough through beneath it.
+    let material_handle = app
+        .world()
+        .get::<MeshMaterial3d<crate::xrds_api::material::XrdsRuntimeMaterial>>(entity)
+        .expect("a Video360 node should have a material")
+        .0
+        .clone();
+    let materials = app
+        .world()
+        .resource::<Assets<crate::xrds_api::material::XrdsRuntimeMaterial>>();
+    let material = materials.get(&material_handle).expect("material should exist");
+    assert!(material.base.unlit, "a 360 video must be unlit or it renders dark");
+    assert!(
+        matches!(material.base.alpha_mode, AlphaMode::Blend),
+        "must blend even at opacity 1, or lowering opacity later changes nothing"
+    );
+    assert!(
+        (material.base.base_color.alpha() - 0.8).abs() < 1e-3,
+        "authored opacity should reach the material; got {}",
+        material.base.base_color.alpha()
+    );
+}

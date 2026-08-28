@@ -78,6 +78,9 @@ pub(super) fn register_default_interpreters(registry: &mut SurfaceInterpreterReg
     registry.register_entity::<XrdsAudioClip, _>(|audio, commands, _asset_server| {
         spawn_audio_clip_descriptor(commands, audio)
     });
+    registry.register_entity::<xrds_components::XrdsVideo360, _>(
+        |video, commands, _asset_server| spawn_video_360_descriptor(commands, video),
+    );
     registry.register_entity::<XrdsText, _>(|text, commands, _asset_server| {
         spawn_text_descriptor(commands, text)
     });
@@ -118,6 +121,7 @@ pub(super) fn register_default_descriptor_cloners(registry: &mut SurfaceDescript
     registry.register_clone::<XrdsSpotLight>();
     registry.register_clone::<XrdsAmbientLight>();
     registry.register_clone::<XrdsAudioClip>();
+    registry.register_clone::<xrds_components::XrdsVideo360>();
     registry.register_clone::<XrdsText>();
     registry.register_clone::<XrdsExtrudedText>();
 }

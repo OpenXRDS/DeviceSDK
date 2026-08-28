@@ -108,6 +108,7 @@ impl XrdsApp for EnvironmentMapVisualCheckApp {
                 opacity: 1.0,
                 unlit: false,
                 pbr: XrdsMaterialPbrParams {
+                    cull: Default::default(),
                     metallic: 0.0,
                     roughness: 0.94,
                     reflectance: 0.18,
@@ -213,6 +214,7 @@ fn spawn_sphere(
             opacity: 1.0,
             unlit: false,
             pbr: XrdsMaterialPbrParams {
+                cull: Default::default(),
                 metallic,
                 roughness,
                 reflectance,

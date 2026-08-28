@@ -155,6 +155,7 @@ fn blue_alpha_material() -> XrdsSceneMaterial {
         opacity: 0.7,
         unlit: false,
         pbr: XrdsSceneMaterialPbrParams {
+            cull: Default::default(),
             metallic: 0.0,
             roughness: 0.5,
             reflectance: 0.5,

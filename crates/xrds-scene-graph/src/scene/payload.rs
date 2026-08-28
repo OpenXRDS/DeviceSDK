@@ -18,6 +18,8 @@ pub enum XrdsSceneNodePayload {
     PointLight(XrdsScenePointLight),
     SpotLight(XrdsSceneSpotLight),
     AudioClip(XrdsSceneAudioClip),
+    /// A 360 video surface. See [`XrdsSceneVideo360`].
+    Video360(XrdsSceneVideo360),
     InteractionZone(XrdsSceneInteractionZone),
     PlayerSpawn(XrdsScenePlayerSpawn),
     Player(XrdsScenePlayer),
@@ -130,6 +132,11 @@ impl XrdsSceneNodePayload {
             // anyway (see xrds-gltf in CLAUDE.md).
             Self::Effect(_) => XrdsGltfExportClass::NodeOnly,
             Self::AudioClip(_) => XrdsGltfExportClass::NodeOnly,
+            // NodeOnly, though it does have a mesh: the sphere is generated at
+            // spawn from a radius, and baking it would export a 50 m ball of
+            // geometry whose whole point is the video it cannot carry. Scene
+            // glTF export is retired anyway (see xrds-gltf in CLAUDE.md).
+            Self::Video360(_) => XrdsGltfExportClass::NodeOnly,
             Self::InteractionZone(_) => XrdsGltfExportClass::NodeOnly,
             Self::PlayerSpawn(_) => XrdsGltfExportClass::NodeOnly,
             Self::Player(_) => XrdsGltfExportClass::NodeOnly,
@@ -466,12 +473,26 @@ impl Default for XrdsSceneMaterialAlphaMode {
     }
 }
 
+/// Authored counterpart of `XrdsMaterialCull`. See that type for why this is
+/// separate from `double_sided`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum XrdsSceneMaterialCull {
+    #[default]
+    Back,
+    Front,
+    None,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct XrdsSceneMaterialPbrParams {
     pub metallic: f32,
     pub roughness: f32,
     pub reflectance: f32,
     pub double_sided: bool,
+    /// `#[serde(default)]` so every document authored before 2026-08-28 loads
+    /// unchanged, culling back faces exactly as it always did.
+    #[serde(default)]
+    pub cull: XrdsSceneMaterialCull,
     pub alpha_mode: XrdsSceneMaterialAlphaMode,
     pub alpha_cutoff: f32,
 }
@@ -483,6 +504,7 @@ impl Default for XrdsSceneMaterialPbrParams {
             roughness: 0.5,
             reflectance: 0.5,
             double_sided: false,
+            cull: XrdsSceneMaterialCull::Back,
             alpha_mode: XrdsSceneMaterialAlphaMode::Auto,
             alpha_cutoff: 0.5,
         }
@@ -689,6 +711,26 @@ impl From<XrdsSceneMaterialAlphaMode> for XrdsMaterialAlphaMode {
     }
 }
 
+impl From<XrdsMaterialCull> for XrdsSceneMaterialCull {
+    fn from(value: XrdsMaterialCull) -> Self {
+        match value {
+            XrdsMaterialCull::Back => Self::Back,
+            XrdsMaterialCull::Front => Self::Front,
+            XrdsMaterialCull::None => Self::None,
+        }
+    }
+}
+
+impl From<XrdsSceneMaterialCull> for XrdsMaterialCull {
+    fn from(value: XrdsSceneMaterialCull) -> Self {
+        match value {
+            XrdsSceneMaterialCull::Back => Self::Back,
+            XrdsSceneMaterialCull::Front => Self::Front,
+            XrdsSceneMaterialCull::None => Self::None,
+        }
+    }
+}
+
 impl From<XrdsMaterialPbrParams> for XrdsSceneMaterialPbrParams {
     fn from(value: XrdsMaterialPbrParams) -> Self {
         Self {
@@ -696,6 +738,7 @@ impl From<XrdsMaterialPbrParams> for XrdsSceneMaterialPbrParams {
             roughness: value.roughness,
             reflectance: value.reflectance,
             double_sided: value.double_sided,
+            cull: value.cull.into(),
             alpha_mode: value.alpha_mode.into(),
             alpha_cutoff: value.alpha_cutoff,
         }
@@ -709,6 +752,7 @@ impl From<XrdsSceneMaterialPbrParams> for XrdsMaterialPbrParams {
             roughness: value.roughness,
             reflectance: value.reflectance,
             double_sided: value.double_sided,
+            cull: value.cull.into(),
             alpha_mode: value.alpha_mode.into(),
             alpha_cutoff: value.alpha_cutoff,
         }
@@ -1021,6 +1065,45 @@ impl Default for XrdsSceneSphere {
             physics_body: XrdsPhysicsBody::None,
             gravity_scale: 1.0,
             mass: 1.0,
+        }
+    }
+}
+
+/// A 360 video surface — an inside-facing sphere the viewer stands within.
+///
+/// See `docs/video-360-plan.md`. Deliberately *not* a Sphere node with a material:
+/// inward winding, equirectangular UVs and unlit shading are all set by the
+/// runtime, because each is invisible when wrong in the same way (a black view)
+/// and none is distinguishable from the others in a headset.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct XrdsSceneVideo360 {
+    /// Catalog asset id referencing an `XrdsSceneAssetKind::Video` asset.
+    #[serde(default)]
+    pub video_asset_id: String,
+    /// Metres. Large enough to clear roomscale drift, small enough for the far plane.
+    #[serde(default = "default_video_360_radius")]
+    pub radius: f32,
+    /// `1.0` is opaque. **Below 1.0 is what lets passthrough show through**, since
+    /// the app layer's alpha is what reveals the room beneath.
+    #[serde(default = "default_one")]
+    pub opacity: f32,
+    /// Off by default like every other video here — a decoder is the expensive
+    /// part, so nothing starts one unasked.
+    #[serde(default)]
+    pub autoplay: bool,
+}
+
+fn default_video_360_radius() -> f32 {
+    50.0
+}
+
+impl Default for XrdsSceneVideo360 {
+    fn default() -> Self {
+        Self {
+            video_asset_id: String::new(),
+            radius: default_video_360_radius(),
+            opacity: 1.0,
+            autoplay: false,
         }
     }
 }

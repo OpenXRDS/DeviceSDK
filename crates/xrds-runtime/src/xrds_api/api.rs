@@ -449,6 +449,9 @@ impl XrdsAPI<'_> {
                 XrdsSceneRuntimeComponent::AudioClip(component) => {
                     self.spawn_with_id(id, &component)?.entity()
                 }
+                XrdsSceneRuntimeComponent::Video360(component) => {
+                    self.spawn_with_id(id, &component)?.entity()
+                }
                 XrdsSceneRuntimeComponent::HudText(hud) => {
                     reserve_runtime_id_in_world(self.app.world_mut(), id)?;
                     spawn_hud_text_entity(self.app.world_mut(), id, &hud)

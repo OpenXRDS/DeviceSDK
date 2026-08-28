@@ -145,6 +145,7 @@ fn authored_scene_document() -> XrdsSceneDocument {
                         opacity: 1.0,
                         unlit: false,
                         pbr: XrdsSceneMaterialPbrParams {
+                            cull: Default::default(),
                             roughness: 0.92,
                             reflectance: 0.2,
                             double_sided: true,
@@ -177,6 +178,7 @@ fn authored_scene_document() -> XrdsSceneDocument {
                         opacity: 1.0,
                         unlit: false,
                         pbr: XrdsSceneMaterialPbrParams {
+                            cull: Default::default(),
                             metallic: 1.0,
                             roughness: 0.08,
                             reflectance: 0.95,
@@ -209,6 +211,7 @@ fn authored_scene_document() -> XrdsSceneDocument {
                         opacity: 1.0,
                         unlit: false,
                         pbr: XrdsSceneMaterialPbrParams {
+                            cull: Default::default(),
                             metallic: 1.0,
                             roughness: 0.72,
                             reflectance: 0.9,
