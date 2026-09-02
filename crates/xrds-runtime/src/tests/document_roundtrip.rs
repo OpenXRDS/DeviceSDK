@@ -1155,6 +1155,7 @@ fn a_video_360_node_spawns_an_inside_facing_unlit_sphere() {
                 radius: 40.0,
                 opacity: 0.8,
                 autoplay: false,
+                looped: true,
             }),
             grabbable: false,
             editor: Default::default(),
@@ -1227,5 +1228,237 @@ fn a_video_360_node_spawns_an_inside_facing_unlit_sphere() {
         (material.base.base_color.alpha() - 0.8).abs() < 1e-3,
         "authored opacity should reach the material; got {}",
         material.base.base_color.alpha()
+    );
+}
+
+/// Absolute path to the committed 2.9 KB test clip.
+///
+/// Absolute, because a document `uri` is opened as a filesystem path relative to
+/// the process CWD — which for `cargo test -p xrds-runtime` is the crate
+/// directory, not the repo root, so the relative form a real scene uses would not
+/// resolve here. Path resolution is not what these tests are about.
+#[cfg(test)]
+fn tiny_test_clip_path() -> String {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../assets/videos/tiny_test.mp4")
+        .to_string_lossy()
+        .into_owned()
+}
+
+/// A `Video360` with `autoplay` set actually starts playing, and honours `looped`.
+///
+/// **This is the test that was missing when `autoplay` shipped inert.** The field
+/// was authorable, round-tripped through the document, appeared in the inspector as
+/// "Play on load", and nothing anywhere read it — a 360 scene came up as a blank
+/// sphere.
+///
+/// It survived two phases because every *other* way to start a video works: the
+/// editor's preview button and a `PlayVideo` action on a Track, which are the two
+/// paths anyone exercises on a desktop. On a headset there is no button to press and
+/// a Track has to be authored first, so the one platform that needs `autoplay` was
+/// the one platform nobody had run it on. Found on a Quest 3 on 2026-09-02.
+///
+/// Uses a real 2.9 KB clip, because a missing file makes this untestable: with no
+/// file to open, `play_video_asset_in_world` returns false whether or not `autoplay`
+/// was read at all, so the two outcomes are indistinguishable and the test could not
+/// fail. The clip is 2D footage on a 360 sphere — geometric nonsense, and irrelevant
+/// to the only thing read here, which is whether playback started.
+#[test]
+fn a_video_360_with_autoplay_starts_playing_and_honours_looped() {
+    use xrds_scene_graph::{XrdsSceneNodePayload, XrdsSceneVideo360};
+
+    for looped in [true, false] {
+        let mut app = xrds_test_app();
+        let document = XrdsSceneDocument {
+            nodes: vec![XrdsSceneNode {
+                id: XrdsSceneNodeId(4400),
+                parent_id: None,
+                name: "Dome".to_string(),
+                enabled: true,
+                visible: true,
+                transform: XrdsSceneTransform::default(),
+                payload: XrdsSceneNodePayload::Video360(XrdsSceneVideo360 {
+                    video_asset_id: "clip".to_string(),
+                    radius: 40.0,
+                    opacity: 0.8,
+                    autoplay: true,
+                    looped,
+                }),
+                grabbable: false,
+                editor: Default::default(),
+                triggers: Vec::new(),
+                watchers: Vec::new(),
+            }],
+            assets: vec![xrds_scene_graph::XrdsSceneAsset {
+                id: "clip".to_string(),
+                uri: tiny_test_clip_path(),
+                kind: xrds_scene_graph::XrdsSceneAssetKind::Video,
+            }],
+            ..Default::default()
+        };
+
+        {
+            let mut xrds = XrdsAPI::attach(&mut app);
+            xrds.import_scene_document(&document)
+                .expect("import should succeed");
+        }
+        app.update();
+
+        assert!(
+            crate::xrds_api::video_desktop::is_playing_as_in_world(app.world(), "clip", looped),
+            "autoplay must start the clip, and with looped={looped} as authored"
+        );
+    }
+}
+
+/// `autoplay` off must **not** start a decoder.
+///
+/// The other half of the pair, and the reason `autoplay` defaults off: a decoder is
+/// a thread on a desktop and a hardware codec session on a headset, so a scene that
+/// merely *contains* a 360 sphere must not pay for one.
+#[test]
+fn a_video_360_without_autoplay_starts_nothing() {
+    use xrds_scene_graph::{XrdsSceneNodePayload, XrdsSceneVideo360};
+
+    let mut app = xrds_test_app();
+    let document = XrdsSceneDocument {
+        nodes: vec![XrdsSceneNode {
+            id: XrdsSceneNodeId(4401),
+            parent_id: None,
+            name: "Dome".to_string(),
+            enabled: true,
+            visible: true,
+            transform: XrdsSceneTransform::default(),
+            payload: XrdsSceneNodePayload::Video360(XrdsSceneVideo360 {
+                video_asset_id: "clip".to_string(),
+                radius: 40.0,
+                opacity: 0.8,
+                autoplay: false,
+                looped: true,
+            }),
+            grabbable: false,
+            editor: Default::default(),
+            triggers: Vec::new(),
+            watchers: Vec::new(),
+        }],
+        assets: vec![xrds_scene_graph::XrdsSceneAsset {
+            id: "clip".to_string(),
+            uri: tiny_test_clip_path(),
+            kind: xrds_scene_graph::XrdsSceneAssetKind::Video,
+        }],
+        ..Default::default()
+    };
+
+    {
+        let mut xrds = XrdsAPI::attach(&mut app);
+        xrds.import_scene_document(&document)
+            .expect("import should succeed");
+    }
+    app.update();
+
+    assert!(
+        !crate::xrds_api::video_desktop::is_playing_as_in_world(app.world(), "clip", true)
+            && !crate::xrds_api::video_desktop::is_playing_as_in_world(app.world(), "clip", false),
+        "a 360 sphere without autoplay must not open a decoder"
+    );
+}
+
+/// Build a one-node document holding a passthrough window.
+fn passthrough_window_document(id: u64, visible: bool) -> XrdsSceneDocument {
+    use xrds_scene_graph::{XrdsSceneNodePayload, XrdsScenePassthroughWindow};
+    XrdsSceneDocument {
+        nodes: vec![XrdsSceneNode {
+            id: XrdsSceneNodeId(id),
+            parent_id: None,
+            name: "Window".to_string(),
+            enabled: true,
+            visible,
+            transform: XrdsSceneTransform::default(),
+            payload: XrdsSceneNodePayload::PassthroughWindow(XrdsScenePassthroughWindow {
+                width: 1.5,
+                height: 0.75,
+            }),
+            grabbable: false,
+            editor: Default::default(),
+            triggers: Vec::new(),
+            watchers: Vec::new(),
+        }],
+        ..Default::default()
+    }
+}
+
+/// A passthrough window's material must be **`Opaque`**, and that is the whole test.
+///
+/// It reads like a contradiction — the node's entire job is to be transparent — and
+/// that is exactly why it is worth pinning. `Opaque` is what turns blending *off*
+/// and depth write *on*, so the shader's `vec4(0.0)` is written raw and the surface
+/// occludes the video sphere behind it. Switched to `Blend`, `vec4(0.0)` composites
+/// against what is already there and contributes precisely nothing: the hole would
+/// silently not appear, on device only, with nothing in the scene looking wrong.
+#[test]
+fn a_passthrough_window_material_is_opaque_so_the_hole_is_written_not_blended() {
+    let mut app = xrds_test_app();
+    {
+        let mut xrds = XrdsAPI::attach(&mut app);
+        xrds.import_scene_document(&passthrough_window_document(4300, true))
+            .expect("import should succeed");
+    }
+    app.update();
+
+    let entity = app
+        .world()
+        .resource::<crate::xrds_api::XrdsIdIndex>()
+        .entity_of(XrdsId(4300))
+        .expect("the node should be live");
+
+    let material_handle = app
+        .world()
+        .get::<MeshMaterial3d<crate::xrds_api::material::XrdsRuntimeMaterial>>(entity)
+        .expect("a passthrough window should have a material")
+        .0
+        .clone();
+    let materials = app
+        .world()
+        .resource::<Assets<crate::xrds_api::material::XrdsRuntimeMaterial>>();
+    let material = materials.get(&material_handle).expect("material should exist");
+
+    assert!(
+        matches!(material.base.alpha_mode, AlphaMode::Opaque),
+        "must be Opaque: Blend would make vec4(0.0) contribute nothing and the hole \
+         would silently not appear"
+    );
+}
+
+/// A passthrough window spawns **hidden**, even when the author marked it visible.
+///
+/// With no passthrough layer beneath, an alpha-0 surface is a black rectangle — and
+/// the author who sees black, ships it, and finds it correct on device has been
+/// misled rather than merely underserved. So `visible: true` is recorded as intent
+/// and applied only once passthrough is confirmed on, which never happens in this
+/// test app because it has no XR session at all. That is the desktop case, and it
+/// is the one this asserts.
+#[test]
+fn a_passthrough_window_spawns_hidden_even_when_authored_visible() {
+    let mut app = xrds_test_app();
+    {
+        let mut xrds = XrdsAPI::attach(&mut app);
+        xrds.import_scene_document(&passthrough_window_document(4301, true))
+            .expect("import should succeed");
+    }
+    app.update();
+
+    let entity = app
+        .world()
+        .resource::<crate::xrds_api::XrdsIdIndex>()
+        .entity_of(XrdsId(4301))
+        .expect("the node should be live");
+
+    assert!(
+        matches!(
+            app.world().get::<Visibility>(entity),
+            Some(Visibility::Hidden)
+        ),
+        "a window must not be drawn without a passthrough layer beneath it; got {:?}",
+        app.world().get::<Visibility>(entity)
     );
 }

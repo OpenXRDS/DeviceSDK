@@ -32,6 +32,7 @@ const PALETTE_META: Record<string, ItemMeta> = {
   Camera:           { label: "Camera",         tip: "Free scene camera, not player-bound." },
   AudioClip:        { label: "Audio Clip",     tip: "Positional audio source placed in the scene." },
   Video360:         { label: "360 Video",      tip: "Equirectangular video on the inside of a sphere — the viewer stands at the centre. Lower its opacity to let passthrough show through." },
+  PassthroughWindow: { label: "Passthrough Window", tip: "A rectangle cleared to fully clear passthrough — a window in a blended environment. Anything behind it is replaced by the room; anything in front still draws over it. Shows nothing unless the scene's XR blend mode is Alpha Blend." },
   InteractionZone:  { label: "Interaction Zone", tip: "Trigger volume that fires events when a player enters or exits." },
   // Player
   PlayerSpawn:      { label: "Spawn Point",    tip: "World-space marker defining where a player enters the scene. Standalone — no parent node required." },
@@ -53,7 +54,7 @@ const PALETTE_META: Record<string, ItemMeta> = {
 const PRIMITIVE_GROUPS = [
   { label: "Geometry", items: ["Cube","Sphere","Cylinder","Capsule","Plane","Tetrahedron","Empty"] },
   { label: "Lights",   items: ["PointLight","SpotLight","DirectionalLight","AmbientLight"] },
-  { label: "Scene",    items: ["Camera","AudioClip","Video360","InteractionZone"] },
+  { label: "Scene",    items: ["Camera","AudioClip","Video360","PassthroughWindow","InteractionZone"] },
   { label: "Player",   items: ["PlayerSpawn","PlayerSpawnZone","Player","PlayerAnchor"] },
   { label: "Text",     items: ["Text","ExtrudedText","Billboard","HudText"] },
   // `WorldPanel` was offered here once, then removed from the palette (its

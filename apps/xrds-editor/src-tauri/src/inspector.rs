@@ -72,6 +72,11 @@ fn build_payload_dto(
             radius: v.radius,
             opacity: v.opacity,
             autoplay: v.autoplay,
+            looped: v.looped,
+        },
+        XrdsSceneNodePayload::PassthroughWindow(w) => NodePayloadDto::PassthroughWindow {
+            width: w.width,
+            height: w.height,
         },
         XrdsSceneNodePayload::AudioClip(a)  => NodePayloadDto::AudioClip {
             asset_id: a.asset_id.clone(),
@@ -198,9 +203,8 @@ fn payload_kind_name(p: &XrdsSceneNodePayload) -> &'static str {
         XrdsSceneNodePayload::ExtrudedText(_) => "ExtrudedText",
         XrdsSceneNodePayload::HudText(_)      => "HudText",
         XrdsSceneNodePayload::AudioClip(_)    => "AudioClip",
-        // Kind string only for now. Palette entry, DTO and Inspector section
-        // are phase 3 of docs/video-360-plan.md.
         XrdsSceneNodePayload::Video360(_)     => "Video360",
+        XrdsSceneNodePayload::PassthroughWindow(_) => "PassthroughWindow",
         XrdsSceneNodePayload::InteractionZone(_) => "InteractionZone",
         XrdsSceneNodePayload::PlayerSpawn(_)     => "PlayerSpawn",
         XrdsSceneNodePayload::PlayerSpawnZone(_) => "PlayerSpawnZone",
@@ -381,7 +385,7 @@ pub fn apply_inspector_command(
             false
         }
         EditorCommand::SetVideo360Params {
-            id, video_asset_id, radius, opacity, autoplay,
+            id, video_asset_id, radius, opacity, autoplay, looped,
         } => {
             let id = XrdsSceneNodeId(*id);
             let video_asset_id = video_asset_id.clone();
@@ -391,6 +395,7 @@ pub fn apply_inspector_command(
             let radius = radius.max(0.01);
             let opacity = opacity.clamp(0.0, 1.0);
             let autoplay = *autoplay;
+            let looped = *looped;
             match session.0.edit(|doc| {
                 if let Some(node) = doc.node_mut(id) {
                     if let XrdsSceneNodePayload::Video360(v) = &mut node.payload {
@@ -398,6 +403,7 @@ pub fn apply_inspector_command(
                         v.radius = radius;
                         v.opacity = opacity;
                         v.autoplay = autoplay;
+                        v.looped = looped;
                     }
                 }
             }) {
@@ -407,6 +413,29 @@ pub fn apply_inspector_command(
                     // another node already shows, and that refusal is the one the
                     // author most needs to see.
                     error!("[video360] SetVideo360Params rejected: {e:?}");
+                    false
+                }
+            }
+        }
+        EditorCommand::SetPassthroughWindowParams { id, width, height } => {
+            let id = XrdsSceneNodeId(*id);
+            // A zero or negative side is a quad with no area: nothing drawn, no
+            // hole, and no way to tell that apart from a window pointed away from
+            // the viewer. Clamped small rather than refused, so dragging a size
+            // field through zero does not lose the node.
+            let width = width.max(0.01);
+            let height = height.max(0.01);
+            match session.0.edit(|doc| {
+                if let Some(node) = doc.node_mut(id) {
+                    if let XrdsSceneNodePayload::PassthroughWindow(w) = &mut node.payload {
+                        w.width = width;
+                        w.height = height;
+                    }
+                }
+            }) {
+                Ok(()) => true,
+                Err(e) => {
+                    error!("[passthrough-window] SetPassthroughWindowParams rejected: {e:?}");
                     false
                 }
             }

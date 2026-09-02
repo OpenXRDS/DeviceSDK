@@ -760,6 +760,7 @@ function Video360Section({ id, v, assets, send }: {
       radius:         patch.radius         ?? v.radius,
       opacity:        patch.opacity        ?? v.opacity,
       autoplay:       patch.autoplay       ?? v.autoplay,
+      looped:         patch.looped         ?? v.looped,
     },
   });
 
@@ -790,6 +791,14 @@ function Video360Section({ id, v, assets, send }: {
       <div className="insp-row">
         <Checkbox label="Play on load" checked={v.autoplay}
           onCheckedChange={value => commit({ autoplay: value })} />
+      </div>
+      <div className="insp-row">
+        <Checkbox label="Loop" checked={v.looped}
+          onCheckedChange={value => commit({ looped: value })} />
+      </div>
+      <div className="text-[10px] text-overlay0 leading-snug px-1 pb-1">
+        On by default, unlike Play on load: a backdrop that stops on its last frame
+        reads as a broken video, and looping costs nothing once the clip is running.
       </div>
       {/* The same audition every other video surface gets. Without it the only way
         * to check you picked the right clip — or that the sphere is facing the
@@ -829,6 +838,61 @@ function Video360Section({ id, v, assets, send }: {
           surface — import another copy to use it twice.
         </div>
       )}
+    </div>
+  );
+}
+
+/** A passthrough window: size, and the one thing an author has to be told.
+ *
+ *  Two fields only, and there will never be a third for opacity — the surface
+ *  clears its region to *fully* clear passthrough, and partial alpha would tint
+ *  the room toward black rather than let any video through.
+ *
+ *  The warning is the load-bearing part of this section. A window renders nothing
+ *  at all unless the scene's XR blend mode is Alpha Blend, and it renders nothing
+ *  in this viewport either way, because the editor has no compositor beneath it.
+ *  Without saying so, a correctly-authored window and a broken one look identical
+ *  here: an outline and no hole.
+ */
+function PassthroughWindowSection({ id, w, passthrough, send }: {
+  id: number;
+  w: Extract<NodePayload, { type: "PassthroughWindow" }>;
+  passthrough: boolean;
+  send: (c: EditorCommand) => void;
+}) {
+  const commit = (patch: Partial<typeof w>) => send({
+    type: "SetPassthroughWindowParams",
+    payload: {
+      id,
+      width:  patch.width  ?? w.width,
+      height: patch.height ?? w.height,
+    },
+  });
+
+  return (
+    <div className="insp-section">
+      <h4>Passthrough Window</h4>
+      <SliderRow label="Width" value={w.width} min={0.05} max={10} step={0.05}
+        onLive={value => commit({ width: value })}
+        onCommit={value => commit({ width: value })} />
+      <SliderRow label="Height" value={w.height} min={0.05} max={10} step={0.05}
+        onLive={value => commit({ height: value })}
+        onCommit={value => commit({ height: value })} />
+      <div className="insp-note">
+        Everything <b>behind</b> this rectangle is replaced by the real room;
+        anything <b>in front</b> of it still draws over the room. It is a window in
+        a wall, so aim it with the node's rotation.
+      </div>
+      {!passthrough && (
+        <div className="text-[10px] text-yellow leading-snug px-1 pb-1">
+          ⚠ This scene's XR blend mode is not <b>Alpha Blend</b>, so this window
+          shows nothing on device. Turn on <b>Passthrough</b> under Scene.
+        </div>
+      )}
+      <div className="text-[10px] text-overlay0 leading-snug px-1 pb-1">
+        Never visible in this viewport — there is no compositor here to reveal. The
+        outline is where the hole will be.
+      </div>
     </div>
   );
 }
@@ -1416,6 +1480,9 @@ function PayloadSection({ node, send, isPlaying, snapshot }: { node: NodeInspect
   }
   if (payload.type === "Video360") {
     return <Video360Section id={id} v={payload} assets={snapshot.asset_catalog} send={send} />;
+  }
+  if (payload.type === "PassthroughWindow") {
+    return <PassthroughWindowSection id={id} w={payload} passthrough={snapshot.xr_passthrough} send={send} />;
   }
   // Tetrahedron is mapped to Cube DTO on the Rust side
   if (payload.type === "Cube" || payload.type === "Sphere" || payload.type === "Cylinder" ||

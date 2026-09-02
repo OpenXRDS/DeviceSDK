@@ -11,6 +11,22 @@ apps/xrds-editor/node_modules/*
 apps/xrds-editor/dist/*
 test_output
 
+# Test video. `assets/videos/` was untracked but *not* ignored, so a `git add -A`
+# would have staged a 170 MB clip — and GitHub refuses anything over 100 MB only
+# after the commit exists, which is the expensive place to find out. Video is the one
+# asset kind here that is routinely too big to track; keep clips local and name them
+# in the recipe instead.
+#
+# `assets/videos/*`, not `assets/videos/` — git cannot re-include a file whose
+# *parent directory* is excluded, so the negation below is silently dead with the
+# directory form. Matching the contents instead keeps it live.
+assets/videos/*
+# ...except the test fixture, which exists to be committed: 2.9 KB, 128x64, 24
+# frames, cut down from `2d_test_sample.mp4`. It is a *2D* clip used as a 360
+# source, so it is geometrically nonsense on a sphere — irrelevant to what the
+# tests read from it, which is only whether playback starts.
+!assets/videos/tiny_test.mp4
+
 # cargo artifacts in patched crates
 patches/**/.cargo-ok
 patches/**/.cargo_vcs_info.json

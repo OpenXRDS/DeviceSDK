@@ -212,6 +212,119 @@ grep -oiE "grabbed|\[zone\] ENTER|fire_and_stop" run.txt | sort | uniq -c
 grep -c "trigger-action.*did nothing"           run.txt   # 0 = the action found its target
 ```
 
+### 11. A pushed `scene.json` silently overrides the bundled one — and is the fast loop
+
+`/sdcard/Android/data/org.openxrds.devicesdk/files/scene.json` takes priority over the
+scene bundled into the APK by `build.ps1 -SceneDir`. A stale one left there from a
+previous session is loaded in preference to the scene you just built, and **the only
+tell is the path in the log line** — which is easy to read straight past, because it
+reports success:
+
+```bash
+grep -o "loaded '[^']*' — [0-9]* entities"  run.txt
+```
+
+Cost a full build-and-install cycle on 2026-09-02: a scene from six days earlier
+loaded, the node count was wrong (4 where 5 were expected), and passthrough never
+enabled because that old scene did not ask for it — so the failure presented as three
+unrelated problems.
+
+**Read the path, not just the entity count.** Then use this deliberately: pushing to
+that path is the **fast loop**, and it is the reason a scene iteration needs no rebuild
+and no reinstall at all.
+
+```bash
+adb shell am force-stop org.openxrds.devicesdk
+adb push scene.json /sdcard/Android/data/org.openxrds.devicesdk/files/scene.json
+adb push clip.mp4   /sdcard/Android/data/org.openxrds.devicesdk/files/assets/
+```
+
+Only a *code* change needs `build.ps1` + `adb install`. Note that Git Bash mangles
+`/sdcard/...` into a Windows path (`C:/Program Files/Git/sdcard/...`); run these from
+PowerShell.
+
+---
+
+## The 360 / passthrough check
+
+The device pass for `docs/video-360-plan.md`. Two scenes, because putting both in one
+frame confounds them — the opacity sweep has to blend against the *room*, and a 360
+sphere is a wall between the two.
+
+```bash
+# A: the alpha convention. No assets needed.
+XRDS_GEN_DEVICE_SCENE=/path/to/sweep/scene.json \
+    cargo test -p xrds-scene-graph xxx_gen -- --nocapture
+
+# B: the feature. Copy the clip in first — it is NOT in the repo.
+cp assets/videos/360_testrun.mp4 /path/to/dome/assets/
+XRDS_GEN_DEVICE_SCENE_KIND=dome XRDS_GEN_DEVICE_SCENE=/path/to/dome/scene.json \
+    cargo test -p xrds-scene-graph xxx_gen -- --nocapture
+```
+
+`assets/videos/` is gitignored: video is the one asset kind here routinely too large
+to track, and GitHub refuses a >100 MB file only *after* the commit exists. Name a
+different clip with `XRDS_GEN_DEVICE_SCENE_CLIP`.
+
+**The stock clip is 170 MB, and the scene directory is bundled into the APK.** That is
+a 170 MB install for a check that needs a few seconds of footage, and `build.ps1` +
+`adb install` both pay for it on every iteration. Trim and re-encode before the first
+build, not after the third:
+
+```bash
+ffmpeg -i assets/videos/360_testrun.mp4 -t 10 -vf scale=3840:1920 \
+    -c:v libx264 -b:v 12M -an /path/to/dome/assets/360_testrun.mp4
+```
+
+3840 wide rather than the source's 4096 is deliberate: 4096 is exactly the width limit
+of common H.264 decoder levels, so a clip that fails to decode on device should be
+re-encoded narrower before anything else is suspected.
+
+Then the ordinary procedure above, once per scene. Both set
+`xr_blend_mode = AlphaBlend`; without it there is no passthrough layer and every
+check below reads as a failure of something else.
+
+### A. The opacity sweep — **do not skip to 0.8 and eyeball it**
+
+Five unlit white quads at opacity 1.0, 0.8, 0.6, 0.4, 0.2, left to right.
+
+The bug this looks for is **invisible at a single opacity**, which is why it survived
+a device session once already. `projection.rs` declared the layer
+`UNPREMULTIPLIED_ALPHA` while Bevy was writing premultiplied alpha, so the runtime
+multiplied a second time and composited `a²·C` where `a·C` was wanted. At 0.8 that is
+20% dark, and with nothing to compare against, 20% dark is simply what the video
+looks like. The row supplies the comparison:
+
+| | 1.0 | 0.8 | 0.6 | 0.4 | 0.2 |
+| --- | --- | --- | --- | --- | --- |
+| **Correct** (premultiplied) | 1.0 | 0.8 | 0.6 | 0.4 | 0.2 — an even ramp; the last quad is still a clear pale wash |
+| **Wrong** (double-multiplied) | 1.0 | 0.64 | 0.36 | 0.16 | 0.04 — bunched hard toward dark; the last quad has all but vanished |
+
+Judge the *shape of the ramp*, not any one quad. If it looks quadratic, the flag in
+`projection.rs` is back to `UNPREMULTIPLIED_ALPHA`.
+
+### B. The dome and the window
+
+A `Video360` at 0.8 with `autoplay` on — a Track cannot be fired by hand while wearing
+a headset, and a still first frame is indistinguishable from a video that will not
+play. Plus three cubes that make the window's contract visible rather than merely
+claimed:
+
+1. **`Liveness`**, off to the left and outside the window. If the view is black, this
+   cube is what separates "the app is dead" from "the video is not showing" — a
+   distinction a headset cannot otherwise make.
+2. **`BehindWindow`** must be **invisible**. Everything behind a window is outside the
+   room, and outside is reality.
+3. **`InFrontOfWindow`** must be **visible**, drawn over the room.
+
+Both cubes showing means the window is not punching at all. Both vanishing means the
+window is far larger than intended, or the sphere is missing — check the window's size
+and the sphere before anything subtler.
+
+The video's seam is behind you and its centre is straight ahead by construction
+(`u = 0.5` faces −Z). A seam in front means the UV convention regressed, not that the
+clip is wrong.
+
 ---
 
 ## Generating a test scene

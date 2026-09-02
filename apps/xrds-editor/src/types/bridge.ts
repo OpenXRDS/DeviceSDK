@@ -147,7 +147,8 @@ export type NodePayload =
   | { type: "Sphere";   material: MaterialParams; physics_body: string; gravity_scale: number; mass: number }
   | { type: "Cylinder"; material: MaterialParams; physics_body: string; gravity_scale: number; mass: number }
   | { type: "Capsule";  material: MaterialParams; physics_body: string; gravity_scale: number; mass: number; radius: number; length: number }
-  | { type: "Video360"; video_asset_id: string; radius: number; opacity: number; autoplay: boolean }
+  | { type: "Video360"; video_asset_id: string; radius: number; opacity: number; autoplay: boolean; looped: boolean }
+  | { type: "PassthroughWindow"; width: number; height: number }
   | { type: "AudioClip"; asset_id: string; volume: number; looped: boolean; spatial: boolean;
       autoplay: boolean; distance_model: string; min_distance: number; max_distance: number;
       rolloff_factor: number }
@@ -692,7 +693,8 @@ export type EditorCommand =
   | { type: "SetIbl";       payload: { diffuse_asset_id: string; specular_asset_id: string; intensity: number } }
   | { type: "ClearIbl" }
   | { type: "SetVideo360Params"; payload: { id: number; video_asset_id: string; radius: number;
-      opacity: number; autoplay: boolean } }
+      opacity: number; autoplay: boolean; looped: boolean } }
+  | { type: "SetPassthroughWindowParams"; payload: { id: number; width: number; height: number } }
   | { type: "SetSkybox";    payload: { texture_asset_id: string; brightness: number; yaw_deg: number } }
   | { type: "ClearSkybox" }
   | { type: "SetAtmosphere"; payload: { enabled: boolean } }

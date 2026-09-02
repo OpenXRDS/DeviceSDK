@@ -901,3 +901,35 @@ fn the_video_accessor_ignores_non_video_assets() {
     };
     assert!(doc.video_asset_ids_on_node(XrdsSceneNodeId(1)).is_empty());
 }
+
+// ---------------------------------------------------------------------------
+// PassthroughWindow persistence
+// ---------------------------------------------------------------------------
+
+/// A window survives a save/load, and an older document without the fields still
+/// loads with a usable size.
+///
+/// The second half is the point. `#[serde(default)]` on `width` and `height` is
+/// what lets the payload gain fields later without breaking scenes, and the failure
+/// it prevents is not a parse error — it is a window that loads at 0 × 0, draws
+/// nothing, and is indistinguishable from one facing away from the viewer.
+#[test]
+fn a_passthrough_window_round_trips_and_defaults_its_size() {
+    let window = crate::XrdsScenePassthroughWindow {
+        width: 2.5,
+        height: 1.25,
+    };
+    let json = serde_json::to_string(&window).expect("serialize");
+    let back: crate::XrdsScenePassthroughWindow =
+        serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(back, window, "an authored size must survive a save/load");
+
+    let bare: crate::XrdsScenePassthroughWindow =
+        serde_json::from_str("{}").expect("a document without the size fields must still load");
+    assert!(
+        bare.width > 0.0 && bare.height > 0.0,
+        "a defaulted window must have area, or it silently draws nothing; got {}x{}",
+        bare.width,
+        bare.height
+    );
+}

@@ -20,6 +20,8 @@ const XRDS_TEXTURE_FLAG_METALLIC_ROUGHNESS: u32 = 1u << 1u;
 const XRDS_TEXTURE_FLAG_NORMAL: u32 = 1u << 2u;
 const XRDS_TEXTURE_FLAG_OCCLUSION: u32 = 1u << 3u;
 const XRDS_TEXTURE_FLAG_EMISSIVE: u32 = 1u << 4u;
+// Not a texture flag, despite sharing the field. See `punch_through_material`.
+const XRDS_MATERIAL_FLAG_PUNCH_THROUGH: u32 = 1u << 5u;
 
 struct XrdsRuntimeTextureSlotUniform {
     uv_transform: mat3x3<f32>,
@@ -157,6 +159,25 @@ fn xrds_apply_extension(
 
 @fragment
 fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> FragmentOutput {
+#ifndef PREPASS_PIPELINE
+    // A passthrough window: colour zero, alpha zero, nothing else evaluated. The
+    // compositor shows the passthrough layer beneath at full clarity wherever this
+    // lands. See `punch_through_material` for why the material is Opaque.
+    //
+    // Before `pbr_input_from_standard_material`, not after, so no material or
+    // texture state is read on a surface that has none of it — the same shape of
+    // bug that made the depth-only prepass fail on `in.world_normal`.
+    //
+    // Not in the prepass/deferred branch: `prepass_io::FragmentOutput` has no
+    // `color` to write, and the depth this surface occludes with is exactly what
+    // the ordinary prepass path already produces.
+    if (xrds_runtime_material.flags & XRDS_MATERIAL_FLAG_PUNCH_THROUGH) != 0u {
+        var punched: FragmentOutput;
+        punched.color = vec4<f32>(0.0);
+        return punched;
+    }
+#endif
+
     var pbr_input = pbr_input_from_standard_material(in, is_front);
     pbr_input = xrds_apply_extension(in, is_front, pbr_input);
     pbr_input.material.base_color = alpha_discard(pbr_input.material, pbr_input.material.base_color);

@@ -1,5 +1,6 @@
 import {
   AppWindow, Box, Camera, Circle, CircleDashed, CloudSun, Cylinder, Flashlight,
+  Frame,
   Gamepad2, Hexagon, Image, Lightbulb, MapPin, Mountain, Music, Package, PanelTop,
   PersonStanding, Pill, RectangleHorizontal, Sparkles, SquareDashed, Sun, Triangle,
   Type, Video, Wind, Zap,
@@ -42,6 +43,7 @@ const KIND_ICONS: Record<string, LucideIcon> = {
   HudText: PanelTop,
   AudioClip: Music,
   Video360: Video,
+  PassthroughWindow: Frame,
   InteractionZone: Hexagon,
   PlayerSpawn: PersonStanding,
   PlayerSpawnZone: SquareDashed,
@@ -101,6 +103,9 @@ const KIND_COLOR: Record<string, string> = {
   Texture: "var(--mauve)",
   AudioClip: "var(--green)", Audio: "var(--green)",
   Video: "var(--teal)", Video360: "var(--teal)",
+  // Same family as the 360 video it usually accompanies — both are about what
+  // the viewer sees instead of the scene.
+  PassthroughWindow: "var(--teal)",
   EnvironmentMap: "var(--peach)",
 
   Empty: "var(--overlay0)",

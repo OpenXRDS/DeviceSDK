@@ -20,6 +20,8 @@ pub enum XrdsSceneNodePayload {
     AudioClip(XrdsSceneAudioClip),
     /// A 360 video surface. See [`XrdsSceneVideo360`].
     Video360(XrdsSceneVideo360),
+    /// A region cleared to fully clear passthrough. See [`XrdsScenePassthroughWindow`].
+    PassthroughWindow(XrdsScenePassthroughWindow),
     InteractionZone(XrdsSceneInteractionZone),
     PlayerSpawn(XrdsScenePlayerSpawn),
     Player(XrdsScenePlayer),
@@ -137,6 +139,7 @@ impl XrdsSceneNodePayload {
             // geometry whose whole point is the video it cannot carry. Scene
             // glTF export is retired anyway (see xrds-gltf in CLAUDE.md).
             Self::Video360(_) => XrdsGltfExportClass::NodeOnly,
+            Self::PassthroughWindow(_) => XrdsGltfExportClass::NodeOnly,
             Self::InteractionZone(_) => XrdsGltfExportClass::NodeOnly,
             Self::PlayerSpawn(_) => XrdsGltfExportClass::NodeOnly,
             Self::Player(_) => XrdsGltfExportClass::NodeOnly,
@@ -1091,10 +1094,73 @@ pub struct XrdsSceneVideo360 {
     /// part, so nothing starts one unasked.
     #[serde(default)]
     pub autoplay: bool,
+    /// Whether playback restarts at the end. **Defaults on**, unlike `autoplay`.
+    ///
+    /// The two look symmetrical and are not. `autoplay` defaults *off* because a
+    /// decoder costs a thread or a hardware codec session, so starting one unasked
+    /// is a real expense. Looping costs nothing extra once that decoder is already
+    /// running — and a 360 backdrop that stops dead on its final frame is a defect,
+    /// not a choice an author makes. Found exactly that way on a Quest 3 on
+    /// 2026-09-02: a clip ended while the headset was off and the frozen frame read
+    /// as a broken video.
+    ///
+    /// Defaulting *on* also cannot contradict an existing document, because no
+    /// document could express "do not loop" before the field existed.
+    #[serde(default = "default_true")]
+    pub looped: bool,
 }
 
 fn default_video_360_radius() -> f32 {
     50.0
+}
+
+/// A rectangle that clears itself to *fully clear* passthrough: a window in the
+/// wall of a blended environment.
+///
+/// The case it exists for is a 360 video over passthrough — the room is dimly
+/// visible everywhere at the video's opacity, and this makes one rectangle
+/// *really* the room. Nothing about it is video-specific, though: any scene
+/// blending over reality can use one.
+///
+/// **How it behaves, and why that is the intuitive reading.** The surface writes
+/// alpha 0 in the opaque pass, so it wins the depth test against anything behind
+/// it and the compositor shows passthrough there at 100%. Everything *behind* the
+/// plane is outside the room, and outside is reality; everything *in front* is
+/// still drawn over reality, so a label between the viewer and the window is
+/// still visible. It is a window in a wall, and it needs no list of what to
+/// exclude — geometry is the region, depth decides what it replaces.
+///
+/// **There is no opacity field, deliberately.** Whatever is behind is
+/// depth-rejected either way, so a window writing partial alpha would tint the
+/// room toward black rather than let any video through — a control meaning
+/// something no author would ask for. Full clarity or nothing.
+///
+/// **It does not exist when passthrough is off.** With no layer beneath, an
+/// alpha-0 surface is a black rectangle, which is worse than inert: the author
+/// sees black, ships it, and it is correct on device. So the runtime spawns it
+/// hidden and only reveals it once passthrough is confirmed on, and the editor
+/// draws a gizmo outline instead of a mesh. See `docs/video-360-plan.md`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct XrdsScenePassthroughWindow {
+    /// Metres, along the node's local X.
+    #[serde(default = "default_passthrough_window_size")]
+    pub width: f32,
+    /// Metres, along the node's local Y.
+    #[serde(default = "default_passthrough_window_size")]
+    pub height: f32,
+}
+
+fn default_passthrough_window_size() -> f32 {
+    1.0
+}
+
+impl Default for XrdsScenePassthroughWindow {
+    fn default() -> Self {
+        Self {
+            width: default_passthrough_window_size(),
+            height: default_passthrough_window_size(),
+        }
+    }
 }
 
 impl Default for XrdsSceneVideo360 {
@@ -1104,6 +1170,7 @@ impl Default for XrdsSceneVideo360 {
             radius: default_video_360_radius(),
             opacity: 1.0,
             autoplay: false,
+            looped: true,
         }
     }
 }

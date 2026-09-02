@@ -268,6 +268,9 @@ fn spawn_runtime_component(
         XrdsSceneRuntimeComponent::Video360(c) => {
             Some(crate::xrds_api::spawn::spawn_video_360_descriptor(commands, c))
         }
+        XrdsSceneRuntimeComponent::PassthroughWindow(c) => Some(
+            crate::xrds_api::spawn::spawn_passthrough_window_descriptor(commands, c),
+        ),
         XrdsSceneRuntimeComponent::HudText(hud) => {
             Some(spawn_hud_text_for_reimport(commands, hud))
         }

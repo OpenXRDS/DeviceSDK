@@ -274,6 +274,12 @@ pub enum EditorCommand {
         radius: f32,
         opacity: f32,
         autoplay: bool,
+        looped: bool,
+    },
+    SetPassthroughWindowParams {
+        id: u64,
+        width: f32,
+        height: f32,
     },
     SetSkybox     { texture_asset_id: String, brightness: f32, yaw_deg: f32 },
     ClearSkybox,
@@ -665,6 +671,13 @@ pub enum NodePayloadDto {
         radius: f32,
         opacity: f32,
         autoplay: bool,
+        looped: bool,
+    },
+    /// A region cleared to fully clear passthrough. Two fields, and there will
+    /// never be a third for opacity: see `XrdsScenePassthroughWindow`.
+    PassthroughWindow {
+        width: f32,
+        height: f32,
     },
     AudioClip {
         asset_id: String,

@@ -490,6 +490,8 @@ pub(super) fn spawn_video_360_descriptor(
     let radius = video.radius;
     let opacity = video.opacity.clamp(0.0, 1.0);
     let asset_id = video.video_asset_id.clone();
+    let autoplay = video.autoplay;
+    let looped = video.looped;
 
     commands.queue(move |world: &mut World| {
         let mesh = {
@@ -529,13 +531,83 @@ pub(super) fn spawn_video_360_descriptor(
             material.textures.set(
                 xrds_components::XrdsMaterialTextureSlotKind::BaseColor,
                 Some(xrds_components::XrdsMaterialTextureRef {
-                    texture_asset_id: asset_id,
+                    texture_asset_id: asset_id.clone(),
                     uv: Default::default(),
                     sampler: Default::default(),
                 }),
             );
         }
         apply_authored_material_to_entity(world, entity, material);
+
+        // Honour `autoplay`, which was **inert until 2026-09-02** and found by the
+        // first device run: the field was authorable, round-tripped through the
+        // document, showed as "Play on load" in the inspector, and nothing anywhere
+        // read it. Importing the asset gives the surface a texture; only this puts
+        // a picture on it, so a 360 scene came up as a blank sphere.
+        //
+        // It hid because every other way of starting a video — the editor's
+        // preview button, a `PlayVideo` action on a Track — works, and those are
+        // the two paths anyone exercises on a desktop. On a headset there is no
+        // button to press and a Track has to be authored first, which is precisely
+        // the case `autoplay` exists for.
+        //
+        if autoplay && !asset_id.is_empty() {
+            if !crate::xrds_api::video::play_video_asset_in_world(world, &asset_id, looped) {
+                warn!("[video360] autoplay could not start '{asset_id}'");
+            }
+        }
+    });
+
+    entity
+}
+
+/// Spawn a passthrough window: a quad that clears its region to fully clear
+/// passthrough.
+///
+/// **Spawned hidden, unconditionally**, whatever `visible` says. With no
+/// passthrough layer beneath, an alpha-0 surface is a black rectangle, and that is
+/// the failure worth designing out: the author sees black, ships it, and it is
+/// correct on device. `sync_passthrough_system` is the only thing that reveals
+/// one, and it reveals nothing on a desktop because it returns early when there is
+/// no XR session at all. So the desktop path needs no code here, and no reachable
+/// state draws the rectangle.
+///
+/// The author's `visible` is kept on the descriptor rather than applied, because it
+/// is necessary but not sufficient — see [`XrdsPassthroughWindowVisible`].
+pub(super) fn spawn_passthrough_window_descriptor(
+    commands: &mut Commands,
+    window: &xrds_components::XrdsPassthroughWindow,
+) -> Entity {
+    let entity = commands.spawn_empty().id();
+    let descriptor = window.clone();
+    let name = window.name.clone();
+    let transform = window.transform;
+    let visible = window.visible;
+    let width = window.width.max(0.0);
+    let height = window.height.max(0.0);
+
+    commands.queue(move |world: &mut World| {
+        let mesh = {
+            let mut meshes = world.resource_mut::<Assets<Mesh>>();
+            meshes.add(Mesh::from(bevy::math::primitives::Rectangle::new(
+                width, height,
+            )))
+        };
+        let material = {
+            let mut materials = world.resource_mut::<Assets<XrdsRuntimeMaterial>>();
+            materials.add(crate::xrds_api::material::punch_through_material())
+        };
+
+        world.entity_mut(entity).insert((
+            Name::new(name),
+            Mesh3d(mesh),
+            MeshMaterial3d(material),
+            build_transform(&transform),
+            // Hidden regardless of the authored value; see the doc comment.
+            build_visibility_hierarchy_components(false),
+            crate::xrds_api::passthrough::XrdsPassthroughWindowVisible(visible),
+            XrdsStored(descriptor),
+        ));
     });
 
     entity

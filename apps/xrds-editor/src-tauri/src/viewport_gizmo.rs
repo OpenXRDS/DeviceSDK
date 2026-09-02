@@ -427,6 +427,57 @@ pub fn spawn_zone_gizmo_system(
     }
 }
 
+/// Draw a wireframe rectangle with a diagonal cross for each PassthroughWindow.
+///
+/// **A gizmo rather than a mesh, because the real surface must not exist here.** A
+/// passthrough window writes alpha 0 so the compositor reveals the room beneath;
+/// with no passthrough layer under the editor viewport that same surface is a black
+/// rectangle, and an author who sees black, ships it, and finds it correct on
+/// device has been actively misled. So the runtime spawns it hidden off-passthrough
+/// (see `sync_passthrough_system`) and the editor draws this instead — the sixth
+/// node kind here that renders nothing in a scene and is authored through an
+/// outline.
+///
+/// The diagonals are what say "this is a hole, not a panel": an empty rectangle
+/// reads as a frame around something, and there is nothing here to frame.
+pub fn passthrough_window_gizmo_system(
+    mut gizmos:   Gizmos,
+    editor_state: Res<EditorState>,
+    session:      Res<EditorSession>,
+) {
+    let doc = session.0.document();
+    for node in &doc.nodes {
+        let XrdsSceneNodePayload::PassthroughWindow(window) = &node.payload else { continue; };
+        let is_selected = editor_state.selection.contains(node.id);
+        // Cyan, and not shared with any other gizmo here: this one means "reality
+        // shows through", which is not a kind of zone or volume.
+        let color = if is_selected { Color::srgba(0.4, 0.95, 1.0, 0.95) }
+                    else           { Color::srgba(0.3, 0.75, 0.85, 0.5) };
+        let pos = Vec3::from_array(node.transform.translation);
+        let [qx, qy, qz, qw] = node.transform.rotation_quat_xyzw;
+        let rot = Quat::from_xyzw(qx, qy, qz, qw);
+        let scale = Vec3::from_array(node.transform.scale);
+
+        // Local XY, matching the runtime's `Rectangle::new(width, height)` quad, so
+        // the outline is where the hole will be rather than approximately there.
+        let hx = window.width * 0.5 * scale.x;
+        let hy = window.height * 0.5 * scale.y;
+        let corner = |sx: f32, sy: f32| pos + rot * Vec3::new(sx * hx, sy * hy, 0.0);
+        let (tl, tr, br, bl) = (
+            corner(-1.0, 1.0),
+            corner(1.0, 1.0),
+            corner(1.0, -1.0),
+            corner(-1.0, -1.0),
+        );
+        gizmos.line(tl, tr, color);
+        gizmos.line(tr, br, color);
+        gizmos.line(br, bl, color);
+        gizmos.line(bl, tl, color);
+        gizmos.line(tl, br, color);
+        gizmos.line(tr, bl, color);
+    }
+}
+
 // `world_panel_gizmo_system` drew a wireframe rectangle for each WorldPanel node,
 // since that payload had no mesh of its own to select against. Retired with
 // WorldPanel. A `Panel` node needs no equivalent: it now carries a real

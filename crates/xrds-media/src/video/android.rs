@@ -250,6 +250,17 @@ pub struct HardwareVideoDecoder {
 
     acquired: VecDeque<*mut sys::AImage>,
     current: Option<HardwareBuffer>,
+    /// Bumped every time `current` is replaced, and compared against
+    /// `delivered_generation` so a repeat frame can be reported as *no new frame*.
+    ///
+    /// Without this the decoder handed back the same buffer on every call — the
+    /// documented "hold the last frame" behaviour — and the caller had no way to
+    /// tell a repeat from a fresh frame, so it re-converted an identical image
+    /// every rendered frame. On a 72 Hz display showing a 30 fps clip that is
+    /// roughly 58% of conversions wasted in steady state, and *every* conversion
+    /// wasted once the clip has finished and its last frame stands forever.
+    generation: u64,
+    delivered_generation: u64,
 
     sent_eos: bool,
     pending: Option<PendingFrame>,
@@ -347,6 +358,8 @@ impl HardwareVideoDecoder {
                 _file: file,
                 acquired: VecDeque::new(),
                 current: None,
+                generation: 0,
+                delivered_generation: 0,
                 sent_eos: false,
                 pending: None,
                 playback_start: None,
@@ -366,19 +379,29 @@ impl HardwareVideoDecoder {
         self.height
     }
 
-    /// Pump the pipeline and return the newest frame's buffer.
+    /// Pump the pipeline and return the newest frame's buffer, **or `None` when
+    /// there is no new frame**.
     ///
-    /// Call once per rendered frame. Returns the previous frame's buffer when
-    /// nothing new is due — a video that is merely slower than the display should
-    /// hold its last frame, not flicker — and `None` only before the first frame
-    /// arrives.
+    /// Call once per rendered frame. `None` means "nothing changed, keep showing
+    /// what you have" — which covers three cases that used to be indistinguishable
+    /// to the caller: before the first frame arrives, between frames of a video
+    /// slower than the display, and after a non-looping clip has finished.
+    ///
+    /// It returned `Ok(self.current)` unconditionally until 2026-09-02, so a
+    /// repeat frame looked exactly like a fresh one and the caller re-converted an
+    /// identical image every rendered frame. Holding the last frame is still the
+    /// behaviour — it is just the *caller's* existing `None` path that does it now,
+    /// by keeping the texture it already has, instead of rebuilding it.
     pub fn next_buffer(&mut self) -> Result<Option<HardwareBuffer>> {
-        if self.finished {
-            return Ok(self.current);
+        if !self.finished {
+            self.feed_input()?;
+            self.drain_output()?;
+            self.acquire_latest()?;
         }
-        self.feed_input()?;
-        self.drain_output()?;
-        self.acquire_latest()?;
+        if self.generation == self.delivered_generation {
+            return Ok(None);
+        }
+        self.delivered_generation = self.generation;
         Ok(self.current)
     }
 
@@ -519,6 +542,7 @@ impl HardwareVideoDecoder {
                 return Err(Error::Null("AImage_getHardwareBuffer"));
             }
             self.current = Some(HardwareBuffer(buffer));
+            self.generation += 1;
         }
         Ok(())
     }

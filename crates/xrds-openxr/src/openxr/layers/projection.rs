@@ -8,8 +8,8 @@ use openxr::{
 use crate::openxr::{
     layers::{OpenXrCompositionLayer, OpenXrLayerBuilder},
     resources::{
-        OpenXrPassthroughEnabled, OpenXrPrimaryReferenceSpace, OpenXrSpace, OpenXrSwapchain,
-        OpenXrSwapchainInfo, OpenXrViews,
+        OpenXrPrimaryReferenceSpace, OpenXrSpace, OpenXrSwapchain, OpenXrSwapchainInfo,
+        OpenXrViews,
     },
 };
 
@@ -168,22 +168,40 @@ impl OpenXrLayerBuilder for OpenXrCompositionLayerProjectionBuilder {
             .collect();
 
         // With passthrough beneath, this layer's alpha decides where reality shows
-        // through, so the compositor must be told the alpha is unpremultiplied —
-        // Bevy renders straight (unpremultiplied) alpha. Without the flag the
-        // runtime assumes premultiplied and darkens every partially transparent
-        // pixel toward black instead of revealing the room.
+        // through, so the compositor's premultiplication convention has to match
+        // what Bevy actually wrote. It wrote **premultiplied**, which is the
+        // no-flag case — hence `BLEND_TEXTURE_SOURCE_ALPHA` alone.
         //
-        // Only added while passthrough is actually being submitted: the flag is not
-        // free elsewhere, and an opaque VR scene has no alpha to interpret.
-        let passthrough_active = world
-            .get_resource::<OpenXrPassthroughEnabled>()
-            .is_some_and(|e| e.0);
-        let layer_flags = if passthrough_active {
-            CompositionLayerFlags::BLEND_TEXTURE_SOURCE_ALPHA
-                | CompositionLayerFlags::UNPREMULTIPLIED_ALPHA
-        } else {
-            CompositionLayerFlags::BLEND_TEXTURE_SOURCE_ALPHA
-        };
+        // ## Why `UNPREMULTIPLIED_ALPHA` was here until 2026-08-31, and was wrong
+        //
+        // The flag was transcribed from a shipped Quest 3 passthrough app whose
+        // fragment shader writes `vec4(rgb, opacity)` with **blending disabled** —
+        // it is the only thing that app draws, so nothing ever multiplies its
+        // colour and its framebuffer really does hold straight alpha. Correct flag,
+        // for that app.
+        //
+        // Bevy reaches the same swapchain through a blend pass, and arrives with
+        // the opposite convention. `AlphaMode::Blend` is wgpu's `ALPHA_BLENDING`:
+        // colour `SrcAlpha / OneMinusSrcAlpha`, alpha `One / OneMinusSrcAlpha`.
+        // Over a target cleared to `Color::NONE` a fragment of colour C, alpha a
+        // lands as
+        //
+        //     dst.rgb = a·C + (1-a)·0 = a·C
+        //     dst.a   = a
+        //
+        // — the blend has *already* done the multiply. Declaring the layer
+        // unpremultiplied made the runtime multiply a second time, compositing
+        // `a²·C + (1-a)·reality` where `a·C + (1-a)·reality` was wanted.
+        //
+        // The error is a factor of alpha, so it hid at the 0.8 opacity a 360 video
+        // is authored at — 20% dark, with no in-headset reference to compare
+        // against — and became obvious only well below that. Any device check of
+        // this path must therefore **sweep opacity** rather than eyeball one value:
+        // brightness has to fall off proportionally, not off a cliff.
+        //
+        // Opaque geometry is unaffected either way: Bevy gives `AlphaMode::Opaque`
+        // no blend state and forces alpha to 1, and 1² = 1.
+        let layer_flags = CompositionLayerFlags::BLEND_TEXTURE_SOURCE_ALPHA;
 
         Some(Box::new(
             OpenXrCompositionLayerProjection::new()

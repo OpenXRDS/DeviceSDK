@@ -279,6 +279,9 @@ fn build_primitive_node(
                 .unwrap_or_default(),
             ..Default::default()
         }),
+        // No asset and nothing to look up: a window is geometry and a rule, not
+        // content. Placed at the payload default of 1 m × 1 m.
+        "PassthroughWindow" => XrdsSceneNodePayload::PassthroughWindow(Default::default()),
         "AudioClip"       => XrdsSceneNodePayload::AudioClip(XrdsSceneAudioClip {
             asset_id: doc
                 .assets
@@ -564,6 +567,55 @@ mod video_360_palette_tests {
         assert!(
             bound.contains(&""),
             "the second must be left unbound, not given the same clip"
+        );
+    }
+}
+
+#[cfg(test)]
+mod passthrough_window_palette_tests {
+    use super::*;
+
+    /// A Passthrough Window is placed with nothing imported and nothing selected.
+    ///
+    /// Worth a test despite being a two-line arm, because the payload-default route
+    /// is exactly what the `Video360` arm got wrong: that one looked up an asset and
+    /// returned `None` when it found none, and `build_primitive_node`'s `None` is
+    /// dropped by the caller without a node, an error or a log — a palette entry
+    /// that did nothing at all. A window has no asset to look up, so the failure
+    /// cannot recur *here*; this pins that it never grows one.
+    #[test]
+    fn a_passthrough_window_is_placed_from_payload_defaults() {
+        let session = EditorSession(
+            xrds_scene_graph::XrdsSceneDocumentSession::new(XrdsSceneDocument::default())
+                .expect("an empty document is valid"),
+        );
+        let (mut session, mut state) = (session, EditorState::default());
+
+        let placed = apply_palette_command(
+            &EditorCommand::SpawnPrimitive {
+                kind: "PassthroughWindow".to_string(),
+                parent_id: None,
+            },
+            &mut session,
+            &mut state,
+        );
+        assert!(placed, "the command should report success");
+
+        let doc = session.0.document();
+        let window = doc
+            .nodes
+            .iter()
+            .find_map(|n| match &n.payload {
+                XrdsSceneNodePayload::PassthroughWindow(w) => Some(w),
+                _ => None,
+            })
+            .expect("a PassthroughWindow node should exist");
+        assert!(
+            window.width > 0.0 && window.height > 0.0,
+            "a zero-area window is a node that draws nothing and cannot be told \
+             apart from one facing away; got {}x{}",
+            window.width,
+            window.height
         );
     }
 }

@@ -126,6 +126,7 @@ pub enum XrdsSceneRuntimeComponent {
     SpotLight(XrdsSpotLight),
     AudioClip(XrdsAudioClip),
     Video360(xrds_components::XrdsVideo360),
+    PassthroughWindow(xrds_components::XrdsPassthroughWindow),
     HudText(XrdsHudTextData),
     Text(XrdsText),
     ExtrudedText(XrdsExtrudedText),
@@ -426,10 +427,31 @@ impl XrdsSceneNode {
                     radius: video.radius,
                     opacity: video.opacity,
                     autoplay: video.autoplay,
+                    looped: video.looped,
                 }),
                 // No material: the runtime builds it, because unlit + blend +
                 // the video in the base-colour slot is the arrangement that makes
                 // this work and is not the author's to get wrong.
+                material: None,
+                editor,
+                gltf_node_authoring: None,
+            },
+            XrdsSceneNodePayload::PassthroughWindow(window) => XrdsSceneRuntimeNode {
+                id: self.id.into(),
+                parent_id: self.parent_id.map(Into::into),
+                component: XrdsSceneRuntimeComponent::PassthroughWindow(
+                    xrds_components::XrdsPassthroughWindow {
+                        name: self.name.clone(),
+                        transform,
+                        visible: self.visible,
+                        width: window.width,
+                        height: window.height,
+                    },
+                ),
+                // No material, for a stronger reason than Video360's: this one
+                // has no authorable surface at all. Writing alpha 0 in the opaque
+                // pass *is* the node, and every PBR field on it would be a
+                // control with no effect.
                 material: None,
                 editor,
                 gltf_node_authoring: None,

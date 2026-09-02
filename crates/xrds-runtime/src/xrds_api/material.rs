@@ -20,6 +20,11 @@ const XRDS_TEXTURE_FLAG_METALLIC_ROUGHNESS: u32 = 1 << 1;
 const XRDS_TEXTURE_FLAG_NORMAL: u32 = 1 << 2;
 const XRDS_TEXTURE_FLAG_OCCLUSION: u32 = 1 << 3;
 const XRDS_TEXTURE_FLAG_EMISSIVE: u32 = 1 << 4;
+/// Not a texture flag, despite sharing the field: makes the fragment shader
+/// return `vec4(0.0)` and nothing else. Kept in `flags` because that field is a
+/// general bitfield and adding a second uniform member for one bit would cost a
+/// re-layout of the struct on both sides.
+const XRDS_MATERIAL_FLAG_PUNCH_THROUGH: u32 = 1 << 5;
 
 pub(super) type XrdsRuntimeMaterial =
     ExtendedMaterial<StandardMaterial, XrdsRuntimeMaterialExtension>;
@@ -101,6 +106,43 @@ impl MaterialExtension for XrdsRuntimeMaterialExtension {
 
     fn deferred_fragment_shader() -> ShaderRef {
         XRDS_RUNTIME_MATERIAL_SHADER_PATH.into()
+    }
+}
+
+/// The material for a passthrough window: writes `(0,0,0,0)` and nothing else.
+///
+/// **`AlphaMode::Opaque` is what makes this work, not a contradiction of it.**
+/// Opaque gets the surface into the opaque phase with blending *off* and depth
+/// write *on*, so the write is a raw replace — alpha really becomes 0 — and the
+/// surface occludes whatever is behind it. A `Blend` material would composite
+/// against what is already there, and `vec4(0.0)` under standard alpha blending
+/// contributes exactly nothing: the hole would not appear at all.
+///
+/// It is also why the 360 sphere loses without being told to. That material is
+/// `AlphaMode::Blend`, and Bevy's transparent pass has depth write *disabled*, so
+/// it never contests this surface's depth.
+///
+/// The result is order-independent: an opaque object behind the window yields
+/// alpha 0 whether it draws before this surface (and is overwritten) or after
+/// (and fails the depth test).
+pub(super) fn punch_through_material() -> XrdsRuntimeMaterial {
+    XrdsRuntimeMaterial {
+        base: StandardMaterial {
+            // Every one of these is unreachable — the shader returns before it
+            // reads any of them — and they are set anyway so that a reader who
+            // finds this material in a debugger is not misled about what it draws.
+            base_color: Color::NONE,
+            alpha_mode: AlphaMode::Opaque,
+            unlit: true,
+            ..Default::default()
+        },
+        extension: XrdsRuntimeMaterialExtension {
+            material_uniform: XrdsRuntimeMaterialExtensionUniform {
+                flags: XRDS_MATERIAL_FLAG_PUNCH_THROUGH,
+                ..Default::default()
+            },
+            ..Default::default()
+        },
     }
 }
 

@@ -51,6 +51,17 @@ use bevy::prelude::*;
 use xrds_openxr::{OpenXrCameraIndex, OpenXrPassthroughEnabled};
 use xrds_scene_graph::XrdsXrBlendMode;
 
+/// The author's `visible` on a passthrough window, held apart from Bevy's
+/// [`Visibility`] because it is **necessary but not sufficient**.
+///
+/// A window is shown only when this is true *and* passthrough is on. Keeping the
+/// intent here rather than in `Visibility` is what lets the entity spawn hidden
+/// without losing what the author asked for, and it means the two conditions are
+/// combined in exactly one place ([`sync_passthrough_system`]) rather than raced
+/// between spawn and a later sync.
+#[derive(Component, Debug, Clone, Copy)]
+pub(crate) struct XrdsPassthroughWindowVisible(pub(crate) bool);
+
 /// What the loaded scene asked for, independent of whether XR is up yet.
 ///
 /// Exists from app start so an import that lands before the OpenXR session — which
@@ -74,6 +85,7 @@ pub(crate) fn sync_passthrough_system(
     requested: Option<Res<XrdsRequestedBlendMode>>,
     enabled: Option<ResMut<OpenXrPassthroughEnabled>>,
     mut cameras: Query<&mut Camera, With<OpenXrCameraIndex>>,
+    mut windows: Query<(&XrdsPassthroughWindowVisible, &mut Visibility)>,
 ) {
     let wants = matches!(
         requested.map(|r| r.0).unwrap_or_default(),
@@ -82,6 +94,12 @@ pub(crate) fn sync_passthrough_system(
 
     // Absent until an XR session exists; on desktop it never appears and this is a
     // no-op, so the authored field round-trips unharmed through the editor.
+    //
+    // Passthrough windows spawn hidden and are revealed only below, so this early
+    // return is also what keeps a desktop build from drawing an alpha-0 quad as a
+    // black rectangle. That is deliberate: the desktop case is handled by *not*
+    // reaching the code that shows them, rather than by a check that has to be
+    // remembered.
     let Some(mut enabled) = enabled else { return };
 
     if enabled.0 != wants {
@@ -114,5 +132,24 @@ pub(crate) fn sync_passthrough_system(
             ClearColorConfig::Default
         };
         debug!("[passthrough] eye camera clear updated (passthrough={wants})");
+    }
+
+    // A window clears its region to *fully clear* passthrough, which only means
+    // anything while there is a passthrough layer beneath to reveal. With
+    // passthrough off it would be a black rectangle over the scene, so it is not
+    // shown at all — the video sphere simply covers that region like any other.
+    //
+    // Applied here for the same reason the camera clear is: windows can be spawned,
+    // reimported and respawned long after the session exists, so this has to be a
+    // system that keeps them in step rather than a decision made once at spawn.
+    for (authored, mut visibility) in windows.iter_mut() {
+        let target = if wants && authored.0 {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
+        if *visibility != target {
+            *visibility = target;
+        }
     }
 }

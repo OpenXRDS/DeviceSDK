@@ -1,9 +1,27 @@
 # 360 video — plan
 
-**Phase 1 built; phases 2–5 open.** Written 2026-08-28, then largely *answered* the
-same day by reading `F:\workspace\rust\HMDViewer`, which already ships 360 video
-over passthrough on a Quest 3. Mono first; **stereo is the destination**,
-because this gets tested on a headset.
+**Phases 1–4 built. Phase 5 deferred — see below.**
+Written 2026-08-28, then largely *answered* the same day by reading
+`F:\workspace\rust\HMDViewer`, which already ships 360 video over passthrough on a
+Quest 3.
+
+Device verification and an example scene are deliberately **last**, after phase 4.
+The cost of that ordering, stated so it is not a surprise: phase 4 was built without
+anyone having seen phase 2's sphere over real passthrough.
+
+**What phase 4 is verified to do, which is all of it.** The payload, the spawn, the
+hidden-off-passthrough rule, the palette and the inspector have tests, and the shader
+change compiles and renders — it lives in the fragment entry point *every* material
+shares, so a syntax or type error there would break all rendering, and an example ran
+clean for a minute.
+
+The punch-through branch itself never executes on a desktop, and that is not a gap in
+the coverage: **off-passthrough, "draws nothing" is the entire specification**, and it
+is exactly what the hidden-spawn test asserts. A hole with no passthrough beneath it
+is not an untested path, it is a path that does not exist — the purpose of the hole is
+punching passthrough, so where there is no passthrough there is nothing for it to be.
+The composite belongs to the device pass because it is a device behaviour, not because
+phase 4 left it owing.
 
 ## What it is
 
@@ -38,10 +56,28 @@ project has spent enough on authorable-but-inert fields to not add one on purpos
 
 So there is no stereo field. It goes in when stereo does.
 
-Stereo is a per-eye UV transform — each eye samples a different half of the frame.
-That reaches into the XR render path, which cannot be prototyped on a desktop, so
-it is deliberately last. The reference implementation is mono, so it is also the
-one phase with nothing to copy.
+## Stereo is deferred, not planned — decided 2026-08-31
+
+Two findings, and they point the same way.
+
+**Nothing here can capture stereo.** The only 360 use case this project has is
+HMDViewer's: teleoperation from a mono camera on a vehicle. Stereo there is not
+unbuilt, it is *uncapturable*. Stereo matters only if the SDK's 360 story becomes
+"play the stereo 360 clips that exist in the world" — most commercial 360 content is
+over-under — which is a different product from "show our camera feed". Building for
+it now is speculation, and this document has already reversed itself once for
+exactly that reason (the `stereo_layout` field above).
+
+**And it is much cheaper than this document claimed.** The claim was that stereo
+"reaches into the XR render path, which cannot be prototyped on a desktop". That is
+wrong: `session.rs` spawns **two independent cameras**, one per eye, each with its
+own `OpenXrCameraIndex`, render target and depth texture. There is no multiview, so
+there is no per-eye shader branch to write. Stereo 360 is two spheres on two
+`RenderLayers`, each with its own UV half — no new render machinery and no
+device-only debugging. It is arguably *easier* than phase 4.
+
+So the entry stays in the table as deferred with that note attached, rather than
+sitting at the end as an unbounded item nobody wants to pick up.
 
 ## What phase 2 built
 
@@ -165,20 +201,140 @@ top of the video. The seam lands behind the viewer and the video's centre is
 straight ahead, which is what an author expects and is not something to
 rediscover by eye.
 
-### A punch-through surface — missing from this plan entirely
+### The blending path itself: verified, and one bug in it — 2026-08-31
+
+Before designing anything on top of the blend, the whole alpha path was read end to
+end. It is structurally complete, and **none of it is 360-specific** — any scene can
+put a semi-transparent element over reality:
+
+| Link | Where |
+| --- | --- |
+| Passthrough layer submitted *beneath* the projection layer | `session.rs` — projection inserted at 0, then passthrough inserted at 0, leaving `[passthrough, projection]` |
+| Eye cameras clear to alpha 0 | `passthrough.rs`, `Color::NONE` |
+| Swapchain format carries an alpha channel | `swapchain.rs`, prefers `Rgba8UnormSrgb` |
+| Layer flagged to blend on source alpha | `projection.rs` |
+| Opaque scene content still occludes reality | Bevy gives `AlphaMode::Opaque` no blend state and forces alpha 1 |
+
+**The bug: the premultiplication flag was backwards.** `projection.rs` set
+`UNPREMULTIPLIED_ALPHA` and its comment asserted "Bevy renders straight
+(unpremultiplied) alpha". Bevy's output is *premultiplied* — `AlphaMode::Blend` is
+wgpu's `ALPHA_BLENDING`, so over a target cleared to `Color::NONE` a fragment of
+colour C, alpha a lands as `(a·C, a)`; the blend has already done the multiply.
+Declaring the layer unpremultiplied made the runtime multiply a second time,
+compositing `a²·C` instead of `a·C`.
+
+**Why the comment read so confidently and was still wrong:** the flags were
+transcribed from HMDViewer, whose shader writes `vec4(rgb, opacity)` with *blending
+disabled* — it is the only thing it draws, so its framebuffer really does hold
+straight alpha, and the flag is correct *for it*. The convention differs, not the
+intent, and nothing about the copied line looked suspicious.
+
+The full derivation lives in the code comment. The part worth repeating here is the
+**test**, because it is not the obvious one: the error is a factor of alpha, so it
+hid completely at the 0.8 a 360 video is authored at — 20% dark, with no in-headset
+reference to compare against. Any device check of this path must **sweep opacity**
+from 1.0 down to ~0.2 and confirm brightness falls off proportionally rather than off
+a cliff. Eyeballing a single value distinguishes nothing.
+
+### Phase 4: a passthrough window — designed 2026-08-31
 
 HMDViewer has a second thing this plan did not account for: a **world-anchored
-punch-through window**, an alpha-0 quad that clears a region back to *fully clear*
-passthrough. In its case, so the operator can see the physical monitor in front of
-them through an otherwise video-filled view.
+punch-through window**, so the operator can see the physical monitor in front of them
+through an otherwise video-filled view. It is the difference between "the room is
+dimly visible everywhere" and "this rectangle is really the room".
 
-Its shader writes `vec4(0.0)` — colour zero, alpha zero — and the compositor then
-shows passthrough at full clarity there.
+The question this raised was whether it clears passthrough, or *designates a target*
+to clear. It clears — and no target needs designating, which is what makes it small.
 
-This is a separate authorable thing from the sphere, and it is the difference
-between "the room is dimly visible everywhere" and "this rectangle is really the
-room". Worth a payload of its own; it is a small one, and nothing about it is
-video-specific.
+**It is a window in a wall.** An alpha-0 surface in the **opaque** pass (blending
+off, depth write on) writes `(0,0,0,0)`. The sphere is `AlphaMode::Blend`, and
+Bevy's transparent pass has depth write *disabled*, so the sphere never contests
+that depth and simply loses in that region; the compositor then shows the
+passthrough layer beneath at 100%. Geometry is the region, and depth decides what it
+replaces: everything *behind* the plane is outside the room, and outside is reality;
+everything *in front* still draws normally over reality, so a label between the
+viewer and the window is still visible. No stencil, no render layers, no per-object
+exclusion list. It is also order-independent — an opaque object behind the window
+gives alpha 0 whether it draws before or after.
+
+The alternative reading of "designate the target" would be Quest's
+**surface-projected passthrough** (`XR_FB_passthrough` geometry instances):
+passthrough rendered only onto designated geometry. That is the right construction
+when there is *no* full-screen passthrough layer beneath. There is one, so the hole
+is both simpler and runtime-agnostic. Ruled out.
+
+**No opacity field.** The first instinct was to make it authorable like the sphere's.
+It must not be: the video behind is depth-rejected either way, so a window writing
+alpha `w` gives a `w`-black tint over the room — a *dimmed view of reality*, not a
+partial video. That is a control meaning something no author would ask for. Full
+clarity or nothing.
+
+**Off-passthrough it does not exist.** An alpha-0 surface with no layer beneath is a
+**black rectangle**, and that is the misleading failure shape from
+`docs/platform-support.md`, not the inert one: the author sees black, ships it, and
+it is correct on device. Closed by construction rather than by a check someone has to
+remember — spawn the surface **hidden**, and let `sync_passthrough_system` be the
+only thing that ever shows it. That system already runs every frame, writes only on
+change, solves the ordering problem that bit this before (the scene is imported
+*before* the OpenXR session exists, so an on-import approach dropped the authored
+value), and **returns early when there is no XR session at all**, which is the
+desktop path. Default-hidden plus a system that only ever turns things on means
+desktop needs no code, and no reachable state draws the rectangle.
+
+**The editor draws a gizmo, not a mesh.** This is the sixth instance of an existing
+pattern, not a special case: `viewport_gizmo.rs` already draws wireframe outlines for
+five node kinds that render nothing in a scene — `InteractionZone`,
+`PlayerSpawnZone`, `PlayerSpawn`, audio falloff, physics colliders. So "not needed
+when passthrough is off" and "the author must see where they put it" are not in
+tension.
+
+**A payload, not a material flag**, for the same reason `Video360` is one — and more
+so here, because "hidden unless passthrough" is a property of the node kind. As a
+material flag it would be tickable on an arbitrary glTF, where it mostly produces
+nonsense that still has to obey the same rule.
+
+Shape is a **quad**; a box is additive if something asks for it. Implementation is a
+flag in the existing `ExtendedMaterial` uniform, early-returning `vec4(0.0)` from the
+fragment shader — the runtime already routes every node through that one material,
+so no new material type is needed.
+
+### What phase 4 built
+
+`XrdsSceneNodePayload::PassthroughWindow` → `XrdsPassthroughWindow` →
+`spawn_passthrough_window_descriptor`, with `punch_through_material` and a
+`XRDS_MATERIAL_FLAG_PUNCH_THROUGH` branch at the top of the shared fragment shader.
+Editor: palette entry under Scene, inspector section, `SetPassthroughWindowParams`,
+DTO both ways, hierarchy kind, icon, and `passthrough_window_gizmo_system`.
+
+Three things worth recording, all of them about *where* a decision lives rather than
+what it is:
+
+**The early return sits before `pbr_input_from_standard_material`, not after.** That
+function reads material and texture state a punch-through surface does not have, and
+reading it anyway is the exact shape of the bug that made the depth-only prepass fail
+on `in.world_normal` (above). The branch is also excluded from the prepass/deferred
+compile, because `prepass_io::FragmentOutput` has no `color` to write and the depth
+this surface occludes with is what the ordinary prepass path already produces.
+
+**`AlphaMode::Opaque` on a surface whose whole job is transparency**, which reads
+like a mistake and is the load-bearing choice. Opaque means blending *off* and depth
+write *on*, so `vec4(0.0)` is written raw. Under `Blend` it would composite against
+what is already there and contribute exactly nothing — the hole would silently not
+appear, on device only, with nothing in the scene looking wrong. That is what
+`a_passthrough_window_material_is_opaque_so_the_hole_is_written_not_blended` pins.
+
+**The author's `visible` is held in a component, not applied.** It is necessary but
+not sufficient — a window shows only when it is true *and* passthrough is on — so
+`XrdsPassthroughWindowVisible` carries the intent and `sync_passthrough_system`
+combines the two conditions in one place. The alternative, applying `visible` at
+spawn and correcting it later, is a race between spawn and the first sync, and the
+losing case is the black rectangle this whole design is built to make unreachable.
+
+The editor tells the author both things the outline cannot: that a window is inert
+unless the scene's blend mode is Alpha Blend, and that it is *never* visible in the
+viewport because there is no compositor here. Without the second line, a
+correctly-authored window and a broken one look identical in the editor — an outline
+and no hole.
 
 ## What phase 3 built
 
@@ -234,15 +390,97 @@ and its doc comment names all four failures so the fifth person finds it.
 
 Reordered 2026-08-28 once HMDViewer answered the open questions. Passthrough
 blending moves up — it is a per-node opacity value, not the research project it
-looked like — and stereo goes last because it is the only part with no reference.
+looked like — and stereo goes last.
+
+Numbers are kept stable rather than renumbered, so rows are not in execution order:
+**phase 4, then verification, and 5 only if content asks.** Stereo kept its number
+because other documents cite it.
 
 | Phase | Scope | State |
 | --- | --- | --- |
 | 1 | `cull_mode` plumbed from the material | ✅ built — for authored meshes; `Video360` does not depend on it |
 | 2 | `Video360` payload + runtime spawn: inside-facing sphere generated directly, equirect UVs with `u=0.5` at −Z, unlit, mono, **authorable opacity** | ✅ built |
 | 3 | Editor: palette entry, inspector section, validation | ✅ built |
-| 4 | Punch-through surface: an alpha-0 quad that clears a region to fully clear passthrough | |
-| 5 | Stereo `OverUnder` / `SideBySide` as a per-eye UV transform. **The only phase with no reference implementation** — HMDViewer is mono. Device-verified or not done | |
+| 4 | Passthrough window: an alpha-0 quad in the opaque pass that clears a region to fully clear passthrough. Hidden unless passthrough is on; editor gizmo, not a mesh | ✅ built |
+| — | Device verification on a Quest 3 — **sweeping opacity**, not eyeballing 0.8 — plus a `quest-device-test-recipe.md` entry and an example scene. Runs after phase 4, by decision | ✅ verified 2026-09-02; found one bug, see below. Example scene still open |
+| 5 | Stereo `OverUnder` / `SideBySide`. Two spheres on two `RenderLayers`, since the XR path is two cameras and not multiview — small when content asks | deferred, see above |
+
+## The device pass — 2026-09-02, on a Quest 3
+
+Everything passed, and the pass found one bug that no desktop check could have.
+
+**Verified:**
+
+- **The premultiply fix.** The five-quad opacity ramp faded evenly with the 0.2 quad
+  still a visible wash — the linear composite `a·C`. Under the old flag the row would
+  have been bunched hard toward dark with the last quad at 0.04, effectively gone.
+  This was the one item that was a *check* rather than a first run.
+- **Phase 2's sphere over real passthrough**, at 0.8, with the room visible through it.
+- **Phase 4's hole**, executing for the first time anywhere.
+- **Phase 4's occlusion contract.** A bar passing behind the window was hidden inside
+  it while a cube in front stayed drawn over the room — "behind the plane is outside
+  the room, in front still draws" confirmed rather than merely asserted.
+- **Video decode cost**: `c2.qti.avc.decoder` on a 3840×1920 clip, **0.23 ms/frame**.
+
+**The bug: `Video360::autoplay` was inert.** The field was authorable, round-tripped
+through the document, appeared in the inspector as "Play on load", and *nothing
+anywhere read it* — `grep autoplay` over the runtime returned only audio's
+`paused: !autoplay`. A 360 scene came up as a blank sphere.
+
+It hid because every other way to start a video works: the editor's preview button and
+a `PlayVideo` action on a Track, which are the two paths anyone exercises on a desktop.
+On a headset there is no button to press and a Track must be authored first — which is
+exactly the case `autoplay` exists for. So the one platform that needs the field is the
+one platform nobody had run it on. Fixed in `spawn_video_360_descriptor`, with a
+`warn!` on failure so it can no longer fail silently.
+
+**Two false alarms worth recording**, because both cost real time:
+
+- **A frozen picture that was the last frame, not the first.** The clip does not loop
+  (see below), so a 30 s video played out while the headset was off and sat on its
+  final frame. The tell was in the log and misread: conversions had reached 1500
+  against a 900-frame clip, because after EOS the decoder keeps handing back its last
+  buffer and the converter dutifully re-converts it every rendered frame.
+- **A black window that was a real monitor.** The hole revealed the room so faithfully
+  that the physical monitor behind it read as a rendering failure. That is the
+  reference app's own use case working exactly as intended.
+
+**Two items this opened, both since closed:**
+
+**`Video360.looped`, defaulting *on*.** For an authored backdrop, looping is almost
+always what is wanted — a clip that plays once and freezes is not a usable
+environment. The plan never raised it because the reference app is a *live*
+teleoperation feed, where looping is meaningless; an authored scene is the opposite
+case.
+
+It defaults on while `autoplay` defaults off, and the asymmetry is the point: the two
+look symmetrical and are not. `autoplay` costs a thread or a hardware codec session,
+so starting one unasked is a real expense. Looping costs nothing once that decoder is
+already running, and a backdrop stopping dead on its final frame is a defect rather
+than a choice. Defaulting on also cannot contradict an existing document, because none
+could express "do not loop" before the field existed.
+
+**The redundant re-conversion, which was larger than "post-EOS waste".**
+`AndroidVideo::next_buffer` returned `Ok(self.current)` unconditionally — deliberately,
+so a video slower than the display holds its frame rather than flickering — but the
+caller could not tell a repeat from a fresh frame, so it re-converted an identical
+image every rendered frame. That is not only the post-EOS case: on a 72 Hz display
+showing a 30 fps clip it is **~58% of conversions wasted in steady state**, and 100%
+once a non-looping clip has finished.
+
+The caller already had the right path — `Ok(None)` keeps the existing `GpuImage`
+without converting — and the decoder simply never used it. Fixed with a generation
+counter, so `None` now means "nothing changed, keep what you have". The desktop
+decoder was already correct: `PacedVideo::newest_frame` returns `None` when nothing
+arrived since the last call, so this brings Android in line rather than inventing a
+convention.
+
+**The regression test that was missing.** `a_video_360_with_autoplay_starts_playing_and_honours_looped`
+and its negative pair now cover the field, using a committed 2.9 KB clip
+(`assets/videos/tiny_test.mp4`, 128×64, cut from the 2D sample). A real file is
+required, not incidental: with no file to open, `play_video_asset_in_world` returns
+false whether or not `autoplay` was read at all, so a fixtureless test could not
+fail. `assets/videos/` stays gitignored with a negation for that one file.
 
 ## What stays out
 

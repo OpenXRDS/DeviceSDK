@@ -43,6 +43,7 @@ pub use light_params::{
     AmbientLightParams, DirectionalLightParams, LightKind, PointLightParams, SpotLightParams,
 };
 pub use world::audio::{XrdsAudioClip, XrdsAudioDistanceModel};
+pub use world::passthrough_window::XrdsPassthroughWindow;
 pub use world::video360::XrdsVideo360;
 pub use world_ui::{
     XrdsWorldButton, XrdsWorldButtonParams, XrdsWorldButtonState,

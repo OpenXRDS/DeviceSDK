@@ -39,6 +39,12 @@ pub struct XrdsVideo360 {
     /// is the one case where an author usually does want it on, which is a reason
     /// to make it easy to tick, not a reason to change the default.
     pub autoplay: bool,
+    /// Whether playback restarts at the end. **On by default**, unlike `autoplay`.
+    ///
+    /// Looping costs nothing once the decoder is already running, which is what
+    /// makes it different from `autoplay` — and a backdrop that stops dead on its
+    /// last frame reads as a broken video rather than a finished one.
+    pub looped: bool,
 }
 
 impl Default for XrdsVideo360 {
@@ -53,6 +59,7 @@ impl Default for XrdsVideo360 {
             radius: 50.0,
             opacity: 1.0,
             autoplay: false,
+            looped: true,
         }
     }
 }
