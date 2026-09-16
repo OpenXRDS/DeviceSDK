@@ -36,6 +36,13 @@ pub struct XRNetServer {
     pub greeting: Option<String>,
     pub root_dir: Option<String>,
 
+    /// Interface the FTP server binds on. `None` keeps its historical
+    /// loopback-only default, so existing callers are unaffected. Set it to
+    /// `0.0.0.0` to accept connections from another machine (see
+    /// [`set_bind_address`](Self::set_bind_address)). WS/WebRTC already bind
+    /// all interfaces and ignore this.
+    bind_address: Option<String>,
+
     ws_handlers: WsHandlers, //TODO: will be changed for generic handlers
 }
 
@@ -46,12 +53,26 @@ impl XRNetServer {
             port,
             greeting: None,
             root_dir: Some("".to_string()),
+            bind_address: None,
             ws_handlers: HashMap::new(),
         }
     }
 
     pub fn set_greeting(mut self, greeting: String) -> Self {
         self.greeting = Some(greeting);
+        self
+    }
+
+    /// Bind the FTP server on a specific interface, e.g. `0.0.0.0` to be
+    /// reachable from another machine on the LAN. No effect on the other
+    /// protocols, whose servers already bind all interfaces.
+    ///
+    /// Opt-in rather than the default because the FTP server has always bound
+    /// loopback only, and it runs with libunftp's anonymous authenticator —
+    /// exposing it on every interface is a decision the caller should make
+    /// deliberately, not inherit.
+    pub fn set_bind_address(mut self, bind_address: &str) -> Self {
+        self.bind_address = Some(bind_address.to_string());
         self
     }
 
@@ -323,7 +344,9 @@ impl XRNetServer {
 
         let server = libunftp::Server::with_fs(ftp_home).build().unwrap();
 
-        let host_addr = ["127.0.0.1", port.to_string().as_str()].join(":");
+        let bind = self.bind_address.as_deref().unwrap_or("127.0.0.1");
+        let host_addr = [bind, port.to_string().as_str()].join(":");
+        println!("ftp server listening on: {host_addr}");
         let listen_result = server.listen(host_addr.as_str()).await;
 
         if let Err(e) = listen_result {

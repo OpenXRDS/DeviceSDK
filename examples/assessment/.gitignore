@@ -1,0 +1,4 @@
+# Run artifacts: the received payloads and their reports. One folder per run
+# under received/<protocol>/<run-id>/. These are evidence to collect from the
+# receiving machine, not source to commit.
+received/

@@ -1,0 +1,212 @@
+{
+  "version": 1,
+  "metadata": {
+    "name": "Protocol-Agnostic Assessment Scene",
+    "authored_by": "xrds assessment suite",
+    "default_scene_label": null,
+    "extras": {}
+  },
+  "assets": [],
+  "nodes": [
+    {
+      "id": 400,
+      "parent_id": null,
+      "name": "Root",
+      "enabled": true,
+      "visible": true,
+      "transform": {
+        "translation": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rotation_quat_xyzw": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "payload": "Empty",
+      "editor": {
+        "tags": [],
+        "layer": null,
+        "locked": false,
+        "hidden_in_editor": false,
+        "user_properties": {},
+        "source": null
+      }
+    },
+    {
+      "id": 401,
+      "parent_id": 400,
+      "name": "AssessmentCube",
+      "enabled": true,
+      "visible": true,
+      "transform": {
+        "translation": [
+          0.0,
+          1.0,
+          0.0
+        ],
+        "rotation_quat_xyzw": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "payload": {
+        "Cube": {
+          "size": [
+            1.5,
+            1.5,
+            1.5
+          ],
+          "material": {
+            "base_color": [
+              0.22,
+              0.64,
+              0.94,
+              1.0
+            ],
+            "emissive": [
+              0.03,
+              0.05,
+              0.08,
+              1.0
+            ],
+            "opacity": 1.0,
+            "unlit": false,
+            "pbr": {
+              "metallic": 0.0,
+              "roughness": 0.5,
+              "reflectance": 0.5,
+              "double_sided": false,
+              "cull": "Back",
+              "alpha_mode": "Auto",
+              "alpha_cutoff": 0.5
+            }
+          }
+        }
+      },
+      "editor": {
+        "tags": [
+          "assessment"
+        ],
+        "layer": null,
+        "locked": false,
+        "hidden_in_editor": false,
+        "user_properties": {},
+        "source": null
+      }
+    },
+    {
+      "id": 402,
+      "parent_id": null,
+      "name": "KeyLight",
+      "enabled": true,
+      "visible": true,
+      "transform": {
+        "translation": [
+          4.0,
+          6.0,
+          4.0
+        ],
+        "rotation_quat_xyzw": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "payload": {
+        "PointLight": {
+          "color": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "intensity": 180000.0,
+          "range": 24.0,
+          "radius": 0.0,
+          "shadows": false
+        }
+      },
+      "editor": {
+        "tags": [],
+        "layer": null,
+        "locked": false,
+        "hidden_in_editor": false,
+        "user_properties": {},
+        "source": null
+      }
+    },
+    {
+      "id": 403,
+      "parent_id": null,
+      "name": "Camera",
+      "enabled": true,
+      "visible": true,
+      "transform": {
+        "translation": [
+          0.0,
+          3.0,
+          8.0
+        ],
+        "rotation_quat_xyzw": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "payload": {
+        "Camera": {
+          "projection": {
+            "Perspective": {
+              "fov_deg": 50.0,
+              "near": 0.1,
+              "far": 200.0,
+              "order": 0
+            }
+          },
+          "look_at": [
+            0.0,
+            1.0,
+            0.0
+          ]
+        }
+      },
+      "editor": {
+        "tags": [],
+        "layer": null,
+        "locked": false,
+        "hidden_in_editor": false,
+        "user_properties": {},
+        "source": null
+      }
+    }
+  ]
+}
