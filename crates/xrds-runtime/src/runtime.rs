@@ -292,10 +292,13 @@ pub(crate) fn build_bevy_app(params: &RuntimeParameters) -> App {
 
     let window_plugin = WindowPlugin {
         primary_window: Some(Window {
-            title: if params.app_name.is_empty() {
-                "OpenXRDS".to_owned()
-            } else {
-                params.app_name.clone()
+            // XRDS_WINDOW_TITLE lets a harness stamp its own label on the window,
+            // so a screenshot identifies which program produced it. Unset, the
+            // app's own name is used exactly as before.
+            title: match std::env::var("XRDS_WINDOW_TITLE") {
+                Ok(t) if !t.trim().is_empty() => t,
+                _ if params.app_name.is_empty() => "OpenXRDS".to_owned(),
+                _ => params.app_name.clone(),
             },
             resolution: params.window_resolution
                 .map(|(w, h)| WindowResolution::new(w as u32, h as u32))
@@ -329,6 +332,64 @@ pub(crate) fn build_bevy_app(params: &RuntimeParameters) -> App {
     app
 }
 
+/// Set by `XRDS_EXIT_AFTER_FRAMES`: render this many frames, then exit cleanly.
+#[derive(Resource)]
+struct FrameLimit {
+    target: u64,
+    rendered: u64,
+    started: std::time::Instant,
+}
+
+/**
+ * Opt-in smoke-test hook, off unless `XRDS_EXIT_AFTER_FRAMES` is set to a
+ * positive integer. A windowed app otherwise runs until a human closes it,
+ * which leaves an automated harness nothing to check but "it hadn't crashed
+ * yet". With the variable set, the app renders that many frames, prints one
+ * summary line, and exits 0 — so "it runs" becomes an exit code and a frame
+ * count. Invalid or absent values leave the app untouched.
+ */
+fn install_frame_limit(app: &mut App) {
+    let Ok(raw) = std::env::var("XRDS_EXIT_AFTER_FRAMES") else {
+        return;
+    };
+    let Ok(target) = raw.trim().parse::<u64>() else {
+        warn!("XRDS_EXIT_AFTER_FRAMES={raw:?} is not a frame count; ignoring it");
+        return;
+    };
+    if target == 0 {
+        warn!("XRDS_EXIT_AFTER_FRAMES=0 would exit before rendering; ignoring it");
+        return;
+    }
+
+    app.insert_resource(FrameLimit {
+        target,
+        rendered: 0,
+        started: std::time::Instant::now(),
+    });
+    // Last, so the count only advances for frames that made it through the
+    // whole schedule — a frame that panicked mid-update must not be counted.
+    app.add_systems(Last, exit_after_frame_limit);
+}
+
+fn exit_after_frame_limit(mut limit: ResMut<FrameLimit>, mut commands: Commands) {
+    limit.rendered += 1;
+    if limit.rendered < limit.target {
+        return;
+    }
+
+    let elapsed = limit.started.elapsed();
+    let fps = limit.rendered as f64 / elapsed.as_secs_f64().max(f64::MIN_POSITIVE);
+    println!(
+        "XRDS_FRAME_LIMIT_REACHED frames={} elapsed_ms={} avg_fps={:.1}",
+        limit.rendered,
+        elapsed.as_millis(),
+        fps,
+    );
+    commands.queue(|world: &mut World| {
+        world.write_message(AppExit::Success);
+    });
+}
+
 impl Runtime {
     pub fn new(params: RuntimeParameters) -> Self {
         Self {
@@ -349,6 +410,8 @@ impl Runtime {
         handler.on_construct(OnConstruct(&mut self.app));
         handler.on_begin(OnBegin(&mut self.app));
         handler.on_update(OnUpdate(&mut self.app));
+
+        install_frame_limit(&mut self.app);
 
         self.app.run();
 

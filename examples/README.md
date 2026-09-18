@@ -10,6 +10,19 @@ cargo run --example <example_name>
 `xrds_first/simple_api`) — every example name is unique across categories,
 so this works regardless of which subfolder it lives in.
 
+Most examples open a window and run until you close them. To make one exit
+on its own — useful for smoke tests and CI — set `XRDS_EXIT_AFTER_FRAMES`:
+
+```bash
+XRDS_EXIT_AFTER_FRAMES=600 cargo run --example simple_api
+```
+
+The app renders that many frames, prints `XRDS_FRAME_LIMIT_REACHED` with a
+frame count and average FPS, and exits 0. It works for anything that runs
+through `Runtime`, and does nothing when the variable is unset. The
+reference-example assessment in
+[`assessment/tech-references/`](assessment/tech-references/) is built on it.
+
 ## Directory layout
 
 Examples are grouped into category subfolders, matching the sections
@@ -74,13 +87,13 @@ Important rule about ids:
 | [edit_material.rs](xrds_first/edit_material.rs) | Material editing through XRDS-authored material params. |
 | [active_compo_control.rs](xrds_first/active_compo_control.rs) | XRDS-centric component control flow. |
 | [load_gltf.rs](xrds_first/load_gltf.rs) | Loading authored glTF scene content through XRDS. |
-| [load_gltf_fail_case.rs](xrds_first/load_gltf_fail_case.rs) | Handling glTF load failures through XRDS-facing status queries. |
 | [load_gltf_animated.rs](xrds_first/load_gltf_animated.rs) | Animated counterpart to `load_gltf.rs` — loads an animated glTF via `XrdsGltfAsset`/`XrdsAPI` and starts its animation from `update()`. |
 | [scene_document_import.rs](xrds_first/scene_document_import.rs) | Importing scene-graph document data into live runtime entities. |
 | [scene_document_environment_import.rs](xrds_first/scene_document_environment_import.rs) | Small XRDS-first import example for authored scene-level IBL environment metadata. |
 | [scene_document_texture_uv_rotation_only.rs](xrds_first/scene_document_texture_uv_rotation_only.rs) | Minimal authored-scene proof that texture UV rotation is center-based by default. |
 | [scene_document_texture_uv_validation.rs](xrds_first/scene_document_texture_uv_validation.rs) | Control-versus-proof render example for authored texture UV transforms and sampler settings. |
 | [scene_document_audio_workflow.rs](xrds_first/scene_document_audio_workflow.rs) | Scene-document audio asset catalog and `XrdsSceneAudioClip` node workflow — non-spatial and spatial/panning clips authored through `XrdsSceneDocument`/`XrdsSceneDocumentSession`. |
+| [spatial_audio_falloff_check.rs](xrds_first/spatial_audio_falloff_check.rs) | Audible proof that `XrdsSceneAudioClip`'s authored distance falloff is honoured: two equidistant clips with deliberately opposite `max_distance` curves, so any asymmetry you hear can only come from the authored fields. |
 | [scene_document_material_workflow.rs](xrds_first/scene_document_material_workflow.rs) | Authoring/importing a scene document with PBR material params (`XrdsSceneMaterial`, alpha-blend, double-sided) and live-editing emissive color at runtime via `XrdsAPI`. |
 | [editor_basement_flow.rs](xrds_first/editor_basement_flow.rs) | End-to-end editor-basement flow: document session edits, runtime import, and queued runtime commit helpers. |
 | [scene_document_export.rs](xrds_first/scene_document_export.rs) | Export-focused XRDS flow: runtime edits committed through XRDS and exported back into a document snapshot. |
@@ -97,6 +110,7 @@ These show the open extension model. Use them when built-in XRDS components are 
 | --- | --- |
 | [generic_update.rs](extensions/generic_update.rs) | Custom descriptor plus custom patch type while still realizing through XRDS-owned geometry/material paths. |
 | [net_app.rs](networking/net_app.rs) | **Networking inside an `XrdsApp`** — the recommended in-app path. Kicks off a one-shot (`request_async` → poll with `Option<XrdsNetTask>::take_ready()`) and an ongoing stream (`NetFeed::try_recv`/`take_error`) from `setup`/`update`, all off the frame thread. Start here if you're networking from a running app. |
+| [net_app_publisher.rs](networking/net_app_publisher.rs) | The "server" half of `net_app.rs` — a standalone loop publishing to the same MQTT topic once a second, so you can watch live pushes reach a running `XrdsApp`'s `update()` without stalling the frame. Run it in a second terminal alongside `net_app`. |
 | [net_intent.rs](networking/net_intent.rs) | The same four intent verbs (`request`/`dispatch`/`listen`/`transfer`) called **synchronously**, standalone (no runtime) — fine for scripts/tests; would block a frame if used in-app. |
 | [net.rs](networking/net.rs) | Expert `ClientBuilder`/`Client` session API `XrdsNet` is built on — protocol-aware (`set_protocol`, `.connect()`/`.request()`/`.send()`/`.rcv()`) for when you need lower-level control. |
 | [net_protocols.rs](networking/net_protocols.rs) | Focused: a **capability tour** — one supported verb per protocol (HTTP/CoAP `request`, WS `dispatch`, MQTT `dispatch`+`listen` round-trip, FTP `transfer`), all through the intent verbs. See MANUAL.md §12. |
@@ -115,6 +129,7 @@ They import Bevy directly on purpose. XRDS no longer re-exports Bevy for them.
 | Example | Layer | Purpose |
 | --- | --- | --- |
 | [direct_bevy.rs](expert/direct_bevy.rs) | `Direct-Bevy` | Direct Bevy scene construction and animation inside an XRDS runtime shell. Use this when XRDS abstractions are intentionally not the goal. |
+| [sequential_actions_spike.rs](expert/sequential_actions_spike.rs) | `Direct-Bevy` | Spike answering, with running code, whether `bevy-sequential-actions` coexists with the `Runtime`/`RuntimeHandler` expert layer and whether tuple `.add((a, b))` queues or parallelises. Two cubes spin in turn if sequential, together if concurrent. Exits itself once the queue drains. |
 
 ## Rendering And Feature Demos
 
@@ -151,6 +166,8 @@ For strict layering, treat the label below as authoritative:
 | [split_screen.rs](rendering/split_screen.rs) | `Direct-Bevy` | Viewports, multiple cameras, UI overlays, and mesh/material setup are all direct Bevy APIs. | <img src="./screenshots/split_screen.png" width="400"> |
 | [two_pass.rs](rendering/two_pass.rs) | `Direct-Bevy` | The point of the example is multi-camera render ordering, implemented directly with Bevy camera APIs. | <img src="./screenshots/two_pass.png" width="400"> |
 | [vertex_color.rs](rendering/vertex_color.rs) | `Direct-Bevy` | Vertex attribute mutation, mesh construction, and material handling are authored directly with Bevy mesh APIs. | <img src="./screenshots/vertex_color.png" width="400"> |
+| [particle_effect.rs](rendering/particle_effect.rs) | `XRDS-first` | Both `XrdsEffect` emission kinds side by side through `XrdsAPI` — a continuously emitting `Trail` plume orbiting the centre, and a `Burst` that fires once at startup. Colours are authored ≤ 1.0 deliberately, since the XR cameras have no HDR pass. | — |
+| [video_texture_check.rs](rendering/video_texture_check.rs) | `XRDS-first` | A 2-D video on a surface in a 3-D scene via `create_video_texture`/`write_video_frame` — no separate render path, just a textured quad whose texture changes every frame. Decoding stays outside the runtime. Takes an optional path argument. | — |
 | [3d_text.rs](rendering/3d_text.rs) | `XRDS-first` | Flat/billboard 3D text authored through `XrdsText`/`TextParams`; the FPS-style camera controller is incidental Bevy input glue, not the teaching surface. | — |
 | [extruded_text.rs](rendering/extruded_text.rs) | `XRDS-first` | Extruded (embossed) 3D text authored through `XrdsExtrudedText`, same camera controller as `3d_text.rs`. | — |
 | [gltf_samples_check.rs](rendering/gltf_samples_check.rs) | `Direct-Bevy` | Diagnostic tool: loads GLB files directly through Bevy's native `GltfLoader`/`AssetServer` and reports load status/errors, bypassing XRDS entirely. | — |

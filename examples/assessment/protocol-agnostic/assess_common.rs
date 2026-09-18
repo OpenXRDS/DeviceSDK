@@ -15,8 +15,8 @@ limitations under the License.
 */
 
 //! Shared support code for the protocol-agnostic assessment binaries
-//! (`examples/assessment/`). No `main` — each sender/receiver pulls this in
-//! with `#[path = "assess_common.rs"] mod common;`, the same way
+//! (`examples/assessment/protocol-agnostic/`). No `main` — each sender/receiver
+//! pulls this in with `#[path = "assess_common.rs"] mod common;`, the same way
 //! `examples/webrtc/realnet_common.rs` is shared.
 //!
 //! The assessment is a **content × protocol matrix**: every supported XR
@@ -62,13 +62,50 @@ pub const CONTENT_TYPES: &[(&str, &str)] = &[
 /// suite in a sitting, and MQTT publishes one broker connection per chunk.
 /// Swap in bigger assets with `--files` when throughput is what's being
 /// measured.
+/// Bare file names, resolved by [`resolve_sample`]. They are copies of assets
+/// from `assets/`, not references into it: the kit has to be handed to someone
+/// running the assessment on their own machine, and a suite that only works
+/// inside a full checkout is not portable.
 pub const DEFAULT_SUITE: &[(&str, &str)] = &[
-    ("gltf-model", "assets/models/StainedGlassLamp/StainedGlassLamp.gltf"),
-    ("texture", "assets/textures/arrow_box.png"),
-    ("audio", "assets/sound/wav/spatial_test_ping.wav"),
-    ("video", "assets/videos/tiny_test.mp4"),
-    ("scene-document", "examples/assessment/fixtures/assessment_scene.xrds"),
+    ("gltf-model", "StainedGlassLamp.gltf"),
+    ("texture", "arrow_box.png"),
+    ("audio", "spatial_test_ping.wav"),
+    ("video", "tiny_test.mp4"),
+    ("scene-document", "assessment_scene.xrds"),
 ];
+
+/// Where `samples/` is looked for, in order.
+///
+/// The portable kit is a flat folder — five executables and `samples/` beside
+/// them — so the first candidate is the directory holding the running binary.
+/// That is what makes the same build work both from a checkout and from a kit
+/// copied onto an evaluation machine with no toolchain: nothing is baked in
+/// that only one of the two layouts can satisfy.
+///
+/// Only the default suite goes through this. A path given with `--file` /
+/// `--files` is used exactly as typed.
+pub fn resolve_sample(name: &str) -> PathBuf {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+
+    // 1. next to the executable: the kit layout.
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            candidates.push(dir.join("samples").join(name));
+        }
+    }
+    // 2. run from inside examples/assessment/protocol-agnostic/.
+    candidates.push(PathBuf::from("samples").join(name));
+    // 3. run from the repo root, which is what the README tells you to do.
+    let from_root = PathBuf::from("examples/assessment/protocol-agnostic/samples").join(name);
+    candidates.push(from_root.clone());
+
+    candidates
+        .into_iter()
+        .find(|p| p.exists())
+        // Nothing found: hand back the documented location so the "no such
+        // file" names somewhere a reader can act on, rather than a temp dir.
+        .unwrap_or(from_root)
+}
 
 /// Content type from a file extension. `None` when the extension doesn't map
 /// to a supported type — the caller then requires an explicit `--content-type`
@@ -207,7 +244,7 @@ pub fn resolve_items(args: &Args) -> Vec<Item> {
     } else {
         DEFAULT_SUITE
             .iter()
-            .map(|(content_type, path)| (Some(content_type.to_string()), PathBuf::from(path)))
+            .map(|(content_type, name)| (Some(content_type.to_string()), resolve_sample(name)))
             .collect()
     };
 
@@ -663,11 +700,33 @@ pub fn verify(manifest: &Manifest, data: &[u8]) -> Verdict {
 }
 
 /// Where received files and their reports go: one folder per run underneath,
-/// created on demand. Relative to the working directory, which for
-/// `cargo run --example` is the crate root and for the portable kit is the kit
-/// folder.
+/// created on demand.
+///
+/// In a checkout this is the repo-relative path, so evidence stays with the
+/// source it came from. In the portable kit it is `received/` beside the
+/// executables — a conductor collecting evidence should find it next to the
+/// thing they ran, not three directories down a tree that only makes sense
+/// inside this repository. `--out-dir` overrides either.
+/// A binary built by cargo sits under `target/`; one in a kit does not. That is
+/// the only reliable difference between the two situations at run time, since
+/// the working directory is the same in both (the folder you launched from).
+fn out_dir_root() -> PathBuf {
+    let in_cargo_target = std::env::current_exe()
+        .ok()
+        .map(|exe| exe.components().any(|c| c.as_os_str() == "target"))
+        .unwrap_or(false);
+
+    if in_cargo_target {
+        return PathBuf::from("examples/assessment/protocol-agnostic/received");
+    }
+    std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|d| d.join("received")))
+        .unwrap_or_else(|| PathBuf::from("received"))
+}
+
 pub fn default_out_dir() -> PathBuf {
-    let dir = PathBuf::from("examples/assessment/received");
+    let dir = out_dir_root();
     let _ = std::fs::create_dir_all(&dir);
     dir
 }

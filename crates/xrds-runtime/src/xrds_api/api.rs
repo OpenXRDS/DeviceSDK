@@ -755,6 +755,21 @@ impl XrdsAPI<'_> {
         self
     }
 
+    /// Apply everything queued through the `set_*` helpers right now, instead of
+    /// on the next frame.
+    ///
+    /// Needed when you have to *read back* committed state before the app starts
+    /// running — exporting a scene document from `setup()`, for example. Driving
+    /// a whole `App::update()` for this does not work from `setup()`: the render
+    /// plugins have not finished initialising yet, so render-world systems fail
+    /// parameter validation on a missing `RenderDevice` and the app wedges.
+    pub fn apply_queued_updates(&mut self) -> &mut Self {
+        let world = self.app.world_mut();
+        apply_surface_updates(world);
+        apply_queued_parent_changes(world);
+        self
+    }
+
     /// Read current camera projection settings.
     pub fn camera_projection(&self, handle: &Handle<XrdsCamera>) -> Option<CameraProjectionParams> {
         camera_projection_in_world(self.app.world(), handle)

@@ -67,7 +67,7 @@ impl XrdsApp for SceneDocumentExportApp {
 
         // Flush the queued XRDS commit helpers once so the export snapshot reflects committed
         // runtime state rather than transient viewport preview changes.
-        api.get().update();
+        api.apply_queued_updates();
 
         let exported = api
             .export_scene_document_with_metadata(XrdsSceneMetadata {

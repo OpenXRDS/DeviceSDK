@@ -38,13 +38,13 @@ Get this wrong and the second command fails with "connection refused". It is
 not the same side every time — the two pull protocols invert the roles, because
 for them the node holding the content is the one that serves it.
 
-| # | protocol | start first | then start | why |
-|---|----------|-------------|------------|-----|
-| 1 | `ws` | **receiver** | sender | the receiver is the WebSocket server |
-| 2 | `mqtt` | **receiver** | sender | it must be subscribed before anything is published, or the messages are gone |
-| 3 | `ftp` | **receiver** | sender | the receiver is the FTP server |
-| 4 | `http` | **sender** | receiver | the sender serves the content; the receiver pulls it |
-| 5 | `coap` | **sender** | receiver | same as HTTP, over UDP |
+| # | protocol | start first        | then start | why                                                                          |
+| - | -------- | ------------------ | ---------- | ---------------------------------------------------------------------------- |
+| 1 | `ws`   | **receiver** | sender     | the receiver is the WebSocket server                                         |
+| 2 | `mqtt` | **receiver** | sender     | it must be subscribed before anything is published, or the messages are gone |
+| 3 | `ftp`  | **receiver** | sender     | the receiver is the FTP server                                               |
+| 4 | `http` | **sender**   | receiver   | the sender serves the content; the receiver pulls it                         |
+| 5 | `coap` | **sender**   | receiver   | same as HTTP, over UDP                                                       |
 
 A memory hook: **ws / mqtt / ftp → receiver first. http / coap → sender first.**
 
@@ -101,7 +101,7 @@ What you should see each time, on the **receiving** machine:
 
 ```text
   RESULT        : 5/5 PASS
-  evidence      : examples/assessment/received/ws/a40a2019
+  evidence      : examples/assessment/protocol-agnostic/received/ws/a40a2019
 ```
 
 Both processes exit on their own when the suite is done — nothing to Ctrl-C.
@@ -122,7 +122,7 @@ Wireshark *before* the sender, since a run takes well under a second.
 ### Step 7 — collect the evidence
 
 From the **receiving** machine, take
-`examples/assessment/received/<protocol>/<run-id>/` for each of the five runs:
+`examples/assessment/protocol-agnostic/received/<protocol>/<run-id>/` for each of the five runs:
 the received files, `report.txt` and `result.json`. Add `protocol-proof.txt`
 and any `.pcapng` captures.
 
@@ -187,23 +187,25 @@ git-ignored: run output, not source.
 
 The supported XR content types, and the file used for each by default:
 
-| content type | meaning | default file | size |
-|--------------|---------|--------------|------|
-| `gltf-model` | glTF / GLB 3D model | `assets/models/StainedGlassLamp/StainedGlassLamp.gltf` | 30,985 B |
-| `texture` | image texture, lightmap, environment map | `assets/textures/arrow_box.png` | 2,217 B |
-| `audio` | audio clip (spatial or ambient) | `assets/sound/wav/spatial_test_ping.wav` | 88,244 B |
-| `video` | video clip (2D or 360) | `assets/videos/tiny_test.mp4` | 2,943 B |
-| `scene-document` | XRDS scene document | `fixtures/assessment_scene.xrds` | 4,002 B |
+| content type       | meaning                                  | default file                      | size     |
+| ------------------ | ---------------------------------------- | --------------------------------- | -------- |
+| `gltf-model`     | glTF / GLB 3D model                      | `samples/StainedGlassLamp.gltf` | 30,985 B |
+| `texture`        | image texture, lightmap, environment map | `samples/arrow_box.png`         | 2,217 B  |
+| `audio`          | audio clip (spatial or ambient)          | `samples/spatial_test_ping.wav` | 88,244 B |
+| `video`          | video clip (2D or 360)                   | `samples/tiny_test.mp4`         | 2,943 B  |
+| `scene-document` | XRDS scene document                      | `samples/assessment_scene.xrds` | 4,002 B  |
 
 The vocabulary is fixed: a sender naming anything else is rejected rather than
 quietly accepted, so the matrix in the report is the matrix that was agreed.
 
 Note on the glTF item: `StainedGlassLamp.gltf` is the glTF *document* — its
 geometry (`.bin`) and textures are sibling files, and only the document itself
-is this item. That is fine for a transfer test (the bytes are verified either
-way), but if the received file should be loadable on its own, run the
-gltf-model item against a self-contained GLB instead:
-`--file assets/models/animated/phoenix_bird.glb --content-type gltf-model`.
+is this item. The received file is therefore not loadable on its own, which
+does not weaken the result: this assessment moves opaque bytes and proves they
+arrive intact. Whether an arrived model opens is a question about the SDK's
+glTF loader, answered by the reference examples and the loader's own tests, not
+by a transport. A self-contained GLB would travel through exactly the same code
+path and prove exactly the same thing, so the suite does not carry one.
 
 The default files are small on purpose — every protocol has to get through the
 whole suite in a sitting, and MQTT opens one broker connection per chunk (cheap
@@ -212,25 +214,27 @@ instead, swap in bigger assets:
 
 ```bash
 # one content type, one file
---file assets/models/animated/phoenix_bird.glb --content-type gltf-model
+--file /path/to/your/big_model.glb --content-type gltf-model
 
 # a custom suite (types inferred from the extension unless --types is given)
---files assets/models/animated/phoenix_bird.glb,assets/videos/2d_test_sample.mp4
+--files /path/to/big_model.glb,/path/to/large_clip.mp4
 ```
 
-`fixtures/assessment_scene.xrds` is a genuine scene document produced by
+Files passed this way can live anywhere; only `samples/` travels with the kit.
+
+`samples/assessment_scene.xrds` is a genuine scene document produced by
 `XrdsSceneDocument::save_json` — a root, a cube with a material, a point light
 and a camera — not a hand-written stand-in.
 
 ## The protocols
 
-| protocol | sender uses | receiver uses | shape |
-|----------|-------------|---------------|-------|
-| `ws://` | `XrdsNet::open` → `NetChannel::send` / `try_recv` | `XRNetServer` (WS) + registered binary handler | bidirectional session, chunked + acked |
-| `mqtt://` | `XrdsNet::dispatch` (URL path = topic) | `XrdsNet::listen` → `EventStream` | pub/sub via a broker (third node) |
-| `ftp://` | `XrdsNet::transfer(Upload / Download / List)` | `XRNetServer` (FTP, libunftp) | bulk file transfer |
-| `http://` | peer node: minimal `std::net` HTTP server | `XrdsNet::request` (GET) | request/response pull |
-| `coap://` | peer node: `coap` crate UDP server | `XrdsNet::request` (GET) | request/response pull over UDP |
+| protocol    | sender uses                                              | receiver uses                                    | shape                                  |
+| ----------- | -------------------------------------------------------- | ------------------------------------------------ | -------------------------------------- |
+| `ws://`   | `XrdsNet::open` → `NetChannel::send` / `try_recv` | `XRNetServer` (WS) + registered binary handler | bidirectional session, chunked + acked |
+| `mqtt://` | `XrdsNet::dispatch` (URL path = topic)                 | `XrdsNet::listen` → `EventStream`           | pub/sub via a broker (third node)      |
+| `ftp://`  | `XrdsNet::transfer(Upload / Download / List)`          | `XRNetServer` (FTP, libunftp)                  | bulk file transfer                     |
+| `http://` | peer node: minimal`std::net` HTTP server               | `XrdsNet::request` (GET)                       | request/response pull                  |
+| `coap://` | peer node:`coap` crate UDP server                      | `XrdsNet::request` (GET)                       | request/response pull over UDP         |
 
 All four verbs of the protocol-agnostic API — `request`, `dispatch` + `listen`,
 `transfer`, `open` — are exercised end-to-end against a live peer.
@@ -315,26 +319,54 @@ pull quiche/BoringSSL: the root package has no quiche edge.)
 For the evaluation machines, copy the prebuilt kits instead — two disjoint
 folders, so no binary is duplicated:
 
-| folder | holds | goes to |
-|--------|-------|---------|
-| `dist/assessment-sender-kit/` (~53 MB) | the five senders + the content files + the `.xrds` fixture | the sending machine |
-| `dist/assessment-receiver-kit/` (~77 MB) | the five receivers | the receiving machine |
+| folder                                     | holds                                    | goes to               |
+| ------------------------------------------ | ---------------------------------------- | --------------------- |
+| `dist/assessment-sender-kit/` (~53 MB)   | the five senders + a copy of`samples/` | the sending machine   |
+| `dist/assessment-receiver-kit/` (~77 MB) | the five receivers                       | the receiving machine |
 
 Both also carry `RUN.md`, `WIRESHARK.md` and `prove-protocols.ps1`. Each runs
 from its own folder, needs nothing installed, and the receiver kit needs no
 content files (only the sender reads them).
 
+The sender kit is flat — the five executables with `samples/` beside them:
+
+```text
+assessment-sender-kit/
+  assess_ws_sender.exe   ...and the other four
+  samples/               StainedGlassLamp.gltf, arrow_box.png, ...
+  RUN.md  WIRESHARK.md  prove-protocols.ps1
+```
+
+That works because the default suite is resolved at run time rather than baked
+in: `samples/` is looked for next to the executable first, then under the
+working directory, then at `examples/assessment/protocol-agnostic/samples/`.
+One build therefore serves both a checkout and a kit, and **`samples/` has to
+be copied into the sender kit** — the binaries no longer carry any content of
+their own. Paths given with `--file` / `--files` are used exactly as typed and
+are not searched for.
+
 Rebuild **both** after changing any of this code:
 
-```bash
-cargo build --example assess_ws_sender --example assess_ws_receiver \
-            --example assess_mqtt_sender --example assess_mqtt_receiver \
-            --example assess_ftp_sender --example assess_ftp_receiver \
-            --example assess_http_sender --example assess_http_receiver \
-            --example assess_coap_sender --example assess_coap_receiver
-# then copy the senders over dist/assessment-sender-kit/
-#      and the receivers over dist/assessment-receiver-kit/
+```powershell
+pwsh -File examples/assessment/protocol-agnostic/build-kits.ps1
 ```
+
+That compiles the ten binaries, wipes both kit folders and reassembles them:
+the five senders plus a fresh copy of `samples/` in one, the five receivers in
+the other, `RUN.md` / `WIRESHARK.md` / `prove-protocols.ps1` in both, and a
+`MANIFEST.csv` in each listing the SHA-256 of every file shipped. `-Release`
+builds optimised binaries; `-SkipBuild` reassembles from whatever is already in
+`target/`.
+
+It exists because every drift these kits have suffered came from assembling
+them by hand: content that no longer matched the binaries, a sample file
+nothing used any more, and a receiver kit that shipped seventeen folders of a
+previous run's output. Each kit is rebuilt from scratch rather than copied
+over, so nothing stale survives — a kit that accumulates is a kit that lies.
+
+The kit-facing docs live in [`kit/`](kit/) (`RUN-sender.md`, `RUN-receiver.md`)
+and are copied in as `RUN.md`. They are source, not build output: edit them
+there, never inside `dist/`.
 
 `dist/` is git-ignored — the kit is a build artifact, not source. Its binaries
 are debug builds: correctness is what they verify, so the throughput figures
@@ -356,13 +388,13 @@ that *serves* is the one holding the content.
 That also decides **which side types the other's address**. A receiver that
 listens never needs the sender's IP:
 
-| receiver | is given the sender's address? | how |
-|----------|-------------------------------|-----|
-| `assess_http_receiver` | yes | `--url http://SENDER-IP:9302` |
-| `assess_coap_receiver` | yes | `--url coap://SENDER-IP:5683` |
-| `assess_mqtt_receiver` | no — the **broker's** | `--url mqtt://BROKER-IP:1883/<topic>` |
-| `assess_ws_receiver` | no, it listens | `--port 9301` (the *sender* types the receiver's IP) |
-| `assess_ftp_receiver` | no, it listens | `--port 2121` |
+| receiver                 | is given the sender's address? | how                                                      |
+| ------------------------ | ------------------------------ | -------------------------------------------------------- |
+| `assess_http_receiver` | yes                            | `--url http://SENDER-IP:9302`                          |
+| `assess_coap_receiver` | yes                            | `--url coap://SENDER-IP:5683`                          |
+| `assess_mqtt_receiver` | no — the**broker's**    | `--url mqtt://BROKER-IP:1883/<topic>`                  |
+| `assess_ws_receiver`   | no, it listens                 | `--port 9301` (the *sender* types the receiver's IP) |
+| `assess_ftp_receiver`  | no, it listens                 | `--port 2121`                                          |
 
 Either way both addresses end up in the evidence: each side records its own IP
 on the route to the other, and the sender's travels in the manifest.
@@ -378,13 +410,13 @@ command for the other machine**, with its own IP filled in —
 so the ws/ftp receivers and the http/coap senders each hand over a line to paste
 on the far side.
 
-| protocol | listens (must be reachable, opens the firewall) | dials out |
-|----------|------------------------------------------------|-----------|
-| `ws://` | **receiver** — TCP `--port` (9301) | sender |
-| `ftp://` | **receiver** — TCP `--port` (2121) **and** passive data ports 49152–65535 | sender |
-| `http://` | **sender** — TCP `--port` (9302) | receiver |
-| `coap://` | **sender** — UDP `--port` (5683) | receiver |
-| `mqtt://` | neither — **both dial out** to the broker on TCP 1883 | both |
+| protocol    | listens (must be reachable, opens the firewall)                                           | dials out |
+| ----------- | ----------------------------------------------------------------------------------------- | --------- |
+| `ws://`   | **receiver** — TCP `--port` (9301)                                               | sender    |
+| `ftp://`  | **receiver** — TCP `--port` (2121) **and** passive data ports 49152–65535 | sender    |
+| `http://` | **sender** — TCP `--port` (9302)                                                 | receiver  |
+| `coap://` | **sender** — UDP `--port` (5683)                                                 | receiver  |
+| `mqtt://` | neither —**both dial out** to the broker on TCP 1883                               | both      |
 
 **Every receiver listens on all interfaces**, FTP included (`--bind 127.0.0.1`
 for a local-only run). Note that `XRNetServer` itself still defaults to loopback
@@ -429,10 +461,12 @@ cargo run --example assess_mqtt_sender -- --url mqtt://172.16.1.55:1883/xrds/ass
 
 Notes for an on-site run:
 
-- **Both machines need the asset files.** The suite is resolved from paths
-  relative to the crate root on each side, so run from a checkout with
-  `assets/` present on both. (Only the sender reads them; the receiver just
-  needs the repo to build.)
+- **The sender needs the sample files.** The suite is resolved from paths
+  relative to the crate root, so the sending machine needs `samples/` in place
+  at `examples/assessment/protocol-agnostic/samples/`. The receiver never reads
+  them — it reconstructs whatever arrives on the wire — so only the sender's
+  copy has to be correct. [`samples/README.md`](samples/README.md) lists the
+  SHA-256 of each file if you need to confirm that.
 - **Firewall.** Windows prompts on first bind; allow it for the private
   network, or pre-authorise the ports in the table. CoAP is **UDP** — a rule
   that only covers TCP will silently produce timeouts (the receiver's retry
@@ -442,7 +476,7 @@ Notes for an on-site run:
   both `1883` and `11883`). Any other broker works by changing the URL on both
   sides — a public one is a poor choice, as the timings above show.
 - **The receiver writes to its own machine**, under
-  `examples/assessment/received/<protocol>/<run-id>/` — the files, `report.txt`
+  `examples/assessment/protocol-agnostic/received/<protocol>/<run-id>/` — the files, `report.txt`
   and `result.json` together (see "The evidence on disk"). Collect that folder
   from the receiving machine for the evidence pack.
 - **A port that is already in use** is handled: every binary that binds checks
@@ -464,13 +498,13 @@ Notes for an on-site run:
 25/25 transfers PASS — every content type over every protocol, all
 byte-identical (size and SHA-256 both matched).
 
-| content type ↓ / protocol → | ws | mqtt | ftp | http | coap |
-|---|---|---|---|---|---|
-| gltf-model (30,985 B) | PASS | PASS | PASS | PASS | PASS |
-| texture (2,217 B) | PASS | PASS | PASS | PASS | PASS |
-| audio (88,244 B) | PASS | PASS | PASS | PASS | PASS |
-| video (2,943 B) | PASS | PASS | PASS | PASS | PASS |
-| scene-document (4,002 B) | PASS | PASS | PASS | PASS | PASS |
+| content type ↓ / protocol →    | ws                | mqtt             | ftp               | http              | coap              |
+| -------------------------------- | ----------------- | ---------------- | ----------------- | ----------------- | ----------------- |
+| gltf-model (30,985 B)            | PASS              | PASS             | PASS              | PASS              | PASS              |
+| texture (2,217 B)                | PASS              | PASS             | PASS              | PASS              | PASS              |
+| audio (88,244 B)                 | PASS              | PASS             | PASS              | PASS              | PASS              |
+| video (2,943 B)                  | PASS              | PASS             | PASS              | PASS              | PASS              |
+| scene-document (4,002 B)         | PASS              | PASS             | PASS              | PASS              | PASS              |
 | **whole suite, 128,391 B** | **0.046 s** | **0.13 s** | **0.046 s** | **0.011 s** | **0.075 s** |
 
 The MQTT column was run twice: **0.13 s** through the lab broker
@@ -528,13 +562,13 @@ which are stronger together:
 client written by somebody else at each endpoint. Each only succeeds if the
 endpoint implements the real protocol:
 
-| protocol | independent client | what it got |
-|----------|--------------------|-------------|
-| ws | .NET `ClientWebSocket` | RFC 6455 handshake completed, socket `Open` |
-| http | PowerShell `Invoke-WebRequest` | `HTTP 200 OK` with headers |
-| ftp | Windows' built-in `ftp.exe` | logged in, `257` reply to `PWD` |
-| coap | a raw CoAP `CON GET`, built byte by byte in the script | `ACK 2.05 Content` |
-| mqtt | a raw MQTT 3.1.1 `CONNECT` packet, built byte by byte in the script | `CONNACK` with return code 0 |
+| protocol | independent client                                                   | what it got                                  |
+| -------- | -------------------------------------------------------------------- | -------------------------------------------- |
+| ws       | .NET`ClientWebSocket`                                              | RFC 6455 handshake completed, socket`Open` |
+| http     | PowerShell`Invoke-WebRequest`                                      | `HTTP 200 OK` with headers                 |
+| ftp      | Windows' built-in`ftp.exe`                                         | logged in,`257` reply to `PWD`           |
+| coap     | a raw CoAP`CON GET`, built byte by byte in the script              | `ACK 2.05 Content`                         |
+| mqtt     | a raw MQTT 3.1.1`CONNECT` packet, built byte by byte in the script | `CONNACK` with return code 0               |
 
 Verified 5/5 against live endpoints. It needs no Administrator and no capture
 tooling, and writes `protocol-proof.txt` to keep with the run's evidence.
@@ -546,10 +580,8 @@ reads the lab's libcoap server correctly (see "Interoperability" above).
 
 **2. A packet capture** — `WIRESHARK.md` (also in both kits) has the capture
 filters, the `Decode As` settings the non-standard ports need, the display
-filter per protocol, and what to point at in each: the `101 Switching
-Protocols` upgrade for WS, `Publish Message` per chunk for MQTT, `STOR` plus
-the `FTP-DATA` stream for FTP, `200 OK` payload fetches for HTTP, `ACK 2.05
-Content` for CoAP. Capture a genuine two-machine run: Windows short-circuits
+filter per protocol, and what to point at in each: the `101 Switching Protocols` upgrade for WS, `Publish Message` per chunk for MQTT, `STOR` plus
+the `FTP-DATA` stream for FTP, `200 OK` payload fetches for HTTP, `ACK 2.05 Content` for CoAP. Capture a genuine two-machine run: Windows short-circuits
 traffic to its own address, so a single-machine run shows nothing on the
 Ethernet adapter.
 
@@ -603,15 +635,15 @@ These are limitations of the library the runs exposed, not of the harness:
 
 ## Files
 
-| file | role |
-|------|------|
-| `assess_common.rs` | shared support: content vocabulary, default suite, manifest, frame format, integrity check, suite report. No `main`; included with `#[path]`, like `examples/webrtc/realnet_common.rs` |
-| `ws_sender.rs` / `ws_receiver.rs` | WebSocket pair |
-| `mqtt_sender.rs` / `mqtt_receiver.rs` | MQTT pair |
-| `ftp_sender.rs` / `ftp_receiver.rs` | FTP pair |
-| `http_sender.rs` / `http_receiver.rs` | HTTP pair (sender is the content server) |
-| `coap_sender.rs` / `coap_receiver.rs` | CoAP pair (sender is the content server) |
-| `fixtures/assessment_scene.xrds` | the `scene-document` item, produced by the SDK's own document serializer |
+| file                                      | role                                                                                                                                                                                        |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `assess_common.rs`                      | shared support: content vocabulary, default suite, manifest, frame format, integrity check, suite report. No`main`; included with `#[path]`, like `examples/webrtc/realnet_common.rs` |
+| `ws_sender.rs` / `ws_receiver.rs`     | WebSocket pair                                                                                                                                                                              |
+| `mqtt_sender.rs` / `mqtt_receiver.rs` | MQTT pair                                                                                                                                                                                   |
+| `ftp_sender.rs` / `ftp_receiver.rs`   | FTP pair                                                                                                                                                                                    |
+| `http_sender.rs` / `http_receiver.rs` | HTTP pair (sender is the content server)                                                                                                                                                    |
+| `coap_sender.rs` / `coap_receiver.rs` | CoAP pair (sender is the content server)                                                                                                                                                    |
+| `samples/`                              | the content the suite transfers — one file per content type, plus a self-contained GLB. Hashes, provenance and licensing in[`samples/README.md`](samples/README.md)                       |
 
 Wire format for the push transports (WS, MQTT): per item, a manifest frame,
 then chunk frames, then an end frame — each a 14-byte header (`XRDS` magic,

@@ -1,0 +1,4 @@
+# Run artifacts: staged binaries, per-example logs, screenshots and reports.
+# One folder per run under runs/<run-id>/. These are evidence to collect from
+# the machine that ran the assessment, not source to commit.
+runs/

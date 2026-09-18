@@ -133,7 +133,7 @@ fn handle_frame(bytes: Vec<u8>, state: &Arc<Mutex<State>>) -> Option<Vec<u8>> {
 #[tokio::main]
 async fn main() {
     let args = Args::parse();
-    let usage = "cargo run --example assess_ws_receiver -- --port 9301 [--strict-port] [--out-dir examples/assessment/received]";
+    let usage = "cargo run --example assess_ws_receiver -- --port 9301 [--strict-port] [--out-dir examples/assessment/protocol-agnostic/received]";
     if args.flag("help") {
         println!("{usage}");
         return;

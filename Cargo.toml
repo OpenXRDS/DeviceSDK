@@ -175,9 +175,9 @@ tokio = { workspace = true, features = ["time", "signal"] }
 # builds a narrower subset, at which point the examples break for no visible reason.
 xrds-net = { workspace = true, features = [
   "protocol-webrtc",
-  # examples/assessment/* drive one sender/receiver pair per protocol, and the
-  # FTP receiver hosts the server side in-process — so this target needs the
-  # server feature as well as the client protocols.
+  # examples/assessment/protocol-agnostic/* drive one sender/receiver pair per
+  # protocol, and the FTP receiver hosts the server side in-process — so this
+  # target needs the server feature as well as the client protocols.
   "protocol-http",
   "protocol-coap",
   "protocol-ws",
@@ -185,8 +185,9 @@ xrds-net = { workspace = true, features = [
   "protocol-ftp",
   "ftp-server",
 ] }
-# examples/assessment/* only: manifest (serde_json), integrity check (sha2/hex),
-# and the peer node for the CoAP pair — xrds-net has no CoAP server, and its
+# examples/assessment/protocol-agnostic/* only: manifest (serde_json), integrity
+# check (sha2/hex), and the peer node for the CoAP pair — xrds-net has no CoAP
+# server, and its
 # CoAP client only accepts UTF-8 payloads, hence base64. Same versions xrds-net
 # itself pins, so nothing new enters the build.
 serde = { version = "1", features = ["derive"] }
@@ -240,10 +241,6 @@ path = "examples/xrds_first/active_compo_control.rs"
 [[example]]
 name = "load_gltf"
 path = "examples/xrds_first/load_gltf.rs"
-
-[[example]]
-name = "load_gltf_fail_case"
-path = "examples/xrds_first/load_gltf_fail_case.rs"
 
 [[example]]
 name = "load_gltf_animated"
@@ -358,47 +355,47 @@ name = "webrtc_realnet_subscriber"
 path = "examples/webrtc/webrtc_realnet_subscriber.rs"
 
 # Protocol-agnostic transfer assessment: one sender/receiver pair per
-# protocol, all sharing examples/assessment/assess_common.rs (support code, no
+# protocol, all sharing examples/assessment/protocol-agnostic/assess_common.rs (support code, no
 # `main`, included via #[path] like examples/webrtc/realnet_common.rs).
 [[example]]
 name = "assess_ws_receiver"
-path = "examples/assessment/ws_receiver.rs"
+path = "examples/assessment/protocol-agnostic/ws_receiver.rs"
 
 [[example]]
 name = "assess_ws_sender"
-path = "examples/assessment/ws_sender.rs"
+path = "examples/assessment/protocol-agnostic/ws_sender.rs"
 
 [[example]]
 name = "assess_mqtt_receiver"
-path = "examples/assessment/mqtt_receiver.rs"
+path = "examples/assessment/protocol-agnostic/mqtt_receiver.rs"
 
 [[example]]
 name = "assess_mqtt_sender"
-path = "examples/assessment/mqtt_sender.rs"
+path = "examples/assessment/protocol-agnostic/mqtt_sender.rs"
 
 [[example]]
 name = "assess_ftp_receiver"
-path = "examples/assessment/ftp_receiver.rs"
+path = "examples/assessment/protocol-agnostic/ftp_receiver.rs"
 
 [[example]]
 name = "assess_ftp_sender"
-path = "examples/assessment/ftp_sender.rs"
+path = "examples/assessment/protocol-agnostic/ftp_sender.rs"
 
 [[example]]
 name = "assess_http_sender"
-path = "examples/assessment/http_sender.rs"
+path = "examples/assessment/protocol-agnostic/http_sender.rs"
 
 [[example]]
 name = "assess_http_receiver"
-path = "examples/assessment/http_receiver.rs"
+path = "examples/assessment/protocol-agnostic/http_receiver.rs"
 
 [[example]]
 name = "assess_coap_sender"
-path = "examples/assessment/coap_sender.rs"
+path = "examples/assessment/protocol-agnostic/coap_sender.rs"
 
 [[example]]
 name = "assess_coap_receiver"
-path = "examples/assessment/coap_receiver.rs"
+path = "examples/assessment/protocol-agnostic/coap_receiver.rs"
 
 [[example]]
 name = "direct_bevy"

@@ -48,7 +48,7 @@ use common::{
 
 const PROTOCOL: &str = "ftp";
 const API: &str = "XRNetServer (FTP/libunftp) <- XrdsNet::transfer(Upload)";
-const USAGE: &str = "cargo run --example assess_ftp_receiver -- --port 2121 [--bind 0.0.0.0] [--strict-port] [--out-dir examples/assessment/received] [--timeout 300]";
+const USAGE: &str = "cargo run --example assess_ftp_receiver -- --port 2121 [--bind 0.0.0.0] [--strict-port] [--out-dir examples/assessment/protocol-agnostic/received] [--timeout 300]";
 
 #[tokio::main]
 async fn main() {

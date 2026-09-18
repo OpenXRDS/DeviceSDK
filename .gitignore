@@ -42,5 +42,5 @@ android/quest/libs/**/*.so
 # generates its own lockfile. Not worth tracking for a crate slated for deletion.
 crates/xrds-audio/Cargo.lock
 
-# Portable assessment kit (built artifacts; see examples/assessment/README.md)
+# Portable assessment kit (built artifacts; see examples/assessment/protocol-agnostic/README.md)
 /dist/

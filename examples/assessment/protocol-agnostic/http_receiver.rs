@@ -42,7 +42,7 @@ use common::{default_out_dir, Args, Manifest, SuiteReport};
 
 const PROTOCOL: &str = "http";
 const API: &str = "XrdsNet::request (GET)";
-const USAGE: &str = "cargo run --example assess_http_receiver -- --url http://127.0.0.1:9302 [--out-dir examples/assessment/received]";
+const USAGE: &str = "cargo run --example assess_http_receiver -- --url http://127.0.0.1:9302 [--out-dir examples/assessment/protocol-agnostic/received]";
 
 fn main() {
     let args = Args::parse();
